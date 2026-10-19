@@ -88,7 +88,9 @@ def read_race(sdk, names, session_num):
             continue
         car = {'idx': idx, 'name': driver.get('UserName') or f'차량 {idx}', 'class_id': driver.get('CarClassID'),
                'class_name': driver.get('CarClassShortName') or driver.get('CarClassName'),
-               'class_est_lap_s': positive(driver.get('CarClassEstLapTime'))}
+               'class_est_lap_s': positive(driver.get('CarClassEstLapTime')),
+               # The pace car is listed among the drivers with no rating of its own.
+               'irating': None if driver.get('CarIsPaceCar') else positive(driver.get('IRating'))}
         for key, values in arrays.items():
             value = values[idx] if values is not None and idx < len(values) else None
             car[key] = bool(value) if key == 'on_pit_road' and value is not None else numeric(value)

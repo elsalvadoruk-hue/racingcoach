@@ -4,7 +4,7 @@ import logging
 import math
 import random
 import radio_phrases
-from live_formation import history_facts
+from live_formation import history_facts, rating_goal, strength_of_field
 from live_sectors import place_name
 from radio_audio import shown_text
 logger=logging.getLogger('iRacingLive')
@@ -146,6 +146,9 @@ class LiveReporting:
             own = next((car for car in race.get('cars') or [] if car.get('idx') == race.get('player_idx')), {})
             classes = {car.get('class_id') for car in race.get('cars') or [] if car.get('class_id') is not None}
             mates = [car for car in race.get('cars') or [] if car.get('class_id') == own.get('class_id')] if own else []
+            # A car not in the world (-1) never joined the race: it is not part of the field.
+            joined = [car for car in race.get('cars') or [] if car.get('track_surface') != -1]
+            rank, target = rating_goal(own.get('irating'), [car.get('irating') for car in joined if car in mates and car is not own])
             laps, seconds = metadata.get('total_laps'), metadata.get('session_duration_s')
             wetness, declared = sample.get('track_wetness'), sample.get('declared_wet')
             position = sample.get('class_position')
@@ -162,6 +165,10 @@ class LiveReporting:
                 'dry': type(wetness) in (int, float) and wetness <= 1,
                 'incident_limit': metadata.get('incident_limit'),
                 'multiclass': len(classes) > 1,
+                'sof': strength_of_field(car.get('irating') for car in joined) if len(classes) <= 1 else None,
+                'class_sof': strength_of_field(car.get('irating') for car in joined if car in mates) if len(classes) > 1 else None,
+                # "클래스 1위 안에" is no way to say it: a goal of the win has its own sentence.
+                'rating_rank': rank, 'rating_target': target if target and target > 1 else None, 'rating_win': target == 1,
             }
             if self.formation.plan is None:
                 # Looked up once, as the formation lap begins.

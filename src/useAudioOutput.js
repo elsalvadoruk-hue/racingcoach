@@ -43,6 +43,9 @@ const askDevicePermission = async () => {
   }
 };
 
+// A clip joined on the server from cut pieces comes as a whole data URL (a WAV between MP3 sentences).
+const clipSource = (clip, mime) => (String(clip).startsWith('data:') ? clip : `data:${mime};base64,${clip}`);
+
 export default function useAudioOutput() {
   const supported = typeof HTMLMediaElement.prototype.setSinkId === 'function' && !!navigator.mediaDevices?.enumerateDevices;
   const [outputId, setOutputId] = useState(savedOutput);
@@ -201,7 +204,7 @@ export default function useAudioOutput() {
     stop('preempted'); setMessage('');
     // A list is one call of several whole sentences: they play back to back and nothing slips in between.
     const rest = Array.isArray(encoded) ? encoded.slice(1) : [];
-    const current = new Audio(`data:${mime};base64,${Array.isArray(encoded) ? encoded[0] : encoded}`);
+    const current = new Audio(clipSource(Array.isArray(encoded) ? encoded[0] : encoded, mime));
     current._priority = priority;
     let terminal = false, monitor, metadataReady;
     current._finish = (status, reason = '') => {
@@ -246,7 +249,7 @@ export default function useAudioOutput() {
         part._effect?.release(!rest.length);
         part._effect = null;
         if (!rest.length) { current._finish('completed'); stop(); return; }
-        const next = new Audio(`data:${mime};base64,${rest.shift()}`);
+        const next = new Audio(clipSource(rest.shift(), mime));
         next._priority = priority; next._finish = current._finish;
         next.playbackRate = speed; next.preservesPitch = true;
         next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;

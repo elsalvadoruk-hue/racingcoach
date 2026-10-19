@@ -167,6 +167,7 @@ def spoken_form(text):
     text = re.sub(r'(?<![\d.])(\d+)리터', lambda match: sino(int(match[1])) + '리터', text)
     text = re.sub(r'(?<=\S) 랩(?!타임)', '랩', text)
     text = text.replace('식은 죽 먹기', '식은죽 먹기')   # spaced, the voice stopped at every word
+    text = text.replace('SOF', '에스오에프')                # strength of field, spelled out as drivers say it
     return re.sub(r'쯤 (?=뒤|전|후)', '쯤', text)  # "랩쯤 … 뒤에" paused the same way
 
 
@@ -191,7 +192,17 @@ class RadioAudioCache:
         digest = hashlib.sha256(json.dumps([role_voice(role), spoken_form(text)], ensure_ascii=False).encode()).hexdigest()
         return self.directory / f'{digest}.mp3'
 
+    def pieces(self):
+        """Numbers said from cut pieces (number_splice), kept beside the clips."""
+        import number_splice
+        if getattr(self, '_pieces', None) is None:
+            self._pieces = number_splice.Pieces(self.speech, self.directory / 'pieces')
+        return self._pieces
+
     def cached(self, role, text):
+        import number_splice
+        if number_splice.spliceable(text):
+            return self.pieces().on_disk(role, text)
         try:
             return self.path(role, text).stat().st_size >= 100
         except OSError:
@@ -203,6 +214,10 @@ class RadioAudioCache:
 
     def phrase(self, role, text):
         """One whole call as a single clip, synthesized once per voice and wording."""
+        import number_splice
+        if number_splice.spliceable(text):
+            # Joined from cut pieces; returned as a whole data URL since it is a WAV, not an MP3.
+            return self.pieces().sentence(role, text)
         path = self.path(role, text)
         with self.lock:
             if path.name in self.memory:

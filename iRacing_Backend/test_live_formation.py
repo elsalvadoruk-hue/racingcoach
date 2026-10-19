@@ -5,7 +5,7 @@ import radio_phrases
 import tempfile
 from pathlib import Path
 
-from live_formation import FormationBrief, RaceHistory, TOPICS, CLOSING, history_facts
+from live_formation import FormationBrief, RaceHistory, TOPICS, CLOSING, history_facts, strength_of_field
 from live_telemetry import LiveTelemetry
 from radio_audio import shown_text
 
@@ -80,7 +80,7 @@ class FormationBriefTests(unittest.TestCase):
     def test_every_sentence_builds_is_prepared_and_reads_cleanly_on_screen(self):
         prepared = {text for _, text in radio_phrases.catalog()}
         values = {'min': 45, 'laps': 30, 'pos': 7, 'count': 23, 'liters': 55, 'kph': 80, 'sec': 25, 'temp': 20, 'points': 17, 'nth': 3,
-                  'lap': 239.6, 'turn': '5번 코너'}
+                  'lap': 239.6, 'turn': '5번 코너', 'rating': 2200}
         for name, role, sentences in [*TOPICS, CLOSING]:
             for key, _ in sentences:
                 owner, wordings = radio_phrases.PHRASES[key]
@@ -91,6 +91,59 @@ class FormationBriefTests(unittest.TestCase):
                     self.assertIn(text, prepared, key)
                     self.assertNotIn('[', shown_text(text))
                     self.assertNotIn('  ', shown_text(text))
+
+
+class StrengthOfFieldTests(unittest.TestCase):
+    def test_the_field_is_rated_as_iracing_does_and_said_to_the_nearest_hundred(self):
+        self.assertAlmostEqual(strength_of_field([2000, 2000, 2000]), 2000, places=6)     # an even field is its rating
+        # The formula leans to the weaker drivers: below the plain average.
+        self.assertAlmostEqual(strength_of_field([1000, 3000]), 1789.8, places=1)
+        self.assertLess(strength_of_field([1000, 3000]), 2000)
+        # Unrated entries (the pace car, AI) are left out, and one rated driver is no field.
+        self.assertAlmostEqual(strength_of_field([None, 0, 2500, 2500]), 2500, places=6)
+        self.assertIsNone(strength_of_field([2500, None]))
+        self.assertIsNone(strength_of_field([]))
+        said = radio_phrases.build('form_sof', 0, rating=2347)['text']
+        self.assertEqual(said, '이번 경기 SOF는 약 2300입니다.')
+        self.assertEqual(radio_phrases.build('form_sof_class', 1, rating=1651)['text'], '클래스 SOF는 약 1700입니다.')
+        from radio_audio import spoken_form
+        self.assertEqual(spoken_form(said), '이번 경기 에스오에프는 약 2300입니다.')
+
+    def field_call(self, facts, calls=5):
+        said = {name: dict(sentences) for _, name, _, sentences in FormationBriefTests().lap(facts, calls=calls)}
+        return said.get('field')
+
+    def test_the_field_is_the_second_call_and_one_class_says_the_grid(self):
+        said = FormationBriefTests().lap({**FACTS, 'multiclass': False, 'sof': 2347., 'rating_rank': 7, 'rating_target': 9})
+        self.assertEqual([name for _, name, _, _ in said][:2], ['race', 'field'])      # by then every car is rolling
+        self.assertGreater(said[1][0], .15)
+        self.assertEqual(dict(said[1][3]), {'form_sof': {'rating': 2347.}, 'form_rating_rank': {'pos': 7}, 'form_rating_target': {'pos': 9}})
+        self.assertNotIn('form_sof', dict(said[0][3]))
+        several = self.field_call({**FACTS, 'class_sof': 1880.})
+        self.assertEqual(several, {'form_sof_class': {'rating': 1880.}})
+        self.assertIsNone(self.field_call(FACTS))                                     # nothing known: no call
+        self.assertEqual(self.field_call({**FACTS, 'class_sof': 1880., 'rating_rank': 1, 'rating_win': True}),
+                         {'form_sof_class': {'rating': 1880.}, 'form_rating_rank': {'pos': 1}, 'form_rating_win': {}})
+        self.assertIsNone(self.field_call({**FACTS, 'sof': 2347.}, calls=2))          # only the race and the send-off
+        # Always there with three calls or more; the other middle topics are still drawn.
+        for n in range(6):
+            names = [name for _, name, _, _ in FormationBriefTests().lap({**FACTS, 'sof': 2000.}, calls=3, run=f'race {n}')]
+            self.assertEqual(names, ['race', 'field', 'closing'])
+
+    def test_the_rating_goal_is_the_lowest_place_that_still_gains(self):
+        from live_formation import rating_goal, win_chance
+        self.assertAlmostEqual(win_chance(2000, 2000), .5)
+        self.assertAlmostEqual(win_chance(3000, 1500), .745, places=3)   # the stronger driver, not a sure thing
+        # An even field of nine others: half of them expected beaten, so 5th still gains and 6th does not.
+        self.assertEqual(rating_goal(2000, [2000] * 9), (1, 5))
+        # The strongest driver must finish near the front to gain; the weakest gains well down the order.
+        self.assertEqual(rating_goal(4000, [1500] * 15 + [2500] * 4), (1, 4))
+        self.assertEqual(rating_goal(1200, [2500] * 19), (20, 15))
+        self.assertEqual(rating_goal(2400, [1800, 2100, 2600, 3000, 1500, 2200, 2900, 1900, 2500]), (5, 5))
+        # Unknown ratings say nothing.
+        self.assertEqual(rating_goal(None, [2000] * 5), (None, None))
+        self.assertEqual(rating_goal(2000, [None, 0]), (None, None))
+        self.assertEqual(radio_phrases.build('form_rating_target', 0, pos=9)['text'], '클래스 9위 안에 들면 레이팅이 오릅니다.')
 
 
 class RaceHistoryTests(unittest.TestCase):

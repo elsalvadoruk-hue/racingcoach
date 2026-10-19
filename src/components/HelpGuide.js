@@ -464,12 +464,15 @@ const SECTIONS = [
     '레이스의 포메이션 랩을 도는 동안 오늘 경기를 몇 번에 나눠 정리해 줍니다. 포메이션 랩이 없는 경기에서는 나오지 않습니다.',
     { say: [
       '“무전 연결됐습니다. 포메이션 랩 동안 오늘 경기를 정리해 드리겠습니다.” “클래스 7위에서 출발합니다.”',
+      '“이번 경기 SOF는 약 2300입니다.” “아이레이팅 순위는 클래스 7위입니다.” “클래스 9위 안에 들면 레이팅이 오릅니다.”',
       '“이 트랙은 이번이 세 번째네요.” “이 트랙의 지난번 베스트입니다.” “3분 59초 6입니다.”',
       '“지난번에는 5번 코너에서 가장 많이 잃었습니다.”',
       '“타이어가 아직 차갑습니다. 첫 랩은 제동을 조금 일찍 시작하세요.”',
       '“준비됐습니다.” “좋은 경기 하세요.” (항상 마지막)',
     ] },
     { list: [
+      'SOF(그리드 실력)는 참가자의 iRating으로 iRacing과 같은 식으로 계산해 100 단위로 말합니다. 클래스가 여럿이면 내 클래스의 SOF입니다. 모든 차가 움직이기 시작한 두 번째 안내에서 말하며(안내 개수 3 이상), 접속하지 않은 차는 뺍니다.',
+      '같은 안내에서 내 iRating이 클래스에서 몇 번째인지와, 몇 위 안에 들면 레이팅이 오르는지를 말합니다. 각 참가자를 이길 확률(iRating 계산기들이 쓰는 식)로 기대 승수를 구한 추정이며, iRacing의 실제 계산과는 조금 다를 수 있습니다.',
       '주제: 경기 길이와 출발 순위, 지난번 이 트랙의 기록, 연료와 피트, 출발 요령, 타이어, 날씨, 규정, 무전 사용법. 값을 모르는 것은 말하지 않습니다.',
       '스포터 설정의 “포메이션 랩 안내 개수”로 몇 번 말할지 정합니다(0~8, 기본 5). 0이면 끕니다. 첫 안내는 랩 시작 직후, 마지막 인사는 랩의 80%쯤이고 그 사이를 고르게 띄웁니다.',
       '개수가 주제보다 적으면 가운데 주제는 경기마다 다르게 고릅니다. 표현도 경기마다 바뀝니다.',
@@ -810,12 +813,13 @@ const SECTIONS = [
       '설정 맨 위에서 사용하던 버전을 확인하고 앱을 종료합니다. 기존 프로그램 폴더와 실제 데이터 폴더를 백업합니다.',
       'GitHub Code → Download ZIP을 새로 받고 임시 위치에 풉니다. racingcoach-main 폴더 안의 내용물을 기존 실행.bat이 있는 폴더에 덮어씁니다. 기존 data 폴더는 삭제하지 않습니다.',
       '설치.bat을 다시 실행합니다. Python 패키지 설치와 npm ci, 화면 빌드까지 자동으로 준비합니다. Python 3.12와 Node.js LTS를 권장합니다.',
-      '기존 버전 → 1.3.0 음성 업데이트팩 하나를 같은 프로그램 폴더에 풀어 data/radio_audio, data/spotter_audio를 합칩니다. 현재 제공하는 팩은 중간 버전 없이 바로 적용합니다.',
+      '1.4.0은 음성을 전부 바꿉니다. 데이터 폴더의 radio_audio, spotter_audio 두 폴더만 지우고 전체 음성팩 1.4.0을 같은 프로그램 폴더에 풉니다. data 폴더 자체와 다른 파일(기록, 설정, 키, 토큰)은 지우지 않습니다.',
       '실행.bat으로 다시 켜고 브라우저를 새로고침합니다.',
     ] },
     { list: [
-      '처음 설치하거나 기존 음성이 누락됐으면 전체 음성팩 1.3.0을 받습니다. 버전을 모를 때도 전체 음성팩을 사용할 수 있습니다.',
-      '1.3.1: Bluetooth 출력장치가 끊겨도 선택을 유지합니다. 1.3.0 음성이 있으면 음성팩은 다시 받을 필요가 없습니다.',
+      '처음 설치할 때도 전체 음성팩 1.4.0을 받습니다. 1.4.0은 이전 버전에서 오는 음성 업데이트팩이 없습니다.',
+      '1.4.0: 랩타임·SOF 안내가 음성 조각(data/radio_audio/pieces의 OGG)을 이어 말합니다. 예전 랩타임 MP3 약 1.4GB를 쓰지 않아 음성 전체가 약 0.6GB입니다. 설치.bat을 다시 실행해야 합니다(soundfile 패키지 추가).',
+      '데이터 폴더를 따로 지정했다면 설정 → 설치 설정에 표시된 데이터 폴더 안의 radio_audio, spotter_audio를 지웁니다.',
       '음성 ZIP을 풀 때 data/data 또는 음성팩이름/data처럼 중첩하지 마세요. 별도 데이터 폴더나 음성 경로를 지정했다면 그 실제 경로에 합칩니다.',
       '그대로 남는 것: 분석 기록, 음성 메모, 폴더 설정, Google 키, Garage61 토큰, 확정한 코너 번호, 피트 기록, 스포터·피트월 설정.',
       '버전별 변경 내역과 음성 공유 폴더 링크는 GitHub Releases와 README에서 확인합니다. 오프라인 패치 노트도 유지합니다.',
@@ -912,7 +916,7 @@ export function UserManual({ onNavigate, hasAnalysis }) {
   }, [sections]);
   return <Card asChild><article className="coach-manual" aria-label="사용 매뉴얼">
     <CardHeader className="coach-manual-intro p-0">
-      <div><CardTitle asChild><h2 className="flex items-center gap-2"><BookOpen aria-hidden="true" size={18} />기능별 사용법</h2></CardTitle><CardDescription>1.3.1 데스크톱 화면 기준입니다. 처음이면 1장, 비교 조작은 2~3장, 셋업 실험은 4~6장, 기록은 7장, 주행 중 음성은 8~12장, 폴더와 키 설정은 18장을 보세요.</CardDescription></div>
+      <div><CardTitle asChild><h2 className="flex items-center gap-2"><BookOpen aria-hidden="true" size={18} />기능별 사용법</h2></CardTitle><CardDescription>1.4.0 데스크톱 화면 기준입니다. 처음이면 1장, 비교 조작은 2~3장, 셋업 실험은 4~6장, 기록은 7장, 주행 중 음성은 8~12장, 폴더와 키 설정은 18장을 보세요.</CardDescription></div>
       <Field className="coach-manual-search"><FieldLabel htmlFor="manual-search" className="sr-only">사용 가이드 검색</FieldLabel><Input ref={searchRef} id="manual-search" aria-label="사용 가이드 검색" type="search" placeholder="기능이나 문제를 검색하세요" value={search} onChange={event => setSearch(event.target.value)} /></Field>
     </CardHeader>
     {!hasAnalysis && <p className="mt-4 text-sm text-muted-foreground">주행 분석이 없어도 매뉴얼을 읽을 수 있습니다. 기능을 사용하려면 IBT 파일을 선택하세요.</p>}

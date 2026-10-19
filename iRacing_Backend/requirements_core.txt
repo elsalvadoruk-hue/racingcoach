@@ -5,3 +5,4 @@ PyYAML
 pydantic
 google-genai
 Pillow>=11,<13
+soundfile>=0.12,<1

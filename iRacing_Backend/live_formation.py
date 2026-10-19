@@ -23,6 +23,11 @@ from pathlib import Path
 TOPICS = [
     ('race', 'race', [('form_hello', None), ('form_length_min', 'race_min'), ('form_length_laps', 'race_laps'),
                       ('form_grid', 'class_position'), ('form_field', 'class_cars')]),
+    # The field, always the second call: by then every car is rolling, so the cars that never joined are known
+    # (on the grid the strength of field was told before the field was complete). Strength of field of the whole
+    # grid, or of the own class with several classes; where the iRating ranks the driver, and the place to beat.
+    ('field', 'race', [('form_sof', 'sof'), ('form_sof_class', 'class_sof'),
+                       ('form_rating_rank', 'rating_rank'), ('form_rating_target', 'rating_target'), ('form_rating_win', 'rating_win')]),
     # The last time at this track with this car: what it was like, and where the time went.
     # The second to the tenth time are counted; from the eleventh on it is simply a track the driver knows well.
     ('history', 'race', [('form_hist_first', 'hist_first'), ('form_hist_nth', 'hist_nth'), ('form_hist_familiar', 'hist_familiar'),
@@ -40,7 +45,9 @@ CLOSING = ('closing', 'race', [('form_ready', None), ('form_good_luck', None)])
 VALUE_NAMES = {'race_min': 'min', 'race_laps': 'laps', 'class_position': 'pos', 'class_cars': 'count', 'fuel_l': 'liters',
                'pit_speed_kph': 'kph', 'pit_transit_s': 'sec', 'track_temp_c': 'temp', 'air_temp_c': 'temp', 'incident_limit': 'points',
                'hist_nth': 'nth', 'hist_lap': 'lap', 'hist_pos': 'pos', 'hist_temp_lower': 'temp', 'hist_temp_higher': 'temp',
-               'hist_loss_turn': 'turn', 'hist_loss_turn2': 'turn'}
+               'hist_loss_turn': 'turn', 'hist_loss_turn2': 'turn', 'sof': 'rating', 'class_sof': 'rating',
+               'rating_rank': 'pos', 'rating_target': 'pos'}
+ALWAYS = ('field',)          # said whenever there are calls enough for it, right after the race itself
 DEFAULT_CALLS, MAX_CALLS = 5, len(TOPICS) + 1
 
 
@@ -55,6 +62,46 @@ def usable(topic, known):
     # A topic built on measured facts is skipped when none of them is known: its opening words alone say nothing.
     measured = [need for _, need in sentences if need is not None]
     return [] if measured and not any(need in known for need in measured) else chosen
+
+
+SOF_MIN_CARS = 2
+
+
+def strength_of_field(ratings):
+    """iRacing's strength of field: 1600/ln2 * ln(n / sum(2^(-iR/1600))), over the cars with a rating.
+
+    None with fewer than two rated cars: one driver is not a field, and an unrated grid (AI, the pace car)
+    says nothing about it.
+    """
+    rated = [value for value in (finite(r) for r in ratings) if value is not None and 0 < value < 20000]
+    if len(rated) < SOF_MIN_CARS:
+        return None
+    return 1600 / math.log(2) * math.log(len(rated) / sum(2 ** (-value / 1600) for value in rated))
+
+
+def win_chance(mine, theirs):
+    """The chance to finish ahead of a driver, from the two iRatings, as iRacing's rating calculators have it."""
+    base = 1600 / math.log(2)
+    a, b = math.exp(-mine / base), math.exp(-theirs / base)
+    return (1 - a) * b / ((1 - b) * a + (1 - a) * b)
+
+
+def rating_goal(mine, others):
+    """(rank by iRating in the class, the lowest place that still gains iRating) or (None, None).
+
+    iRating moves with the drivers beaten against the number expected from the ratings: finishing at place p
+    beats n - p of the field, so it goes up when n - p is above the expected count. An estimate: iRacing does
+    not publish its formula, and the field can still change before the start.
+    """
+    mine = finite(mine)
+    rated = [value for value in (finite(r) for r in others) if value is not None and 0 < value < 20000]
+    if mine is None or not 0 < mine < 20000 or len(rated) < 2:
+        return None, None
+    field = len(rated) + 1
+    rank = 1 + sum(value > mine for value in rated)
+    expected = sum(win_chance(mine, value) for value in rated)
+    target = math.ceil(field - expected) - 1           # the largest place p with field - p > expected
+    return rank, (target if 1 <= target <= field else None)
 
 
 class RaceHistory:
@@ -172,9 +219,12 @@ class FormationBrief:
         if count == 1:
             return ready[:1] or [CLOSING]
         first, others = ready[:1], ready[1:]
-        wanted = max(0, count - 1 - len(first))
+        room = max(0, count - 1 - len(first))
+        kept = [topic for topic in others if topic[0] in ALWAYS][:room]
+        others = [topic for topic in others if topic[0] not in ALWAYS]
+        wanted = room - len(kept)
         picked = set(random.Random(str(run_id)).sample(range(len(others)), min(wanted, len(others))))
-        return first + [topic for index, topic in enumerate(others) if index in picked] + [CLOSING]
+        return first + kept + [topic for index, topic in enumerate(others) if index in picked] + [CLOSING]
 
     def step(self, sample, facts, run_id, now):
         """The next call to say as (name, role, [(phrase key, values)]), or None."""

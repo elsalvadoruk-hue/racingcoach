@@ -335,6 +335,14 @@ test('several whole sentences play back to back as one call and nothing slips in
   expect(result.current.audioBusy()).toBe(false);
 });
 
+test('a sentence joined from number pieces arrives as a whole WAV data URL between MP3 sentences', async () => {
+  const { result } = renderHook(useAudioOutput);
+  await act(async () => result.current.play(['first', 'data:audio/wav;base64,UklGRg'], 'audio/mpeg', { priority: 1 }));
+  expect(players[0].src).toBe('data:audio/mpeg;base64,first');
+  await act(async () => players[0].onended());
+  expect(players[1].src).toBe('data:audio/wav;base64,UklGRg');   // used as it is, not wrapped as an MP3
+});
+
 test('three absolute rates are independent, multipart overrides the role and formation stays fixed', async () => {
   const { result } = renderHook(useAudioOutput);
   act(() => { result.current.changeSpotterRate(1); result.current.changePitwallRate(1.25); result.current.changeRate(1.4); });

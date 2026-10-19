@@ -143,6 +143,12 @@ class RaceTests(unittest.TestCase):
         self.assertIsNone(result['cars'][0]['last_lap_s'])
         self.assertIsNone(result['cars'][0]['on_pit_road'])
 
+    def test_each_driver_brings_a_rating_and_the_pace_car_none(self):
+        sdk = {'DriverInfo': {'DriverCarIdx': 1, 'Drivers': [
+            {'CarIdx': 0, 'CarIsPaceCar': 1, 'IRating': 0}, {'CarIdx': 1, 'CarClassID': 10, 'IRating': 2412},
+            {'CarIdx': 2, 'CarClassID': 10, 'IRating': 1350}, {'CarIdx': 3, 'CarClassID': 10}]}}
+        self.assertEqual([car['irating'] for car in read_race(sdk, [], 0)['cars']], [None, 2412., 1350., None])
+
 
 class PitWallIntegrationTests(unittest.TestCase):
     def setUp(self):

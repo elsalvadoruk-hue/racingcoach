@@ -66,6 +66,38 @@ class VoicePackTests(unittest.TestCase):
         for name in ['../x.mp3', '/data/radio_audio/x.mp3', 'data/radio_audio/../x.mp3',
                      'data/settings.json', 'data/radio_audio/x.json', 'data\\radio_audio\\x.mp3']:
             self.assertFalse(packs.voice_path(name), name)
+        # Number pieces are the one WAV allowed, and only in their own folder.
+        self.assertTrue(packs.voice_path('data/radio_audio/pieces/abc.wav'))
+        self.assertTrue(packs.voice_path('data/radio_audio/pieces/abc.ogg'))
+        self.assertFalse(packs.voice_path('data/radio_audio/abc.ogg'))
+        for name in ['data/radio_audio/abc.wav', 'data/spotter_audio/pieces/abc.wav', 'data/radio_audio/pieces/../x.wav']:
+            self.assertFalse(packs.voice_path(name), name)
+
+    def test_number_pieces_go_into_the_pack_and_other_wav_files_do_not(self):
+        (self.radio / 'pieces').mkdir()
+        (self.radio / 'pieces' / 'p.wav').write_bytes(b'RIFFpiece')
+        (self.radio / 'stray.wav').write_bytes(b'RIFFstray')
+        found = packs.sources(self.radio, self.spotter)
+        self.assertIn('data/radio_audio/pieces/p.wav', found)
+        self.assertNotIn('data/radio_audio/stray.wav', found)
+
+    def test_clips_replaced_by_pieces_are_left_out(self):
+        (self.radio / 'pieces').mkdir()
+        (self.radio / 'pieces' / 'p.ogg').write_bytes(b'OggSpiece')
+        (self.radio / 'pieces' / 'p.part.ogg').write_bytes(b'OggShalf')
+        found = packs.sources(self.radio, self.spotter, skip=frozenset({'new.mp3'}))
+        self.assertIn('data/radio_audio/pieces/p.ogg', found)
+        self.assertNotIn('data/radio_audio/pieces/p.part.ogg', found)        # being written
+        self.assertNotIn('data/radio_audio/new.mp3', found)                  # said from pieces now
+        self.assertIn('data/radio_audio/same.mp3', found)
+
+    def test_lap_time_clips_in_every_voice_are_named_as_replaced(self):
+        replaced = packs.replaced_clips(self.radio)
+        import sys
+        sys.path.insert(0, str(packs.ROOT / 'iRacing_Backend'))
+        from radio_audio import RadioAudioCache
+        self.assertIn(RadioAudioCache(None, self.radio).path('spotter', '이번 랩 1분 42초 3입니다.').name, replaced)
+        self.assertNotIn(RadioAudioCache(None, self.radio).path('race', '같은 클래스는 23대입니다.').name, replaced)
 
     def test_changed_source_does_not_leave_a_finished_or_partial_archive(self):
         target = self.root / 'broken.zip'

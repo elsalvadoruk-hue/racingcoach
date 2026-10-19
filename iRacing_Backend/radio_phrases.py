@@ -28,6 +28,8 @@ FORMATS = {
     'turn': str, 'place': str,
     'kph': lambda v: f'{round(v)}킬로미터', 'steer': lambda v: f'{v:.1f}도',
     'count': lambda v: f'{int(v)}대', 'temp': lambda v: f'{round(v)}도',
+    # Strength of field, to the nearest hundred: "약 2300" is how a field is told, not 2347.
+    'rating': lambda v: f'{int(v / 100 + .5) * 100}',
     # How many times: "두 번", never "2번" (read as a number, "이 번", like a corner).
     'times': lambda v: ('', '한', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉', '열')[int(v)] + ' 번',
     'nth': lambda v: ('', '첫', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉', '열')[int(v)] + ' 번째',
@@ -50,10 +52,15 @@ PLACES = [f'{n}번 코너 부근' for n in range(1, 31)] + [f'{n}번 구간' for
 
 RACE_MINUTES = (10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 70, 75, 80, 90, 100, 120, 150, 160, 180, 240, 360, 480, 600, 720, 1440)
 
+SPLICE_COVER = [d * 1100 for d in range(1, 10)] + [d * 1000 for d in range(1, 11)]
+
 PREPARED = {
     # The formation lap (live_formation): the race laid out before the start.
     'form_length_min': {'min': RACE_MINUTES}, 'form_length_laps': {'laps': range(3, 201)},
     'form_grid': {'pos': range(1, 61)}, 'form_field': {'count': range(2, 61)},
+    # Said from cut pieces (number_splice): these values need every piece once, so preparing them covers 100 to 10000.
+    'form_sof': {'rating': SPLICE_COVER}, 'form_sof_class': {'rating': SPLICE_COVER},
+    'form_rating_rank': {'pos': range(1, 61)}, 'form_rating_target': {'pos': range(2, 61)},
     'form_fuel': {'liters': range(5, 151)}, 'form_pit_speed': {'kph': range(40, 131)}, 'form_pit_loss': {'sec': range(10, 91)},
     'rejoin_ahead_of': {'pos': range(1, 61)}, 'rejoin_behind': {'pos': range(1, 61)}, 'rejoin_margin': {'gap': tenths(.1, 3.0)},
     'stint_that': {'laps': range(1, 61)}, 'stint_ahead': {'laps': range(1, 61)}, 'stint_behind': {'laps': range(1, 61)},
@@ -264,6 +271,11 @@ PHRASES.update({
     'form_grid': ('race', ['클래스 {pos}에서 출발합니다.', '출발 순위는 클래스 {pos}입니다.', '그리드는 클래스 {pos}입니다.']),
     'form_field': ('race', ['같은 클래스는 {count}입니다.', '같은 클래스에 {count}가 달립니다.', '클래스 참가 차량은 {count}입니다.']),
     # Last time at this track. The lap time has one wording (3,900 clips); the sentence before it carries the variety.
+    'form_sof': ('race', ['이번 경기 SOF는 약 {rating}입니다.', '오늘 SOF는 약 {rating}입니다.', '이 그리드의 SOF는 약 {rating}입니다.']),
+    'form_rating_rank': ('race', ['아이레이팅 순위는 클래스 {pos}입니다.', '레이팅으로는 클래스 {pos}입니다.', '클래스 안에서 아이레이팅은 {pos}입니다.']),
+    'form_rating_target': ('race', ['클래스 {pos} 안에 들면 레이팅이 오릅니다.', '레이팅을 올리려면 클래스 {pos} 안에 들어야 합니다.', '목표는 클래스 {pos} 안입니다.']),
+    'form_rating_win': ('race', ['우승해야 레이팅이 오릅니다.', '레이팅을 올리려면 클래스 우승이 필요합니다.', '목표는 클래스 우승입니다.']),
+    'form_sof_class': ('race', ['우리 클래스 SOF는 약 {rating}입니다.', '클래스 SOF는 약 {rating}입니다.', '같은 클래스의 SOF는 약 {rating}입니다.']),
     'form_hist_first': ('race', ['이 차로는 이 트랙의 기록이 없습니다. [pause short] 오늘 기준을 만들어 봅시다.',
                                  '이 트랙은 저희 기록에 처음입니다. 첫 랩들은 여유 있게 가세요.',
                                  '이 조합은 처음 달립니다. [pause short] 오늘 기록이 기준이 됩니다.']),

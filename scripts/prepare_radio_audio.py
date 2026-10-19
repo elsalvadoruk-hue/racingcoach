@@ -31,6 +31,7 @@ def cache_directory() -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--status", action="store_true", help="합성 요청 없이 준비 상태만 출력")
+    parser.add_argument("--roles", nargs="*", help="이 담당의 문장만 (예: spotter). 다른 스포터 목소리를 동시에 받을 때 엔지니어 문장을 겹쳐 받지 않게")
     args = parser.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -41,6 +42,8 @@ def main() -> int:
 
     directory = cache_directory()
     job = AudioPreparation(RadioAudioCache(GoogleSpeech(), directory))
+    if args.roles:
+        job._items = [item for item in job.items() if item[0] in args.roles]
     status = job.status()
     print(f"저장 위치: {directory}")
     print(f"준비됨 {status['ready']} / {status['total']} · 남은 {status['missing']}개, 약 {status['characters_missing']}자", flush=True)

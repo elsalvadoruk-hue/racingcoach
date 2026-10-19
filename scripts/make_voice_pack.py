@@ -16,32 +16,66 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VOICE_DIRS = ('data/radio_audio/', 'data/spotter_audio/')
+PIECES_DIR = 'data/radio_audio/pieces/'
+PIECE_TYPES = ('.ogg', '.wav')
 
 
 def voice_path(name: str) -> bool:
     path = PurePosixPath(name)
     return (not path.is_absolute() and '..' not in path.parts and '\\' not in name
-            and name.startswith(VOICE_DIRS) and path.suffix.lower() == '.mp3')
+            and name.startswith(VOICE_DIRS) and (path.suffix.lower() == '.mp3'
+                                                 # Number pieces joined at play time (number_splice): Ogg Opus,
+                                                 # or WAV from before they were compressed.
+                                                 or (path.suffix.lower() in PIECE_TYPES and name.startswith(PIECES_DIR))))
 
 
-def sources(radio: Path, spotter: Path) -> dict[str, Path]:
+def sources(radio: Path, spotter: Path, skip=frozenset()) -> dict[str, Path]:
+    """Every voice file to share; skip holds radio clip names the app no longer plays (replaced_clips)."""
     result = {}
     for prefix, folder in zip(VOICE_DIRS, (radio, spotter)):
         folder = folder.resolve()
         if not folder.is_dir():
             raise ValueError('Both fixed voice cache folders must exist')
         for file in sorted(folder.rglob('*')):
-            if not file.is_file() or file.suffix.lower() != '.mp3':
+            if not file.is_file() or file.suffix.lower() not in ('.mp3', *PIECE_TYPES) or file.name.endswith('.part.ogg'):
+                continue
+            if prefix == VOICE_DIRS[0] and file.parent == folder and file.name in skip:
                 continue
             if file.is_symlink() or not file.resolve().is_relative_to(folder):
                 raise ValueError('A voice file points outside its cache folder')
             name = prefix + file.relative_to(folder).as_posix()
+            if file.suffix.lower() in PIECE_TYPES and not name.startswith(PIECES_DIR):
+                continue
             if not voice_path(name):
                 raise ValueError('Invalid voice path')
             result[name] = file
     if not result:
         raise ValueError('No fixed voice MP3 files were found')
     return result
+
+
+def replaced_clips(radio: Path) -> frozenset:
+    """Names of whole-sentence clips for sentences now said from cut pieces (lap times, strength of field),
+    in every spotter voice: they stay on disk but are not shared any more."""
+    sys.path.insert(0, str(ROOT / 'iRacing_Backend'))
+    import os
+    import number_splice
+    import radio_phrases
+    from radio_audio import RadioAudioCache
+    from spotter import SPOTTER_VOICES
+    cache, names = RadioAudioCache(None, radio), set()
+    sentences = [(role, text) for role, text in radio_phrases.catalog() if number_splice.spliceable(text)]
+    before = os.environ.get('IRACING_TTS_SPOTTER_VOICE')
+    try:
+        for voice in SPOTTER_VOICES:
+            os.environ['IRACING_TTS_SPOTTER_VOICE'] = f'ko-KR-Chirp3-HD-{voice}'
+            names.update(cache.path(role, text).name for role, text in sentences)
+    finally:
+        if before is None:
+            os.environ.pop('IRACING_TTS_SPOTTER_VOICE', None)
+        else:
+            os.environ['IRACING_TTS_SPOTTER_VOICE'] = before
+    return frozenset(names)
 
 
 def previous(releases: Path, version: str) -> dict[str, str]:
@@ -58,6 +92,12 @@ def previous(releases: Path, version: str) -> dict[str, str]:
 
 def instructions(version: str, old: str | None, count: int) -> str:
     kind = '전체 음성' if old is None else f'음성 업데이트 {old} → {version}'
+    # A full pack replaces the voice folders: since 1.4.0 the lap time clips are cut pieces, and the old
+    # whole-sentence clips (about 1.4 GB) would only stay behind unused.
+    replace = '' if old else (
+        '   이미 쓰던 사람은 먼저 데이터 폴더의 radio_audio, spotter_audio 두 폴더만 지웁니다\n'
+        '   (보통 프로그램 폴더\\data\\radio_audio, 프로그램 폴더\\data\\spotter_audio).\n'
+        '   data 폴더 자체와 그 안의 다른 파일(기록, 설정, Google 키, Garage61 토큰)은 지우지 않습니다.\n')
     change = (f'음성 {count:,}개를 포함합니다.' if count else
               '이 버전 사이에는 추가·변경된 음성이 없습니다. 기존 음성이 정상이라면 이 ZIP은 받을 필요가 없습니다.')
     return f'''iRacing 주행 코치 {version} · {kind}
@@ -66,11 +106,12 @@ def instructions(version: str, old: str | None, count: int) -> str:
 음성만 들어 있습니다. 프로그램 버전은 바뀌지 않습니다.
 
 1. 프로그램과 실행.bat으로 연 창을 종료합니다.
-2. 이 ZIP을 실행.bat이 있는 프로그램 폴더에 압축 해제합니다.
+{replace}2. 이 ZIP을 실행.bat이 있는 프로그램 폴더에 압축 해제합니다.
 3. ZIP 안의 data 폴더를 기존 data 폴더와 합치고 같은 파일은 덮어씁니다.
 4. 실행.bat으로 다시 실행하고 음성 코치에서 소리를 확인합니다.
 
 올바른 위치: 프로그램 폴더/data/radio_audio/*.mp3
+              프로그램 폴더/data/radio_audio/pieces/*.ogg (랩타임·SOF 숫자 음성 조각)
               프로그램 폴더/data/spotter_audio/*.mp3
 프로그램 폴더/음성팩이름/data/ 또는 프로그램 폴더/data/data/처럼 중첩하지 마세요.
 
@@ -145,13 +186,13 @@ def write_pack(target: Path, files: dict[str, Path], version: str, old: str | No
 
 
 def create(radio: Path, spotter: Path, version: str, baselines: list[str],
-           releases: Path, out: Path) -> list[dict]:
+           releases: Path, out: Path, skip=frozenset()) -> list[dict]:
     if not re.fullmatch(r'\d+\.\d+\.\d+', version) or any(
             not re.fullmatch(r'\d+\.\d+\.\d+', v) or v == version for v in baselines):
         raise ValueError('Use distinct source and target semantic versions')
     baselines = list(dict.fromkeys(baselines))
     old = {v: previous(releases, v) for v in baselines}
-    clips = sources(radio, spotter)
+    clips = sources(radio, spotter, skip)
     out.mkdir(parents=True, exist_ok=True)
     if any(out.iterdir()):
         raise FileExistsError('Use a new empty output folder')
@@ -186,8 +227,10 @@ def main() -> int:
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
     out = args.out or ROOT / 'share' / 'voice-packs' / args.version
-    result = create(app_settings.data_dir() / 'radio_audio', app_settings.spotter_audio_dir(),
-                    args.version, args.baselines, ROOT / 'releases', out)
+    app_settings.apply_environment()
+    radio = app_settings.data_dir() / 'radio_audio'
+    result = create(radio, app_settings.spotter_audio_dir(), args.version, args.baselines, ROOT / 'releases', out,
+                    replaced_clips(radio))
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 

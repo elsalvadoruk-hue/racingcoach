@@ -39,6 +39,16 @@ class FakeSpeech:
 
     def synthesize(self, text, role='coach', encoding='mp3'):
         self.calls.append((role, text, encoding))
+        if encoding == 'wav' and '[pause' in text:
+            # Numbers said from pieces (number_splice) are cut at the pauses: say each part, silence between.
+            import re
+            import numpy as np
+            import number_splice
+            words = [np.sin(np.arange(int(24000 * .04 * len(part.strip()))) * .2).astype(np.float32) * .5
+                     for part in re.split(r'\[pause[^\]]*\]|(?<=\.) ', text)]   # a full stop is a pause too
+            gap = np.zeros(int(24000 * .6), dtype=np.float32)
+            audio = np.concatenate([gap] + [x for word in words for x in (word, gap)])
+            return base64.b64encode(number_splice.write_wav(audio)).decode()
         return wav(.5) if encoding == 'wav' else base64.b64encode(b'ID3' + text.encode() + b'x' * 200).decode()
 
 
@@ -656,7 +666,8 @@ class PreparationTests(unittest.TestCase):
         self.job._ready = (0., None)
         done = self.job.status()
         self.assertEqual((done['state'], done['missing'], done['failed']), ('COMPLETE', 0, 0))
-        self.assertEqual(len(self.speech.calls), done['total'])
+        # At most one request per sentence: numbers said from pieces (number_splice) share them.
+        self.assertLessEqual(len(self.speech.calls), done['total'])
         calls = len(self.speech.calls)
         self.job.start()
         self.finish()
@@ -690,7 +701,7 @@ class PreparationTests(unittest.TestCase):
         self.finish()
         self.job._ready = (0., None)
         self.assertEqual(self.job.status()['state'], 'COMPLETE')
-        self.assertEqual(len(self.speech.calls), failed['total'])
+        self.assertLessEqual(len(self.speech.calls), failed['total'])
 
     def test_quota_errors_are_waited_out_instead_of_failing_the_batch(self):
         good = self.speech.synthesize
