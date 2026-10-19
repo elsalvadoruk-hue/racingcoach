@@ -4,25 +4,16 @@ chcp 65001 >nul
 pushd "%~dp0"
 if errorlevel 1 goto folder_error
 
-if exist ".venv\Scripts\python.exe" (
-  ".venv\Scripts\python.exe" "scripts\launch_app.py" %*
-  goto finished
-)
-if exist "iRacing_Backend\.venv\Scripts\python.exe" (
-  "iRacing_Backend\.venv\Scripts\python.exe" "scripts\launch_app.py" %*
-  goto finished
-)
-where python >nul 2>nul
-if not errorlevel 1 (
-  python "scripts\launch_app.py" %*
-  goto finished
-)
-where py >nul 2>nul
-if not errorlevel 1 (
-  py -3 "scripts\launch_app.py" %*
-  goto finished
-)
-echo Python was not found. Install Python 3.10 or later and try again.
+call "scripts\find_python.bat"
+if not defined COACH_PYTHON goto no_python
+call %COACH_PYTHON% "scripts\launch_app.py" %*
+goto finished
+
+:no_python
+echo Python 3.10 or later was not found.
+echo Install Python 3.12, run the installer bat file once, then try again.
+echo   - With the Python install manager:  py install 3.12
+echo   - Or download Python 3.12 from python.org and check "Add Python to PATH".
 popd
 pause
 exit /b 1

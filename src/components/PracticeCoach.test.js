@@ -34,7 +34,7 @@ test('shows the check of the next run with corner rows', () => {
     corners: [{ label: '5번 코너', matched: true, input_change: -6, input_done: true, time_before_s: 10.1, time_after_s: 9.9, gain_s: 0.2 }],
   };
   render(<PracticeCoach apiBase="" filename="b.ibt" practice={{ active, check, history: { by_cause: [] } }} coach={coach} />);
-  expect(screen.getByText('해냈습니다')).toBeInTheDocument();
+  expect(screen.getByText('개선 확인')).toBeInTheDocument();
   expect(screen.getByTestId('practice-summary')).toHaveTextContent('과제를 해냈습니다');
   expect(screen.getByText(/풀스로틀 지점 -6.0 m/)).toBeInTheDocument();
   expect(screen.getByText(/0.200초 빨라짐/)).toBeInTheDocument();
@@ -44,15 +44,24 @@ test('closing a task returns to the suggestion and keeps the history', async () 
   const history = { by_cause: [{ root_cause: 'THROTTLE_RETURN_LATE', title: '풀스로틀 복귀 지연', tried: 1, done: 1, gain_s: 0.2 }] };
   global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ task: {}, history }) });
   render(<PracticeCoach apiBase="" filename="b.ibt" practice={{ active, check: null, history: { by_cause: [] } }} coach={coach} />);
-  fireEvent.click(screen.getByText('완료로 기록'));
+  fireEvent.click(screen.getByText('연습 종료로 기록'));
   await waitFor(() => expect(screen.getByText(/오늘의 한 가지/)).toBeInTheDocument());
   expect(global.fetch.mock.calls[0][0]).toBe('/api/practice/task1/close');
-  expect(screen.getByTestId('practice-history-THROTTLE_RETURN_LATE')).toHaveTextContent('찾은 시간 0.20초');
+  expect(screen.getByTestId('practice-history-THROTTLE_RETURN_LATE')).toHaveTextContent('종료 1 · 개선 확인 0 · 확인된 시간 0.20초');
 });
 
 test('says so when there is nothing to work on', () => {
   render(<PracticeCoach apiBase="" filename="b.ibt" practice={null} coach={{ ranked_focuses: [] }} />);
   expect(screen.getByText(/고칠 만한 반복 손실을 찾지 못했습니다/)).toBeInTheDocument();
+});
+
+test('a finished task can show a later verification without becoming active again', () => {
+  render(<PracticeCoach apiBase="" filename="later.ibt" practice={{ active: null, followups: [
+    { task_id: 'old', title: 'ABS 개입 줄이기', check: { status: 'UNVERIFIED', summary: '효과 확인이 필요합니다.', reasons: ['연료량: 조건 차이'] } },
+  ], history: { by_cause: [] } }} coach={coach} />);
+  expect(screen.getByTestId('practice-followup')).toHaveTextContent('종료한 과제 재확인: ABS 개입 줄이기');
+  expect(screen.getByTestId('practice-followup')).toHaveTextContent('연료량: 조건 차이');
+  expect(screen.queryByText(/진행 중인 과제/)).not.toBeInTheDocument();
 });
 
 test('shows the server reason when a start is refused', async () => {

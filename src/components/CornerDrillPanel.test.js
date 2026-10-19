@@ -34,7 +34,7 @@ test('shows attempts against the first three and the progress', async () => {
   ];
   global.fetch = jest.fn(() => Promise.resolve({ ok: true, json: async () => running({ attempts }) }));
   render(<CornerDrillPanel apiBase="" filename="a.ibt" task={task} />);
-  expect(await screen.findByTestId('drill-progress')).toHaveTextContent('같은 저장 지점 최근 3번 중 목표 달성 2번 (5번 중 4번이면 완료)');
+  expect(await screen.findByTestId('drill-progress')).toHaveTextContent('같은 저장 지점 최근 3번 중 목표 달성 2번 (5번 중 4번과 반복 편차 조건을 함께 확인)');
   expect(screen.getByText('-0.100')).toBeInTheDocument();
   expect(screen.getByText('-6.0 m ✓')).toBeInTheDocument();
   expect(screen.getByText('1 (진입)')).toBeInTheDocument();
@@ -43,7 +43,8 @@ test('shows attempts against the first three and the progress', async () => {
 test('a finished drill says so and can be ended', async () => {
   global.fetch = jest.fn((url, options) => Promise.resolve({ ok: true, json: async () => (options?.method === 'DELETE' ? { active: false } : running({ done: true })) }));
   render(<CornerDrillPanel apiBase="" filename="a.ibt" task={task} />);
-  expect(await screen.findByText('연습 완료')).toBeInTheDocument();
+  expect(await screen.findByText('입력 목표 달성')).toBeInTheDocument();
+  expect(screen.getByTestId('drill-progress')).toHaveTextContent('페이스 개선은 다음 정상 주행에서 확인');
   fireEvent.click(screen.getByText('구간 연습 끝내기'));
   await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('/api/drill', expect.objectContaining({ method: 'DELETE' })));
 });
@@ -54,6 +55,13 @@ test('the guide explains the keys and lets each sound be heard', () => {
   expect(screen.getByTestId('drill-guide')).toHaveTextContent('혼자 하는 오프라인 연습');
   fireEvent.click(screen.getByText('“삐, 삐, 삑”'));
   expect(playBeep).toHaveBeenCalledWith('brake_point');
+});
+
+test('an unmeasurable goal never presents stable attempts as completion progress', async () => {
+  global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => running({ target: null, recent_count: 5 }) });
+  render(<CornerDrillPanel apiBase="" filename="a.ibt" task={task} />);
+  expect(await screen.findByTestId('drill-progress')).toHaveTextContent('자동으로 달성 처리하지 않습니다');
+  expect(screen.queryByText('입력 목표 달성')).not.toBeInTheDocument();
 });
 
 test('warm-up laps first, with the fuel to put in, and they can be skipped', async () => {

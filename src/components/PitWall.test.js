@@ -126,3 +126,23 @@ test('a report cut off by a more urgent call stays undelivered and is said again
   await act(async () => output.play.mock.calls[1][2].onStatus('completed'));
   await waitFor(() => expect(acks()).toBe(1));
 }, 15000);
+
+test.each(['disconnect', 'new session'])('urgent fuel speech is invalidated by %s before playback starts', async (transition) => {
+  const fallback = global.fetch;
+  let currentStatus = { connected: true, snapshot: { run_id: 'old-run', brake: 1, steering_rad: 1, speed_mps: 30 } };
+  global.fetch = jest.fn(async (url, options) => url.endsWith('/status')
+    ? { ok: true, json: async () => currentStatus } : fallback(url, options));
+  output.play = jest.fn(async () => true);
+  pendingReport = { ok: true, json: async () => ({ pit_wall: { active: true }, report: {
+    ...report, priority: 3, note: { ...report.note, context: { ...report.note.context, snapshot: { run_id: 'old-run' } } },
+  } }) };
+  render(<LiveCoach apiBase="http://test" visible />);
+  fireEvent.click(screen.getByRole('button', { name: '자동 보고 시작' }));
+  await waitFor(() => expect(output.play).toHaveBeenCalledTimes(1));
+  const options = output.play.mock.calls[0][2];
+  expect(options.valid()).toBe(true); // Urgency still bypasses braking and steering.
+  currentStatus = transition === 'disconnect' ? { connected: false, snapshot: {} }
+    : { connected: true, snapshot: { run_id: 'new-run', brake: 0, steering_rad: 0, speed_mps: 30 } };
+  await waitFor(() => expect(options.valid()).toBe(false), { timeout: 2500 });
+  await act(async () => options.onStatus('cancelled', 'realtime_state_changed'));
+});

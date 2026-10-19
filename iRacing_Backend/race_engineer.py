@@ -288,6 +288,7 @@ class RaceEngineer:
                 deltas = [b['gap_s'] - a['gap_s'] for a, b in zip(points, points[1:])] if consecutive else []
                 trend = 'closing' if deltas and all(d < -.15 for d in deltas) else 'opening' if deltas and all(d > .15 for d in deltas) else 'steady' if deltas else None
                 car.update(gap_trend=trend, gap_at_line_s=round(points[-1]['gap_s'], 1) if consecutive else None,
+                           gap_start_s=round(points[0]['gap_s'], 1) if consecutive else None,
                            gap_change_s_per_lap=round(statistics.median(deltas), 2) if deltas else None,
                            gap_observations=len(points) if consecutive else 0, trend_lap=points[-1]['lap'] if points else None)
             return car

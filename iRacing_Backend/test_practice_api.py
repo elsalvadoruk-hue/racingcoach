@@ -121,6 +121,17 @@ class DrillRouteTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/practice/nope/drill", json={"filename": "a.ibt", "corner_label": "5번 코너"}).status_code, 404)
         self.assertEqual(self.client.post(f"/api/practice/{self.task['id']}/drill", json={"filename": "a.ibt", "corner_label": "99번 코너"}).status_code, 422)
 
+    def test_same_filename_from_another_car_cannot_start_the_old_task(self):
+        api.shared_sync_state['analysis_result']['session']['car_path'] = 'another-car'
+        self.assertEqual(self.client.post(f"/api/practice/{self.task['id']}/drill", json={'filename': 'a.ibt', 'corner_label': '5번 코너'}).status_code, 409)
+
+    def test_stopped_drill_remains_readable_from_task_history(self):
+        self.client.post(f"/api/practice/{self.task['id']}/drill", json={'filename': 'a.ibt', 'corner_label': '5번 코너'})
+        self.client.delete('/api/drill')
+        kept = self.client.get(f"/api/practice/{self.task['id']}/drills").json()
+        self.assertEqual(kept['runs'][-1]['outcome'], 'STOPPED')
+        self.assertEqual(kept['runs'][-1]['plan']['task_id'], self.task['id'])
+
 
 class DrillFuelTests(unittest.TestCase):
     def test_fuel_is_the_task_laps_start_plus_two_warm_up_laps(self):
@@ -163,17 +174,23 @@ class DrillReferenceTests(unittest.TestCase):
         api.shared_sync_state["analysis_result"] = result
         task = self.client.post("/api/practice/start", json={"filename": "a.ibt", "focus_index": 0}).json()["task"]
         self.assertEqual(task["reference_source"], source)
-        return self.client.post(f"/api/practice/{task['id']}/drill", json={"filename": "a.ibt", "corner_label": "5번 코너"}).json()["plan"]
+        response = self.client.post(f"/api/practice/{task['id']}/drill", json={"filename": "a.ibt", "corner_label": "5번 코너"})
+        if not external_ready and source.startswith('GARAGE61'):
+            self.assertEqual(response.status_code, 422)
+            self.assertIn('Garage61 기준', response.json()['detail'])
+            return None
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()["plan"]
 
     def test_garage61_task_beeps_at_the_fast_laps(self):
         plan = self.start("GARAGE61_REFERENCE_CONSENSUS")
         self.assertEqual((plan["reference_source"], plan["reference_label"]), ("GARAGE61", "Garage61 조건 가중 종합 기준 · 5랩"))
         self.assertEqual((plan["brake_pct"], plan["throttle_pct"]), (0.232, 0.262))
 
-    def test_personal_task_or_missing_garage61_keeps_the_own_reference_lap(self):
+    def test_personal_uses_own_lap_and_missing_garage61_does_not_silently_substitute_it(self):
         plan = self.start("PERSONAL_LAP_COMPARISON")
         self.assertEqual((plan["reference_source"], plan["reference_label"]), ("PERSONAL", "내 기준 랩 7"))
         self.assertNotEqual(plan["brake_pct"], 0.232)
         self.tearDown(); self.setUp()
         plan = self.start("GARAGE61_REFERENCE_CONSENSUS", external_ready=False)
-        self.assertEqual(plan["reference_source"], "PERSONAL")
+        self.assertIsNone(plan)

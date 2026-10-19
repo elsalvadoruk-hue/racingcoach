@@ -295,6 +295,110 @@ class BlueAndPitSpeedTests(unittest.TestCase):
         self.wait(10)
         self.assertEqual([e['key'] for e in self.radio.pending].count('blue'), 1)   # once while it stays up
 
+    def blue_traffic(self, other_lap=0, other_pct=.49, own_pct=.5):
+        self.meta.update(player_idx=0, cars=[
+            {'idx': 0, 'lap_completed': 0, 'distance_pct': own_pct,
+             'on_pit_road': False, 'track_surface': 3},
+            {'idx': 1, 'lap_completed': other_lap, 'distance_pct': other_pct,
+             'on_pit_road': False, 'track_surface': 3},
+        ])
+
+    def test_first_lap_startup_flag_longer_than_hold_needs_lapping_traffic(self):
+        # Recorded Laguna Seca startup flag lasted 1.9 s, beyond the old hold.
+        for completed in (0, None):
+            with self.subTest(completed=completed):
+                self.setUp()
+                self.blue_traffic()
+                self.tick(lap_completed=completed, session_flags=0x20)
+                self.wait(3)
+                self.assertNotIn('blue', self.keys())
+                self.assertIsNone(self.radio.blue_since)
+
+    def test_start_line_lap_counter_difference_is_not_a_lapping_car(self):
+        # The front car crossed the line first but is only .02 laps ahead.
+        self.blue_traffic(other_lap=1, other_pct=.01, own_pct=.99)
+        self.tick(lap_completed=0, session_flags=0x20)
+        self.wait(2)
+        self.assertNotIn('blue', self.keys())
+
+    def test_late_starter_can_have_genuine_first_lap_blue_and_loses_it_after_pass(self):
+        self.blue_traffic(other_lap=1)
+        self.tick(lap_completed=0, session_flags=0x20)
+        self.wait(1.6)
+        event = next(e for e in self.radio.pending if e['key'] == 'blue')
+        self.assertTrue(self.radio.valid(event, self.now))
+        self.meta['cars'][1]['distance_pct'] = .51
+        self.tick()
+        self.assertFalse(self.radio.valid(event, self.now))
+        self.assertNotIn('blue', self.keys())
+
+    def test_first_lap_blue_requires_fresh_on_track_lapping_car_and_actual_flag(self):
+        for changes in ({'on_pit_road': True}, {'track_surface': -1}, {'lap_completed': None},
+                        {'distance_pct': .2}):
+            with self.subTest(changes=changes):
+                self.setUp()
+                self.blue_traffic(other_lap=1)
+                self.meta['cars'][1].update(changes)
+                self.tick(lap_completed=0, session_flags=0x20)
+                self.wait(2)
+                self.assertNotIn('blue', self.keys())
+        self.setUp()
+        self.blue_traffic(other_lap=1)
+        self.tick(lap_completed=0, session_flags=0)
+        self.wait(2)
+        self.assertNotIn('blue', self.keys())
+        self.tick(session_flags=0x20)
+        self.wait(1.6)
+        event = next(e for e in self.radio.pending if e['key'] == 'blue')
+        for _ in range(21):
+            self.now += .1
+            self.sample['session_time'] += .1
+            self.radio.ingest(self.sample, 'run', self.now, metadata=None)
+        self.assertFalse(self.radio.valid(event, self.now))
+
+    def test_formation_and_pit_flags_do_not_count_toward_racing_hold(self):
+        for changes in ({'session_state': 3}, {'on_pit_road': True}, {'session_state': None}):
+            with self.subTest(changes=changes):
+                self.setUp()
+                self.tick(session_flags=0x20, **changes)
+                self.wait(3)
+                self.assertNotIn('blue', self.keys())
+                self.tick(session_state=4, on_pit_road=False)
+                self.wait(1.2)
+                self.assertNotIn('blue', self.keys())
+                self.wait(.4)
+                self.assertIn('blue', self.keys())
+
+    def test_unknown_flag_replay_and_car_exit_restart_observation(self):
+        for changes in ({'session_flags': None}, {'is_replay': True}, {'on_track': False}):
+            with self.subTest(changes=changes):
+                self.setUp()
+                self.tick(session_flags=0x20)
+                self.wait(1)
+                self.tick(**changes)
+                self.wait(1)
+                self.tick(session_flags=0x20, is_replay=False, on_track=True)
+                self.wait(1.2)
+                self.assertNotIn('blue', self.keys())
+                self.wait(.4)
+                self.assertIn('blue', self.keys())
+
+    def test_waiting_blue_cannot_return_on_a_new_brief_flag(self):
+        self.tick(session_flags=0x20)
+        self.wait(1.6)
+        event = next(e for e in self.radio.pending if e['key'] == 'blue')
+        self.tick(session_flags=0)
+        self.tick(session_flags=0x20)
+        self.assertFalse(self.radio.valid(event, self.now))
+        self.assertNotIn('blue', self.keys())
+        self.assertNotIn(event, self.radio.pending)
+
+    def test_practice_blue_does_not_require_race_lap_progress(self):
+        self.meta['session_type'] = 'Practice'
+        self.tick(session_flags=0x20, lap_completed=0)
+        self.wait(1.6)
+        self.assertIn('blue', self.keys())
+
     def test_the_limiter_hovering_just_over_the_limit_is_not_called_but_real_overspeed_is(self):
         self.tick(on_pit_road=True, speed_mps=81.5 / 3.6)              # 80 km/h limit, limiter on: +1.5 km/h
         self.assertNotIn('pit_speed', self.keys())

@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import time
 from pathlib import Path
 
 from practice import PracticeStore, check, corner_snapshot
@@ -10,16 +11,20 @@ def run(name, full_throttle=0.30, times=(10.0, 10.1, 10.2), apex=0.25, track="17
     """A small analysis result with one focus corner (C1) and one other corner (C2)."""
     corners = [
         {"id": "C1", "label": "5번 코너", "apex_pct": apex, "entry_pct": apex - 0.02, "exit_pct": apex + 0.02,
-         "target": {"full_throttle_pct": full_throttle, "min_speed_kph": 90.0}},
+         "target": {"full_throttle_pct": full_throttle, "min_speed_kph": 90.0,
+                    'exit_speed_kph': 150 + (0.30 - full_throttle) * 1000, 'throttle_relifts': 0}},
         {"id": "C2", "label": "9번 코너", "apex_pct": 0.6, "entry_pct": 0.58, "exit_pct": 0.62,
          "target": {"full_throttle_pct": 0.65, "min_speed_kph": 120.0}},
     ]
-    consistency = {"corners": [{"id": "C1", "passes": [{"lap": i + 1, "time_s": t} for i, t in enumerate(times)]},
+    conditions = {'fuel_l': 40, 'track_temp_c': 30, 'weather_declared_wet': False, 'tire_compound': 0,
+                  'weight_penalty_kg': 0, 'power_adjust_pct': 0}
+    consistency = {"corners": [{"id": "C1", "passes": [{"lap": i + 1, "time_s": t, 'metrics': dict(corners[0]['target']),
+                                                       'conditions': dict(conditions)} for i, t in enumerate(times)]},
                                {"id": "C2", "passes": [{"lap": 1, "time_s": 5.0}]}]} if laps else None
     return {
-        "file": {"name": name},
+        "file": {"name": name, 'modified_at': time.time()},
         "session": {"car_path": "mclaren720sgt3", "car_name": "McLaren", "track_platform_id": track,
-                    "track_name": "Long Beach", "track_config": "", "track_length_m": 3000.0},
+                    "track_name": "Long Beach", "track_config": "", "track_length_m": 3000.0, 'setup_hash': 'unchanged-setup'},
         "performance": {"corners": corners, "corner_consistency": consistency},
     }
 

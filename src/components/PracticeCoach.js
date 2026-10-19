@@ -3,11 +3,13 @@ import { Button } from './ui/button';
 import FocusMiniMap from './FocusMiniMap';
 import CornerDrillPanel from './CornerDrillPanel';
 import CornerTrace, { CAUSE_EVENT } from './CornerTrace';
+import PracticeDrillHistory from './PracticeDrillHistory';
 
 // "Today's one thing": one driving focus at a time, checked on the next run with measurements only
 // (iRacing_Backend/practice.py). The detailed closed-loop panel stays below for drivers who want more.
 const STATUS = {
-  ACHIEVED: ['해냈습니다', 'border-success/40 bg-success/10 text-success'],
+  ACHIEVED: ['개선 확인', 'border-success/40 bg-success/10 text-success'],
+  UNVERIFIED: ['효과 확인 필요', 'border-warning/40 bg-warning/10 text-warning'],
   INPUT_ONLY: ['입력만 바뀜', 'border-warning/40 bg-warning/10 text-warning'],
   FASTER_OTHER: ['다른 이유로 빨라짐', 'border-primary/40 bg-primary/10 text-primary'],
   NOT_YET: ['아직', 'border-border bg-muted text-muted-foreground'],
@@ -156,6 +158,7 @@ export default function PracticeCoach({ apiBase, filename, practice, coach, visu
           <p className="mt-1 text-xs text-muted-foreground">코너: {numbered((active.corners || []).map((c) => c.label))} · 시작한 주행 {active.source_file}</p>
           {referenceNote}
           {check && <p className="mt-3 text-sm font-semibold text-foreground" data-testid="practice-summary">{check.summary}</p>}
+          {(check?.reasons || []).length > 0 && <p className="mt-1 text-xs text-muted-foreground">확인 필요: {check.reasons.join(' · ')}</p>}
           {check && (check.corners || []).length > 0 && (
             <div className="mt-2 flex flex-col gap-1 font-mono text-sm">
               {check.corners.map((row) => (
@@ -165,15 +168,16 @@ export default function PracticeCoach({ apiBase, filename, practice, coach, visu
                   {finite(row.gain_s) && <span className={row.gain_s > 0 ? 'text-success' : row.gain_s < 0 ? 'text-destructive' : 'text-muted-foreground'}>
                     구간 {row.time_before_s.toFixed(3)} → {row.time_after_s.toFixed(3)} s ({row.gain_s > 0 ? `${row.gain_s.toFixed(3)}초 빨라짐` : `${Math.abs(row.gain_s).toFixed(3)}초 느려짐`})
                   </span>}
+                  {(row.criteria || []).map((c) => <span key={c.metric} className="text-xs text-muted-foreground">{c.label}: {c.ok === true ? '충족' : c.ok === false ? '미달' : '측정 불가'}</span>)}
                 </div>
               ))}
             </div>
           )}
           <div className="mt-4 flex flex-wrap gap-2">
-            <Button variant="default" type="button" disabled={busy} onClick={() => close('DONE')} className="px-3 py-2 text-sm">완료로 기록</Button>
+            <Button variant="default" type="button" disabled={busy} onClick={() => close('DONE')} className="px-3 py-2 text-sm">연습 종료로 기록</Button>
             <Button variant="outline" type="button" disabled={busy} onClick={() => close('DROPPED')} className="border px-3 py-2 text-sm">그만두고 다른 과제 고르기</Button>
           </div>
-          <p className="mt-2 text-xs text-muted-foreground">결과가 "아직"이나 "입력만 바뀜"이면 그대로 두고 한 번 더 달려 보세요. 다음 주행 파일을 분석하면 다시 확인합니다.</p>
+          <p className="mt-2 text-xs text-muted-foreground">연습 종료는 효과 확인과 별개입니다. 종료한 뒤에도 같은 차·트랙의 다음 정상 주행을 분석하면 가장 최근 종료 과제를 다시 확인합니다.</p>
           <div className="mt-4"><CornerDrillPanel apiBase={apiBase} filename={filename} task={active} corners={corners} /></div>
           </div>
           {visuals}
@@ -211,6 +215,11 @@ export default function PracticeCoach({ apiBase, filename, practice, coach, visu
         <p className="text-sm text-muted-foreground">이번 주행에서는 고칠 만한 반복 손실을 찾지 못했습니다. 유효 랩을 몇 개 더 달려 보세요.</p>
       )}
       {error && <p className="text-sm text-destructive">{error}</p>}
+      {(view?.followups || []).map((item) => <div key={item.task_id} className="flex flex-col gap-1 text-sm" data-testid="practice-followup">
+        <p className="font-semibold">종료한 과제 재확인: {item.title}</p>
+        <p>{item.check.summary}</p>
+        {(item.check.reasons || []).length > 0 && <p className="text-xs text-muted-foreground">{item.check.reasons.join(' · ')}</p>}
+      </div>)}
       {history.length > 0 && (
         <details className="rounded-xl border border-border p-3">
           <summary className="cursor-pointer text-sm font-semibold text-foreground">배운 것 · 지금까지의 과제</summary>
@@ -218,10 +227,14 @@ export default function PracticeCoach({ apiBase, filename, practice, coach, visu
             {history.map((item) => (
               <div key={item.root_cause} className="flex flex-wrap justify-between gap-2" data-testid={`practice-history-${item.root_cause}`}>
                 <span className="text-foreground">{item.title}</span>
-                <span className="font-mono text-muted-foreground">시도 {item.tried} · 완료 {item.done} · 찾은 시간 {item.gain_s.toFixed(2)}초</span>
+                <span className="font-mono text-muted-foreground">시도 {item.tried} · 종료 {item.done} · 개선 확인 {item.verified || 0} · 확인된 시간 {item.gain_s.toFixed(2)}초</span>
               </div>
             ))}
           </div>
+          {(view?.history?.recent || []).map((item) => <div key={item.id} className="mt-3 flex flex-col gap-1 text-xs">
+            <p>{item.title} · {item.status === 'DONE' ? '연습 종료' : item.status === 'ACTIVE' ? '진행 중' : '중단'}</p>
+            <PracticeDrillHistory apiBase={apiBase} taskId={item.id} />
+          </div>)}
         </details>
       )}
     </div>

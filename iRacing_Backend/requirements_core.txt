@@ -4,3 +4,4 @@ numpy
 PyYAML
 pydantic
 google-genai
+Pillow>=11,<13

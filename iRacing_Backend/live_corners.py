@@ -76,6 +76,7 @@ class LiveCornerCoach:
         self.brake_onset = None
         self.review = None
         self.last_pass = None
+        self.last_measurement = None
         self.focus = None
 
     def _definitions(self, identity, now):
@@ -102,12 +103,14 @@ class LiveCornerCoach:
         previous, self.previous = self.previous, ({**sample, 'distance_pct': pct, 'session_time': at, 'speed_mps': speed} if valid else None)
         if not valid or previous is None:
             self.active, self.brake_onset = None, None
+            self.last_measurement = None
             return
         dt = at - previous['session_time']
         rollover = lap == previous['lap_number'] + 1 and previous['distance_pct'] > .9 and pct < .1
         step = pct - previous['distance_pct'] + (1 if rollover else 0)
         if not 0 < dt <= .5 or not 0 <= step < .05 or (lap != previous['lap_number'] and not rollover):
             self.active, self.brake_onset = None, None
+            self.last_measurement = None
             return
         start, end = previous['distance_pct'], previous['distance_pct'] + step  # end may pass 1.0 at the line
 
@@ -129,12 +132,15 @@ class LiveCornerCoach:
             active['clean'] = active['clean'] and not dirty
             if active['brake_pct'] is None and brake is not None and brake > BRAKE_ON and pct <= active['apex_pct']:
                 active['brake_pct'] = pct
+                active['brake_observed'] = self.brake_onset == pct
             if pct >= active['apex_pct'] and throttle is not None:
                 if active['throttle_pct'] is None and throttle > THROTTLE_ON:
                     active['throttle_pct'] = pct
             exit_at = crossing(active['exit_pct'])
             if exit_at is not None:
                 active['duration_s'] = exit_at - active.pop('entry_at')
+                active['exit_at'] = exit_at
+                self.last_measurement = None
                 self.active = None
                 if active['clean'] and active['duration_s'] > 0:
                     self._finished(active, track_length_m)
@@ -153,10 +159,12 @@ class LiveCornerCoach:
                 self.active = {'id': definition['id'], 'call': definition.get('call'), 'apex_pct': definition['apex_pct'], 'exit_pct': definition['exit_pct'],
                                'entry_pct': definition['entry_pct'], 'entry_at': entry_at, 'lap': int(lap),
                                'min_speed_mps': min(speed, previous['speed_mps']), 'brake_pct': onset,
+                               'brake_observed': onset is not None,
                                'throttle_pct': None, 'clean': not dirty}
                 break
 
     def _finished(self, corner_pass, track_length_m):
+        self.last_measurement = dict(corner_pass)
         best = self.best.setdefault(self.key, {})
         reference = best.get(corner_pass['id'])
         self.lap[corner_pass['id']] = corner_pass

@@ -264,6 +264,20 @@ test('mute records dynamic basic text without synthesizing and specialist stop p
   expect(audio.play).not.toHaveBeenCalled();
 });
 
+test('driver-started drill speech plays with pit-wall reports off and still expires with its event', async () => {
+  const event = radioEvent('drill_ready', { engineer: 'coach', priority: 2 });
+  global.fetch = jest.fn(async (url) => ({ ok: true, json: async () =>
+    url.endsWith('/render') ? { event, audio_base64: 'drill-ready-audio' } : manifest }));
+  const { result } = renderHook(() => useSpotter('http://test', audio, { specialists: false, level: 'off' }));
+  await enable(result);
+  send(sockets[0], radioFrame([event]));
+  await waitFor(() => expect(audio.play).toHaveBeenCalledWith('drill-ready-audio', 'audio/mpeg', expect.objectContaining({ priority: 2 })));
+  const options = audio.play.mock.calls[0][2];
+  expect(options.valid()).toBe(true);
+  send(sockets[0], radioFrame([]));
+  expect(options.valid()).toBe(false);
+});
+
 test('a rejected overlap retries the current state once, without waiting for a new serial', async () => {
   jest.useFakeTimers();
   audio.play.mockImplementationOnce(async () => false);

@@ -225,11 +225,15 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
         if (audio && wallOptions.current.speak) {
           lastMime.current = mime; setLastAudio(audio);
           const urgent = response.report.priority >= 3;
-          const workloadValid = () => {
+          const reportCurrent = () => {
             if (!drivingConnected.current) return false;
+            const runId = driving.current?.run_id, reportRunId = note.context?.snapshot?.run_id;
+            return !runId || !reportRunId || runId === reportRunId;
+          };
+          const workloadValid = () => {
+            if (!reportCurrent()) return false;
             const current = driving.current;
             if (!current) return true;
-            if (current.run_id && note.context?.snapshot?.run_id && current.run_id !== note.context.snapshot.run_id) return false;
             if (wallOptions.current.hold_enabled === false) return true;
             if (current.quiet != null) return response.report.brief ? (current.brief_quiet ?? current.quiet) : current.quiet;
             return current.on_pit_road === true || (current.speed_mps != null && current.speed_mps < 2)
@@ -240,7 +244,7 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
           const finished = new Promise((resolve) => { finish = resolve; });
           const started = await play(audio, mime, {
             valid: () => !stopped && mounted.current && epoch === reportEpoch.current
-              && (urgent || workloadValid()),
+              && (urgent ? reportCurrent() : workloadValid()),
             workloadValid: urgent ? undefined : workloadValid,
             onStatus: (status, reason) => {
               recordDelivery(deliveryEvent(note, response.report.spoken_text), status, reason);

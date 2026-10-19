@@ -36,11 +36,11 @@ NOTE = """iRacing 주행 코치 업데이트 {old} → {new}
 
 이 파일은 {old} 버전에만 맞습니다. 적용하기 전에 "설정" 탭 맨 위의 버전이 {old}인지 확인하세요.
 
-- 업데이트는 버전 순서대로 하나씩 적용합니다. 예: 1.0.0 → 1.0.1 → 1.0.2 → 1.1.0
+- 업데이트는 버전 순서대로 하나씩 적용합니다. 예: 1.0.0 → 1.0.1 → 1.0.2 → 1.1.0 → 1.2.0
 - 건너뛰지 마세요. 업데이트 파일에는 바로 앞 버전 뒤에 새로 생긴 음성만 들어 있습니다.
   건너뛰면 그 사이에 추가된 음성이 빠져서 일부 안내가 소리 없이 지나갑니다.
 - 이미 건너뛰었다면: 빠뜨린 버전의 파일부터 순서대로 다시 풀고, 마지막에 가장 새 버전의 파일을 한 번 더 풉니다.
-- 처음 설치하는 사람은 1.0.0 설치본을 받은 뒤 업데이트 파일을 버전 순서대로 모두 풉니다.
+- 처음 설치하는 사람은 업데이트 파일이 필요 없습니다. 최신 전체 설치본(iracing-coach-{new}.zip)만 받으면 됩니다.
 
 ■ 적용 방법
 
@@ -69,9 +69,11 @@ def release_notes(folder: Path, version: str) -> str:
     """The block of this version from the copy's patch notes, to go under the instructions."""
     file = folder / "패치 노트.txt"
     if not file.is_file():
-        return ""
+        raise ValueError(f"새 공유본에 패치 노트.txt가 없습니다: {file}")
     found = re.search(rf"^■ {re.escape(version)}\b[^\n]*\n(.*?)(?=^■ |\Z)", file.read_text(encoding="utf-8-sig"), re.MULTILINE | re.DOTALL)
-    return f"\n■ {version}에서 달라진 것\n\n{found[1].strip()}\n" if found else ""
+    if not found or not found[1].strip():
+        raise ValueError(f"패치 노트.txt에 {version} 블록이 없습니다. 배포 전에 사용자용 변경 내용을 먼저 적으세요.")
+    return f"\n■ {version}에서 달라진 것\n\n{found[1].strip()}\n"
 
 
 def digest(path: Path) -> str:
@@ -143,7 +145,12 @@ def main() -> int:
     install = "\n   이번 업데이트는 필요한 패키지가 바뀌었습니다. 켜기 전에 설치.bat을 한 번 더 실행하세요.\n" if requirements else ""
     out = (args.out or ROOT / "share" / f"iracing-coach-patch-{args.old}-to-{new_version}.zip").resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
-    note = NOTE.format(old=args.old, new=new_version, clips=clips, install=install, notes=release_notes(folder, new_version))
+    try:
+        release = release_notes(folder, new_version)
+    except ValueError as error:
+        print(f"패치를 만들 수 없습니다: {error}")
+        return 1
+    note = NOTE.format(old=args.old, new=new_version, clips=clips, install=install, notes=release)
     # The same text beside the zip, to read or post without opening it.
     out.with_name(f"패치 방법 {args.old}-to-{new_version}.txt").write_text(note, encoding="utf-8-sig")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:

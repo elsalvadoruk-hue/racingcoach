@@ -3,7 +3,7 @@ from collections import deque
 import math
 import statistics
 from radio_policy import quiet_window, speech_ok
-from spotter_context import TrafficApproach, PitBoxGuide, HazardWatch
+from spotter_context import TrafficApproach, PitBoxGuide, HazardWatch, progress
 from radio_audio import speech_fields
 import radio_phrases
 import radio_variations
@@ -92,8 +92,8 @@ POSITION_CALL_S = 40.      # a place is only said while it still holds, so it ca
 
 # Low-fuel warning: about half a lap of the car's own clean-lap use (fuel_l_per_lap, the most used of the
 # last clean laps), never later than FUEL_LOW_MIN_L, which is also the limit before a lap is measured.
-# A blue flag the sim holds for only a moment is not called (2026-10-17: at a rolling start it raised one for
-# 1.3 s just over the line with no lapping car anywhere near). A real one stays up until the car has passed.
+# Ignore brief SDK blue flags. First-lap startup flags can last longer than this
+# (Laguna Seca 2026-10-18: 1.9 s), so a first-lap race also needs measured lapping traffic.
 BLUE_HOLD_S = 1.5
 # Pit lane speed: with the limiter on, the speed sits up to about 1.5 km/h over the limit, and in the driver's
 # 244 recorded pit visits nothing under 3 km/h over ever brought a penalty; both penalties for speed were far
@@ -126,6 +126,7 @@ class RaceRadio:
         self.fuel_low_stage = 0
         self.blue_since, self.blue_called = None, False
         self.latest, self.metadata = {}, {}
+        self.metadata_at = None
         self.pending = deque(maxlen=48)
         self.last_sample = None
         self.sent = {}
@@ -207,11 +208,13 @@ class RaceRadio:
         self.run_id = run_id
         if metadata is not None:
             self.metadata = dict(metadata)
+            self.metadata_at = now
             self.qualifying = 'qual' in str(metadata.get('session_type') or '').lower()
         previous = self.latest
         self.latest, self.last_sample = dict(sample), now
         if sample.get('is_replay') is not False or sample.get('on_track') is not True:
             self.pending.clear()
+            self.blue_since, self.blue_called = None, False
             self.traffic.reset()
             self.hazard.reset()
             self.pit_box.reset()
@@ -252,6 +255,7 @@ class RaceRadio:
             self.emit(hazard['kind'], now, priority=2, ttl=3, condition=('hazard', (hazard['idx'], hazard['kind'])),
                       cooldown=15, group='hazard')
         flags, old_flags = num(sample.get('session_flags')), num(previous.get('session_flags'))
+        self._blue_flag(sample, now)
         if flags is not None:
             rising = int(flags) & ~int(old_flags or 0)
             table = [(0x1, 'finish', 2), (0x2, 'white', 2), (0x10, 'red', 2),
@@ -264,13 +268,6 @@ class RaceRadio:
                     # Every flag is the sim's own signal, debris included: while it lies there the sim
                     # raises the flag on each approach, and each time it is called (the driver's decision).
                     self.emit(key, now, priority=priority, condition=('flag', bit), cooldown=10)
-            if not int(flags) & 0x20:
-                self.blue_since, self.blue_called = None, False
-            elif self.blue_since is None:
-                self.blue_since = now
-            elif now - self.blue_since >= BLUE_HOLD_S and not self.blue_called:
-                self.blue_called = True
-                self.emit('blue', now, priority=2, condition=('flag', 0x20), cooldown=10)
             caution_mask = 0xC000
             yellow_mask = 0x108
             if int(flags) & caution_mask and not int(old_flags or 0) & caution_mask:
@@ -563,6 +560,52 @@ class RaceRadio:
             self.fuel_low_stage = 2 if fuel_low_limit(s) <= FUEL_LOW_MIN_L else stage
             self.emit('fuel_low', now, priority=2, condition=('low_fuel', None), cooldown=0)
 
+    def _blue_flag_active(self, sample, now):
+        flags = num(sample.get('session_flags'))
+        if (flags is None or not int(flags) & 0x20 or self.qualifying
+                or sample.get('session_state') != 4 or sample.get('on_pit_road') is not False):
+            return False
+        if str(self.metadata.get('session_type') or '').lower() != 'race':
+            return True
+        completed = num(sample.get('lap_completed'))
+        if completed is not None and completed >= 1:
+            return True
+        # At the start the SDK can briefly raise blue even though the driver has
+        # no lapping traffic. A late starter can still have a genuine first-lap
+        # blue: require fresh measured total progress AND a nearby car behind.
+        # This only confirms an existing flag; traffic never creates a flag.
+        if self.metadata_at is None or not 0 <= now - self.metadata_at < 2:
+            return False
+        cars = self.metadata.get('cars') or []
+        own = next((car for car in cars if car.get('idx') == self.metadata.get('player_idx')), {})
+        own_progress = progress(own)
+        if own_progress is None:
+            return False
+        for car in cars:
+            if car.get('idx') == own.get('idx'):
+                continue
+            other_progress = progress(car)
+            if other_progress is None:
+                continue
+            relative = other_progress - own_progress
+            behind = (relative + .5) % 1 - .5
+            if relative > .5 and -.1 <= behind <= 0:
+                return True
+        return False
+
+    def _blue_flag(self, sample, now):
+        if not self._blue_flag_active(sample, now):
+            if self.blue_since is not None:
+                # Cleared/unknown flags end this episode permanently. An old
+                # waiting call must not return when a new brief flag appears.
+                self.pending = deque((event for event in self.pending if event['key'] != 'blue'), maxlen=48)
+            self.blue_since, self.blue_called = None, False
+        elif self.blue_since is None:
+            self.blue_since = now
+        elif now - self.blue_since >= BLUE_HOLD_S and not self.blue_called:
+            self.blue_called = True
+            self.emit('blue', now, priority=2, condition=('blue', self.blue_since), cooldown=10)
+
     def valid(self, event, now):
         if (self.last_sample is None or not 0 <= now - self.last_sample < .5 or
                 self.latest.get('on_track') is not True or self.latest.get('is_replay') is not False
@@ -593,6 +636,8 @@ class RaceRadio:
             return (self.pit_box_enabled and s.get('on_pit_road') is True and box['ready']
                     and (num(s.get('speed_mps')) or 0) >= 2 and s.get('pit_service_status') not in (1, 2, 100, 101, 102, 103, 104, 105)
                     and value * .55 <= box['distance_estimate_m'] <= value)
+        if kind == 'blue':
+            return value == self.blue_since and self._blue_flag_active(s, now)
         if kind == 'flag': return num(s.get('session_flags')) is not None and bool(int(s['session_flags']) & value)
         if kind == 'warning': return num(s.get('engine_warnings')) is not None and bool(int(s['engine_warnings']) & value)
         if kind == 'pit': return s.get('on_pit_road') is value

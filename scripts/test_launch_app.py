@@ -1,4 +1,8 @@
 """Launcher lifecycle checks without starting the real API or accessing personal data."""
+import os
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -64,9 +68,11 @@ class LauncherTests(unittest.TestCase):
 
 
 class ScreenSelectionTests(unittest.TestCase):
-    def layout(self, temp, built_after_source):
+    def layout(self, temp, built_after_source, dev_tools=True):
         root = Path(temp)
         (root / "src").mkdir(); (root / "public").mkdir(); (root / "build").mkdir()
+        if dev_tools:
+            (root / "node_modules" / "react-scripts").mkdir(parents=True)
         source, built = root / "src" / "App.js", root / "build" / "index.html"
         source.write_text("x"); built.write_text("x")
         import os
@@ -92,6 +98,142 @@ class ScreenSelectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             self.assertTrue(self.frontend(self.layout(temp, False), None)[1].endswith("serve_ui.py"))
 
+    def test_a_shared_copy_serves_its_build_even_with_node_installed(self):
+        # Unzipping a patch with a tool that drops file times can make src/ look newer than build/.
+        with tempfile.TemporaryDirectory() as temp:
+            command = self.frontend(self.layout(temp, False, dev_tools=False), "node")
+            self.assertTrue(command[1].endswith("serve_ui.py"))
+
+
+FAKE_PYTHON = """import sys
+sys.version_info = (3, {minor}, 0, 'final', 0)
+if sys.argv[1:2] == ['-c']:
+    exec(sys.argv[2])
+"""
+
+# A stand-in for the Windows py launcher: "py -3.12 ..." runs as 3.12 when that version is listed,
+# "py -3 ..." runs as the newest listed one, anything else fails like a missing version.
+FAKE_LAUNCHER = """import sys
+installed = {minors!r}
+wanted = sys.argv[1] if len(sys.argv) > 1 else ''
+if wanted == '-3' and installed:
+    minor = max(installed)
+elif wanted.startswith('-3.') and wanted[3:].isdigit() and int(wanted[3:]) in installed:
+    minor = int(wanted[3:])
+else:
+    sys.exit(103)
+sys.version_info = (3, minor, 0, 'final', 0)
+if sys.argv[2:3] == ['-c']:
+    exec(sys.argv[3])
+"""
+
+
+@unittest.skipUnless(sys.platform == "win32", "the bat files run only on Windows")
+class FindPythonTests(unittest.TestCase):
+    """find_python.bat picks the Python that 설치.bat installs into and 실행.bat starts."""
+
+    def probe(self, *minors, launcher=()):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "한글 폴더 (1)"
+            (root / "scripts").mkdir(parents=True)
+            shutil.copy2(Path(__file__).with_name("find_python.bat"), root / "scripts" / "find_python.bat")
+            (root / "probe.bat").write_bytes(
+                b'@echo off\r\nsetlocal DisableDelayedExpansion\r\npushd "%~dp0"\r\ncall "scripts\\find_python.bat"\r\n'
+                b'echo [%COACH_PYTHON%][%COACH_PY_VERSION%][%COACH_PY_NEW%]\r\npopd\r\n')
+            path = []
+            for index, minor in enumerate(minors):
+                fake = Path(folder) / f"python{index}"
+                fake.mkdir()
+                (fake / "fake.py").write_text(FAKE_PYTHON.format(minor=minor), encoding="utf-8")
+                (fake / "python.cmd").write_text(f'@"{sys.executable}" "%~dp0fake.py" %*\r\n', encoding="ascii")
+                path.append(str(fake))
+            if launcher:
+                fake = Path(folder) / "launcher"
+                fake.mkdir()
+                (fake / "fakepy.py").write_text(FAKE_LAUNCHER.format(minors=list(launcher)), encoding="utf-8")
+                (fake / "py.cmd").write_text(f'@"{sys.executable}" "%~dp0fakepy.py" %*\r\n', encoding="ascii")
+                path.append(str(fake))
+            # Only the fakes and cmd's own folder: no real py launcher, no real Python on the path.
+            path.append(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32"))
+            env = dict(os.environ, PATH=os.pathsep.join(path))
+            result = subprocess.run(["cmd", "/c", str(root / "probe.bat")], capture_output=True, env=env,
+                                    stdin=subprocess.DEVNULL, timeout=60)
+            return result.stdout.decode("utf-8", "replace").strip()
+
+    def test_a_tested_version_is_used(self):
+        self.assertEqual(self.probe(12), "[python][3.12.0][]")
+
+    def test_an_older_supported_version_is_still_used(self):
+        self.assertEqual(self.probe(11), "[python][3.11.0][]")
+
+    def test_a_newer_python_is_tried_when_it_is_the_only_one(self):
+        self.assertEqual(self.probe(15), "[python][3.15.0][1]")
+        self.assertEqual(self.probe(launcher=(15,)), "[py -3][3.15.0][1]")
+
+    def test_a_tested_version_wins_over_a_newer_default(self):
+        # The reported case: "python" is 3.15, and 3.12 was added beside it.
+        self.assertEqual(self.probe(15, launcher=(15, 12)), "[py -3.12][3.12.0][]")
+        self.assertEqual(self.probe(15, 11), "[python][3.15.0][1]")
+
+    def test_too_old_or_nothing_found(self):
+        self.assertEqual(self.probe(9), "[][][]")
+        self.assertEqual(self.probe(), "[][][]")
+
+# Answers the version probe like FAKE_PYTHON; "-m pip ..." writes what it was given and succeeds or fails.
+FAKE_PIP_PYTHON = """import os, sys
+sys.version_info = (3, {minor}, 0, 'final', 0)
+if sys.argv[1:2] == ['-c']:
+    exec(sys.argv[2])
+elif sys.argv[1:3] == ['-m', 'pip']:
+    with open(os.path.join(os.path.dirname(__file__), 'pip-call.txt'), 'w') as log:
+        log.write(' '.join(sys.argv[3:]) + '\\n' + os.environ.get('PYYAML_FORCE_LIBYAML', '<unset>'))
+    sys.exit({pip_exit})
+"""
+
+
+@unittest.skipUnless(sys.platform == "win32", "the bat files run only on Windows")
+class InstallerTests(unittest.TestCase):
+    """설치.bat installs with the picked Python and explains a failure on a new one."""
+
+    def install(self, minor, pip_exit):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "한글 폴더 (1)"
+            (root / "scripts").mkdir(parents=True)
+            project = Path(__file__).resolve().parents[1]
+            shutil.copy2(project / "설치.bat", root / "설치.bat")
+            shutil.copy2(project / "scripts" / "find_python.bat", root / "scripts" / "find_python.bat")
+            fake = Path(folder) / "python"
+            fake.mkdir()
+            (fake / "fake.py").write_text(FAKE_PIP_PYTHON.format(minor=minor, pip_exit=pip_exit), encoding="utf-8")
+            (fake / "python.cmd").write_text(f'@"{sys.executable}" "%~dp0fake.py" %*\r\n', encoding="ascii")
+            path = os.pathsep.join([str(fake), os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")])
+            env = dict(os.environ, PATH=path)
+            env.pop("PYYAML_FORCE_LIBYAML", None)
+            result = subprocess.run(["cmd", "/c", str(root / "설치.bat")], capture_output=True, env=env,
+                                    input=b"\r\n", timeout=60)
+            call = (fake / "pip-call.txt").read_text() if (fake / "pip-call.txt").exists() else ""
+            return result.returncode, result.stdout.decode("utf-8", "replace"), call
+
+    def test_pyyaml_is_installed_without_compiling_its_optional_part(self):
+        code, output, call = self.install(12, 0)
+        self.assertEqual(code, 0, output)
+        arguments, pyyaml_setting = call.splitlines()
+        self.assertIn("--prefer-binary", arguments)
+        self.assertIn("requirements_core.txt", arguments)
+        self.assertEqual(pyyaml_setting, "0")
+        self.assertNotIn("newer than the tested", output)
+
+    def test_a_failure_on_a_new_python_points_to_3_12(self):
+        code, output, _ = self.install(15, 1)
+        self.assertEqual(code, 1)
+        self.assertIn("newer than the tested", output)
+        self.assertIn("py install 3.12", output)
+
+    def test_a_failure_on_a_tested_python_points_to_the_messages(self):
+        code, output, _ = self.install(12, 1)
+        self.assertEqual(code, 1)
+        self.assertIn("Check the internet connection", output)
+        self.assertNotIn("py install 3.12", output)
 
 if __name__ == "__main__":
     unittest.main()

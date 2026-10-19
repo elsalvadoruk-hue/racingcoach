@@ -14,7 +14,8 @@ CORNERS = [
 
 
 def plan(**changes):
-    made = drill_plan(CORNERS, '2번 코너', 'THROTTLE_RETURN_LATE', {'full_throttle_pct': .352}, L)
+    made = drill_plan(CORNERS, '2번 코너', 'THROTTLE_RETURN_LATE',
+                      {'full_throttle_pct': .352, 'exit_speed_kph': 178., 'throttle_relifts': 0}, L)
     made.update(changes)
     return made
 
@@ -33,7 +34,8 @@ class Driver:
             v = 25.0 if .315 <= pct <= .325 else speed
             self.drill.ingest({'distance_pct': pct % 1.0, 'speed_mps': v, 'session_time': self.time,
                                'brake': .8 if braking else 0.0, 'throttle': 1.0 if (pct >= full_at or pct < brake_at) else .4,
-                               'on_pit_road': pit, 'is_replay': False}, L)
+                               'on_pit_road': pit, 'is_replay': False, 'on_track': True,
+                               'steering_rad': .1, 'yaw_rate': .2, 'abs_active': False}, L)
             pct += v / 30 / L
             self.time += 1 / 30
 
@@ -42,7 +44,8 @@ class Driver:
         self.drive_one(pct)
 
     def drive_one(self, pct):
-        self.drill.ingest({'distance_pct': pct, 'speed_mps': 50.0, 'session_time': self.time, 'brake': 0.0, 'throttle': 1.0}, L)
+        self.drill.ingest({'distance_pct': pct, 'speed_mps': 50.0, 'session_time': self.time, 'brake': 0.0, 'throttle': 1.0,
+                           'on_track': True, 'is_replay': False, 'on_pit_road': False}, L)
         self.time += 1 / 30
 
 

@@ -171,7 +171,7 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
     const ticket = epoch.current;
     const valid = () => mounted.current && ticket === epoch.current && state.current.radio?.connected
       && state.current.radio.run_id === event.run_id && !state.current.occupied
-      && (output.current.specialists || event.engineer === 'spotter')
+      && (output.current.specialists || event.engineer === 'spotter' || event.key?.startsWith('drill_'))
       && (event.priority >= 2 || !output.current.busy)
       && radioQueue.current.has(event.id) && Date.now() < event.local_expires && Date.now() - lastFrame.current < 600;
     processing.current.add(event.id);

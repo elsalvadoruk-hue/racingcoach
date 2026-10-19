@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from './ui/button';
 import { playBeep } from '../drillBeeps';
+import PracticeDrillHistory from './PracticeDrillHistory';
 
 // Corner drill with iRacing's Active Reset, for a corner of the running practice task (live_drill.py).
 // The driver presses Active Reset's keys himself, where it is safe; this panel starts the measuring,
@@ -14,7 +15,7 @@ const SOUNDS = [
   ['brake_beep', '“삐, 삐, 삑”', '기준 랩의 제동 지점까지 1초·0.5초 전, 마지막 높은 “삑”이 제동 지점입니다.'],
   ['throttle_beep', '짧은 “뾱”', '기준 랩이 풀스로틀로 돌아간 지점입니다.'],
   ['end_beep', '낮은 “삐삐”', '구간 끝. Active Reset “실행” 키를 누르면 저장한 곳으로 돌아갑니다.'],
-  ['done', '올라가는 “띠리링”', '목표를 채웠습니다. 연습 완료.'],
+  ['done', '올라가는 “띠리링”', '입력과 부가 조건을 반복해서 지켰습니다. 페이스 개선은 다음 정상 주행에서 확인합니다.'],
 ];
 
 export function DrillGuide() {
@@ -31,10 +32,10 @@ export function DrillGuide() {
         <li>“타이어 준비됐습니다”가 나온 바퀴에서, 제동 구간 앞 직선에서 낮고 긴 “삐—”가 나면 <b>그 근처 직선에서 차가 똑바로 안정적으로 달릴 때</b> 저장 키를 누르세요. 비프는 권장 위치일 뿐이고, 누르는 곳은 직접 고릅니다. 저장할 때의 속도·연료·타이어 상태가 함께 저장되어 매번 같은 조건으로 다시 출발합니다.</li>
         <li>코너를 지나 낮은 “삐삐”가 나면 <b>실행</b> 키를 누릅니다. 저장한 곳으로 바로 돌아가 다시 달립니다. 앱은 차가 뒤로 순간이동한 것을 보고 새 시도로 셉니다.</li>
         <li>제동 지점 앞에서 “삐, 삐, 삑”이 납니다. <b>마지막 높은 “삑”이 기준 랩의 제동 지점</b>입니다. 정점 뒤 짧은 “뾱”은 기준 랩이 풀스로틀로 돌아간 지점입니다. Bloops처럼 소리에 맞춰 입력을 맞춰 보세요.</li>
-        <li>같은 저장 지점에서 출발한 <b>최근 5번 중 4번</b>이 과제의 입력 목표(예: 풀스로틀 3m 앞당기기)를 지키고, 그 시도들의 <b>제동 시작이 6m 안</b>, <b>구간 시간이 0.2초 안</b>에서 반복되면 “띠리링”과 함께 완료됩니다(검증 전 초기 기준).</li>
-        <li>저장 키를 다시 누르면 그때부터 새 묶음으로 셉니다. 피트로드·리플레이·데이터가 끊긴 시도는 세지 않습니다.</li>
+        <li>같은 저장 지점에서 출발한 <b>최근 5번 중 4번</b>이 입력 목표와 속도·조향 등 부가 조건을 함께 지키고, 그 시도들의 <b>제동 시작이 6m 안</b>, <b>구간 시간이 0.2초 안</b>에서 반복되면 입력 목표 달성입니다(검증 전 초기 기준). 측정값이 없으면 달성으로 세지 않습니다.</li>
+        <li>복귀 위치나 출발 속도·연료·설정이 달라지면 새 묶음으로 셉니다. 피트로드·리플레이·차량 밖·주변 차량 겹침·인시던트 증가·데이터가 끊긴 시도는 세지 않습니다.</li>
         <li>목표를 채우면 “띠리링”과 함께 주행 코치가 “구간 연습 목표를 채웠습니다”라고 말합니다.</li>
-        <li>연습을 마치면 일반 주행으로 한 번 달리고, 그 주행 파일을 분석하면 오늘의 한 가지 결과에 반영됩니다.</li>
+        <li>시도별 측정값은 자동 저장됩니다. 연습을 마치면 일반 주행에서 유효 랩을 3개 이상 달리고 파일을 분석하세요. 연습 종료와 페이스 개선 확인은 따로 기록합니다.</li>
       </ol>
       <div className="mt-3 grid gap-1">
         <span className="text-xs font-semibold text-muted-foreground">소리 미리 듣기</span>
@@ -91,7 +92,7 @@ export default function CornerDrillPanel({ apiBase, filename, task, corners = []
     <div className="flex flex-col gap-3 rounded-lg border border-border p-3" data-testid="corner-drill">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="text-sm font-semibold text-foreground">구간 반복 연습 · iRacing Active Reset</h4>
-        {mine && drill.done && <span className="rounded-lg border border-success/40 bg-success/10 px-2 py-1 text-xs font-semibold text-success">연습 완료</span>}
+        {mine && drill.done && <span className="rounded-lg border border-success/40 bg-success/10 px-2 py-1 text-xs font-semibold text-success">입력 목표 달성</span>}
       </div>
       <p className="text-xs text-muted-foreground">
         이 코너만 오프라인 테스트 주행에서 반복합니다. 저장·실행 키는 직접 누르고, 앱은 소리로 위치를 알려 주고 시도마다 측정합니다.
@@ -128,10 +129,15 @@ export default function CornerDrillPanel({ apiBase, filename, task, corners = []
           <p className="text-sm font-semibold text-foreground" data-testid="drill-progress">
             {drill.phase === 'WARMUP' ? '워밍업 중에는 저장하지 않습니다.'
               : !drill.saved ? '아직 시작점이 저장되지 않았습니다. 낮고 긴 “삐—” 근처 직선에서 저장 키를 누르세요.'
-              : drill.done ? '같은 저장 지점에서 목표를 반복해서 지켰습니다. 연습을 마쳐도 됩니다.'
-                : `같은 저장 지점 최근 ${drill.recent_count}번 중 ${target ? '목표 달성' : '기록'} ${target ? drill.recent_ok : drill.recent_count}번 (${drill.needed.recent}번 중 ${drill.needed.ok}번이면 완료)`}
+              : drill.done ? '같은 저장 지점에서 입력과 부가 조건을 반복해서 지켰습니다. 페이스 개선은 다음 정상 주행에서 확인합니다.'
+                : !target ? '이 과제는 실시간 목표를 측정할 수 없습니다. 자동으로 달성 처리하지 않습니다.'
+                : `같은 저장 지점 최근 ${drill.recent_count}번 중 목표 달성 ${drill.recent_ok}번 (${drill.needed.recent}번 중 ${drill.needed.ok}번과 반복 편차 조건을 함께 확인)`}
           </p>
-          {target && <p className="text-xs text-muted-foreground">목표: {target.label} {target.sign < 0 ? '−' : '+'}{target.goal} {target.unit} (과제를 정한 랩 대비)</p>}
+          {target && <p className="text-xs text-muted-foreground">목표: {target.label} {target.sign < 0 ? '−' : '+'}{target.goal} {target.unit} (과제를 정한 주행 대비). 부가 조건이나 채널이 없으면 달성으로 세지 않습니다.</p>}
+          {(attempts[0]?.criteria || []).length > 0 && <ul className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {attempts[0].criteria.map((c) => <li key={c.metric}>{c.label}: {c.ok === true ? '충족' : c.ok === false ? '미달' : '측정 불가'}</li>)}
+          </ul>}
+          {drill.history_error && <p role="alert" className="text-sm text-destructive">{drill.history_error}</p>}
           {attempts.length > 0 && (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[520px] font-mono text-xs">
@@ -145,8 +151,8 @@ export default function CornerDrillPanel({ apiBase, filename, task, corners = []
                     <tr key={row.n} className={row.origin_m == null ? 'text-muted-foreground' : 'text-foreground'}>
                       <td>{row.n}{row.origin_m == null ? ' (진입)' : ''}</td>
                       <td className="text-right">{row.time_s.toFixed(3)}</td>
-                      <td className={`text-right ${finite(drill.baseline_s) && row.origin_m != null ? (row.time_s < drill.baseline_s ? 'text-success' : 'text-destructive') : ''}`}>
-                        {finite(drill.baseline_s) && row.origin_m != null ? signed(row.time_s - drill.baseline_s, 3) : '--'}
+                      <td className={`text-right ${finite(drill.baseline_s) && row.origin_m != null && row.comparable !== false ? (row.time_s < drill.baseline_s ? 'text-success' : 'text-destructive') : ''}`}>
+                        {finite(drill.baseline_s) && row.origin_m != null && row.comparable !== false ? signed(row.time_s - drill.baseline_s, 3) : '--'}
                       </td>
                       <td className="text-right">{finite(row.brake_start_m) ? `${row.brake_start_m.toFixed(0)} m` : '--'}</td>
                       <td className="text-right">{finite(row.min_speed_kph) ? row.min_speed_kph.toFixed(1) : '--'}</td>
@@ -163,6 +169,7 @@ export default function CornerDrillPanel({ apiBase, filename, task, corners = []
         </>
       )}
       {error && <p className="text-sm text-destructive">{error}</p>}
+      <PracticeDrillHistory apiBase={apiBase} taskId={task?.id} revision={mine ? drill.serial : 0} />
       <DrillGuide />
     </div>
   );

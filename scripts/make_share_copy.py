@@ -9,16 +9,19 @@ key and token on the screen (Settings tab); those land in the copy's own data/ f
     python scripts/make_share_copy.py                       # writes to share/iracing-coach
     python scripts/make_share_copy.py --out E:\\coach-share
     python scripts/make_share_copy.py --no-audio            # without the 0.9 GB of voice clips
+    python scripts/make_share_copy.py --out share/iracing-coach-1.2.0 --zip   # also the full installer zip beside it
 
 Nothing is sent anywhere and this installation is not changed.
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import getpass
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sys
 
@@ -31,7 +34,14 @@ ROOT_FILES = ("실행.bat", "설치.bat", "패치 노트.txt", "README.md", "pac
               "tailwind.config.js", "postcss.config.js", ".gitignore", "log-upload-url.txt")
 ROOT_FOLDERS = ("src", "public", "build", "manual")
 BACKEND_SKIP = ("gcp-key.json", "garage61_api_token.txt")
-SCRIPTS = ("launch_app.py", "serve_ui.py", "prepare_radio_audio.py", "test_launch_app.py", "make_share_copy.py", "make_patch.py", "read_coach_log.py", "read_timing_log.py")
+SCRIPTS = ("launch_app.py", "serve_ui.py", "prepare_radio_audio.py", "test_launch_app.py", "make_share_copy.py", "make_patch.py", "read_coach_log.py", "read_timing_log.py",
+           # 설치.bat and 실행.bat pick a supported Python through this.
+           "find_python.bat",
+           # The web settings tab and the driving overlay run this window process.
+           "overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
+           "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py")
+REQUIRED_OVERLAY_SCRIPTS = ("overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
+                            "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py")
 DATA_FILES = ("corner-definitions.json", "pit-knowledge.json")
 TEXT_SUFFIXES = {".py", ".js", ".json", ".md", ".txt", ".bat", ".ps1", ".html", ".css", ".map", ".svg", ".yml", ".yaml", ".cfg", ".ini"}
 
@@ -42,8 +52,10 @@ FIRST_RUN = """iRacing 주행 코치 {version} - 처음 실행
 
 ■ 설치 (처음 한 번)
 
-1. Python 3.10 이상을 설치합니다.
+1. Python 3.10 이상을 설치합니다. 권장은 3.12입니다(3.13도 됩니다).
    python.org 에서 받고, 설치 첫 화면에서 "Add Python to PATH"를 꼭 체크하세요.
+   Python 설치 관리자를 쓰고 있다면 명령 창에서 "py install 3.12"를 실행해도 됩니다.
+   이미 깔린 Python이 있으면 그대로 두세요. 여러 개가 있으면 설치.bat이 3.12 → 3.13을 먼저 고릅니다.
 2. 이 폴더를 원하는 곳에 둡니다. 한글이나 공백이 있는 경로도 괜찮습니다.
 3. "설치.bat"을 더블클릭합니다. 필요한 패키지를 인터넷에서 받습니다. 몇 분 걸립니다.
 
@@ -107,12 +119,18 @@ iRacing 기본 위치(문서\\iRacing\\telemetry)의 주행 파일은 자동으�
 ■ 업데이트
 
 새 버전은 작은 업데이트 파일(zip)로 나옵니다. 이 폴더에 풀어 덮어쓰면 되고 기록과 설정은 그대로 남습니다.
-버전 순서대로 하나씩 적용하세요(예: 1.0.1 → 1.0.2 → 1.1.0). 건너뛰면 그 사이에 추가된 음성이 빠집니다.
+버전 순서대로 하나씩 적용하세요(예: 1.0.2 → 1.1.0 → 1.2.0). 건너뛰면 그 사이에 추가된 음성이 빠집니다.
 지금 버전은 "설정" 탭 맨 위에 나오고, 버전마다 달라진 것은 "패치 노트.txt"에 있습니다.
 
 
 ■ 문제가 생기면
 
+- 설치.bat에서 "Failed building wheel for PyYAML", "Microsoft Visual C++ 14.0 or greater is required":
+  1.1.0 이하의 설치.bat에서 Python 3.15 같은 새 버전을 쓸 때 나던 오류입니다(1.2.0에서 고침). 최신 업데이트를 적용하고
+  설치.bat을 다시 실행하세요. Visual C++을 설치할 필요는 없습니다.
+- 설치.bat이 "Installation failed on Python 3.xx"와 "py install 3.12"를 안내함: 아주 새 Python에
+  아직 준비되지 않은 패키지가 있는 것입니다. Python 3.12를 추가로 설치하고 설치.bat을 다시 실행하세요.
+  다른 버전은 지우지 않아도 됩니다.
 - 실행.bat이 바로 꺼짐: Python 설치와 "설치.bat" 실행 여부를 확인하세요.
 - 주행 파일이 안 보임: iRacing에서 텔레메트리 기록을 켰는지, 차에서 내렸는지,
   "설정" 탭의 주행 파일 폴더에 실제 저장 위치가 있는지 확인하세요.
@@ -166,10 +184,83 @@ def scan(folder: Path, markers: dict[str, str]) -> list[tuple[str, str]]:
     return found
 
 
+def overlay_runtime_scripts() -> set[str]:
+    """Follow local HUD imports so future extractions cannot silently disappear from a share."""
+    pending = list(REQUIRED_OVERLAY_SCRIPTS)
+    found: set[str] = set()
+    while pending:
+        name = pending.pop()
+        if name in found:
+            continue
+        found.add(name)
+        source = ROOT / "scripts" / name
+        if not source.is_file():
+            continue
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"), filename=name)):
+            modules = ([node.module or ""] if isinstance(node, ast.ImportFrom)
+                       else [alias.name for alias in node.names] if isinstance(node, ast.Import) else [])
+            for module in modules:
+                local = module.split(".")[0]
+                if not local.startswith("overlay_"):
+                    continue
+                filename = local + ".py"
+                # Shared backend helpers are already copied by the backend's Python-file rule.
+                if not (ROOT / "scripts" / filename).is_file() and (ROOT / "iRacing_Backend" / filename).is_file():
+                    continue
+                pending.append(filename)
+    return found
+
+
+def root_bat_scripts() -> set[str]:
+    """Files in the scripts folder that the root bat files (설치.bat, 실행.bat) run."""
+    found = set()
+    for name in ROOT_FILES:
+        if name.endswith(".bat") and (ROOT / name).is_file():
+            text = (ROOT / name).read_text(encoding="utf-8", errors="replace")
+            found.update(re.findall(r"scripts[\\/]([\w.-]+\.(?:bat|py))", text, flags=re.IGNORECASE))
+    return found
+
+
+def validate_share_inputs() -> None:
+    """Fail before copying if a known runtime part would be missing from a share."""
+    missing = [name for name in sorted(root_bat_scripts())
+               if name not in SCRIPTS or not (ROOT / "scripts" / name).is_file()]
+    if missing:
+        raise RuntimeError("설치.bat·실행.bat이 쓰는 파일이 공유본 목록에 없습니다: " + ", ".join(missing))
+    missing = [name for name in sorted(overlay_runtime_scripts())
+               if name not in SCRIPTS or not (ROOT / "scripts" / name).is_file()]
+    if missing:
+        raise RuntimeError("공유본에 필요한 오버레이 파일이 없습니다: " + ", ".join(missing))
+    requirements = ROOT / "iRacing_Backend" / "requirements_core.txt"
+    try:
+        lines = requirements.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise RuntimeError(f"핵심 패키지 목록을 읽을 수 없습니다: {requirements}") from error
+    if not any(line.strip().lower().startswith("pillow") for line in lines):
+        raise RuntimeError("오버레이에 필요한 Pillow가 requirements_core.txt에 없습니다.")
+
+
+def zip_share(out: Path) -> Path:
+    """The full installer: the share folder as one zip beside it, with the folder itself at the top."""
+    import zipfile
+    import make_patch
+    target = out.with_name(out.name + ".zip")
+    partial = target.with_name(target.name + ".part")
+    with zipfile.ZipFile(partial, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        for path in sorted(out.rglob("*")):
+            if path.is_file() and "__pycache__" not in path.parts:
+                stored = path.suffix.lower() in make_patch.STORED   # already compressed: mp3, png, fonts
+                archive.write(path, (Path(out.name) / path.relative_to(out)).as_posix(),
+                              compress_type=zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED)
+    partial.replace(target)
+    return target
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", type=Path, default=ROOT / "share" / "iracing-coach")
     parser.add_argument("--no-audio", action="store_true", help="받아 둔 음성을 넣지 않습니다")
+    parser.add_argument("--zip", action="store_true", help="처음 설치하는 사람에게 줄 전체 설치본 zip도 만듭니다")
     args = parser.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -179,6 +270,11 @@ def main() -> int:
         return 1
     if not (ROOT / "build" / "index.html").is_file():
         print("빌드된 화면(build/)이 없습니다. 먼저 npm run build를 실행하세요.")
+        return 1
+    try:
+        validate_share_inputs()
+    except RuntimeError as error:
+        print(f"공유본을 만들 수 없습니다: {error}")
         return 1
     out.mkdir(parents=True, exist_ok=True)
     for name in ROOT_FILES:
@@ -224,6 +320,10 @@ def main() -> int:
         import make_patch
         kept = make_patch.record(out)
         print(f"버전 기록: {kept}" if kept else f"버전 기록은 처음 만든 것을 유지합니다: releases/{make_patch.version_of(out)}.json")
+    if args.zip:
+        print("전체 설치본 압축 중...", flush=True)
+        archive = zip_share(out)
+        print(f"전체 설치본: {archive} ({archive.stat().st_size / 1e9:.2f} GB)")
     return 0
 
 

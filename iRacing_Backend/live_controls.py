@@ -47,16 +47,19 @@ class ControlAdvisor:
             self.current = None
             return
         dt = at - previous['at']
+        clean_step = (0 < dt <= .5 and sample.get('incidents') == previous['incidents']
+                      and not int(sample.get('session_flags') or 0) & 0xC108
+                      and sample.get('car_left_right') not in (2, 3, 4, 5, 6))
         rollover = lap == previous['lap'] + 1 and previous['pct'] > .9 and pct < .1
         if rollover:
-            if self.current and self.current['clean'] and self.current['brake_s'] >= 2:
+            # The crossing interval belongs to both laps; check it before saving the old one.
+            if clean_step and self.current and self.current['clean'] and self.current['brake_s'] >= 2:
                 self.laps.append({k: v for k, v in self.current.items() if k != 'run'})
             self.current = self._new_lap(lap, True)
         elif self.current is None or lap != previous['lap']:
             self.current = self._new_lap(lap, False)
         current = self.current
-        if (not 0 < dt <= .5 or sample.get('incidents') != previous['incidents'] or int(sample.get('session_flags') or 0) & 0xC108
-                or sample.get('car_left_right') in (2, 3, 4, 5, 6)):
+        if not clean_step:
             current['clean'] = False
             return
         turning = abs(steer) > STEER_MIN and abs(yaw) > YAW_MIN and speed > 15

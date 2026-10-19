@@ -91,14 +91,17 @@ def commands(need_api: bool, need_ui: bool) -> dict[str, list[str]]:
                    if importlib.util.find_spec(name) is None]
         if missing:
             raise RuntimeError("분석 서버 패키지가 없습니다: " + ", ".join(missing)
-                               + "\n먼저 iRacing_Backend\\install_core.bat를 실행하세요."
+                               + "\n먼저 프로그램 폴더의 설치.bat을 실행하세요."
                                + f'\n현재 Python: {sys.executable}')
         result["backend"] = [sys.executable, str(ROOT / "iRacing_Backend" / "backend_api.py")]
     if need_ui:
         node = shutil.which("node")
         current = build_is_current()
-        if not USE_DEV_SERVER and (current or (not node and (BUILD_DIR / "index.html").is_file())):
-            if not current:
+        # A shared copy has no node_modules: its build is the screen even when an unzip tool that does not
+        # keep file times makes src/ look newer, or when the receiver happens to have Node.js installed.
+        dev_tools = (ROOT / "node_modules" / "react-scripts").is_dir()
+        if not USE_DEV_SERVER and (current or ((not node or not dev_tools) and (BUILD_DIR / "index.html").is_file())):
+            if not current and dev_tools:
                 print("화면 소스가 빌드보다 새롭습니다. Node.js가 없어 기존 빌드를 사용합니다.", flush=True)
             result["frontend"] = [sys.executable, str(ROOT / "scripts" / "serve_ui.py")]
             return result

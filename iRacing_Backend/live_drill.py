@@ -15,7 +15,13 @@ from __future__ import annotations
 
 import math
 import statistics
+import time as wall_time
+import uuid
+import numpy as np
 from typing import Any, Optional
+from corner_measurements import CornerMeasurements
+from drill_history import DrillHistory
+from practice_metrics import TARGETS, KEPT_METRICS, evaluate
 
 BRAKE_ON = 0.08
 FULL_THROTTLE = 0.95
@@ -39,12 +45,57 @@ def warmup_crossings(lap_time_s: Optional[float]) -> int:
     return 1 if lap is not None and lap >= SHORT_LAP_S else 2
 
 # Root cause -> what is measured live and which way it should move (like practice.CAUSE_TARGETS).
-LIVE_TARGETS = {
-    'THROTTLE_RETURN_LATE': ('full_throttle_pct', 'm', -1, 3.0, '풀스로틀 지점'),
-    'BRAKE_RELEASE_LATE': ('min_speed_kph', 'km/h', 1, 1.5, '최저 속도'),
-    'BRAKE_POINT_EARLY': ('brake_start_pct', 'm', 1, 3.0, '제동 시작 지점'),
-    'EXCESS_COASTING': ('coast_time_s', '초', -1, 0.04, '코스팅 시간'),
-}
+LIVE_TARGETS = TARGETS
+
+
+def measured_inputs(samples, plan, length):
+    """Resample observed 30 Hz inputs to the same distance grid/definitions as IBT analysis.
+
+    No extrapolation, filling missing channels, or substitute definition for ABS/steering.
+    The stream has already been rejected for gaps, traffic, incidents and replay samples.
+    """
+    if len(samples) < 3:
+        return {}
+    start = plan['start_pct']
+    observed = np.array([(s['distance_pct'] - start) % 1 for s in samples])
+    if np.any(np.diff(observed) <= 0):
+        return {}
+    resolution = _num((plan.get('base_metrics') or {}).get('distance_resolution_m'))
+    count = round(length / resolution) + 1 if resolution else max(1400, math.ceil(length / 2) + 1)
+    if _num(plan.get('grid_points')):
+        count = round(plan['grid_points'])
+    count = max(500, min(25000, count))
+    pct = np.linspace(0, 1, count)
+    pct = pct[np.argsort((pct - start) % 1)]
+    positions = (pct - start) % 1
+    covered = (positions >= observed[0]) & (positions <= observed[-1])
+    grid = {'distance_pct': pct, '_coverage': covered}
+    mapping = {'Brake': 'brake', 'Throttle': 'throttle', 'SteeringWheelAngle': 'steering_rad',
+               'YawRate': 'yaw_rate', 'LatAccel': 'lat_accel', 'BrakeABSactive': 'abs_active',
+               'speed_kph': 'speed_mps', 'time_s': 'session_time'}
+    for channel, key in mapping.items():
+        values = np.array([_num(s.get(key)) if _num(s.get(key)) is not None else np.nan for s in samples])
+        if channel == 'speed_kph':
+            values *= 3.6
+        if channel == 'BrakeABSactive':
+            # Match IBT's binary sample-and-hold; a linear ramp invents ABS states.
+            held = np.searchsorted(observed, positions, side='right')-1
+            grid[channel] = values[np.clip(held, 0, len(values)-1)].copy()
+            grid[channel][~covered] = np.nan
+        else:
+            grid[channel] = np.interp(positions, observed, values, left=np.nan, right=np.nan)
+    indices = [int(np.argmin(abs(positions - ((plan[k] - start) % 1)))) for k in ('entry_pct', 'apex_pct', 'exit_pct')]
+    if not indices[0] < indices[1] < indices[2] or not np.all(covered[indices[0]:indices[2] + 1]):
+        return {}
+    engine = CornerMeasurements()
+    engine.track_length_m = length
+    values = engine._compute_corner_metrics(grid, *indices)
+    # ABS must be observed throughout braking, rather than averaging a partially missing channel.
+    entry = slice(indices[0], indices[1] + 1)
+    braking = grid['Brake'][entry] > BRAKE_ON
+    if not np.all(np.isfinite(grid['BrakeABSactive'][entry][braking])):
+        values['abs_duty_pct'] = None
+    return {key: values.get(key) for key in KEPT_METRICS}
 
 
 def _num(value: Any) -> Optional[float]:
@@ -53,6 +104,9 @@ def _num(value: Any) -> Optional[float]:
 
 class CornerDrill:
     def __init__(self):
+        self.history = DrillHistory()
+        self.record_id = None
+        self.ended = False
         self.plan: Optional[dict[str, Any]] = None
         self.reset()
 
@@ -61,8 +115,10 @@ class CornerDrill:
         self.current: Optional[dict[str, Any]] = None
         self.prev: Optional[dict[str, Any]] = None
         self.saved_pct: Optional[float] = None          # where the driver's start point turned out to be
+        self.saved_conditions = None
+        self.series = 0
         self.events: list[dict[str, Any]] = []
-        self.serial = 0
+        self.serial = getattr(self, 'serial', 0)
         self.done = False
         self.baseline_s: Optional[float] = None
         # Warm-up: crossings of the line, the lap out of the pits included.
@@ -71,8 +127,11 @@ class CornerDrill:
 
     # -- control -------------------------------------------------------------------------------
     def start(self, plan: dict[str, Any], warmup: bool = True) -> dict[str, Any]:
+        self.stop('RESTARTED')
         self.plan = dict(plan)
         self.reset()
+        self.record_id, self.ended = uuid.uuid4().hex, False
+        self.history.record({'kind': 'start', 'id': self.record_id, 'at': wall_time.time(), 'plan': self.plan})
         if warmup:
             self._emit('warmup' if self._needed() > 1 else 'warmup_one')
         else:
@@ -92,7 +151,13 @@ class CornerDrill:
         self.phase = 'READY'
         self._emit('ready')
 
-    def stop(self) -> dict[str, Any]:
+    def _end(self, outcome):
+        if self.record_id and not self.ended:
+            self.history.record({'kind': 'end', 'id': self.record_id, 'at': wall_time.time(), 'outcome': outcome})
+            self.ended = True
+
+    def stop(self, reason='STOPPED') -> dict[str, Any]:
+        self._end(reason)
         self.plan = None
         self.reset()
         return self.view()
@@ -109,16 +174,21 @@ class CornerDrill:
 
     def ingest(self, sample: dict[str, Any], track_length_m: Optional[float]) -> None:
         plan = self.plan
-        if plan is None or self.done:
+        if plan is None or (self.done and not plan.get('continue_after_goal')):
             return
         pct, speed, time = _num(sample.get('distance_pct')), _num(sample.get('speed_mps')), _num(sample.get('session_time'))
-        if pct is None or time is None or sample.get('is_replay') or sample.get('on_pit_road'):
-            self.prev = None
+        if (pct is None or time is None or sample.get('on_track') is not True or sample.get('is_replay') is not False
+                or sample.get('on_pit_road') is not False or sample.get('car_left_right') in (2, 3, 4, 5, 6)
+                or int(sample.get('session_flags') or 0) & 0xC108):
+            self.prev = self.current = None
             return
         length = _num(track_length_m) or _num(plan.get('track_length_m'))
         if not length:
             return
-        prev, self.prev = self.prev, {'pct': pct, 'time': time, 'speed': speed}
+        prev, self.prev = self.prev, {'pct': pct, 'time': time, 'speed': speed, 'incidents': sample.get('incidents')}
+        if prev and prev.get('incidents') != sample.get('incidents'):
+            self.current = None
+            return
         if self.phase == 'WARMUP':
             if prev is not None and prev['pct'] > 0.9 and pct < 0.1 and 0 <= time - prev['time'] <= MAX_GAP_S:
                 self.warm_laps += 1
@@ -131,7 +201,21 @@ class CornerDrill:
             moved = ((pct - prev['pct'] + 0.5) % 1.0 - 0.5) * length
             if moved < -JUMP_M and 0 <= time - prev['time'] <= MAX_GAP_S:
                 # Active Reset ran: the car is back at the saved start point. A new attempt begins here.
+                conditions = {k: sample.get(k) for k in ('speed_mps', 'fuel_l', 'tire_compound', 'track_wetness',
+                                                         'brake_bias', 'abs_setting', 'tc_setting')}
+                limits = {'speed_mps': 2.0, 'fuel_l': 1.0}
+                changed = self.saved_conditions is None or self.saved_pct is None or abs(pct - self.saved_pct) * length > 5
+                if not changed:
+                    for key, value in conditions.items():
+                        previous = self.saved_conditions.get(key)
+                        if value != previous and (value is None or previous is None or abs(value - previous) > limits.get(key, 0)):
+                            changed = True
+                if changed:
+                    self.series += 1
+                    self.saved_conditions = conditions
                 self.saved_pct = pct
+                comparable = self._comparable(length)
+                self.baseline_s = round(statistics.median(a['time_s'] for a in comparable[:3]), 3) if len(comparable) >= 3 else None
                 self.phase = 'RUNNING'
                 self._begin(pct, time, from_reset=True)
                 return
@@ -161,10 +245,11 @@ class CornerDrill:
 
     def _begin(self, pct: float, time: float, from_reset: bool = False) -> None:
         self.current = {'start_time': time, 'start_pct': pct, 'from_reset': from_reset, 'brake_pct': None, 'release_pct': None, 'min_kph': None,
-                        'full_pct': None, 'coast_s': 0.0, 'last_time': time, 'beeps': set(), 'braking': False}
+                        'full_pct': None, 'coast_s': 0.0, 'last_time': time, 'beeps': set(), 'braking': False, 'samples': []}
 
     def _record(self, sample: dict[str, Any], pct: float, speed: Optional[float], time: float, length: float) -> None:
         plan, attempt = self.plan, self.current
+        attempt['samples'].append(dict(sample))
         brake, throttle = _num(sample.get('brake')), _num(sample.get('throttle'))
         dt = max(0.0, time - attempt['last_time'])
         attempt['last_time'] = time
@@ -208,32 +293,29 @@ class CornerDrill:
         seconds = end_time - attempt['start_time']
         if not 0 < seconds < 120:
             return
-        values = {'brake_start_pct': attempt['brake_pct'], 'min_speed_kph': attempt['min_kph'],
-                  'full_throttle_pct': attempt['full_pct'], 'coast_time_s': attempt['coast_s']}
+        values = measured_inputs(attempt['samples'], plan, length)
         result = {'n': len(self.attempts) + 1, 'time_s': round(seconds, 3),
+                  'series': self.series,
                   'brake_start_m': self._metres(attempt['brake_pct'], length),
                   'full_throttle_m': self._metres(attempt['full_pct'], length),
                   'min_speed_kph': round(attempt['min_kph'], 1) if attempt['min_kph'] is not None else None,
                   'coast_time_s': round(attempt['coast_s'], 2), 'input_change': None, 'input_ok': None,
                   # Only runs from the same saved point are compared in time (the first one, driven in, is longer).
                   'origin_m': round(attempt['start_pct'] * length, 1) if attempt['from_reset'] else None}
-        target = LIVE_TARGETS.get(plan.get('cause') or '')
-        base = _num(plan.get('base_value'))
-        if target and base is not None and values.get(target[0]) is not None:
-            metric, unit, sign, goal, _label = target
-            change = values[metric] - base
-            if unit == 'm':
-                change = ((change + 0.5) % 1.0 - 0.5) * length
-            result['input_change'] = round(change, 2)
-            result['input_ok'] = change * sign >= goal
+        result.update(evaluate(plan.get('cause'), plan.get('base_metrics') or {}, values, length), metrics=values,
+                      recorded_at=wall_time.time(), session_end_s=end_time)
+        result['brake_release_m'] = self._metres(values.get('brake_release_pct'), length)
+        result['conditions'] = dict(self.saved_conditions or {}) if attempt['from_reset'] else {}
         self.attempts.append(result)
+        self.history.record({'kind': 'attempt', 'id': self.record_id, 'attempt': result})
         self._emit('end_beep', n=result['n'])
         comparable = self._comparable(length)
         if self.baseline_s is None and len(comparable) == 3:
             self.baseline_s = round(statistics.median(a['time_s'] for a in comparable), 3)
-        if self._settled(length):
+        if not self.done and self._settled(length):
             self.done = True
             self._emit('done')
+            self._end('INPUT_ACHIEVED')
 
     def _metres(self, pct: Optional[float], length: float) -> Optional[float]:
         """A point as metres after the section start (comparable between attempts)."""
@@ -246,19 +328,19 @@ class CornerDrill:
         if self.saved_pct is None:
             return []
         here = self.saved_pct * length
-        return [a for a in self.attempts if a['origin_m'] is not None and abs(a['origin_m'] - here) <= 5.0]
+        return [a for a in self.attempts if a['origin_m'] is not None and abs(a['origin_m'] - here) <= 5.0
+                and a.get('series', self.series) == self.series]
 
     def _settled(self, length: float) -> bool:
         recent = self._comparable(length)[-RECENT:]
         if len(recent) < RECENT:
             return False
-        measured = [a for a in recent if a['input_ok'] is not None]
-        good = [a for a in recent if a['input_ok']] if measured else recent
+        good = [a for a in recent if a.get('goal_ok') is True]
         if len(good) < NEEDED_OK:
             return False
         brakes = [a['brake_start_m'] for a in good if a['brake_start_m'] is not None]
         times = [a['time_s'] for a in good]
-        return (not brakes or max(brakes) - min(brakes) <= BRAKE_SPREAD_M) and max(times) - min(times) <= TIME_SPREAD_S
+        return len(brakes) == len(good) and max(brakes) - min(brakes) <= BRAKE_SPREAD_M and max(times) - min(times) <= TIME_SPREAD_S
 
     # -- view ----------------------------------------------------------------------------------
     def view(self, after: int = 0) -> dict[str, Any]:
@@ -269,8 +351,10 @@ class CornerDrill:
         target = LIVE_TARGETS.get(self.plan.get('cause') or '')
         return {'active': True, 'done': self.done, 'plan': self.plan, 'saved': self.saved_pct is not None,
                 'phase': 'DONE' if self.done else self.phase, 'warm_laps': self.warm_laps, 'warmup_laps': self._needed(),
-                'attempts': self.attempts[-30:], 'baseline_s': self.baseline_s,
-                'recent_ok': sum(1 for a in recent if a['input_ok']), 'recent_count': len(recent),
+                'attempts': [{**a, 'comparable': a in self._comparable(length)} for a in self.attempts[-30:]], 'baseline_s': self.baseline_s,
+                'recent_ok': sum(1 for a in recent if a.get('goal_ok') is True), 'recent_count': len(recent),
+                'result': 'INPUT_ACHIEVED' if self.done else 'MEASURING', 'pace_verified': False,
+                'history_error': self.history.error,
                 'needed': {'recent': RECENT, 'ok': NEEDED_OK, 'brake_spread_m': BRAKE_SPREAD_M, 'time_spread_s': TIME_SPREAD_S},
                 'target': {'label': target[4], 'unit': target[1], 'sign': target[2], 'goal': target[3]} if target else None,
                 'events': [event for event in self.events if event['serial'] > after], 'serial': self.serial}
@@ -315,4 +399,6 @@ def drill_plan(corners: list[dict[str, Any]], label: str, cause: Optional[str], 
             'throttle_pct': round(point(corner, 'full_throttle_pct') % 1.0, 6) if point(corner, 'full_throttle_pct') is not None else None,
             'entry_pct': corner['entry_pct'], 'apex_pct': corner['apex_pct'], 'exit_pct': corner['exit_pct'],
             'base_value': _num((base_metrics or {}).get(target[0])) if target else None,
+            'base_metrics': dict(base_metrics or {}),
+            'target': dict(zip(('metric', 'unit', 'sign', 'goal', 'label'), target)) if target else None,
             'section_m': round(((end - start) % 1.0) * length)}
