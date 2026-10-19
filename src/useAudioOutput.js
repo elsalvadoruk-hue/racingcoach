@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import * as radioEffect from './radioEffect';
 
 const STORAGE_KEY = 'iracing.voice.outputDevice';
 const savedOutput = () => { try { return localStorage.getItem(STORAGE_KEY) || ''; } catch { return ''; } };
@@ -26,13 +27,15 @@ export default function useAudioOutput() {
   const [playback, setPlayback] = useState(savedPlayback);
   const [isPlaying, setIsPlaying] = useState(false);
   const playbackSettings = useRef(playback);
+  const [effect, setEffect] = useState(radioEffect.savedSettings);
+  const effectSettings = useRef(effect);
   const selected = useRef(outputId), knownDevices = useRef([]), player = useRef(null);
   const priorityGate = useRef(false);
   const mounted = useRef(true), refreshSerial = useRef(0);
   const stop = useCallback((reason = 'stopped') => {
     if (typeof reason !== 'string') reason = 'driver_or_radio_pause';
     const current = player.current;
-    if (current) { current.pause(); current._finish?.('interrupted', reason); }
+    if (current) { current.pause(); current._finish?.('interrupted', reason); current._effect?.release(false); }
     player.current = null; if (mounted.current) setIsPlaying(false);
   }, []);
   // The driver's own stop (a new question, the stop button) ends routine speech and his answer,
@@ -60,6 +63,12 @@ export default function useAudioOutput() {
     try { localStorage.setItem(PLAYBACK_KEY, JSON.stringify(next)); } catch { /* Controls still work without storage. */ }
   }, []);
   const changeVolume = useCallback((volume) => updatePlayback({ volume, muted: false }), [updatePlayback]);
+  // The radio effect applies from the next clip on. Changing it is a click, which lets the audio context start.
+  const changeEffect = useCallback((patch) => {
+    const next = radioEffect.cleanSettings({ ...effectSettings.current, ...patch });
+    effectSettings.current = next; setEffect(next); radioEffect.storeSettings(next);
+    radioEffect.warm(next, selected.current);
+  }, []);
   const toggleMute = useCallback(() => updatePlayback({ muted: !playbackSettings.current.muted }), [updatePlayback]);
   const saveOutput = useCallback((id) => {
     selected.current = id; setOutputId(id);
@@ -92,6 +101,7 @@ export default function useAudioOutput() {
   }, [refresh, stop]);
   const changeOutput = useCallback((id) => {
     stop('output_changed'); saveOutput(id); setMessage('');
+    radioEffect.warm(effectSettings.current, id);
   }, [stop, saveOutput]);
   const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, windowSeconds, workloadValid, whilePlaying } = {}) => {
     if (!valid() || (priority < 3 && priorityGate.current)
@@ -113,6 +123,8 @@ export default function useAudioOutput() {
     const follow = (part) => {
       if (terminal || player.current !== part || followed.has(part)) return;
         followed.add(part);
+        part._effect?.release(!rest.length);
+        part._effect = null;
         if (!rest.length) { current._finish('completed'); stop(); return; }
         const next = new Audio(`data:${mime};base64,${rest.shift()}`);
         next._priority = priority; next._finish = current._finish;
@@ -122,6 +134,8 @@ export default function useAudioOutput() {
         player.current = next;
         const start = () => {
           if (terminal || player.current !== next) return;
+          next._effect = radioEffect.attach(next, effectSettings.current, { sinkId: selected.current, ...playbackSettings.current });
+          next._effect?.start(false);
           Promise.resolve(next.play()).catch(() => { current._finish('failed', 'playback_error'); if (player.current === next) stop(); });
         };
         if (supported) Promise.resolve(next.setSinkId(selected.current)).then(start, start); else start();
@@ -175,6 +189,10 @@ export default function useAudioOutput() {
         }
       }
       if (workloadValid && !workloadValid()) { current._finish('cancelled', 'driving_workload'); stop(); return false; }
+      // Routed through the radio effect only when that is certain to be heard on the chosen device.
+      radioEffect.warm(effectSettings.current, selected.current);
+      current._effect = radioEffect.attach(current, effectSettings.current, { sinkId: selected.current, ...playbackSettings.current });
+      current._effect?.start(true);
       await current.play();
       if (!mounted.current || player.current !== current || terminal) return false;
       onStatus?.('started', '');
@@ -194,5 +212,5 @@ export default function useAudioOutput() {
   }, [supported, stop, saveOutput]);
   return { outputId, devices, supported, message, refresh, changeOutput, play, stop, stopNormal,
     setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, isPlaying,
-    volume: playback.volume, muted: playback.muted, changeVolume, toggleMute };
+    volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, effect, changeEffect };
 }

@@ -95,6 +95,14 @@ VARIANTS = {
 VARIANTS.update({key: tuple(VARIANTS.get(key, ())) + more for key, more in radio_variations.CALLS.items()})
 
 
+PAUSE_MARK = re.compile(r'\s*\[pause(?: short| long)?\]\s*')
+
+
+def shown_text(text):
+    """A sentence as it is shown on the screen: without the pause marks meant for the voice."""
+    return PAUSE_MARK.sub(' ', text or '').strip()
+
+
 def texts(key):
     call = CALLS.get(key)
     return (call[1], *VARIANTS.get(key, ())) if call else ()
@@ -150,6 +158,7 @@ def spoken_form(text):
     # how litres are counted, and decimals read digit by digit in Hangul came out garbled: they stay digits.
     text = re.sub(r'(?<![\d.])(\d+)리터', lambda match: sino(int(match[1])) + '리터', text)
     text = re.sub(r'(?<=\S) 랩(?!타임)', '랩', text)
+    text = text.replace('식은 죽 먹기', '식은죽 먹기')   # spaced, the voice stopped at every word
     return re.sub(r'쯤 (?=뒤|전|후)', '쯤', text)  # "랩쯤 … 뒤에" paused the same way
 
 

@@ -23,7 +23,7 @@ test('only explicit enable prepares clips and starts a dedicated websocket witho
   expect(global.fetch).not.toHaveBeenCalled(); expect(sockets).toHaveLength(0);
   await enable(result);
   expect(global.fetch).toHaveBeenCalledWith('http://test/api/live-coach/spotter/prepare', expect.objectContaining({ method: 'POST',
-    body: JSON.stringify({ repeat_seconds: 3, clear_delay: .15, traffic_enabled: true, pit_box_enabled: false }) }));
+    body: JSON.stringify({ voice: 'Fenrir', formation_calls: 5, repeat_seconds: 3, clear_delay: .15, traffic_enabled: true, pit_box_enabled: false }) }));
   expect(global.WebSocket).toHaveBeenCalledWith('ws://test/api/live-coach/spotter/events');
   expect(result.current.voice).toBe('Fenrir');
   send(sockets[0], frame(2, 'left'));

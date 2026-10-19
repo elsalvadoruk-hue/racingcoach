@@ -8,6 +8,7 @@ from pathlib import Path
 import threading
 from race_radio import STATIC_CALLS
 from radio_audio import spoken_form
+from radio_phrases import SPOTTER_VOICES  # noqa: F401  (the voices the spotter can be given)
 import radio_variations
 
 # iRacing CarLeftRight: 0=off, 1=clear, 2=left, 3=right,

@@ -7,6 +7,7 @@ stop follows it (or a short approved ending such as "입니다."). Commas are no
 used in spoken text. Only the program's measured values fill the placeholders.
 """
 import itertools
+import os
 import re
 import radio_variations
 
@@ -26,6 +27,8 @@ FORMATS = {
     'short': lambda v: f'{round(v)}리터', 'fuel': lambda v: f'{v:.1f}리터', 'target': lambda v: f'{v:.1f}리터',
     'turn': str, 'place': str,
     'kph': lambda v: f'{round(v)}킬로미터', 'steer': lambda v: f'{v:.1f}도',
+    'count': lambda v: f'{int(v)}대', 'temp': lambda v: f'{round(v)}도',
+    'nth': lambda v: ('', '첫', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉', '열')[int(v)] + ' 번째',
 }
 
 
@@ -43,7 +46,16 @@ RANGES = {
 # Calls with two numbers are prepared over a narrower grid; None means first use only.
 PLACES = [f'{n}번 코너 부근' for n in range(1, 31)] + [f'{n}번 구간' for n in range(1, 9)]
 
+RACE_MINUTES = (10, 12, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 70, 75, 80, 90, 100, 120, 150, 160, 180, 240, 360, 480, 600, 720, 1440)
+
 PREPARED = {
+    # The formation lap (live_formation): the race laid out before the start.
+    'form_length_min': {'min': RACE_MINUTES}, 'form_length_laps': {'laps': range(3, 201)},
+    'form_grid': {'pos': range(1, 61)}, 'form_field': {'count': range(2, 61)},
+    'form_fuel': {'liters': range(5, 151)}, 'form_pit_speed': {'kph': range(40, 131)}, 'form_pit_loss': {'sec': range(10, 91)},
+    'form_hist_nth': {'nth': range(2, 11)}, 'form_hist_pos': {'pos': range(1, 61)}, 'form_hist_temp_lower': {'temp': range(2, 31)}, 'form_hist_temp_higher': {'temp': range(2, 31)},
+    'form_hist_loss': {'turn': [f'{n}번 코너' for n in range(1, 31)]}, 'form_hist_loss_also': {'turn': [f'{n}번 코너' for n in range(1, 31)]},
+    'form_track_temp': {'temp': range(0, 66)}, 'form_air_temp': {'temp': range(-5, 46)}, 'form_incident_limit': {'points': range(4, 41)},
     'quali_result': {'pos': range(1, 41), 'gap': tenths(.1, 3.0)},
     'quali_p1': {'gap': tenths(.1, 3.0)},
     'consistent': {'gap': tenths(.1, .3)},
@@ -222,6 +234,62 @@ PHRASES = {
     ]),
 }
 
+# The formation lap. A mark in square brackets is a pause for the voice (Chirp 3), not a word; the screen never shows it.
+PHRASES.update({
+    'form_hello': ('race', ['무전 연결됐습니다. [pause short] 포메이션 랩 동안 오늘 경기를 정리해 드리겠습니다.',
+                            '포메이션 랩입니다. [pause short] 출발 전에 오늘 경기를 짚어 드리겠습니다.',
+                            '출발 전 브리핑입니다. [pause short] 포메이션 랩 동안 천천히 들으세요.']),
+    'form_length_min': ('race', ['오늘 경기는 {min}입니다.', '{min} 경기입니다.', '경기 시간은 {min}입니다.']),
+    'form_length_laps': ('race', ['오늘 경기는 {laps}입니다.', '{laps} 경기입니다.', '경기 거리는 {laps}입니다.']),
+    'form_grid': ('race', ['클래스 {pos}에서 출발합니다.', '출발 순위는 클래스 {pos}입니다.', '그리드는 클래스 {pos}입니다.']),
+    'form_field': ('race', ['같은 클래스는 {count}입니다.', '같은 클래스에 {count}가 달립니다.', '클래스 참가 차량은 {count}입니다.']),
+    # Last time at this track. The lap time has one wording (3,900 clips); the sentence before it carries the variety.
+    'form_hist_first': ('race', ['이 차로는 이 트랙의 기록이 없습니다. [pause short] 오늘 기준을 만들어 봅시다.',
+                                 '이 트랙은 저희 기록에 처음입니다. 첫 랩들은 여유 있게 가세요.',
+                                 '이 조합은 처음 달립니다. [pause short] 오늘 기록이 기준이 됩니다.']),
+    'form_hist_nth': ('race', ['이 트랙은 이번이 {nth}네요.', '여기는 이번이 {nth}죠?', '이 트랙은 이번이 {nth}입니다.']),
+    # From the eleventh time on: the feeling of an old acquaintance, in many ways so it does not wear out.
+    'form_hist_familiar': ('race', list(radio_variations.FAMILIAR)),
+    'form_hist_best': ('race', ['이 트랙의 지난번 베스트입니다.', '지난번 이 트랙에서 가장 빨랐던 랩입니다.', '지난번 베스트 랩입니다.']),
+    'form_lap': ('race', ['{lap}입니다.']),
+    'form_hist_pos': ('race', ['지난번에는 클래스 {pos}로 마쳤습니다.', '지난 경기 결과는 클래스 {pos}였습니다.', '지난번 순위는 클래스 {pos}입니다.']),
+    'form_hist_temp_lower': ('race', ['오늘 노면은 그때보다 {temp} 낮습니다.', '노면 온도가 지난번보다 {temp} 낮습니다.', '그때보다 노면이 {temp} 차갑습니다.']),
+    'form_hist_temp_higher': ('race', ['오늘 노면은 그때보다 {temp} 높습니다.', '노면 온도가 지난번보다 {temp} 높습니다.', '그때보다 노면이 {temp} 뜨겁습니다.']),
+    'form_hist_temp_same': ('race', ['노면 온도는 그때와 비슷합니다.', '오늘 노면은 지난번과 비슷합니다.', '노면 조건은 그때와 거의 같습니다.']),
+    'form_hist_loss': ('race', ['지난번에는 {turn}에서 가장 많이 잃었습니다.', '지난번 가장 큰 손실은 {turn}였습니다.', '지난번에 시간을 가장 많이 잃은 곳은 {turn}입니다.']),
+    'form_hist_loss_also': ('race', ['{turn}에서도 잃었습니다.', '그다음은 {turn}였습니다.', '{turn}도 손실이 컸습니다.']),
+    'form_fuel': ('strategy', ['출발 연료는 {liters}입니다.', '탱크에 {liters} 있습니다.', '지금 연료는 {liters}입니다.']),
+    'form_pit_speed': ('strategy', ['피트 제한속도는 시속 {kph}입니다.', '피트로드는 시속 {kph}까지입니다.', '피트 제한은 시속 {kph}입니다.']),
+    'form_pit_loss': ('strategy', ['이 트랙의 피트 통과 손실은 약 {sec}입니다.', '피트를 지나는 데 약 {sec} 잃습니다.', '피트 통과에 약 {sec} 걸립니다.']),
+    'form_rolling': ('spotter', ['롤링 스타트입니다. [pause short] 그린 플래그 전에는 자리를 지키세요.',
+                                 '롤링 스타트입니다. 그린이 나올 때까지 추월은 없습니다.',
+                                 '그린 플래그 전입니다. [pause short] 순서를 지키면서 따라가세요.']),
+    'form_hold_station': ('spotter', ['앞차와 간격을 일정하게 유지하세요.', '앞차와 너무 벌어지지 않게 따라가세요.', '대열 간격을 맞춰 주세요.']),
+    'form_first_corner': ('spotter', ['첫 코너는 차가 몰립니다. [pause short] 옆 차량은 제가 불러 드리겠습니다.',
+                                      '출발 직후에는 좌우를 계속 불러 드리겠습니다. 공간을 남겨 두세요.',
+                                      '첫 코너에서는 무리하지 마세요. [pause short] 옆에 차가 있으면 바로 알려 드립니다.']),
+    'form_cold_tyres': ('coach', ['타이어가 아직 차갑습니다. [pause short] 첫 랩은 제동을 조금 일찍 시작하세요.',
+                                  '타이어 온도가 올라오기 전입니다. 첫 랩은 여유를 두고 달리세요.',
+                                  '차가운 타이어로 출발합니다. [pause short] 첫 두 코너는 평소보다 일찍 제동하세요.']),
+    'form_cold_brakes': ('coach', ['포메이션 랩 동안 브레이크와 타이어의 열을 올리세요.', '직선에서 좌우로 흔들어 타이어를 데워 두세요.',
+                                   '브레이크를 몇 번 밟아 온도를 올려 두세요.']),
+    'form_track_temp': ('race', ['노면 온도는 {temp}입니다.', '지금 노면은 {temp}입니다.', '트랙 온도는 {temp}입니다.']),
+    'form_air_temp': ('race', ['기온은 {temp}입니다.', '바깥 기온은 {temp}입니다.', '대기 온도는 {temp}입니다.']),
+    'form_wet': ('race', ['노면이 젖어 있습니다. [pause short] 접지력이 낮으니 조심하세요.', '젖은 노면입니다. 제동 거리가 길어집니다.',
+                          '트랙이 젖어 있습니다. [pause short] 마른 라인을 찾아 달리세요.']),
+    'form_dry': ('race', ['노면은 말라 있습니다.', '마른 노면입니다.', '트랙은 건조합니다.']),
+    'form_incident_limit': ('race', ['인시던트 한도는 {points}입니다.', '인시던트는 {points}까지입니다.', '인시던트 {points}이면 실격입니다.']),
+    'form_multiclass': ('race', ['여러 클래스가 함께 달립니다. [pause short] 다른 클래스 차량은 스포터가 알려 드립니다.',
+                                 '다른 클래스와 같이 달리는 경기입니다. 접근하는 차는 미리 불러 드리겠습니다.',
+                                 '멀티클래스 경기입니다. [pause short] 빠른 차가 뒤에서 오면 알려 드리겠습니다.']),
+    'form_ask': ('race', ['경기 중 궁금한 것은 무전 키를 누르고 물어보세요.', '간격이나 연료가 궁금하면 무전으로 물어보세요.',
+                          '필요한 것이 있으면 언제든 무전 주세요.']),
+    'form_calls': ('race', ['랩타임과 연료와 피트 시점은 때가 되면 먼저 알려 드리겠습니다.', '연료와 피트는 저희가 챙기겠습니다. [pause short] 주행에 집중하세요.',
+                            '숫자는 저희가 보고 있겠습니다. 운전에만 집중하세요.']),
+    'form_ready': ('race', ['준비됐습니다.', '저희는 준비됐습니다.', '모두 준비됐습니다.']),
+    'form_good_luck': ('race', ['좋은 경기 하세요.', '깔끔하게 출발합시다.', '끝까지 함께 가겠습니다. [pause short] 좋은 경기 하세요.']),
+})
+
 # The second pack goes after the first wordings of each call.
 for _key, _more in radio_variations.PHRASES.items():
     PHRASES[_key] = (PHRASES[_key][0], [*PHRASES[_key][1], *_more])
@@ -233,9 +301,32 @@ ACKS = ('카피.', '체크.', '확인.', '알겠습니다.', '확인했습니다
 PLACEHOLDER = re.compile(r'\{(\w+)\}')
 
 
+# The spotter's voice can be chosen (2026-10-13). The first is the one everything was made in.
+SPOTTER_VOICES = ('Fenrir', 'Algieba', 'Schedar', 'Aoede')
+SPOTTER_VOICE_LABELS = {'Fenrir': '남성 · 기본', 'Algieba': '남성', 'Schedar': '남성', 'Aoede': '여성'}
+VOICE_PREFIX = 'ko-KR-Chirp3-HD-'
+# A wording count per call for the further voices (none now: every voice has every wording).
+EXTRA_VOICE_WORDINGS = {}     # was {'lap_time_read': 2} to save space; the driver asked for all six in every voice (2026-10-13)
+# Calls kept to one wording on purpose (each wording of a lap time is 3,900 clips).
+SINGLE_WORDING = ('form_lap',)
+
+
+def spotter_voice():
+    """The short name of the spotter voice in use."""
+    name = os.getenv('IRACING_TTS_SPOTTER_VOICE', '').strip().removeprefix(VOICE_PREFIX)
+    return name if name in SPOTTER_VOICES else SPOTTER_VOICES[0]
+
+
+def wordings(key):
+    """(role, the wordings of a call that exist in the voice it is spoken in)."""
+    role, variants = PHRASES[key]
+    limit = EXTRA_VOICE_WORDINGS.get(key) if role == 'spotter' and spotter_voice() != SPOTTER_VOICES[0] else None
+    return role, variants[:limit] if limit else variants
+
+
 def build(key, seed=0, **values):
     """One wording of a call with its numbers filled in. A missing value raises; it is never guessed."""
-    role, variants = PHRASES[key]
+    role, variants = wordings(key)
     text = PLACEHOLDER.sub(lambda match: FORMATS[match[1]](values[match[1]]), variants[seed % len(variants)])
     return {'engineer': role, 'text': text}
 
@@ -243,7 +334,8 @@ def build(key, seed=0, **values):
 def catalog():
     """Every (role, sentence) the calls above can speak within the prepared ranges."""
     found = {}
-    for key, (role, variants) in PHRASES.items():
+    for key in PHRASES:
+        role, variants = wordings(key)
         ranges = PREPARED.get(key, RANGES)
         if ranges is None:
             continue

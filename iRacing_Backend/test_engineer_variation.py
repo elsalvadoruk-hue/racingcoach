@@ -4,6 +4,7 @@ import base64
 import copy
 import io
 import math
+import os
 import tempfile
 import unittest
 import wave
@@ -42,11 +43,27 @@ class FakeSpeech:
 
 
 class PhraseTests(unittest.TestCase):
+    def test_every_spotter_voice_has_the_same_wordings_and_its_own_clips(self):
+        with patch.dict(os.environ, {'IRACING_TTS_SPOTTER_VOICE': ''}):
+            self.assertEqual(radio_phrases.spotter_voice(), 'Fenrir')
+            default = {radio_phrases.build('lap_time_read', seed, lap=102.3)['text'] for seed in range(12)}
+            everything = len(radio_phrases.catalog())
+        with patch.dict(os.environ, {'IRACING_TTS_SPOTTER_VOICE': 'ko-KR-Chirp3-HD-Aoede'}):
+            self.assertEqual(radio_phrases.spotter_voice(), 'Aoede')
+            fewer = {radio_phrases.build('lap_time_read', seed, lap=102.3)['text'] for seed in range(12)}
+            self.assertEqual(fewer, default)                                     # all six in every voice (the driver's choice)
+            self.assertEqual(len(radio_phrases.catalog()), everything)
+            # The engineers keep all their wordings whatever the spotter sounds like.
+            self.assertEqual(len(radio_phrases.wordings('gap_ahead_closing')[1]), len(radio_phrases.PHRASES['gap_ahead_closing'][1]))
+        self.assertEqual(len(default), 6)
+        with patch.dict(os.environ, {'IRACING_TTS_SPOTTER_VOICE': 'ko-KR-Chirp3-HD-Somebody'}):
+            self.assertEqual(radio_phrases.spotter_voice(), 'Fenrir')            # not one that can be chosen
+
     def test_every_variant_builds_and_missing_values_are_never_guessed(self):
         values = {name: 3.4 for name in radio_phrases.FORMATS}
         for key, (role, variants) in radio_phrases.PHRASES.items():
             self.assertIn(role, ('coach', 'race', 'strategy', 'spotter'))
-            self.assertGreaterEqual(len(variants), 2, key)
+            self.assertGreaterEqual(len(variants), 1 if key in radio_phrases.SINGLE_WORDING else 2, key)
             self.assertEqual(len(set(variants)), len(variants), key)
             for seed in range(len(variants)):
                 built = radio_phrases.build(key, seed, **values)

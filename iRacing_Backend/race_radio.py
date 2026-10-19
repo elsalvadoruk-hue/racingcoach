@@ -108,6 +108,7 @@ class RaceRadio:
         self.pending = deque(maxlen=48)
         self.last_sample = None
         self.sent = {}
+        self.result = None
         self.car_calls = {}
         self.laps = deque(maxlen=5)
         self.briefed = False
@@ -363,6 +364,7 @@ class RaceRadio:
                 and lap is not None and old_lap is not None and lap == old_lap + 1 and position is not None and position > 0):
             # Crossing the line under the chequered flag: the race is over for this car.
             self.result_called = True
+            self.result = {'class_position': position, 'at': now}      # kept for the history of this track (live_formation)
             self.say('race_result', now, {'pos': position}, ttl=40, delay=3, cooldown=3600)
 
     def briefing(self):
@@ -565,6 +567,7 @@ class RaceRadio:
         if kind == 'overspeed': return s.get('on_pit_road') is True and num(s.get('speed_mps')) is not None and num(self.metadata.get('pit_speed_limit_kph')) is not None and s['speed_mps'] * 3.6 > self.metadata['pit_speed_limit_kph'] + 1
         if kind == 'limiter_off': return s.get('on_pit_road') is True and num(s.get('engine_warnings')) is not None and not int(s['engine_warnings']) & 0x10
         if kind == 'pre_race': return s.get('session_state') in (1, 2, 3)
+        if kind == 'formation': return s.get('session_state') == 3 and s.get('on_pit_road') is False
         if kind == 'racing': return s.get('session_state') == 4
         if kind == 'lap': return s.get('lap_completed') == value
         if kind == 'position': return s.get('class_position') == value and s.get('session_state') == 4
@@ -577,7 +580,9 @@ class RaceRadio:
     def view(self, now):
         events = [{k: v for k, v in e.items() if k != 'condition'} | {'expires_in_ms': round((e['expires_at'] - now) * 1000)}
                   for e in self.pending if self.valid(e, now)]
-        return {'events': events, 'quiet': speech_ok(self.latest), 'brief_quiet': speech_ok(self.latest, brief=True), 'serial': self.serial, 'run_id': self.run_id,
+        # On the formation lap the driver weaves and brakes to warm the car, and has time to listen.
+        calm = self.latest.get('session_state') == 3
+        return {'events': events, 'quiet': calm or speech_ok(self.latest), 'brief_quiet': calm or speech_ok(self.latest, brief=True), 'serial': self.serial, 'run_id': self.run_id,
                 'speech_window_s': self.latest.get('speech_window_s'), 'speech_learned_laps': self.latest.get('speech_learned_laps', 0),
                 'session_time': self.latest.get('session_time'), 'lap_number': self.latest.get('lap_number'), 'distance_pct': self.latest.get('distance_pct'),
                 'connected': self.last_sample is not None and 0 <= now - self.last_sample < .5,

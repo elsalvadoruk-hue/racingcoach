@@ -96,7 +96,7 @@ test('automatic replies, replay and local test sound use the chosen device at 1.
   render(<LiveCoach apiBase="http://localhost:8000" visible />);
   await screen.findByRole('option', { name: 'USB Headset' });
   fireEvent.change(screen.getByRole('combobox', { name: /오디오 출력장치/ }), { target: { value: 'headset' } });
-  fireEvent.change(screen.getByRole('slider'), { target: { value: '45' } });
+  fireEvent.change(document.getElementById('voice-volume'), { target: { value: '45' } });
   fireEvent.change(screen.getByLabelText('텍스트로 질문하거나 느낌 남기기'), { target: { value: '앞이 밀려' } });
   fireEvent.click(screen.getByRole('button', { name: '기록 보내기' }));
   await waitFor(() => expect(players[0]?.play).toHaveBeenCalled());

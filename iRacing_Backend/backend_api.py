@@ -43,6 +43,7 @@ from analysis_support import CornerDefinitionStore, FileMetadataIndex, clean_seg
 from setup_profiles import supplement_setup_summary, vehicle_setup_capabilities
 from live_telemetry import LiveTelemetry
 from live_pit import PitKnowledge
+from live_formation import RaceHistory
 from voice_notes import VoiceNoteStore, review_notes
 from voice_coach import VoiceCoach, register_voice_routes
 import corner_names
@@ -122,7 +123,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "1.0.0"   # the first version made to be shared (2026-10-12); earlier numbers were internal
+APP_VERSION = "1.0.1"   # the first version made to be shared (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -193,7 +194,11 @@ def _legacy_plan_db_paths() -> list[Path]:
             seen.add(key)
     return output
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Two jobs, two models (compared on the app's own requests, 2026-10-13):
+# the briefing and the setup planner want the best content and can take ten seconds or more;
+# the spoken answer has to come back in two or three seconds, every time.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+GEMINI_VOICE_MODEL = os.getenv("GEMINI_VOICE_MODEL", "gemini-3.5-flash")
 genai_types = None
 
 
@@ -10791,6 +10796,41 @@ def compare_experiments(
 live_telemetry = LiveTelemetry()
 # Pit facts learned from driven stops live beside the database (seeded by scripts/learn_pit_history.py).
 live_telemetry.pit_knowledge = PitKnowledge(os.getenv("IRACING_PIT_KNOWLEDGE_PATH") or MEMORY_DB_PATH.parent / "pit-knowledge.json")
+live_telemetry.race_history = RaceHistory(os.getenv("IRACING_RACE_HISTORY_PATH") or MEMORY_DB_PATH.parent / "race-history.json")
+
+
+def last_analysed_session(identity: dict[str, Any]) -> Optional[dict[str, Any]]:
+    """The most recent analysed session with this car at this track: its best lap, track temperature and,
+    where the corners of the track are confirmed, the corners that cost most. For the formation lap briefing."""
+    if memory_store is None or not identity.get("car_path") or not identity.get("track_name"):
+        return None
+    try:
+        with memory_store._connect() as db:
+            row = db.execute(
+                "SELECT best_lap_s, track_temp_c, recorded_at, analysis_json FROM sessions WHERE car_path=? AND track_name=? "
+                "AND COALESCE(track_config,'')=? AND best_lap_s IS NOT NULL ORDER BY recorded_at DESC LIMIT 1",
+                (identity["car_path"], identity["track_name"], identity.get("track_config") or "")).fetchone()
+            sessions = db.execute(
+                "SELECT COUNT(*) FROM sessions WHERE car_path=? AND track_name=? AND COALESCE(track_config,'')=?",
+                (identity["car_path"], identity["track_name"], identity.get("track_config") or "")).fetchone()[0]
+        if not row:
+            return {"sessions": sessions}        # looked, and there is nothing: not the same as being unable to look
+        saved = _CORNER_DEFINITION_STORE.track_names(identity.get("track_id"), identity.get("track_config"))
+        points = (saved or {}).get("points") or [] if (saved or {}).get("confirmed") else []
+        losses = []
+        for loss in (json.loads(row[3] or "{}").get("performance", {}).get("top_losses") or [])[:3]:
+            apex = loss.get("apex_pct")
+            near = min(points, key=lambda point: abs(point["pct"] - apex), default=None) if isinstance(apex, (int, float)) else None
+            call = corner_names.spoken_call(near.get("number"), near.get("name"), near.get("spoken")) if near and abs(near["pct"] - apex) <= .012 else None
+            if call and call not in losses:
+                losses.append(call)
+        return {"best_lap_s": row[0], "track_temp_c": row[1], "at": row[2], "losses": losses, "sessions": sessions}
+    except Exception as exc:
+        logger.warning("Could not read the last session at this track: %s", exc)
+        return None
+
+
+live_telemetry.history_lookup = last_analysed_session
 def live_corner_definitions(identity: dict[str, Any]) -> Optional[list[dict[str, Any]]]:
     definitions = _CORNER_DEFINITION_STORE.find(identity.get("car_id"), identity.get("track_id"), identity.get("track_config"))
     if not definitions:
@@ -10829,7 +10869,7 @@ def corner_names_payload(telemetry: ParsedTelemetry) -> dict[str, Any]:
     return {**base, "status": "CONFIRMED" if confirmed else suggestion["status"], "suggestion_status": suggestion["status"],
             "kind": suggestion.get("kind"), "fit_median_m": suggestion.get("fit_median_m"), "confirmed": confirmed, "corners": corners}
 voice_note_store = VoiceNoteStore(os.getenv("IRACING_VOICE_DB_PATH", str(MEMORY_DB_PATH)))
-voice_coach = VoiceCoach(live_telemetry, voice_note_store, ai_client, GEMINI_MODEL)
+voice_coach = VoiceCoach(live_telemetry, voice_note_store, ai_client, GEMINI_VOICE_MODEL)
 
 
 @asynccontextmanager

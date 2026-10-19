@@ -2,11 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RESUMABLE, MAX_RESUMES } from './voiceAudio';
 
 const SETTINGS_KEY = 'iracing.spotter.settings';
-const DEFAULT_SETTINGS = { repeat_seconds: 3, clear_delay: .15, traffic_enabled: true, pit_box_enabled: false };
+export const SPOTTER_VOICES = [['Fenrir', '남성 · 기본'], ['Algieba', '남성'], ['Schedar', '남성'], ['Aoede', '여성']];
+const DEFAULT_SETTINGS = { voice: 'Fenrir', formation_calls: 5, repeat_seconds: 3, clear_delay: .15, traffic_enabled: true, pit_box_enabled: false };
 const savedSettings = () => {
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
-    return { repeat_seconds: [2, 3, 5].includes(saved?.repeat_seconds) ? saved.repeat_seconds : 3,
+    return { voice: SPOTTER_VOICES.some(([name]) => name === saved?.voice) ? saved.voice : 'Fenrir',
+      formation_calls: Number.isInteger(saved?.formation_calls) && saved.formation_calls >= 0 && saved.formation_calls <= 8 ? saved.formation_calls : 5,
+      repeat_seconds: [2, 3, 5].includes(saved?.repeat_seconds) ? saved.repeat_seconds : 3,
       clear_delay: [.15, .3, .5].includes(saved?.clear_delay) ? saved.clear_delay : .15,
       traffic_enabled: saved?.traffic_enabled !== false, pit_box_enabled: saved?.pit_box_enabled === true };
   } catch { return DEFAULT_SETTINGS; }
@@ -17,8 +20,8 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
   const [preparing, setPreparing] = useState(false);
   const [view, setView] = useState(null);
   const [error, setError] = useState('');
-  const [voice, setVoice] = useState('Fenrir');
   const [settings, setSettings] = useState(savedSettings), [settingsBusy, setSettingsBusy] = useState(false);
+  const [voice, setVoice] = useState(settings.voice);
   const overlapPending = useRef(null);
   const clips = useRef(null), epoch = useRef(0), mounted = useRef(true);
   const state = useRef({ active: false }), lastFrame = useRef(0), release = useRef(null);
@@ -74,7 +77,18 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
     const next = { ...settings, ...patch }, ticket = epoch.current;
     setSettings(next); setSettingsBusy(true);
     try {
-      if (enabled) {
+      if ('voice' in patch && patch.voice !== settings.voice) {
+        // Another voice is another set of clips: fetched now when the spotter is on, at the next start otherwise.
+        if (enabled) {
+          const response = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
+          const manifest = await response.json();
+          if (!response.ok || !manifest.clips?.test?.audio_base64) throw new Error(manifest.detail || '이 목소리의 스포터 음성을 준비하지 못했습니다.');
+          if (!mounted.current || ticket !== epoch.current) return;
+          clips.current = manifest.clips;
+        } else clips.current = null;
+        setVoice(next.voice);
+      } else if (enabled) {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT',
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
         if (!response.ok) throw new Error('스포터 설정을 적용하지 못했습니다.');

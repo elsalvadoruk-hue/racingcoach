@@ -27,15 +27,15 @@ sys.path.insert(0, str(ROOT / "iRacing_Backend"))
 import app_settings  # noqa: E402
 
 # Only what is listed here is copied; a new personal file can never slip in by default.
-ROOT_FILES = ("실행.bat", "설치.bat", "README.md", "package.json", "package-lock.json", "jsconfig.json", "components.json",
+ROOT_FILES = ("실행.bat", "설치.bat", "패치 노트.txt", "README.md", "package.json", "package-lock.json", "jsconfig.json", "components.json",
               "tailwind.config.js", "postcss.config.js", ".gitignore", "log-upload-url.txt")
 ROOT_FOLDERS = ("src", "public", "build", "manual")
 BACKEND_SKIP = ("gcp-key.json", "garage61_api_token.txt")
-SCRIPTS = ("launch_app.py", "serve_ui.py", "prepare_radio_audio.py", "test_launch_app.py", "make_share_copy.py", "read_coach_log.py")
+SCRIPTS = ("launch_app.py", "serve_ui.py", "prepare_radio_audio.py", "test_launch_app.py", "make_share_copy.py", "make_patch.py", "read_coach_log.py")
 DATA_FILES = ("corner-definitions.json", "pit-knowledge.json")
 TEXT_SUFFIXES = {".py", ".js", ".json", ".md", ".txt", ".bat", ".ps1", ".html", ".css", ".map", ".svg", ".yml", ".yaml", ".cfg", ".ini"}
 
-FIRST_RUN = """iRacing 주행 코치 1.0.0 - 처음 실행
+FIRST_RUN = """iRacing 주행 코치 {version} - 처음 실행
 
 그림이 들어간 설명서는 manual 폴더의 "매뉴얼.html"입니다. 더블클릭하면 브라우저로 열립니다.
 
@@ -102,6 +102,13 @@ iRacing 기본 위치(문서\\iRacing\\telemetry)의 주행 파일은 자동으�
 "보내기"를 누르면 그 주행의 로그가 앱을 만든 사람에게 바로 전달됩니다.
 "보내기" 버튼이 없으면 "로그 파일 받기"로 받은 zip 파일을 직접 보내 주세요.
 음성, 주행 파일, 키, 토큰, 폴더 경로는 들어가지 않고 드라이버 이름은 번호로 바뀝니다.
+
+
+■ 업데이트
+
+새 버전은 작은 업데이트 파일(zip)로 나옵니다. 이 폴더에 풀어 덮어쓰면 되고 기록과 설정은 그대로 남습니다.
+버전 순서대로 하나씩 적용하세요(예: 1.0.1 → 1.0.2 → 1.0.3). 건너뛰면 그 사이에 추가된 음성이 빠집니다.
+지금 버전은 "설정" 탭 맨 위에 나오고, 버전마다 달라진 것은 "패치 노트.txt"에 있습니다.
 
 
 ■ 문제가 생기면
@@ -200,7 +207,8 @@ def main() -> int:
             if folder.is_dir():
                 print(f"{name} 복사 중...", flush=True)
                 clips += copy_tree(folder, data / name, skip=lambda path: path.suffix.lower() != ".mp3")
-    (out / "처음 실행.txt").write_text(FIRST_RUN, encoding="utf-8-sig")
+    import make_patch
+    (out / "처음 실행.txt").write_text(FIRST_RUN.replace("{version}", make_patch.version_of(out)), encoding="utf-8-sig")
 
     size = sum(path.stat().st_size for path in out.rglob("*") if path.is_file())
     print(f"\n공유본: {out}\n크기 {size / 1e9:.2f} GB · 음성 {clips:,}개")
@@ -211,6 +219,11 @@ def main() -> int:
             print(f"  {path}: {name}")
         return 2
     print("개인 정보 검사: 사용자 이름, 데이터 폴더 경로, Google 프로젝트·계정·키 ID, Garage61 토큰이 들어 있는 파일이 없습니다.")
+    if not args.no_audio:
+        # What this version contains, so a later update can be a small patch (scripts/make_patch.py).
+        import make_patch
+        kept = make_patch.record(out)
+        print(f"버전 기록: {kept}" if kept else f"버전 기록은 처음 만든 것을 유지합니다: releases/{make_patch.version_of(out)}.json")
     return 0
 
 

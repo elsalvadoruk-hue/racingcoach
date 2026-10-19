@@ -297,6 +297,14 @@ iRacing이 기록 중인 IBT 파일은 Windows의 공유 잠금으로 읽기가 
 - Google 키가 없어도 주행 분석과, 받아 둔 음성으로 나오는 스포터·엔지니어 안내는 됩니다. 키는 마이크 질문, AI 답변, 새 문장 합성에만 필요합니다.
 - 다른 사람에게 줄 때는 `python scripts/make_share_copy.py`로 공유본을 만드세요. 기록, 음성 메모, 키, 토큰을 뺀 폴더가 `share/iracing-coach`에 생깁니다. 받은 사람은 `설치.bat` → `실행.bat` 순서로 실행합니다.
 
+### 업데이트를 작은 패치로 내보내기
+
+1. 버전을 올리고(`backend_api.py`의 `APP_VERSION`, `package.json`) `npm run build`를 실행합니다.
+2. `python scripts/make_share_copy.py --out share/iracing-coach-1.0.1`로 새 공유본을 만듭니다.
+3. `python scripts/make_patch.py --from 1.0.0 --new share/iracing-coach-1.0.1`을 실행하면 `share/iracing-coach-patch-1.0.0-to-1.0.1.zip`이 생깁니다.
+
+받는 사람은 앱을 끄고 이 압축 파일을 쓰던 폴더에 덮어쓰기로 풀면 됩니다. 패치는 프로그램과 새 음성만 담고, `data` 폴더의 기록·설정·키·토큰·확정한 코너 번호·피트 기록은 담지 않으므로 그대로 남습니다.
+
 ## 데이터 위치
 
 - IBT: 사용자 Documents/iRacing/telemetry 등 기존 검색 폴더

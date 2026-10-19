@@ -40,6 +40,7 @@ VOCABULARY = ['언더스티어', '오버스티어', '브레이크 바이어스',
 
 logger = logging.getLogger('iRacingVoiceCoach')
 DEFAULT_TTS_VOICE = 'ko-KR-Chirp3-HD-Algenib'
+NO_THINKING_MODELS = ('gemini-2.5-flash', 'gemini-3.5-flash')
 
 
 class RadioDeliveryEvent(BaseModel):
@@ -61,6 +62,8 @@ class RadioDeliveryBatch(BaseModel):
 
 
 class SpotterOptions(BaseModel):
+    voice: Literal['Fenrir', 'Algieba', 'Schedar', 'Aoede'] = 'Fenrir'
+    formation_calls: int = Field(default=5, ge=0, le=8)
     repeat_seconds: float = Field(default=3, ge=1.5, le=8, allow_inf_nan=False)
     clear_delay: float = Field(default=.15, ge=.15, le=.5, allow_inf_nan=False)
     traffic_enabled: bool = True
@@ -163,7 +166,8 @@ class GoogleSpeech:
         client = self._client('tts', texttospeech.TextToSpeechClient)
         try:
             response = client.synthesize_speech(request={
-                'input': texttospeech.SynthesisInput(text=text),
+                # Pause marks are only understood in the markup field (Chirp 3 HD).
+                'input': texttospeech.SynthesisInput(markup=text) if '[pause' in text else texttospeech.SynthesisInput(text=text),
                 'voice': texttospeech.VoiceSelectionParams(language_code='ko-KR', name=role_voice(role)),
                 # Fragments are joined sample by sample, so they are requested uncompressed.
                 'audio_config': (texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.LINEAR16, sample_rate_hertz=24000)
@@ -324,7 +328,7 @@ def control_question(text):
 
 
 class VoiceCoach:
-    def __init__(self, live, store, ai_client=None, model='gemini-2.5-flash', speech=None):
+    def __init__(self, live, store, ai_client=None, model='gemini-3.5-flash', speech=None):
         self.live, self.store, self.ai_client, self.model = live, store, ai_client, model
         self.speech = speech or GoogleSpeech()
         self.captures = OrderedDict()
@@ -497,9 +501,10 @@ class VoiceCoach:
         }, ensure_ascii=False)
         for token_limit in (1024, 2048):
             config = {'temperature': .1, 'max_output_tokens': token_limit, 'system_instruction': instructions, 'http_options': {'timeout': 20000}}
-            # Flash 2.5 counts thinking against the output budget. Short driving
-            # replies do not need thinking to consume the spoken answer budget.
-            if 'gemini-2.5-flash' in self.model:
+            # Thinking counts against the output budget and costs seconds. Short driving replies
+            # do not need it. 2.5 and 3.5 Flash accept a budget of zero; 3.8 Flash ignores it
+            # (and then takes 3 to 11 s), which is why it is not the model for spoken answers.
+            if any(name in self.model for name in NO_THINKING_MODELS):
                 config['thinking_config'] = {'thinking_budget': 0}
             response = self.ai_client.models.generate_content(model=self.model, contents=prompt, config=config)
             candidates = response.candidates or []
@@ -708,9 +713,15 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
     async def radio_delivery_log(limit: int = 200, run_id: str | None = None):
         return {'events': await asyncio.to_thread(coach.store.radio_log, max(1, min(limit, 5000)), run_id)}
 
+    def use_spotter_voice(name):
+        # Read by role_voice wherever a spotter sentence is fetched; clips are kept per voice.
+        os.environ['IRACING_TTS_SPOTTER_VOICE'] = radio_phrases.VOICE_PREFIX + name
+        coach.audio_preparation._items = None            # the list of sentences to prepare depends on the voice
+
     @router.post('/spotter/prepare')
     async def prepare_spotter(payload: SpotterOptions | None = None):
         if payload is not None:
+            use_spotter_voice(payload.voice)
             coach.live.configure_spotter(payload.model_dump())
         async with coach.cloud_lock:
             try:
@@ -720,6 +731,7 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
 
     @router.put('/spotter/settings')
     def configure_spotter(payload: SpotterOptions):
+        use_spotter_voice(payload.voice)
         return {'settings': coach.live.configure_spotter(payload.model_dump())}
 
     @router.get('/radio-audio')

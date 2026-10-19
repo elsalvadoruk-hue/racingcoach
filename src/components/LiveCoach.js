@@ -11,6 +11,7 @@ import { Mic, MicOff, Radio, Route, Square, Volume2, VolumeX } from 'lucide-reac
 import { HelpHint } from './HelpGuide';
 import { encodeWav, VoiceRecorder, RESUMABLE, MAX_RESUMES } from '../voiceAudio';
 import useAudioOutput from '../useAudioOutput';
+import { EFFECT_LEVELS } from '../radioEffect';
 import PitWall, { ENGINEERS, PIT_WALL_KEY, readPitPreferences } from './PitWall';
 import useSpotter from '../useSpotter';
 import SpotterPanel from './SpotterPanel';
@@ -88,7 +89,7 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
     key: note.context?.report_key || 'answer', engineer: note.context?.engineer || 'coach', text: spokenText || note.reply || '',
     session_time: note.context?.snapshot?.session_time, lap_number: note.context?.snapshot?.lap_number,
     distance_pct: note.context?.snapshot?.distance_pct }), []);
-  const { outputId, devices: outputDevices, supported: outputSupported, message: outputMessage, refresh: refreshOutputs, changeOutput, play, volume, muted, changeVolume, toggleMute, isPlaying, isPriorityBlocked } = audioOutput;
+  const { outputId, devices: outputDevices, supported: outputSupported, message: outputMessage, refresh: refreshOutputs, changeOutput, play, volume, muted, changeVolume, toggleMute, effect, changeEffect, isPlaying, isPriorityBlocked } = audioOutput;
   const stopSpeaking = audioOutput.stopNormal || audioOutput.stop;
   const blocked = useRef(null), busyAudio = useRef(null), reportResumes = useRef(new Map());
   blocked.current = audioOutput.isPriorityBlocked; busyAudio.current = audioOutput.audioBusy;
@@ -383,6 +384,25 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
           </div>
           <p id="voice-volume-help" className="mt-1 text-xs leading-relaxed text-muted-foreground">재생 중에도 바로 적용하며 볼륨과 음소거 상태를 저장합니다. 슬라이더를 움직이면 음소거가 해제됩니다. 마이크 입력과 게임 볼륨은 별도로 조절하세요.</p>
         </div>
+        {effect && <div className="mt-4 border-t border-success/20 pt-4" aria-label="무전 효과">
+          <div className="flex flex-wrap items-center gap-3">
+            <label htmlFor="radio-effect" className="text-sm font-semibold text-success">무전 효과</label>
+            <NativeSelect id="radio-effect" value={effect.level} onChange={(event) => changeEffect({ level: event.target.value })} className="min-h-[44px] w-auto">
+              {EFFECT_LEVELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </NativeSelect>
+            <label className="flex items-center gap-2 text-sm text-foreground"><input type="checkbox" checked={effect.squelch} disabled={effect.level === 'off'} onChange={(event) => changeEffect({ squelch: event.target.checked })} />시작·끝 무전 잡음(칙)</label>
+            <label className="flex items-center gap-2 text-sm text-foreground"><input type="checkbox" checked={effect.hiss} disabled={effect.level === 'off'} onChange={(event) => changeEffect({ hiss: event.target.checked })} />말하는 동안 바탕 잡음</label>
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="flex items-center gap-3 text-sm text-foreground">음성 크기
+              <input type="range" min="20" max="150" step="5" value={effect.voice} disabled={effect.level === 'off'} onChange={(event) => changeEffect({ voice: Number(event.target.value) })} aria-valuetext={`${effect.voice}%`} className="h-11 min-w-0 flex-1 cursor-pointer accent-emerald-400" />
+              <output className="min-w-[48px] text-right font-mono text-sm">{effect.voice}%</output></label>
+            <label className="flex items-center gap-3 text-sm text-foreground">잡음 크기
+              <input type="range" min="0" max="400" step="10" value={effect.noise} disabled={effect.level === 'off'} onChange={(event) => changeEffect({ noise: Number(event.target.value) })} aria-valuetext={`${effect.noise}%`} className="h-11 min-w-0 flex-1 cursor-pointer accent-emerald-400" />
+              <output className="min-w-[48px] text-right font-mono text-sm">{effect.noise}%</output></label>
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">스포터와 엔지니어의 모든 음성에 무전기 느낌의 필터를 겁니다. 음성 파일은 그대로이고 다음 안내부터 적용됩니다. “테스트 소리”로 들어 보세요. 세기가 강하면 숫자가 덜 또렷할 수 있습니다.</p>
+        </div>}
         {outputMessage && <p role="status" className="mt-3 text-sm text-warning">{outputMessage}</p>}
       </div>
       <div className="mt-5 border-t border-border pt-4"><label htmlFor="voice-text" className="mb-2 block text-sm font-semibold text-foreground">텍스트로 질문하거나 느낌 남기기</label><div className="flex flex-wrap gap-2"><Input id="voice-text" value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) submitText(); }} maxLength={2000} placeholder="예: 방금 코너에서 앞이 밀려서 어려웠어" className="min-w-0 flex-1  border   px-3 py-3 text-sm" /><Button variant="default" type="button" onClick={submitText} disabled={!text.trim() || phase !== 'idle'} className="coach-primary-action px-4 py-3 text-sm">기록 보내기</Button></div></div>
