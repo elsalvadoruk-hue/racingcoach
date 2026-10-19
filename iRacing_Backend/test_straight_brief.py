@@ -163,6 +163,18 @@ class StraightBriefTests(unittest.TestCase):
         typed = self.live._pit_view(s, 2., 3, pit_loss_s=30.)
         self.assertEqual((typed['pit_loss_s'], typed['pit_loss_source']), (30., 'INPUT'))        # the driver's own number wins
 
+    def test_an_unset_pit_rule_comes_from_what_this_series_showed_before(self):
+        self.live.identity = {'track_id': '523', 'track_config': 'Grand Prix', 'car_id': '132', 'series_id': '237'}
+        s = sample(5., fuel_l=10., pit_sv_flags=0x1f)
+        self.assertEqual((self.live._pit_view(s, 2., 3)['pit_rule'], self.live._pit_view(s, 2., 3)['pit_rule_source']), (None, None))
+        self.live.pit_knowledge.remember_series_rule('237', 'SEQUENTIAL', 'adelaide.ibt', 2)
+        view = self.live._pit_view(s, 2., 3)
+        self.assertEqual((view['pit_rule'], view['pit_rule_source']), ('SEQUENTIAL', 'RECORD'))
+        self.live.pit_rule = 'CONCURRENT'                                     # the driver's own setting wins
+        view = self.live._pit_view(s, 2., 3)
+        self.assertEqual((view['pit_rule'], view['pit_rule_source']), ('CONCURRENT', 'DRIVER'))
+        self.live.pit_rule = None
+
     def test_silent_in_qualifying_in_the_pits_under_yellow_and_while_another_call_waits(self):
         self.assertIsNone(self.brief(on_pit_road=True))
         self.assertIsNone(self.brief(session_flags=0x8))

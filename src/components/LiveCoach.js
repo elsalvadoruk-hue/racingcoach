@@ -372,10 +372,10 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
             {outputSupported && outputId && !outputDevices.some((device) => device.deviceId === outputId) && <option value={outputId}>저장된 장치 · 연결 및 권한 확인 필요</option>}
             {outputDevices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `출력장치 ${index + 1}`}</option>)}
           </NativeSelect>
-          <Button variant="outline" type="button" onClick={refreshOutputs} disabled={!outputSupported} className="min-h-[44px]  border  px-3 py-2 text-sm  disabled:opacity-50">목록 갱신</Button>
+          <Button variant="outline" type="button" onClick={() => refreshOutputs({ ask: true })} disabled={!outputSupported} className="min-h-[44px]  border  px-3 py-2 text-sm  disabled:opacity-50">목록 갱신</Button>
           <Button variant="outline" type="button" onClick={testOutput} disabled={active || phase === 'arming' || phase === 'sending'} className="flex min-h-[44px] items-center gap-2  border  px-3 py-2 text-sm  disabled:opacity-50"><Volume2 size={15} />테스트 소리</Button>
         </div>
-        <p id="voice-output-help" className="mt-2 text-xs leading-relaxed text-muted-foreground">{outputSupported ? '자동 답변과 다시 듣기에 적용하며 선택은 이 브라우저에 저장합니다. 장치 이름이 안 보이면 마이크 준비 후 목록을 갱신하세요. 장치를 바꾸면 재생 중인 답변이 중단됩니다.' : '이 브라우저는 출력장치 선택을 지원하지 않아 Windows 기본 장치로 재생합니다. 최신 Chrome 또는 Edge에서 선택할 수 있습니다.'}</p>
+        <p id="voice-output-help" className="mt-2 text-xs leading-relaxed text-muted-foreground">{outputSupported ? '자동 답변과 다시 듣기에 적용하며 선택은 이 브라우저에 저장합니다. 장치가 안 보이면 “목록 갱신”을 누르세요. 브라우저가 마이크 허용을 물으면 허용해 주세요(장치 목록을 읽는 데만 쓰고 바로 끕니다). 장치를 바꾸면 재생 중인 답변이 중단됩니다.' : '이 브라우저는 출력장치 선택을 지원하지 않아 Windows 기본 장치로 재생합니다. 최신 Chrome 또는 Edge에서 선택할 수 있습니다.'}</p>
         <div className="mt-4 border-t border-success/20 pt-4">
           <div className="flex items-center justify-between gap-3"><label htmlFor="voice-volume" className="flex items-center gap-2 text-sm font-semibold text-success">답변 볼륨<HelpHint topic="voiceVolume" /></label><output htmlFor="voice-volume" className="min-w-[60px] text-right font-mono text-sm text-success">{muted ? '음소거' : `${Math.round(volume * 100)}%`}</output></div>
           <div className="mt-2 flex items-center gap-3">

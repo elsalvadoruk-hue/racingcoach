@@ -192,6 +192,31 @@ class PitWallIntegrationTests(unittest.TestCase):
                 self.assertIsNone((await self.coach.report(ReportRequest()))['report'])
         asyncio.run(busy())
 
+    def test_a_report_already_on_disk_is_not_held_back_by_a_question(self):
+        # A question (speech -> AI -> speech) holds the cloud lock for several seconds. A report whose clip is
+        # already cached needs no cloud and goes out; one that still needs synthesis waits for the next poll.
+        first = asyncio.run(self.coach.report(ReportRequest()))['report']          # synthesizes and caches the clip
+        self.assertIsNotNone(first)
+        self.coach.pending_report = None
+        self.live.pit_wall.reported.clear(); self.live.pit_wall.last_report = -999
+        self.speech.synthesize.reset_mock()
+        async def during_question():
+            async with self.coach.cloud_lock:
+                return await self.coach.report(ReportRequest())
+        again = asyncio.run(during_question())['report']
+        self.assertIsNotNone(again)
+        self.assertEqual(again['note']['reply'], first['note']['reply'])
+        self.speech.synthesize.assert_not_called()
+
+    def test_audio_on_disk_needs_every_clip(self):
+        cache = self.coach.fixed_audio
+        cache.directory.mkdir(parents=True, exist_ok=True)
+        cache.path('race', '앞차 0.7초. 줄고 있습니다.').write_bytes(b'ID3' + b'x' * 200)
+        self.assertTrue(self.coach.audio_on_disk({'engineer': 'race', 'speech_text': '앞차 0.7초. 줄고 있습니다.'}))
+        self.assertFalse(self.coach.audio_on_disk({'engineer': 'race', 'speech_parts': ['앞차 0.7초. 줄고 있습니다.', '없는 문장입니다.']}))
+        self.assertFalse(self.coach.audio_on_disk({'engineer': 'race', 'text': '합성해야 하는 답변'}))
+        self.assertFalse(self.coach.audio_on_disk({'engineer': 'race', 'speech_key': 'no_such_call'}))
+
     def test_late_cloud_reply_does_not_announce_old_session(self):
         def change_session(*args, **kwargs):
             self.live.ingest({'track_id': '99'}, {**self.sample, 'session_time': 1}, self.race)

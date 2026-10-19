@@ -52,7 +52,44 @@ class PitKnowledge:
             self.data.setdefault('version', self.VERSION)
             self.data.setdefault('tracks', {})
             self.data.setdefault('cars', {})
+            self.data.setdefault('series', {})
         return self.data
+
+    def _save(self, data):
+        if not self.path:
+            return
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix('.tmp')
+            temporary.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+            temporary.replace(self.path)
+        except OSError:
+            pass
+
+    def series_rule(self, series_id):
+        """The tyre-change rule last measured for an official series ('CONCURRENT'/'SEQUENTIAL'), or None."""
+        key = str(series_id or '').strip()
+        if not key or key == '0':
+            return None
+        with self.lock:
+            return (self._load()['series'].get(key) or {}).get('pit_rule')
+
+    def remember_series_rule(self, series_id, rule, source_file=None, stops=0):
+        """Keep the rule a drive file showed for its series (pit_service.detect). The latest file wins:
+        a series can change its rule from one season to the next."""
+        key = str(series_id or '').strip()
+        if not key or key == '0' or rule not in ('CONCURRENT', 'SEQUENTIAL'):
+            return False
+        with self.lock:
+            data = self._load()
+            entry = data['series'].setdefault(key, {})
+            seen = [item for item in (entry.get('seen') or []) if item.get('file') != source_file][-4:]
+            seen.append({'file': source_file, 'pit_rule': rule, 'stops': int(stops)})
+            changed = entry.get('pit_rule') != rule or entry.get('seen') != seen
+            entry.update({'pit_rule': rule, 'seen': seen})
+            if changed:
+                self._save(data)
+            return changed
 
     @staticmethod
     def track_key(identity):
@@ -87,14 +124,8 @@ class PitKnowledge:
                 samples = (entry.get(name + '_samples') or [])[-9:] + [round(value, 3)]
                 entry[name + '_samples'], entry[name] = samples, round(statistics.median(samples), 3)
                 changed = True
-            if changed and self.path:
-                try:
-                    self.path.parent.mkdir(parents=True, exist_ok=True)
-                    temporary = self.path.with_suffix('.tmp')
-                    temporary.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
-                    temporary.replace(self.path)
-                except OSError:
-                    pass
+            if changed:
+                self._save(data)
             return changed
 
 

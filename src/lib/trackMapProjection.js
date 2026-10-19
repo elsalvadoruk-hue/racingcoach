@@ -64,6 +64,12 @@ export function projectComparisonPaths(pathData, referencePath = [], framePath =
       map: registeredMap, mapStatus: 'registered' };
   }
   const metersPerUnit = Math.cos(frame.reduce((sum, point) => sum + point.lat, 0) / frame.length * Math.PI / 180);
-  return { target: projectPath(pathData, gpsToMercator), reference: projectPath(referencePath, gpsToMercator), map: null,
-    geographic: true, metersPerUnit, mapStatus: registeredMap ? 'gps-mismatch' : 'unavailable' };
+  // World Mercator metres are millions (Long Beach x is -13,155,000), and the browser draws SVG in 32-bit
+  // floats: the line came out in 1 m (Long Beach) or 0.5 m (Nürburgring) steps when zoomed in. Everything is
+  // drawn relative to a point near the track instead; the imagery tiles take the same origin.
+  const start = gpsToMercator(frame[0]);
+  const origin = { x: Math.round(start.x / 1000) * 1000, y: Math.round(start.y / 1000) * 1000 };
+  const project = point => { const at = gpsToMercator(point); return { x: at.x - origin.x, y: at.y - origin.y }; };
+  return { target: projectPath(pathData, project), reference: projectPath(referencePath, project), map: null,
+    geographic: true, metersPerUnit, origin, mapStatus: registeredMap ? 'gps-mismatch' : 'unavailable' };
 }

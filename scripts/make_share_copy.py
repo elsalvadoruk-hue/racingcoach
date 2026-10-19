@@ -31,7 +31,7 @@ ROOT_FILES = ("실행.bat", "설치.bat", "패치 노트.txt", "README.md", "pac
               "tailwind.config.js", "postcss.config.js", ".gitignore", "log-upload-url.txt")
 ROOT_FOLDERS = ("src", "public", "build", "manual")
 BACKEND_SKIP = ("gcp-key.json", "garage61_api_token.txt")
-SCRIPTS = ("launch_app.py", "serve_ui.py", "prepare_radio_audio.py", "test_launch_app.py", "make_share_copy.py", "make_patch.py", "read_coach_log.py")
+SCRIPTS = ("launch_app.py", "serve_ui.py", "prepare_radio_audio.py", "test_launch_app.py", "make_share_copy.py", "make_patch.py", "read_coach_log.py", "read_timing_log.py")
 DATA_FILES = ("corner-definitions.json", "pit-knowledge.json")
 TEXT_SUFFIXES = {".py", ".js", ".json", ".md", ".txt", ".bat", ".ps1", ".html", ".css", ".map", ".svg", ".yml", ".yaml", ".cfg", ".ini"}
 
@@ -107,7 +107,7 @@ iRacing 기본 위치(문서\\iRacing\\telemetry)의 주행 파일은 자동으�
 ■ 업데이트
 
 새 버전은 작은 업데이트 파일(zip)로 나옵니다. 이 폴더에 풀어 덮어쓰면 되고 기록과 설정은 그대로 남습니다.
-버전 순서대로 하나씩 적용하세요(예: 1.0.1 → 1.0.2 → 1.0.3). 건너뛰면 그 사이에 추가된 음성이 빠집니다.
+버전 순서대로 하나씩 적용하세요(예: 1.0.1 → 1.0.2 → 1.1.0). 건너뛰면 그 사이에 추가된 음성이 빠집니다.
 지금 버전은 "설정" 탭 맨 위에 나오고, 버전마다 달라진 것은 "패치 노트.txt"에 있습니다.
 
 

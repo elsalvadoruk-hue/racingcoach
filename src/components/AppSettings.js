@@ -44,6 +44,11 @@ export default function AppSettings({ apiBase, visible = true }) {
   const google = view.google;
 
   return <div className="flex flex-col gap-6" aria-label="설치 설정">
+    <section className="rounded-lg border border-primary/30 bg-primary/5 p-4" data-testid="free-notice">
+      <h3 className="text-sm font-semibold text-foreground">무료 프로그램</h3>
+      <p className="mt-1 text-sm leading-relaxed text-foreground">이 앱은 무료이며 판매하지 않습니다. 돈을 받고 팔거나 유료로 배포하지 마세요.</p>
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">일부 도로 지도는 비상업 조건(CC BY-NC 4.0)으로 공개된 위성사진으로 만들었습니다. 지도마다 쓰인 사진의 출처와 라이선스는 지도 파일과 함께 기록되어 있습니다.</p>
+    </section>
     <section className="rounded-lg border border-border p-4">
       <h3 className="text-sm font-semibold text-foreground">iRacing 주행 코치 {view.version ? `v${view.version}` : ''} · 데이터 폴더</h3>
       <p className="mt-2 break-all font-mono text-sm text-foreground">{view.data_dir}</p>

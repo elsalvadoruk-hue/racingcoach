@@ -1,4 +1,5 @@
-import React from 'react';
+import ScrollToTop from './ScrollToTop';
+import React, { useEffect, useState } from 'react';
 import { ArrowRight, Check, CircleHelp, Gauge, LockKeyhole } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -22,10 +23,41 @@ export function WorkflowSteps({ steps, current = 0, label = '실험 진행 순�
   </li>)}</ol>;
 }
 
-export default function WorkspaceShell({ tabs, activeTab, onTab, hoverHelpEnabled, onToggleHelp, onGuide, hasAnalysis, trialActive, children }) {
+// Jump list for the current screen: follows the page (inside the sticky sidebar), opens a folded panel
+// (Panel listens for coach-reveal-section) and marks the section being read.
+export function SectionNav({ sections }) {
+  const [current, setCurrent] = useState(null);
+  const key = (sections || []).map((item) => item.id).join('|');
+  useEffect(() => {
+    if (!sections?.length || typeof IntersectionObserver === 'undefined') return undefined;
+    const seen = new Map();
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => seen.set(entry.target.id, entry.isIntersecting ? entry.boundingClientRect.top : null));
+      const visible = sections.filter((item) => seen.get(item.id) != null);
+      if (visible.length) setCurrent(visible[0].id);
+    }, { rootMargin: '-80px 0px -45% 0px' });
+    sections.forEach((item) => { const element = document.getElementById(item.id); if (element) observer.observe(element); });
+    return () => observer.disconnect();
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!sections?.length) return null;
+  const go = (id) => {
+    window.dispatchEvent(new CustomEvent('coach-reveal-section', { detail: id }));
+    setCurrent(id);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }));
+  };
+  return <nav aria-label="이 화면의 항목" className="coach-section-nav">
+    <p className="coach-nav-caption">이 화면의 항목</p>
+    {sections.map((item) => <button key={item.id} type="button" onClick={() => go(item.id)} aria-current={current === item.id ? 'location' : undefined} className="coach-section-link">{item.label}</button>)}
+  </nav>;
+}
+
+export default function WorkspaceShell({ tabs, activeTab, onTab, hoverHelpEnabled, onToggleHelp, onGuide, hasAnalysis, trialActive, sections = null, children }) {
   const [eyebrow, title, description] = SCREEN[activeTab] || SCREEN.summary;
   return <div className="coach-page">
     <a href="#coach-content" className="coach-skip-link">본문으로 이동</a>
+    <ScrollToTop />
     <header className="coach-masthead">
       <div className="coach-identity"><span className="coach-brand-mark" aria-hidden="true"><Gauge size={23} strokeWidth={1.6} /></span><div><h1>iRacing 주행 코치</h1><p className="coach-brand-caption">DRIVING LAB</p></div></div>
       <div className="coach-tools">
@@ -36,7 +68,7 @@ export default function WorkspaceShell({ tabs, activeTab, onTab, hoverHelpEnable
     <div className="coach-layout">
       <aside className="coach-sidebar"><p className="coach-nav-caption">WORKSPACE</p><nav aria-label="분석 화면">{tabs.map(({ key, label, icon: Icon }) => <Button variant="ghost" key={key} id={`tab-${key}`} aria-current={activeTab === key ? 'page' : undefined} onClick={() => onTab(key)} className={`coach-nav-item ${key === 'history' ? 'coach-nav-divider' : ''}`}>
         <Icon data-icon="inline-start" aria-hidden="true" /><span className="coach-nav-label">{label}</span>
-      </Button>)}</nav><div className="coach-sidebar-note">{trialActive ? <LockKeyhole size={14} aria-hidden="true" /> : <span className={`coach-status-dot ${hasAnalysis ? 'is-ready' : ''}`} aria-hidden="true" />}<span>{trialActive ? '셋업 실험 진행 중' : hasAnalysis ? '분석 완료' : '주행 선택 대기'}</span></div></aside>
+      </Button>)}</nav><div className="coach-sidebar-note">{trialActive ? <LockKeyhole size={14} aria-hidden="true" /> : <span className={`coach-status-dot ${hasAnalysis ? 'is-ready' : ''}`} aria-hidden="true" />}<span>{trialActive ? '셋업 실험 진행 중' : hasAnalysis ? '분석 완료' : '주행 선택 대기'}</span></div><SectionNav sections={sections} /></aside>
       <main id="coach-content" tabIndex={-1} className="coach-content">
         <header className="coach-screen-heading"><div><span className="coach-eyebrow">{eyebrow}</span><h2>{title}</h2><p>{description}</p></div>{trialActive && <Badge variant="outline">실험 진행 중</Badge>}</header>
         {children}

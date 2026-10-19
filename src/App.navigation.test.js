@@ -3,6 +3,9 @@ import App from './App';
 
 jest.mock('./components/CornerComparison', () => () => <div>입력 비교 차트</div>);
 
+// Whole-app flows render every tab; several take 3-4 s alone and pass the 5 s default when the full suite runs in band.
+jest.setTimeout(20000);
+
 const files = ['A.ibt', 'B.ibt', 'C.ibt'].map((name) => ({
   name, analyzable: true, valid_laps: 3, lap_count: 4, car_name: 'GT3', track_name: 'Spa',
 }));

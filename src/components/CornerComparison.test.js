@@ -92,6 +92,7 @@ test('selecting a corner on the map zooms the shared range and the reset restore
   expect(screen.getByTestId('comparison-map')).toHaveAttribute('viewBox', fullMap);
 });
 
+
 test('the whole lap is one click away next to the corners and on the map', () => {
   render(<CornerComparison trace={trace} corners={corners} pathData={pathData} trackLengthM={5000} referenceLabel="Garage61 비교랩" />);
   expect(screen.getByRole('button', { name: '전체 랩', exact: true })).toHaveAttribute('aria-pressed', 'true');
@@ -173,4 +174,65 @@ test('long tracks show useful segments first while every segment remains selecta
   fireEvent.click(screen.getByRole('button', { name: '전체 20구간 보기' }));
   fireEvent.click(screen.getByRole('button', { name: '구간 1', exact: true }));
   expect(screen.getByTestId('comparison-selection')).toHaveTextContent('구간 1 비교');
+});
+
+test('the map line is coloured by where the lap loses time and the colouring can be switched off', () => {
+  window.localStorage.removeItem('iracing.map.lossColour');
+  const dense = Array.from({ length: 201 }, (_, i) => ({ distance_pct: i / 200, target_speed_kph: 100, reference_speed_kph: 100,
+    delta_s: Math.min(.3, Math.max(0, (i - 40) / 20 * .3)) }));   // loses 0.3 s between 20% and 30% of the lap
+  const path = dense.map((point) => ({ distance_pct: point.distance_pct, lat: 37 + point.distance_pct / 100, lon: 127 + Math.sin(point.distance_pct * Math.PI) / 100 }));
+  render(<CornerComparison trace={dense} corners={corners} pathData={path} referencePath={path} trackLengthM={5000} />);
+  const colours = screen.getAllByTestId('map-loss-run').map(run => run.getAttribute('data-colour'));
+  expect(colours).toContain('rgb(239,68,68)');
+  expect(colours).toContain('rgb(229,231,235)');
+  expect(screen.getByTestId('map-loss-legend')).toHaveTextContent('빨강 = 잃은 곳');
+  fireEvent.click(screen.getByTestId('map-loss-toggle'));
+  expect(screen.queryAllByTestId('map-loss-run')).toHaveLength(0);
+  expect(window.localStorage.getItem('iracing.map.lossColour')).toBe('off');
+  window.localStorage.removeItem('iracing.map.lossColour');
+});
+
+test('the ghost replay puts both laps on the map at the same time since their lap start', () => {
+  const timed = (lapTime, lonShift = 0) => pathData.map((point) => ({ ...point, lon: point.lon + lonShift, time_s: lapTime * point.distance_pct }));
+  const onHover = jest.fn();
+  render(<CornerComparison trace={trace} corners={corners} pathData={timed(100)} referencePath={timed(98, .00002)} trackLengthM={5000} />);
+  expect(screen.queryByTestId('ghost-target')).toBeNull();
+  fireEvent.click(screen.getByTestId('ghost-play'));
+  fireEvent.click(screen.getByTestId('ghost-play'));                      // pause right away
+  fireEvent.change(screen.getByTestId('ghost-time'), { target: { value: '50' } });
+  expect(screen.getByTestId('ghost-target')).toBeInTheDocument();
+  expect(screen.getByTestId('ghost-reference')).toBeInTheDocument();
+  expect(screen.getByTestId('ghost-readout')).toHaveTextContent('0:50.0');
+  expect(screen.getByTestId('ghost-readout')).toHaveTextContent('기준보다 1.00초 느림');
+  fireEvent.click(screen.getByText('고스트 끄기'));
+  expect(screen.queryByTestId('ghost-target')).toBeNull();
+});
+
+test('without times on the map points there is no ghost replay', () => {
+  render(<CornerComparison trace={trace} corners={corners} pathData={pathData} referencePath={pathData} trackLengthM={5000} />);
+  expect(screen.queryByTestId('ghost-controls')).toBeNull();
+});
+
+test('the graph cursor is one thin line laid over the graphs at the picked distance', () => {
+  render(<CornerComparison trace={trace} corners={corners} pathData={pathData} trackLengthM={5000} />);
+  expect(screen.queryAllByTestId('chart-cursor')).toHaveLength(0);
+  fireEvent.click(screen.getAllByText('Corner 1').find((node) => node.tagName === 'BUTTON'));
+  const lines = screen.getAllByTestId('chart-cursor');
+  expect(lines.length).toBeGreaterThan(0);
+  expect(lines[0]).toHaveAttribute('aria-hidden', 'true');
+});
+
+test('while the ghost replay runs a panel over the map shows both cars speed, gear and pedals', () => {
+  const timed = (lapTime, lonShift = 0) => pathData.map((point) => ({ ...point, lon: point.lon + lonShift, time_s: lapTime * point.distance_pct }));
+  const rows = [0, .25, .5, .75, 1].map((distance_pct) => ({ distance_pct, target_speed_kph: 100 + distance_pct * 100, reference_speed_kph: 110 + distance_pct * 100,
+    target_throttle: 1, reference_throttle: .5, target_brake: 0, reference_brake: .2, target_gear: 4, reference_gear: 5, delta_s: distance_pct }));
+  render(<CornerComparison trace={rows} corners={corners} pathData={timed(100)} referencePath={timed(98, .00002)} trackLengthM={5000} />);
+  expect(screen.queryByTestId('ghost-panel')).toBeNull();
+  fireEvent.click(screen.getByTestId('ghost-play'));
+  fireEvent.click(screen.getByTestId('ghost-play'));
+  fireEvent.change(screen.getByTestId('ghost-time'), { target: { value: '50' } });
+  const panel = screen.getByTestId('ghost-panel');
+  expect(panel).toHaveTextContent('내 랩150km/h4단');               // the player at half a lap
+  expect(panel).toHaveTextContent('5단');
+  expect(panel).toHaveTextContent('기준보다 1.00초 느림');
 });

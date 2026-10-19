@@ -127,6 +127,12 @@ class CornerComparisonTests(unittest.TestCase):
         self.assertEqual(api.gps_path(grid, 1, 3), path[1:4])
         self.assertEqual(api.gps_path({"distance_pct": grid["distance_pct"]}), [])
 
+    def test_gps_points_carry_the_time_since_the_lap_start_for_the_ghost_replay(self):
+        grid = {"distance_pct": np.linspace(0, 1, 3), "Lat": np.array([50., 50.1, 50.2]), "Lon": np.array([6., 6.1, 6.2]),
+                "time_s": np.array([0.0, 41.23456, np.nan])}
+        self.assertEqual([p["time_s"] for p in api.gps_path(grid)], [0.0, 41.235, None])
+        self.assertTrue(all(p["time_s"] is None for p in api.gps_path({k: v for k, v in grid.items() if k != "time_s"})))
+
     def test_local_detail_includes_both_actual_gps_paths(self):
         source = telemetry()
         source.channels.update({"Lat": 50 + source.channels["LapDistPct"] * .01,

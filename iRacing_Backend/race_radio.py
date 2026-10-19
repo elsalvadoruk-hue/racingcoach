@@ -89,6 +89,25 @@ LAP_CALL_MAX_S = 115.      # the screen keeps a waiting call for two minutes at 
 POSITION_CALL_S = 40.      # a place is only said while it still holds, so it can wait out a run of corners
 
 
+
+# Low-fuel warning: about half a lap of the car's own clean-lap use (fuel_l_per_lap, the most used of the
+# last clean laps), never later than FUEL_LOW_MIN_L, which is also the limit before a lap is measured.
+# A blue flag the sim holds for only a moment is not called (2026-10-17: at a rolling start it raised one for
+# 1.3 s just over the line with no lapping car anywhere near). A real one stays up until the car has passed.
+BLUE_HOLD_S = 1.5
+# Pit lane speed: with the limiter on, the speed sits up to about 1.5 km/h over the limit, and in the driver's
+# 244 recorded pit visits nothing under 3 km/h over ever brought a penalty; both penalties for speed were far
+# over (entering at +20 km/h, +32 km/h without the limiter). Called only beyond this margin.
+PIT_SPEED_MARGIN_KPH = 3.
+
+FUEL_LOW_LAPS = .5
+FUEL_LOW_MIN_L = .5
+
+
+def fuel_low_limit(sample):
+    use = num(sample.get('fuel_l_per_lap'))
+    return max(FUEL_LOW_MIN_L, FUEL_LOW_LAPS * use) if use is not None and use > 0 else FUEL_LOW_MIN_L
+
 class RaceRadio:
     """Only real changes produce calls; uncertain gaps establish a new baseline."""
     POSITION_SETTLE_S = 5   # a place must hold this long before it is said
@@ -104,6 +123,8 @@ class RaceRadio:
 
     def reset(self):
         self.run_id = None
+        self.fuel_low_stage = 0
+        self.blue_since, self.blue_called = None, False
         self.latest, self.metadata = {}, {}
         self.pending = deque(maxlen=48)
         self.last_sample = None
@@ -233,7 +254,7 @@ class RaceRadio:
         flags, old_flags = num(sample.get('session_flags')), num(previous.get('session_flags'))
         if flags is not None:
             rising = int(flags) & ~int(old_flags or 0)
-            table = [(0x1, 'finish', 2), (0x2, 'white', 2), (0x10, 'red', 2), (0x20, 'blue', 2),
+            table = [(0x1, 'finish', 2), (0x2, 'white', 2), (0x10, 'red', 2),
                      (0x40, 'debris', 2), (0x10000, 'black', 2), (0x20000, 'dq', 2),
                      (0x100000, 'repair', 2), (0x200, 'one_to_green', 1),
                      (0x800, 'ten_laps', 1), (0x1000, 'five_laps', 1),
@@ -243,6 +264,13 @@ class RaceRadio:
                     # Every flag is the sim's own signal, debris included: while it lies there the sim
                     # raises the flag on each approach, and each time it is called (the driver's decision).
                     self.emit(key, now, priority=priority, condition=('flag', bit), cooldown=10)
+            if not int(flags) & 0x20:
+                self.blue_since, self.blue_called = None, False
+            elif self.blue_since is None:
+                self.blue_since = now
+            elif now - self.blue_since >= BLUE_HOLD_S and not self.blue_called:
+                self.blue_called = True
+                self.emit('blue', now, priority=2, condition=('flag', 0x20), cooldown=10)
             caution_mask = 0xC000
             yellow_mask = 0x108
             if int(flags) & caution_mask and not int(old_flags or 0) & caution_mask:
@@ -406,7 +434,7 @@ class RaceRadio:
         if pit is False and old is True:
             self.emit('pit_exit', now, priority=2, condition=('pit', False), ttl=5, cooldown=5)
         speed, limit = num(s.get('speed_mps')), num(self.metadata.get('pit_speed_limit_kph'))
-        if pit is True and speed is not None and limit is not None and speed * 3.6 > limit + 1:
+        if pit is True and speed is not None and limit is not None and speed * 3.6 > limit + PIT_SPEED_MARGIN_KPH:
             self.emit('pit_speed', now, priority=2, ttl=3, condition=('overspeed', None), cooldown=8)
         warnings, old_warnings = num(s.get('engine_warnings')), num(p.get('engine_warnings'))
         if pit is True and warnings is not None and old_warnings is not None and int(old_warnings) & 0x10 and not int(warnings) & 0x10:
@@ -526,9 +554,14 @@ class RaceRadio:
                 if int(warning) & bit and not int(old) & bit:
                     self.emit(key, now, priority=2, condition=('warning', bit), cooldown=90)
                     self.emit(key + '_detail', now, '차량 경고가 켜졌습니다. 경고 종류와 계기판을 확인하고 피트 또는 주행 중단 여부를 판단하세요. 이 신호만으로 고장 원인은 확정할 수 없습니다.', role='race', delay=5, condition=('warning', bit), cooldown=180, speech_key='warning_detail')
-        fuel = num(s.get('fuel_l'))
-        if fuel is not None and 0 <= fuel < .5 and s.get('session_state') in (4, 5) and not int(s.get('session_flags') or 0) & 1:
-            self.emit('fuel_low', now, priority=2, condition=('low_fuel', None), cooldown=60)
+        fuel, before = num(s.get('fuel_l')), num(p.get('fuel_l'))
+        if fuel is not None and before is not None and fuel > before + .2:
+            self.fuel_low_stage = 0                         # refuelled: a new stint
+        # Said twice a stint at most: with about half a lap of this car's fuel left, and when nearly dry.
+        stage = 2 if fuel is not None and fuel < FUEL_LOW_MIN_L else 1 if fuel is not None and fuel < fuel_low_limit(s) else 0
+        if stage > self.fuel_low_stage and fuel >= 0 and s.get('session_state') in (4, 5) and not int(s.get('session_flags') or 0) & 1:
+            self.fuel_low_stage = 2 if fuel_low_limit(s) <= FUEL_LOW_MIN_L else stage
+            self.emit('fuel_low', now, priority=2, condition=('low_fuel', None), cooldown=0)
 
     def valid(self, event, now):
         if (self.last_sample is None or not 0 <= now - self.last_sample < .5 or
@@ -564,7 +597,7 @@ class RaceRadio:
         if kind == 'warning': return num(s.get('engine_warnings')) is not None and bool(int(s['engine_warnings']) & value)
         if kind == 'pit': return s.get('on_pit_road') is value
         if kind == 'service': return s.get('on_pit_road') is True and s.get('pit_service_status') == value
-        if kind == 'overspeed': return s.get('on_pit_road') is True and num(s.get('speed_mps')) is not None and num(self.metadata.get('pit_speed_limit_kph')) is not None and s['speed_mps'] * 3.6 > self.metadata['pit_speed_limit_kph'] + 1
+        if kind == 'overspeed': return s.get('on_pit_road') is True and num(s.get('speed_mps')) is not None and num(self.metadata.get('pit_speed_limit_kph')) is not None and s['speed_mps'] * 3.6 > self.metadata['pit_speed_limit_kph'] + PIT_SPEED_MARGIN_KPH
         if kind == 'limiter_off': return s.get('on_pit_road') is True and num(s.get('engine_warnings')) is not None and not int(s['engine_warnings']) & 0x10
         if kind == 'pre_race': return s.get('session_state') in (1, 2, 3)
         if kind == 'formation': return s.get('session_state') == 3 and s.get('on_pit_road') is False
@@ -574,7 +607,7 @@ class RaceRadio:
         if kind == 'laps_left': return num(s.get('session_laps_remaining')) is not None and value - 1 < s['session_laps_remaining'] <= value and s.get('session_state') == 4
         if kind == 'incidents': return s.get('incidents') == value
         if kind == 'tow': return (num(s.get('tow_time_s')) or 0) > 0
-        if kind == 'low_fuel': return num(s.get('fuel_l')) is not None and s['fuel_l'] < .5 and s.get('session_state') in (4, 5) and not int(s.get('session_flags') or 0) & 1
+        if kind == 'low_fuel': return num(s.get('fuel_l')) is not None and s['fuel_l'] < fuel_low_limit(s) and s.get('session_state') in (4, 5) and not int(s.get('session_flags') or 0) & 1
         return True
 
     def view(self, now):

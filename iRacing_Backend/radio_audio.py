@@ -58,6 +58,14 @@ CALLS.update({'corner_' + _cause: ('coach', _text) for _cause, _text in {
 }.items()})
 for _role, _label in [('coach', '주행 코치'), ('race', '레이스 엔지니어'), ('strategy', '전략 엔지니어')]:
     CALLS['preview_' + _role] = (_role, f'{_label}입니다. 경기 중 필요한 정보를 전달하겠습니다.')
+# The corner drill (live_drill): the warm-up laps are spoken, the drill itself is beeps.
+CALLS.update({
+    'drill_warmup': ('coach', '구간 연습을 시작합니다. 타이어를 데우며 두 바퀴 돌겠습니다.'),
+    'drill_warmup_one': ('coach', '구간 연습을 시작합니다. 이번 바퀴는 타이어를 데우며 돌겠습니다.'),
+    'drill_warmup_last': ('coach', '한 바퀴 남았습니다. 이번 랩도 타이어를 데우세요.'),
+    'drill_ready': ('coach', '타이어 준비됐습니다. 이번 랩 낮은 신호음 근처 직선에서 저장하세요.'),
+    'drill_done': ('coach', '구간 연습 목표를 채웠습니다. 수고하셨습니다.'),
+})
 
 
 # Other ways to say the same fixed call. The first wording stays in CALLS.

@@ -1,6 +1,6 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import CornerMap, { fitMapView, zoomMapView } from './CornerMap';
+import CornerMap, { fitMapView, startFinish, zoomMapView } from './CornerMap';
 import library from '../data/registeredTrackMaps.json';
 
 const points = Array.from({ length: 101 }, (_, i) => ({ distance_pct: i / 100, x: i * 5, y: 80 + Math.sin(i / 10) * 60 }));
@@ -131,4 +131,14 @@ test('portrait maps retain their aspect and keyboard navigation can recover a mo
   expect(camera()[0]).toBeGreaterThan(fit[0]);
   fireEvent.keyDown(map, { key: 'Home' });
   expect(camera()).toEqual(fit);
+});
+
+test('a chequered start/finish mark with the direction of travel covers where the lap line starts and ends', () => {
+  const straight = [0, .001, .002, .005, .5].map((distance_pct, i) => ({ distance_pct, x: [0, 2, 4, 10, 300][i], y: 0 }));
+  expect(startFinish(straight)).toEqual({ x: 0, y: 0, angle: 0 });
+  const north = straight.map((point) => ({ ...point, x: 0, y: -point.x }));
+  expect(startFinish(north).angle).toBeCloseTo(-90);
+  expect(startFinish(straight.slice(4))).toBeNull();             // the lap's start was not measured
+  render(<CornerMap projected={points} geographic geographicMetersPerUnit={1} corners={[]} onSelect={jest.fn()} onHover={jest.fn()} />);
+  expect(screen.getByTestId('map-start-finish').getAttribute('transform')).toMatch(/^translate\(0 80\) rotate\(/);
 });

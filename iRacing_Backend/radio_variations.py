@@ -220,3 +220,109 @@ FAMILIAR = (
     '여기는 익숙한 길이니까 긴장 내려놓으셔도 돼요.',
     '이 트랙은 늘 달리던 곳이잖아요. 오늘도 평소대로 가요.',
 )
+
+
+# Third pack (2026-10-16): more wordings for the calls heard most often, so long races repeat less.
+# Kept apart so the listening page can play only these; merged below after the second pack, so every
+# existing 'key#n' keeps its wording and clips already fetched stay in use. Same rules as above:
+# no commas, a number ends its sentence or runs on naturally, corner calls say what was measured.
+SPOTTER_MORE = {
+    'left': ('왼쪽 차량 있습니다.', '왼쪽 조심하세요.'),
+    'right': ('오른쪽 차량 있습니다.', '오른쪽 조심하세요.'),
+    'both': ('양옆에 차 있습니다.', '양쪽 다 있습니다. 라인 지키세요.'),
+    'two_left': ('왼쪽에 차 두 대.', '왼쪽 두 대 붙었습니다.'),
+    'two_right': ('오른쪽에 차 두 대.', '오른쪽 두 대 붙었습니다.'),
+    'left_only': ('왼쪽에만 남았습니다.', '오른쪽 빠졌습니다. 왼쪽은 있습니다.'),
+    'right_only': ('오른쪽에만 남았습니다.', '왼쪽 빠졌습니다. 오른쪽은 있습니다.'),
+    'left_one': ('왼쪽에 한 대 남았습니다.', '한 대 빠졌습니다. 왼쪽 한 대 남았습니다.'),
+    'right_one': ('오른쪽에 한 대 남았습니다.', '한 대 빠졌습니다. 오른쪽 한 대 남았습니다.'),
+    'clear_left': ('왼쪽 이제 없습니다.', '왼쪽 정리됐습니다.'),
+    'clear_right': ('오른쪽 이제 없습니다.', '오른쪽 정리됐습니다.'),
+    'clear_all': ('주변 비었습니다.', '이제 옆에 아무도 없습니다.'),
+    'hold': ('옆에 아직 있습니다.', '여전히 옆에 있습니다.'),
+    'hold_left': ('왼쪽 아직 있습니다.', '여전히 왼쪽입니다.'),
+    'hold_right': ('오른쪽 아직 있습니다.', '여전히 오른쪽입니다.'),
+    'hold_both': ('양쪽 아직 있습니다.', '여전히 양쪽입니다.'),
+    'hold_two_left': ('왼쪽 두 대 아직 있습니다.',),
+    'hold_two_right': ('오른쪽 두 대 아직 있습니다.',),
+}
+
+STATIC_MORE = {
+    'traffic_faster_behind': ('빠른 클래스가 뒤에 붙고 있습니다.', '뒤에 빠른 클래스 옵니다. 라인 지키세요.'),
+    'traffic_slower_ahead': ('느린 클래스 차량이 앞에 있습니다.', '앞쪽에 느린 클래스입니다. 추월 준비하세요.'),
+    'traffic_lapping_behind': ('한 랩 앞선 차가 뒤에 옵니다.', '뒤에 랩을 앞선 차량입니다. 라인 지키세요.'),
+    'traffic_lapped_ahead': ('한 랩 뒤진 차가 앞에 있습니다.', '앞쪽에 랩이 뒤진 차량입니다.'),
+    'hazard_off_ahead': ('전방에 코스 밖으로 나간 차가 있습니다.',),
+    'hazard_slow_ahead': ('전방 차량이 많이 느립니다. 조심하세요.',),
+    'close_behind': ('뒤차 바짝 붙었습니다.', '바로 뒤에 차 있습니다.'),
+    'green': ('그린 나왔습니다.', '그린 플래그. 가세요.'),
+    'yellow': ('옐로 플래그. 조심하세요.',),
+    'caution': ('풀코스 옐로 나왔습니다. 게임 지시를 따르세요.',),
+    'red': ('레드 플래그 나왔습니다. 게임 지시를 확인하세요.',),
+    'blue': ('블루 플래그. 빠른 차에 길 내주세요.',),
+    'debris': ('데브리 플래그. 노면에 파편 있습니다.',),
+    'white': ('화이트 플래그. 마지막 랩입니다.',),
+    'finish': ('체커드 플래그. 수고하셨습니다.',),
+    'pit_enter': ('피트로드 들어왔습니다. 제한속도 확인하세요.',),
+    'pit_exit': ('피트 출구입니다. 트랙 합류 조심하세요.',),
+    'pit_speed': ('피트 속도가 너무 빠릅니다. 줄이세요.',),
+    'service_done': ('작업 끝났습니다. 출구 확인하세요.',),
+    'fuel_low': ('연료가 바닥나고 있습니다.',),
+    'mandatory_repair': ('필수 수리 신호입니다.',),
+    'optional_repair': ('선택 수리 신호입니다.',),
+    'ten_laps': ('열 랩 남았습니다. 집중합시다.',),
+    'five_laps': ('다섯 랩 남았습니다. 끝까지 집중합시다.',),
+}
+
+CALLS_MORE = {
+    'approach': ('뒤차 페이스가 좋습니다. 거울 보세요.',),
+    'class_traffic_ahead': ('앞쪽에 다른 클래스 차량입니다.',),
+    'class_traffic_behind': ('뒤쪽에 다른 클래스 차량입니다.',),
+    'pace_faster': ('방금 랩 좋았습니다. 최근보다 빨랐습니다.',),
+    'pace_slower': ('방금 랩은 조금 느렸습니다.',),
+    'incident': ('인시던트 점수가 추가됐습니다.',),
+    'personal_best': ('세션 베스트 나왔습니다.',),
+    'position': ('순위가 바뀌었습니다.',),
+    'corner_brake_early': ('다음 코너입니다. 지난 랩은 제동이 일렀습니다.',),
+    'corner_min_speed': ('다음 코너입니다. 지난 랩은 코너 속도가 낮았습니다.',),
+    'corner_throttle_late': ('다음 코너입니다. 지난 랩은 가속이 늦었습니다.',),
+    'corner_time': ('다음 코너입니다. 지난 랩에 시간을 잃었습니다.',),
+}
+
+PHRASES_MORE = {
+    'gap_ahead_closing': ('앞차와 간격 {gap}. 줄어들고 있습니다.', '앞차 {gap}. 계속 따라붙고 있습니다.'),
+    'gap_behind_closing': ('뒤차 {gap}. 따라오고 있습니다.', '뒤차와 간격 {gap}. 좁혀지고 있습니다.'),
+    'brief_gap_ahead': ('앞차와는 {gap} 차.', '지금 앞차까지 {gap}입니다.'),
+    'brief_gap_behind': ('뒤차와는 {gap} 차.', '지금 뒤차까지 {gap}입니다.'),
+    'position_up': ('순위 올랐습니다. 지금 클래스 {pos}입니다.', '좋습니다. 클래스 {pos}로 올라왔습니다.'),
+    'position_down': ('순위 내려갔습니다. 지금 클래스 {pos}입니다.', '클래스 {pos}로 내려왔습니다.'),
+    'position_now': ('지금 순위는 클래스 {pos}입니다.',),
+    'pace_slower_by': ('최근보다 {loss} 느린 랩입니다.', '방금 랩은 {loss} 느렸습니다.'),
+    'pace_faster_by': ('최근보다 {loss} 빠른 랩입니다. 좋습니다.', '방금 랩은 {loss} 빨랐습니다.'),
+    'time_left': ('앞으로 {min} 남았습니다.', '경기 시간 {min} 남았습니다.'),
+    'laps_left': ('앞으로 {laps} 남았습니다.', '남은 랩은 {laps}입니다.'),
+    'laps_to_go': ('앞으로 {laps} 남았습니다.', '이제 {laps} 남았습니다.'),
+    'pit_fuel_add': ('이번에는 {liters} 넣습니다.',),
+    'halfway': ('경기 반 왔습니다. 클래스 {pos}.', '절반 지점입니다. 지금 클래스 {pos}.'),
+    'delta_ahead': ('이번 랩 베스트보다 {loss} 앞서 있습니다.', '지금 페이스 좋습니다. 베스트보다 {loss} 빠릅니다.'),
+    'delta_behind': ('이번 랩 베스트보다 {loss} 뒤져 있습니다.', '지금은 베스트보다 {loss} 느립니다.'),
+    'catch_rate': ('앞차와 랩마다 {loss}씩 좁히고 있습니다.',),
+    'lose_rate': ('뒤차가 랩마다 {loss}씩 따라오고 있습니다.',),
+    'corner_focus_brake_early': ('곧 코너입니다. 지난 랩은 제동이 일렀습니다. {loss} 잃었습니다.',),
+    'corner_focus_min_speed': ('곧 코너입니다. 지난 랩은 코너 속도가 낮았습니다. {loss} 잃었습니다.',),
+    'corner_focus_throttle_late': ('곧 코너입니다. 지난 랩은 가속이 늦었습니다. {loss} 잃었습니다.',),
+    'corner_focus_time': ('곧 코너입니다. 지난 랩에 {loss} 잃었습니다.',),
+    'corner_call_brake_early': ('곧 {turn}입니다. 지난 랩은 제동이 일렀습니다. {loss} 잃었습니다.',),
+    'corner_call_min_speed': ('곧 {turn}입니다. 지난 랩은 코너 속도가 낮았습니다. {loss} 잃었습니다.',),
+    'corner_call_throttle_late': ('곧 {turn}입니다. 지난 랩은 가속이 늦었습니다. {loss} 잃었습니다.',),
+    'corner_call_time': ('곧 {turn}입니다. 지난 랩에 {loss} 잃었습니다.',),
+    'race_result': ('체커입니다. 클래스 {pos}로 마쳤습니다. 수고하셨습니다.', '경기 끝났습니다. 클래스 {pos}입니다. 잘하셨습니다.'),
+    'fuel_short_by': ('끝까지 가려면 {short} 더 필요합니다.',),
+    'incident_limit': ('인시던트 {points}입니다. 한도까지 {left} 남았습니다.',),
+    'brief_corner_loss': ('지난 랩 {turn}에서 {loss} 잃었습니다.',),
+    'brief_corner_also': ('{turn}에서도 {loss} 손해 봤습니다.',),
+}
+
+for _table, _more in ((SPOTTER, SPOTTER_MORE), (STATIC, STATIC_MORE), (CALLS, CALLS_MORE), (PHRASES, PHRASES_MORE)):
+    for _key, _texts in _more.items():
+        _table[_key] = tuple(_table.get(_key, ())) + tuple(_texts)

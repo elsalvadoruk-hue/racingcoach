@@ -1,5 +1,8 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import useSpotter from './useSpotter';
+import { playBeep } from './drillBeeps';
+
+jest.mock('./drillBeeps', () => ({ ...jest.requireActual('./drillBeeps'), playBeep: jest.fn() }));
 
 const originalFetch = global.fetch, originalSocket = global.WebSocket;
 let sockets, audio, manifest;
@@ -406,4 +409,29 @@ test('settings respond immediately while saving and roll back when the server re
   expect(result.current.settingsBusy).toBe(false);
   expect(result.current.error).toContain('설정을 적용하지 못했습니다');
   expect(localStorage.getItem('iracing.spotter.settings')).toBeNull();
+});
+
+test('corner drill beeps sound for new events only, on the radio output device', async () => {
+  playBeep.mockClear();
+  const { result } = renderHook(() => useSpotter('http://test', { ...audio, outputId: 'headset', volume: 0.7 }));
+  await enable(result);
+  const drill = (serial, events) => frame(1, null, { drill: { active: true, serial, events } });
+  send(sockets[0], drill(3, [{ serial: 3, kind: 'end_beep' }]));                 // already there when connecting
+  expect(playBeep).not.toHaveBeenCalled();
+  send(sockets[0], drill(5, [{ serial: 3, kind: 'end_beep' }, { serial: 4, kind: 'brake_beep', step: 2, last: false }, { serial: 5, kind: 'brake_beep', step: 3, last: true }]));
+  expect(playBeep.mock.calls.map((call) => call[0])).toEqual(['brake_beep', 'brake_point']);
+  expect(playBeep.mock.calls[0][1]).toEqual({ outputId: 'headset', volume: 0.7, muted: false });
+  send(sockets[0], drill(5, [{ serial: 5, kind: 'brake_beep', step: 3, last: true }]));    // the same frame again
+  expect(playBeep).toHaveBeenCalledTimes(2);
+});
+
+test('closing the tab while the spotter is on asks first, and not once it is off', async () => {
+  const leave = () => { const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); return event.defaultPrevented; };
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  expect(leave()).toBe(false);
+  await enable(result);
+  expect(result.current.enabled).toBe(true);
+  expect(leave()).toBe(true);
+  await enable(result);
+  expect(leave()).toBe(false);
 });

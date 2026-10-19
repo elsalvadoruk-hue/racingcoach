@@ -22,6 +22,7 @@ import { Alert, AlertTitle, AlertDescription } from './components/ui/alert';
 import {
   Activity,
   AlertTriangle,
+  LineChart,
   CheckCircle2,
   ChevronDown,
   Database,
@@ -53,6 +54,15 @@ import AppSettings from './components/AppSettings';
 import SessionLogExport from './components/SessionLogExport';
 import LiveCoach, { VoiceReview } from './components/LiveCoach';
 import CornerNames from './components/CornerNames';
+import LapTimeUse from './components/LapTimeUse';
+import DamperHistogram from './components/DamperHistogram';
+import LapRangeFilter, { lapsInRange } from './components/LapRangeFilter';
+import CornerConsistency from './components/CornerConsistency';
+import GGDiagram from './components/GGDiagram';
+import PracticeCoach from './components/PracticeCoach';
+import CornerTrace from './components/CornerTrace';
+import LapOverlay from './components/LapOverlay';
+import LapDistribution from './components/LapDistribution';
 
 const API_BASE =
   (typeof process !== 'undefined' && process.env?.REACT_APP_API_BASE_URL) ||
@@ -221,6 +231,16 @@ const SPEED_LABELS = { LOW: '저속', MEDIUM: '중속', HIGH: '고속' };
 
 function cx(...classes) {
   return classes.filter(Boolean).join(' ');
+}
+
+// Setup items in Korean; the iRacing garage keeps the English names, so those are shown small beside them.
+const SETTING_NAMES = {
+  rear_wing_angle_deg: '리어 윙 각도', rear_arb_blades: '리어 ARB 블레이드', front_arb_blades: '프런트 ARB 블레이드',
+  front_ride_height: '앞 차고', rear_ride_height: '뒤 차고', diff_preload_nm: '디프 프리로드',
+  brake_bias_pct: '브레이크 바이어스', front_toe_mm: '앞 토',
+};
+function settingName(item) {
+  return SETTING_NAMES[item?.setting] || item?.label || item?.setting || '';
 }
 
 function formatNumber(value, digits = 1, suffix = '') {
@@ -507,6 +527,48 @@ function TraceChart({ trace = [], targetLap, referenceLap }) {
   );
 }
 
+// The "jump to" list under the sidebar for long screens: panel ids in screen order (see WorkspaceShell).
+const SECTION_NAV = {
+  summary: [
+    { id: 'practice-coach', label: '오늘의 한 가지' },
+    { id: 'run-summary', label: '이번 주행 요약' },
+    { id: 'closed-loop-coach', label: '다음 주행에서 할 일' },
+    { id: 'voice-review-panel', label: '대화로 남긴 코너' },
+  ],
+  compare: [
+    { id: 'corner-inputs', label: '코너별 조작 비교' },
+    { id: 'corner-names', label: '코너 번호 확인' },
+    { id: 'comparison', label: '거리 기준 랩 비교' },
+    { id: 'priorities', label: '랩타임 단축 우선순위' },
+    { id: 'external-reference', label: 'Garage61 기준 주행' },
+    { id: 'lap-time-use', label: '랩별 시간 쓰임새' },
+    { id: 'lap-detail', label: '랩 선택 및 품질' },
+    { id: 'corner-table', label: '코너 자동 분할 및 위상별 비교' },
+    { id: 'corner-consistency', label: '코너별 일관성' },
+    { id: 'lap-overlay', label: '전문가 보기 · 여러 랩 겹쳐 보기' },
+  ],
+  setup: [
+    { id: 'briefing', label: '드라이버 피드백과 검증' },
+    { id: 'engineer-briefing', label: '엔지니어 브리핑' },
+    { id: 'setup-decision', label: '셋업 결정' },
+    { id: 'ab-manager', label: '셋업 A/B 비교' },
+    { id: 'decision', label: '원인 분류' },
+    { id: 'ai-planner', label: 'AI 셋업 실험 계획' },
+    { id: 'tire-snapshot', label: '타이어 종료 스냅샷' },
+    { id: 'ride-aero', label: '차고·서스펜션·에어로' },
+    { id: 'damper-velocity', label: '댐퍼 속도 분포' },
+    { id: 'gg-diagram', label: 'G-G 그림 (그립 사용)' },
+  ],
+};
+
+// What the stops of the open file (or earlier races of its series) showed about tyre changes (pit_service.py).
+function pitServiceHint(service) {
+  const name = (rule) => (rule === 'SEQUENTIAL' ? '순차 교체' : '동시 교체');
+  if (service?.rule) return `이 파일의 피트 기록: ${name(service.rule)} (정차 ${service.stops?.length || 0}회)`;
+  if (service?.remembered) return `이 시리즈의 지난 경기 기록: ${name(service.remembered)}`;
+  return null;
+}
+
 function Panel({
   title,
   icon: Icon,
@@ -516,8 +578,12 @@ function Panel({
   collapsible = false,
   defaultOpen = true,
   id = undefined,
+  lazy = false,
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // lazy: build the content the first time the panel opens (for content that fetches data)
+  const [opened, setOpened] = useState(defaultOpen);
+  useEffect(() => { if (open) setOpened(true); }, [open]);
   useEffect(() => {
     if (!id) return undefined;
     // A folded panel also opens for the section it wraps ("voice-review-panel" holds "voice-review").
@@ -555,7 +621,7 @@ function Panel({
           )}
         </div>
       </CardHeader>
-      <CardContent className="coach-panel-content" hidden={!open}>{children}</CardContent>
+      <CardContent className="coach-panel-content" hidden={!open}>{!lazy || opened ? children : null}</CardContent>
     </section></Card>
   );
 }
@@ -825,6 +891,13 @@ function ComparisonSummary({ comparison, lapSelection }) {
           tone={totalDelta < 0 ? 'emerald' : 'rose'}
         />
         <MetricCard
+          label="롤링 베스트"
+          value={comparison.rolling_best_time || '--'}
+          note={comparison.rolling_best_laps ? `랩 ${comparison.rolling_best_laps[0]}–${comparison.rolling_best_laps[1]} · 트랙 ${formatNumber((comparison.rolling_best_start_pct ?? 0) * 100, 0, '%')}에서 시작 · 베스트보다 ${formatNumber(comparison.rolling_best_gain_s, 3, ' s')} 빠름` : '연속한 유효 랩 2개가 필요합니다'}
+          icon={TimerReset}
+          tone="emerald"
+        />
+        <MetricCard
           label="재현 가능 최적"
           value={comparison.reproducible_optimal_time || '--'}
           note={`회수 가능 ${formatNumber(comparison.recoverable_time_s, 3, ' s')}`}
@@ -899,25 +972,49 @@ function PriorityCards({ priorities = [] }) {
   );
 }
 
-function CornerTable({ corners = [] }) {
+function CornerTable({ corners = [], trackLength, loadWindow, referenceLabel }) {
+  const [graphFor, setGraphFor] = useState(null);
   const ordered = useMemo(
     () => [...corners].sort((a, b) => a.apex_pct - b.apex_pct),
     [corners]
   );
   if (!ordered.length) return <EmptyState text="코너 자동 분할 결과가 없습니다." />;
+  // One value per line, never broken inside: "164 m · 1.45 g" and "+0.059 s" stay whole.
+  const Value = ({ children, className = '' }) => <div className={cx('whitespace-nowrap font-mono tabular-nums', className)}>{children}</div>;
+  const Sub = ({ children }) => <div className="mt-1 whitespace-nowrap font-mono text-xs tabular-nums text-muted-foreground">{children}</div>;
+  const braking = (metrics) => {
+    if (metrics?.braking_distance_m == null) return null;
+    const decel = metrics.avg_decel_g != null && metrics.avg_decel_g >= 0.1 ? `${metrics.avg_decel_g.toFixed(2)} g` : '가벼운 제동';
+    return `${Math.round(metrics.braking_distance_m)} m · ${decel}`;
+  };
+  const Band = ({ band }) => (band ? (
+    <>
+      <Value className={cx('font-semibold', band.delta_s > 0 ? 'text-destructive' : 'text-success')}>{formatSigned(band.delta_s)}</Value>
+      <Sub>{Math.round(band.from_kph)}→{Math.round(band.to_kph)} km/h</Sub>
+    </>
+  ) : <span className="text-muted-foreground">--</span>);
   return (
     <div className="overflow-x-auto">
-      <Table className="w-full min-w-[980px] border-collapse text-left text-base">
+      <p className="mb-4 max-w-4xl text-sm leading-relaxed text-muted-foreground">
+        <b className="text-foreground">제동</b>은 브레이크를 밟기 시작해 놓을 때까지(트레일 브레이킹 포함)의 거리와 평균 감속입니다.
+        {' '}<b className="text-foreground">감속·가속</b>은 두 랩이 모두 지난 같은 속도 범위를 지나는 데 걸린 시간 차이입니다. 감속은 코너 진입 제동, 가속은 코너를 나와 풀스로틀로 달린 구간이고, +는 기준보다 느린 것입니다.
+        {' '}각 칸의 아래 줄 회색 글씨는 기준 랩 값입니다.
+        {loadWindow && <>{' '}<b className="text-primary">그래프 보기</b>나 줄을 누르면 그 코너를 이번 랩과 기준으로 겹친 그래프와, 다르게 한 곳의 설명이 펼쳐집니다.</>}
+      </p>
+      <Table className="w-full min-w-[1320px] border-collapse text-left text-sm">
         <TableHeader>
-          <TableRow className="border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
+          <TableRow className="border-b border-border text-xs tracking-wider text-muted-foreground">
+            {loadWindow && <TableHead className="w-[1%] px-3 py-3">그래프</TableHead>}
             <TableHead className="px-3 py-3">구간</TableHead>
-            <TableHead className="px-3 py-3">위치</TableHead>
-            <TableHead className="px-3 py-3">델타</TableHead>
+            <TableHead className="px-3 py-3 text-right">델타</TableHead>
             <TableHead className="px-3 py-3">유형</TableHead>
-            <TableHead className="px-3 py-3">최저속도</TableHead>
-            <TableHead className="px-3 py-3">풀스로틀</TableHead>
-            <TableHead className="px-3 py-3">ABS</TableHead>
-            <TableHead className="px-3 py-3">코칭</TableHead>
+            <TableHead className="px-3 py-3 text-right">최저 속도</TableHead>
+            <TableHead className="px-3 py-3 text-right">풀스로틀 지점</TableHead>
+            <TableHead className="px-3 py-3 text-right">ABS</TableHead>
+            <TableHead className="px-3 py-3 text-right">제동</TableHead>
+            <TableHead className="px-3 py-3 text-right">감속 시간</TableHead>
+            <TableHead className="px-3 py-3 text-right">가속 시간</TableHead>
+            <TableHead className="min-w-[280px] px-3 py-3">코칭</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -929,49 +1026,71 @@ function CornerTable({ corners = [] }) {
                 ? (target.full_throttle_pct - reference.full_throttle_pct) * 100
                 : null;
             return (
-              <TableRow key={corner.id} className="border-b border-border/60 align-top last:border-0">
+              <React.Fragment key={corner.id}>
+              <TableRow
+                className={cx('border-b border-border/60 align-top last:border-0 hover:bg-accent/30', loadWindow && 'cursor-pointer', graphFor === corner.id && 'bg-primary/5')}
+                onClick={loadWindow ? (event) => { if (!event.target.closest('button')) setGraphFor(graphFor === corner.id ? null : corner.id); } : undefined}
+              >
+                {loadWindow && (
+                  <TableCell className="px-3 py-4">
+                    <button type="button" aria-expanded={graphFor === corner.id} aria-label={`${corner.label} 그래프 ${graphFor === corner.id ? '닫기' : '보기'}`}
+                      onClick={() => setGraphFor(graphFor === corner.id ? null : corner.id)}
+                      className={cx('inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border px-3 py-2 text-sm font-semibold transition',
+                        graphFor === corner.id ? 'border-primary bg-primary text-primary-foreground' : 'border-primary/50 bg-primary/10 text-primary hover:bg-primary/20')}>
+                      <LineChart className="h-4 w-4" aria-hidden="true" />
+                      {graphFor === corner.id ? '닫기' : '보기'}
+                      <ChevronDown className={cx('h-4 w-4 transition-transform', graphFor === corner.id && 'rotate-180')} aria-hidden="true" />
+                    </button>
+                  </TableCell>
+                )}
                 <TableCell className="px-3 py-4">
-                  <div className="font-semibold text-foreground">{corner.label}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{corner.speed_class}</div>
+                  <div className="whitespace-nowrap text-base font-semibold text-foreground">{corner.label}</div>
+                  <Sub>{(corner.apex_pct * 100).toFixed(1)}% · {corner.distance_m} m · {corner.speed_class}</Sub>
                 </TableCell>
-                <TableCell className="px-3 py-4 font-mono text-foreground">
-                  {(corner.apex_pct * 100).toFixed(1)}%
-                  <div className="mt-1 text-xs text-muted-foreground">{corner.distance_m} m</div>
-                </TableCell>
-                <TableCell
-                  className={cx(
-                    'px-3 py-4 font-mono font-semibold',
-                    corner.delta_s > 0 ? 'text-destructive' : 'text-success'
-                  )}
-                >
-                  {formatSigned(corner.delta_s)}
+                <TableCell className="px-3 py-4 text-right">
+                  <Value className={cx('text-base font-semibold', corner.delta_s > 0 ? 'text-destructive' : 'text-success')}>{formatSigned(corner.delta_s)}</Value>
                 </TableCell>
                 <TableCell className="px-3 py-4">
-                  <span className="rounded-lg border border-border bg-background/70 px-2 py-1 text-xs font-semibold text-foreground">
+                  <span className="whitespace-nowrap rounded-lg border border-border bg-background/70 px-2 py-1 text-xs font-semibold text-foreground">
                     {ISSUE_LABELS[corner.issue_type] || corner.issue_type}
                   </span>
                 </TableCell>
-                <TableCell className="px-3 py-4 font-mono text-foreground">
-                  {formatNumber(target.min_speed_kph, 1, ' km/h')}
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    기준 {formatNumber(reference.min_speed_kph, 1)}
-                  </div>
+                <TableCell className="px-3 py-4 text-right">
+                  <Value className="text-foreground">{formatNumber(target.min_speed_kph, 1, ' km/h')}</Value>
+                  <Sub>{formatNumber(reference.min_speed_kph, 1, ' km/h')}</Sub>
                 </TableCell>
-                <TableCell className="px-3 py-4 font-mono text-foreground">
-                  {target.full_throttle_pct != null
-                    ? `${(target.full_throttle_pct * 100).toFixed(1)}%`
-                    : '--'}
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    차이 {fullThrottleDelta === null ? '--' : `${fullThrottleDelta > 0 ? '+' : ''}${fullThrottleDelta.toFixed(2)}%`}
-                  </div>
+                <TableCell className="px-3 py-4 text-right">
+                  <Value className="text-foreground">{target.full_throttle_pct != null ? `${(target.full_throttle_pct * 100).toFixed(1)}%` : '--'}</Value>
+                  <Sub>차이 {fullThrottleDelta === null ? '--' : `${fullThrottleDelta > 0 ? '+' : ''}${fullThrottleDelta.toFixed(2)}%`}</Sub>
                 </TableCell>
-                <TableCell className="px-3 py-4 font-mono text-foreground">
-                  {formatNumber(target.abs_duty_pct, 1, '%')}
+                <TableCell className="px-3 py-4 text-right">
+                  <Value className="text-foreground">{formatNumber(target.abs_duty_pct, 1, '%')}</Value>
                 </TableCell>
-                <TableCell className="max-w-[330px] px-3 py-4 text-sm leading-relaxed text-foreground">
+                <TableCell className="px-3 py-4 text-right" data-testid={`braking-${corner.id}`}>
+                  <Value className="text-foreground">{braking(target) || '--'}</Value>
+                  <Sub>{braking(reference) || '--'}</Sub>
+                  {target.brake_entry_speed_kph != null && <Sub>{Math.round(target.brake_entry_speed_kph)}→{Math.round(target.brake_end_speed_kph)} km/h</Sub>}
+                </TableCell>
+                <TableCell className="px-3 py-4 text-right" data-testid={`bands-${corner.id}`}>
+                  <Band band={corner.braking_band} />
+                </TableCell>
+                <TableCell className="px-3 py-4 text-right">
+                  <Band band={corner.drive_band} />
+                </TableCell>
+                <TableCell className="px-3 py-4 text-sm leading-relaxed text-foreground">
                   {corner.driver_action}
                 </TableCell>
               </TableRow>
+              {graphFor === corner.id && (
+                <TableRow className="border-b border-border/60">
+                  <TableCell colSpan={11} className="px-3 py-4">
+                    <div className="sticky left-0 max-w-[900px]">
+                      <CornerTrace corner={corner} trackLength={trackLength} load={loadWindow} referenceLabel={referenceLabel} />
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )}
+              </React.Fragment>
             );
           })}
         </TableBody>
@@ -985,12 +1104,17 @@ function TirePanel({ tires }) {
   const trend = tires.lap_trend || [];
   return (
     <div className="flex flex-col gap-4">
+      <p className="text-sm leading-relaxed text-muted-foreground">
+        대상 랩이 결승선을 지나기 직전 1초의 값입니다. iRacing 주행 파일에서 <b className="text-foreground">표면 온도와 열간 압력은 주행 중에 계속 기록</b>되고,
+        카커스(내부) 온도와 마모는 피트에 들어갔을 때만 바뀌므로 여기서는 쓰지 않습니다. 표면 온도는 코너마다 크게 오르내리므로(한 랩에 30~40°C 차이),
+        같은 지점(결승선 직전 직선)끼리 비교하는 값으로 보세요.
+      </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {Object.entries(tires.wheels).map(([wheel, data]) => (
           <div key={wheel} className="rounded-2xl border border-border bg-background/60 p-4">
             <div className="flex items-center justify-between">
               <span className="font-mono text-lg font-semibold text-foreground">{wheel}</span>
-              <span className="text-xs font-bold text-muted-foreground">FINISH -1s MEDIAN</span>
+              <span className="text-xs text-muted-foreground">표면 온도 (안·가운데·바깥)</span>
             </div>
             <div className="mt-4 grid grid-cols-3 gap-2 text-center">
               {(data.surface_lmr_c || []).map((value, index) => (
@@ -1016,8 +1140,12 @@ function TirePanel({ tires }) {
                 </span>
               </div>
               <div className="flex justify-between text-muted-foreground">
-                <span>카커스/마모</span>
-                <span className="font-bold text-warning">{data.carcass_status}</span>
+                <span>냉간 압력(셋업)</span>
+                <span className="font-mono text-foreground">{formatNumber(data.cold_pressure_kpa, 1, ' kPa')}</span>
+              </div>
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>카커스 온도·마모</span>
+                <span>{data.carcass_status === 'DYNAMIC' && data.wear_status === 'DYNAMIC' ? '주행 중 기록됨' : '피트에서만 갱신 (사용 안 함)'}</span>
               </div>
             </div>
           </div>
@@ -1025,11 +1153,11 @@ function TirePanel({ tires }) {
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         <MetricMini
-          label="Surface temp slope"
+          label="랩당 표면 온도 변화"
           value={formatNumber(tires.surface_temp_slope_c_per_lap, 2, ' °C/lap')}
         />
         <MetricMini
-          label="Hot pressure slope"
+          label="랩당 열간 압력 변화"
           value={formatNumber(tires.hot_pressure_slope_kpa_per_lap, 2, ' kPa/lap')}
         />
       </div>
@@ -1038,10 +1166,11 @@ function TirePanel({ tires }) {
           <Table className="min-w-full text-left text-sm">
             <TableHeader className="border-b border-border bg-muted/70 text-xs uppercase tracking-wider text-muted-foreground">
               <TableRow>
-                <TableHead className="px-4 py-3">Lap</TableHead>
-                <TableHead className="px-4 py-3">Lap time</TableHead>
-                <TableHead className="px-4 py-3">Mean surface</TableHead>
-                <TableHead className="px-4 py-3">Mean hot pressure</TableHead>
+                <TableHead className="px-4 py-3">랩</TableHead>
+                <TableHead className="px-4 py-3">랩타임</TableHead>
+                <TableHead className="px-4 py-3">평균 표면 온도</TableHead>
+                <TableHead className="px-4 py-3">평균 노면 온도</TableHead>
+                <TableHead className="px-4 py-3">평균 열간 압력</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody className="divide-y divide-slate-800">
@@ -1053,6 +1182,9 @@ function TirePanel({ tires }) {
                   </TableCell>
                   <TableCell className="px-4 py-3 font-mono text-warning">
                     {formatNumber(row.mean_surface_temp_c, 1, ' °C')}
+                  </TableCell>
+                  <TableCell className="px-4 py-3 font-mono text-muted-foreground" data-testid={`track-temp-${row.lap_number}`}>
+                    {formatNumber(row.mean_track_temp_c, 1, ' °C')}
                   </TableCell>
                   <TableCell className="px-4 py-3 font-mono text-foreground">
                     {formatNumber(row.mean_hot_pressure_kpa, 1, ' kPa')}
@@ -1269,15 +1401,15 @@ function SetupAdjustmentCard({ adjustment, experimental = false, onStart, canSta
     DRIVER_FEEDBACK_EXPLORATION: '선택한 증상 · 탐색 가설',
   };
   const categoryLabels = {
-    AERO_DRAG: 'AERO / TOP SPEED',
-    AERO_DRAG_SECONDARY: 'DRAG SECONDARY',
-    TOP_SPEED_OPPORTUNITY: 'TOP SPEED',
-    EXIT_TRACTION: 'EXIT TRACTION',
-    ROTATION_DEFICIT: 'ROTATION',
-    REAR_STABILITY: 'REAR STABILITY',
-    DIFF_ROTATION: 'DIFFERENTIAL',
-    HIGH_SPEED_STABILITY: 'HIGH-SPEED AERO',
-    BRAKE_BALANCE: 'BRAKE BALANCE',
+    AERO_DRAG: '공기저항 · 최고속',
+    AERO_DRAG_SECONDARY: '공기저항 (보조)',
+    TOP_SPEED_OPPORTUNITY: '최고속',
+    EXIT_TRACTION: '탈출 트랙션',
+    ROTATION_DEFICIT: '회전 부족',
+    REAR_STABILITY: '리어 안정성',
+    DIFF_ROTATION: '디퍼렌셜 회전',
+    HIGH_SPEED_STABILITY: '고속 에어로 안정성',
+    BRAKE_BALANCE: '브레이크 밸런스',
   };
   const sourceLabel = sourceLabels[adjustment?.source] || adjustment?.source || '현재 세션 근거';
   const originalText = formatSetupOriginal(adjustment);
@@ -1291,7 +1423,8 @@ function SetupAdjustmentCard({ adjustment, experimental = false, onStart, canSta
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <div className="text-base font-bold text-foreground">{adjustment.label}</div>
+            <div className="text-base font-bold text-foreground">{settingName(adjustment)}</div>
+            {SETTING_NAMES[adjustment.setting] && adjustment.label && <span className="text-xs text-muted-foreground">Garage: {adjustment.label}</span>}
             {adjustment.category && (
               <span className="rounded-md border border-sky-500/25 bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold tracking-wider text-sky-300">
                 {categoryLabels[adjustment.category] || adjustment.category}
@@ -1318,7 +1451,7 @@ function SetupAdjustmentCard({ adjustment, experimental = false, onStart, canSta
               ? 'border-warning/30 bg-warning/10 text-warning'
               : 'border-primary/30 bg-primary/10 text-primary'
           )}>
-            {adjustment.tier === 'EXPLORATORY' ? '탐색 후보 · 근거 약함' : experimental ? 'A/B TEST' : 'CONFIRMED TEST'}
+            {adjustment.tier === 'EXPLORATORY' ? '탐색 후보 · 근거 약함' : experimental ? 'A/B 시험' : '근거 확인 · 시험'}
           </span>
           {Number.isFinite(confidence) && (
             <span className="font-mono text-xs font-bold text-muted-foreground">
@@ -1429,7 +1562,7 @@ function SetupRecommendation({ recommendation, onStart, canStart }) {
             <div>
               <div className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Decision</div>
               <div className={cx('mt-1 text-xl font-semibold', isHold ? 'text-warning' : 'text-primary')}>
-                {recommendation.decision_basis === 'DRIVER_FEEDBACK_EXPLORATION' ? '작은 변경부터 탐색' : hasCandidate ? 'A/B TEST' : '추천 후보 없음'}
+                {recommendation.decision_basis === 'DRIVER_FEEDBACK_EXPLORATION' ? '작은 변경부터 탐색' : hasCandidate ? 'A/B 시험' : '추천 후보 없음'}
               </div>
             </div>
           </div>
@@ -2065,7 +2198,7 @@ function PersonalizationPanel({ memory }) {
               <TableBody>
                 {settings.slice(0, 8).map((item) => (
                   <TableRow key={`${item.setting}-${item.direction}`} className="border-t border-border">
-                    <TableCell className="py-3 font-bold text-foreground">{item.label}</TableCell>
+                    <TableCell className="py-3 font-bold text-foreground">{settingName(item)}</TableCell>
                     <TableCell className="text-foreground">{item.direction_label}</TableCell>
                     <TableCell className="font-mono text-foreground">{item.decisive_count}</TableCell>
                     <TableCell className="font-mono text-success">{item.keep_count}</TableCell>
@@ -2357,6 +2490,24 @@ function ExperimentManager({ files = [], sessionMode, preferredBaseline = '', on
           <div className="mt-3 rounded-xl border border-primary/20 bg-primary/10 px-3 py-2 text-sm text-foreground">
             A/B 표본 신뢰도 <b className="text-primary">{result.ab_quality?.sample_confidence || '--'}</b> · 최소 {result.minimum_valid_laps_per_file ?? '--'}랩 / 권장 {result.recommended_valid_laps_per_file ?? '--'}랩 · 효과/자연편차 {result.ab_quality?.effect_vs_noise_ratio ?? '--'}×
           </div>
+          {result.lap_distribution && (
+            <details className="mt-4 rounded-xl border border-border p-3" open>
+              <summary className="cursor-pointer text-sm font-semibold text-foreground">랩타임 분포 A/B</summary>
+              <div className="mt-3"><LapDistribution distribution={result.lap_distribution} /></div>
+            </details>
+          )}
+          {(result.gg?.baseline || result.gg?.candidate) && (
+            <details className="mt-4 rounded-xl border border-border p-3">
+              <summary className="cursor-pointer text-sm font-semibold text-foreground">G-G 그림 A/B</summary>
+              <div className="mt-3"><GGDiagram baseline={result.gg.baseline} candidate={result.gg.candidate} /></div>
+            </details>
+          )}
+          {(result.damper_velocity?.baseline || result.damper_velocity?.candidate) && (
+            <details className="mt-4 rounded-xl border border-border p-3">
+              <summary className="cursor-pointer text-sm font-semibold text-foreground">댐퍼 속도 분포 A/B</summary>
+              <div className="mt-3"><DamperHistogram baseline={result.damper_velocity.baseline} candidate={result.damper_velocity.candidate} /></div>
+            </details>
+          )}
           <LearningEffectSummary result={result} memoryRecord={memoryRecord} />
           {memoryRecord && (
             <div className={cx(
@@ -3599,6 +3750,11 @@ export default function App() {
   const [pitRule, setPitRule] = useState('NOT_APPLICABLE');
   const [status, setStatus] = useState(null);
   const [analysis, setAnalysis] = useState(null);
+  // Laps picked by lap time for the per-lap statistics (time use, corner consistency); a new file starts with all.
+  const [lapRange, setLapRange] = useState(null);
+  const analysedFileName = analysis?.file?.name;
+  useEffect(() => { setLapRange(null); }, [analysedFileName]);
+  const pickedLaps = useMemo(() => lapsInRange(analysis?.laps || [], lapRange), [analysis, lapRange]);
   const [files, setFiles] = useState([]);
   const [selectedFile, setSelectedFile] = useState('');
   const [targetLap, setTargetLap] = useState('');
@@ -4506,6 +4662,42 @@ export default function App() {
     finally { if (isCurrent()) setDetailLoading(false); }
   }, [analysisSnapshot, comparison?.target_lap, comparison?.reference_lap]);
 
+  // Dense trace of one corner window for the annotated corner graph (CornerTrace). The practice card
+  // reads the local corners, so it always asks for the local reference; the corner table follows the
+  // reference the table is showing.
+  const cornerWindowLoader = useCallback((mode) => (start, end) => requestJson('/api/comparison-detail', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: analysisSnapshot?.filename, target_lap: comparison?.target_lap || null,
+      reference_lap: comparison?.reference_lap || null, external_reference_files: mode === 'LOCAL' ? [] : analysisSnapshot?.references || [],
+      reference_mode: mode, start_pct: start, end_pct: end, points: 800 }),
+  }).then((payload) => payload?.trace || []), [analysisSnapshot, comparison?.target_lap, comparison?.reference_lap]);
+  const localCornerLoader = useMemo(() => (analysisSnapshot ? cornerWindowLoader('LOCAL') : null), [analysisSnapshot, cornerWindowLoader]);
+  const overlayLoader = useCallback((body) => requestJson('/api/lap-overlay', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: analysisSnapshot?.filename, ...body }),
+  }), [analysisSnapshot]);
+  // Expert view: other drive files of the same track and layout, usable Garage61 laps, and a file's lap list.
+  const overlayFiles = useMemo(() => {
+    const current = files.find((item) => item.name === analysisSnapshot?.filename);
+    if (!current) return [];
+    const here = comparisonContext(current);
+    const stamp = (name) => { const found = /(\d{4})-(\d{2})-(\d{2}) (\d{2})-(\d{2})/.exec(name); return found ? `${found[1]}-${found[2]}-${found[3]} ${found[4]}:${found[5]}` : name; };
+    return files.filter((item) => item.name !== current.name && item.analyzable !== false
+      && comparisonContext(item).track === here.track && comparisonContext(item).config === here.config)
+      .map((item) => ({ name: item.name, label: `${stamp(item.name)} · ${item.car_name || ''}` }));
+  }, [files, analysisSnapshot?.filename]);
+  const overlayReferences = useMemo(() => externalReferences.filter((item) => item.usable !== false && item.compatible !== false && item.name)
+    .map((item) => ({ name: item.name, label: `${item.driver_name || '드라이버'} · ${item.lap_time || ''}${item.car_name ? ` · ${item.car_name}` : ''}` })), [externalReferences]);
+  const loadFileLaps = useCallback((filename) => requestJson(`/api/file-laps?filename=${encodeURIComponent(filename)}`), []);
+  // Garage61 laps the practice card can ask for: the ones chosen on screen, else the recommended ones.
+  const practiceGarage61Refs = selectedExternalReferences.length ? selectedExternalReferences
+    : (externalReferenceStatus?.recommended_selection || []).slice(0, externalReferenceStatus?.display_limit || externalReferenceStatus?.max_selection || 9);
+  // Garage61 fast laps for the practice card: the mode on screen, or their composite when the screen shows the local lap.
+  const externalCornerLoader = useMemo(() => (analysisSnapshot?.references?.length
+    ? cornerWindowLoader(analysisSnapshot.referenceMode && analysisSnapshot.referenceMode !== 'LOCAL' ? analysisSnapshot.referenceMode : 'AGGREGATE')
+    : null), [analysisSnapshot, cornerWindowLoader]);
+  const tableCornerLoader = useMemo(() => (analysisSnapshot ? cornerWindowLoader(analysisSnapshot.referenceMode || 'LOCAL') : null), [analysisSnapshot, cornerWindowLoader]);
+
 
   return (
     <div className="coach-ui font-sans text-base leading-relaxed">
@@ -4519,7 +4711,7 @@ export default function App() {
 
       <WorkspaceShell tabs={APP_TABS} activeTab={activeTab} onTab={selectTab}
         hoverHelpEnabled={hoverHelpEnabled} onToggleHelp={toggleHoverHelp} onGuide={() => navigateToSection('user-guide')}
-        hasAnalysis={Boolean(analysis)} trialActive={Boolean(activeTrial)}>
+        hasAnalysis={Boolean(analysis)} trialActive={Boolean(activeTrial)} sections={analysis ? SECTION_NAV[activeTab] : null}>
         <div hidden={!['summary', 'compare', 'setup'].includes(activeTab) && !activeTrial}>
           <Button variant="outline" type="button" className="coach-context-toggle" aria-expanded={controlsExpanded || !analysis || Boolean(activeTrial && !activeTrial.candidate_file)} disabled={!analysis || Boolean(activeTrial && !activeTrial.candidate_file)} onClick={() => setControlsExpanded((value) => !value)}>
             <span><span className="coach-context-subject">{selectedFileEntry?.car_name || session?.car_name || '주행 파일 선택'}</span><span className="coach-context-track">{selectedFileEntry?.track_name || session?.track_name || 'IBT 파일을 선택하세요.'}</span></span><span>주행·비교 기준 변경 <ChevronDown size={14} aria-hidden="true" /></span>
@@ -4554,7 +4746,8 @@ export default function App() {
                 <ToggleGroup type="multiple" variant="outline" size="sm" value={[sessionMode]} onValueChange={values => handleSessionModeChange(values.find(mode => mode !== sessionMode) || sessionMode)} disabled={loading || !selectedFile || selectedFileEntry?.analyzable === false} aria-label="주행 유형" className="flex flex-wrap justify-start gap-2">{SESSION_MODES.map(({ value, label }) => <ToggleGroupItem data-help="session" key={value} value={value}>{label}</ToggleGroupItem>)}</ToggleGroup><HelpHint topic="session" />
                 {selectedStoredModes.length > 1 && <p>저장 유형: {selectedStoredModes.map(sessionModeLabel).join(' / ')}</p>}
                 <SessionModeHint file={selectedFileEntry} stored={selectedAssignedMode} current={sessionMode} />
-                {sessionMode === 'ENDURANCE' && <div className="mt-3 flex flex-wrap items-center gap-2"><span>피트 규정</span><HelpHint topic="pit" />{['CONCURRENT','SEQUENTIAL'].map((rule) => <Button variant="outline" type="button" data-help="pit" key={rule} aria-pressed={pitRule === rule} onClick={() => setPitRule(rule)} className="border  px-3 py-2 text-xs">{rule === 'CONCURRENT' ? '동시 교체' : '순차 교체'}</Button>)}</div>}
+                {sessionMode === 'ENDURANCE' && <div className="mt-3 flex flex-wrap items-center gap-2"><span>피트 규정</span><HelpHint topic="pit" />{['CONCURRENT','SEQUENTIAL'].map((rule) => <Button variant="outline" type="button" data-help="pit" key={rule} aria-pressed={pitRule === rule} onClick={() => setPitRule(rule)} className="border  px-3 py-2 text-xs">{rule === 'CONCURRENT' ? '동시 교체' : '순차 교체'}</Button>)}
+                  {pitServiceHint(analysis?.pit_service) && <span className="text-xs text-muted-foreground" data-testid="pit-service-hint">{pitServiceHint(analysis.pit_service)}</span>}</div>}
               </section>
         <details className="coach-quality-line"><summary data-help="quality" className="cursor-pointer text-sm font-bold text-muted-foreground">데이터 품질 · 유효랩 {quality?.valid_laps ?? selectedFileEntry?.valid_laps ?? '--'} · {cleanSectionOnly ? '부분 코너 관측' : QUALITY_THEME[quality?.state]?.label || '확인 중'}</summary><div className="mt-3"><QualityBanner quality={quality} /></div></details>
         </div>
@@ -4578,7 +4771,15 @@ export default function App() {
         {analysis ? (
           <>
             <div hidden={activeTab !== 'summary'} role="region" aria-labelledby="tab-summary" className="flex flex-col gap-6">
-<Panel title="이번 주행 요약" icon={TimerReset}>
+<Panel title="오늘의 한 가지" icon={Target} id="practice-coach">
+              <PracticeCoach apiBase={API_BASE} filename={analysis.file?.name || selectedFile} practice={analysis.practice} coach={analysis.closed_loop_coach} visualizations={analysis.visualizations} trackLength={analysis.visualizations?.track_length_m || analysis.session?.track_length_m}
+                corners={analysis.performance?.corners || []} loadWindow={localCornerLoader} referenceLabel={comparison?.reference_lap != null ? `내 기준 랩 ${comparison.reference_lap}` : '내 기준 랩'}
+                externalCorners={externalReferenceAnalysis?.status === 'READY' ? externalReferenceAnalysis.corners || [] : []}
+                externalLoadWindow={externalCornerLoader} externalLabel={externalReferenceAnalysis?.aggregate?.reference_label}
+                focusSets={analysis.practice_focuses} garage61Available={!activeTrial && practiceGarage61Refs.length > 0}
+                onUseGarage61={() => { setSelectedExternalReferences(practiceGarage61Refs); setReferenceMode('AGGREGATE'); runAnalysis({ referenceModeOverride: 'AGGREGATE', externalReferencesOverride: practiceGarage61Refs }); }} />
+            </Panel>
+            <Panel title="이번 주행 요약" icon={TimerReset} id="run-summary">
               <RunSummary analysis={analysis} onNavigate={navigateToSection} referenceMode={analysisSnapshot?.referenceMode || 'LOCAL'} />
             </Panel>
             <QuickStart hasAnalysis onGuide={() => navigateToSection('user-guide')} onSetup={() => navigateToSection('briefing')} />
@@ -4642,6 +4843,10 @@ export default function App() {
                 onCancelCollect={cancelGarage61Collection}
               />
             </Panel>
+<Panel title="랩별 시간 쓰임새" icon={Activity} collapsible defaultOpen={false} id="lap-time-use">
+              <LapRangeFilter laps={analysis.laps || []} value={lapRange} onChange={setLapRange} />
+              <div className="mt-4"><LapTimeUse laps={(analysis.laps || []).filter((lap) => pickedLaps.has(lap.lap_number))} /></div>
+            </Panel>
 <Panel title="랩 선택 및 품질" icon={Database} collapsible defaultOpen={false} id="lap-detail">
               <LapSelectionSummary
                 selection={analysis.lap_selection}
@@ -4667,8 +4872,18 @@ export default function App() {
                 </Button>
               </div>
             </Panel>
-<Panel title="코너 자동 분할 및 위상별 비교" icon={Route} collapsible defaultOpen={false}>
-              <CornerTable corners={comparisonCorners} />
+<Panel title="코너 자동 분할 및 위상별 비교" icon={Route} collapsible defaultOpen={false} id="corner-table">
+              <CornerTable corners={comparisonCorners} trackLength={analysis.visualizations?.track_length_m || analysis.session?.track_length_m} loadWindow={tableCornerLoader}
+                referenceLabel={wantsExternalComparison ? 'Garage61 기준' : comparison?.reference_lap != null ? `기준 랩 ${comparison.reference_lap}` : '기준 랩'} />
+            </Panel>
+            <Panel title="코너별 일관성" icon={Activity} collapsible defaultOpen={false} id="corner-consistency">
+              <LapRangeFilter laps={analysis.laps || []} value={lapRange} onChange={setLapRange} />
+              <div className="mt-4"><CornerConsistency consistency={analysis.performance?.corner_consistency} allowedLaps={pickedLaps} /></div>
+            </Panel>
+            <Panel title="전문가 보기 · 여러 랩 겹쳐 보기" icon={LineChart} collapsible defaultOpen={false} lazy id="lap-overlay">
+              <LapOverlay laps={analysis.laps || []} corners={analysis.performance?.corners || []} load={analysisSnapshot ? overlayLoader : null}
+                preferredLaps={[comparison?.reference_lap, comparison?.target_lap]}
+                otherFiles={overlayFiles} references={overlayReferences} loadLaps={loadFileLaps} />
             </Panel>
             </div>
             <div hidden={activeTab !== 'setup'} role="region" aria-labelledby="tab-setup" className="flex flex-col gap-6">
@@ -4681,7 +4896,7 @@ export default function App() {
                 onStart={beginTrial} canStart={canStartTrial} goal={goal} onGoal={setGoal} trialActive={Boolean(activeTrial)}
                 onNavigate={navigateToSection} loading={loading} />
             </Panel>
-            <Panel title="엔지니어 브리핑" icon={Sparkles} collapsible defaultOpen={false}>
+            <Panel title="엔지니어 브리핑" icon={Sparkles} collapsible defaultOpen={false} id="engineer-briefing">
               <div className="mb-4 flex justify-end"><Button variant="outline" data-help="ai" type="button" onClick={() => runAnalysis({ includeAI: true })}
                 disabled={loading || !status?.ai_enabled} className=" border   px-4 py-3 text-sm   disabled:opacity-40">{status?.ai_enabled ? 'AI 브리핑 생성 · 토큰 사용' : 'AI 연결 필요'}</Button></div>
               <BriefingViewer briefing={analysis.briefing} />
@@ -4701,7 +4916,7 @@ export default function App() {
               <Panel title="원인 분류" icon={Activity} id="decision" collapsible defaultOpen={false}>
                 <ClassificationPanel classification={classification} />
               </Panel>
-<Panel title="AI 셋업 실험 계획" icon={Sparkles} collapsible defaultOpen={false}>
+<Panel title="AI 셋업 실험 계획" icon={Sparkles} collapsible defaultOpen={false} id="ai-planner">
               <AIExperimentPlanner
                 selectedFile={selectedFile}
                 sessionMode={sessionMode}
@@ -4718,15 +4933,21 @@ export default function App() {
                 onStored={loadMemory}
               />
             </Panel>
-<Panel title="타이어 종료 스냅샷" icon={Thermometer} collapsible defaultOpen={false}>
+<Panel title="타이어 종료 스냅샷" icon={Thermometer} collapsible defaultOpen={false} id="tire-snapshot">
               <TirePanel tires={analysis.vehicle?.tires} />
             </Panel>
 
-            <Panel title="차고·서스펜션·에어로" icon={Layers3} collapsible defaultOpen={false}>
+            <Panel title="차고·서스펜션·에어로" icon={Layers3} collapsible defaultOpen={false} id="ride-aero">
               <RideAeroPanel
                 rideHeight={analysis.vehicle?.ride_height}
                 aero={analysis.vehicle?.aero}
               />
+            </Panel>
+            <Panel title="댐퍼 속도 분포" icon={Activity} collapsible defaultOpen={false} id="damper-velocity">
+              <DamperHistogram current={analysis.vehicle?.damper_velocity} />
+            </Panel>
+            <Panel title="G-G 그림 (그립 사용)" icon={Activity} collapsible defaultOpen={false} id="gg-diagram">
+              <GGDiagram current={analysis.vehicle?.gg} />
             </Panel>
             </div>
             <div hidden={activeTab !== 'history'} role="region" aria-labelledby="tab-history" className="flex flex-col gap-6">

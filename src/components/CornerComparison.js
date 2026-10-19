@@ -1,10 +1,11 @@
 import { Button } from './ui/button';
 import CornerMap from './CornerMap';
-import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { HelpHint } from './HelpGuide';
 import { COMPARISON_COLORS } from '../chartTheme';
 import { findRegisteredTrackMap, projectComparisonPaths } from '../lib/trackMapProjection';
 import { findOfficialTrackMap } from '../lib/officialTrackMaps';
+import { lossColour, lossRates, lossScale, rateAt } from '../lib/lossColours';
 import {
   Area, CartesianGrid, Line, ComposedChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
@@ -40,6 +41,11 @@ export function prepareComparisonTrace(trace, trackLengthM) {
     delta: valueOf(point, 'delta_s'),
   })).sort((a, b) => a.distance_pct - b.distance_pct);
 }
+
+// Plot area of the graphs, so a cursor line can be laid over them without redrawing them.
+const CHART_MARGIN = { top: 5, right: 12, bottom: 0, left: 2 };
+const Y_AXIS_WIDTH = 48;
+const X_AXIS_HEIGHT = 30;
 
 const CHANNELS = [
   { key: 'speed', reference: 'referenceSpeed', label: '속도', unit: 'km/h', digits: 1 },
@@ -81,6 +87,11 @@ export default function CornerComparison({ trace = [], corners = [], pathData = 
   const effectiveTrace = hasDetail ? detailTrace : trace;
   const rows = useMemo(() => prepareComparisonTrace(effectiveTrace, trackLengthM), [effectiveTrace, trackLengthM]);
   const registeredMap = useMemo(() => findRegisteredTrackMap(trackIdentity), [trackIdentity]);
+  // A road map fitted from the official drawing has no photo of its own: "위성" shows the GPS frame
+  // with world imagery instead, and "도로" brings the road map back.
+  const [preferGps, setPreferGps] = useState(false);
+  useEffect(() => { setPreferGps(false); }, [registeredMap]);
+  const photoless = Boolean(registeredMap && !registeredMap.assets?.background);
   const courseDiagram = useMemo(() => findOfficialTrackMap(trackIdentity), [trackIdentity]);
   const projected = useMemo(() => {
     const detailRange = cornerRange(corners.find(item => item.id === selected), trackLengthM);
@@ -88,9 +99,22 @@ export default function CornerComparison({ trace = [], corners = [], pathData = 
       hasDetail ? mergeDetailPath(pathData, detailPath, detailRange) : pathData,
       hasDetail ? mergeDetailPath(referencePath, detailReferencePath, detailRange) : referencePath,
       pathData,
-      registeredMap,
+      photoless && preferGps ? null : registeredMap,
     );
-  }, [pathData, referencePath, detailPath, detailReferencePath, selected, hasDetail, corners, trackLengthM, registeredMap]);
+  }, [pathData, referencePath, detailPath, detailReferencePath, selected, hasDetail, corners, trackLengthM, registeredMap, photoless, preferGps]);
+  // Where the lap loses or gains time against the reference, for colouring the map line: the whole-lap
+  // trace, with the selected corner's finer trace in its range.
+  const overviewRows = useMemo(() => prepareComparisonTrace(trace, trackLengthM), [trace, trackLengthM]);
+  const loss = useMemo(() => {
+    const detailRange = cornerRange(corners.find(item => item.id === selected), trackLengthM);
+    const merged = hasDetail
+      ? [...overviewRows.filter(row => row.distance_pct < detailRange[0] || row.distance_pct > detailRange[1]),
+        ...rows.filter(row => row.distance_pct >= detailRange[0] && row.distance_pct <= detailRange[1])].sort((a, b) => a.distance_pct - b.distance_pct)
+      : overviewRows;
+    const rates = lossRates(merged, trackLengthM);
+    const scale = lossScale(rates);
+    return scale ? { scale, colourAt: pct => lossColour(rateAt(rates, pct), scale) } : null;
+  }, [overviewRows, rows, hasDetail, corners, selected, trackLengthM]);
   const orderedCorners = useMemo(() => (Array.isArray(corners) ? corners : []).slice().sort((a, b) => a.apex_pct - b.apex_pct), [corners]);
   useEffect(() => {
     if (!requestedCorner || appliedRequest.current === requestedCorner) return;
@@ -110,7 +134,8 @@ export default function CornerComparison({ trace = [], corners = [], pathData = 
   useEffect(() => {
     if (onRangeChange) onRangeChange(selected === null ? null : cornerRange(orderedCorners.find((item) => item.id === selected), trackLengthM));
   }, [onRangeChange, selected, orderedCorners, trackLengthM]);
-  const visibleRows = rows.filter((point) => point.distance_pct >= range[0] && point.distance_pct <= range[1]);
+  const [rangeStart, rangeEnd] = range;
+  const visibleRows = useMemo(() => rows.filter((point) => point.distance_pct >= rangeStart && point.distance_pct <= rangeEnd), [rows, rangeStart, rangeEnd]);
   const cursorRow = finite(activePct) && activePct >= range[0] && activePct <= range[1] ? nearest(visibleRows, activePct) : null;
   const selectCorner = (id, revealMap = false) => {
     setMapFocusVersion(value => value + 1);
@@ -121,10 +146,32 @@ export default function CornerComparison({ trace = [], corners = [], pathData = 
   };
   // The whole lap again: graphs, map line and map view, from wherever the driver is looking.
   const showFullLap = () => { setSelected(null); setActivePct(null); setMapFocusVersion(value => value + 1); };
-  const handleChartMove = (state) => {
+  const handleChartMove = useCallback((state) => {
     const distance = Number(state?.activeLabel);
     if (state?.activeLabel !== undefined && state?.activeLabel !== null && Number.isFinite(distance)) setActivePct(distance / distanceScale);
-  };
+  }, [distanceScale]);
+  // The six graphs are drawn once per range and data; moving the cursor (mouse on the map or a graph) only
+  // moves a thin line laid over them, so hovering does not redraw every graph.
+  const apexPct = corner && finite(corner.apex_pct) ? corner.apex_pct : null;
+  const charts = useMemo(() => CHANNELS.map((channel) => {
+    const hasTarget = visibleRows.some((point) => finite(point[channel.key]));
+    const hasReference = Boolean(channel.reference && visibleRows.some((point) => finite(point[channel.reference])));
+    const element = !hasTarget && !hasReference ? null : <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+      <ComposedChart data={visibleRows} syncId={syncId} syncMethod="value" onMouseMove={handleChartMove} margin={CHART_MARGIN}>
+        <CartesianGrid stroke={COMPARISON_COLORS.grid} strokeDasharray="3 3" />
+        <XAxis dataKey="distance" type="number" domain={[rangeStart * distanceScale, rangeEnd * distanceScale]} allowDataOverflow tickFormatter={(value) => `${Math.round(value)}${isMeters ? 'm' : '%'}`} stroke={COMPARISON_COLORS.muted} tick={{ fontSize: 10 }} height={X_AXIS_HEIGHT} />
+        <YAxis width={Y_AXIS_WIDTH} domain={channel.domain || ['auto', 'auto']} allowDecimals={!channel.stepped} stroke={COMPARISON_COLORS.muted} tick={{ fontSize: 10 }} />
+        <Tooltip contentStyle={{ background: '#223140', borderColor: '#3a4b60', borderRadius: 10, fontSize: 12, color: '#dde5ef' }} labelFormatter={(value) => `거리 ${Number(value).toFixed(isMeters ? 0 : 1)} ${isMeters ? 'm' : '%'}`} formatter={(value, name) => [finite(value) ? `${value.toFixed(channel.digits)} ${channel.unit}` : '측정 불가', name]} />
+        {channel.key === 'delta' && <ReferenceLine y={0} stroke={COMPARISON_COLORS.muted} />}
+        {apexPct !== null && <ReferenceLine x={apexPct * distanceScale} stroke={COMPARISON_COLORS.muted} strokeDasharray="2 4" />}
+        {channel.key === 'speed' && visibleRows.some((point) => point.speedBand) && <Area dataKey="speedBand" name="기준 속도 IQR" stroke="none" fill={REFERENCE} fillOpacity={.12} connectNulls={false} isAnimationActive={false} tooltipType="none" />}
+        {hasReference && <Line dataKey={channel.reference} name={referenceLabel || '기준 주행'} stroke={REFERENCE} strokeDasharray="5 3" strokeWidth={2} type={channel.stepped ? 'stepAfter' : 'linear'} dot={false} connectNulls={false} isAnimationActive={false} />}
+        {hasTarget && <Line dataKey={channel.key} name={channel.key === 'delta' ? '내 주행 − 기준' : '내 주행'} stroke={TARGET} strokeWidth={2} type={channel.stepped ? 'stepAfter' : 'linear'} dot={false} connectNulls={false} isAnimationActive={false} />}
+      </ComposedChart>
+    </ResponsiveContainer>;
+    return { channel, hasTarget, hasReference, element };
+  }), [visibleRows, syncId, handleChartMove, rangeStart, rangeEnd, distanceScale, isMeters, apexPct, referenceLabel]);
+  const cursorShare = cursorRow && rangeEnd > rangeStart ? (cursorRow.distance_pct - rangeStart) / (rangeEnd - rangeStart) : null;
   const metrics = corner?.target || corner?.target_metrics;
   const referenceMetrics = corner?.reference || corner?.ref_metrics;
 
@@ -136,7 +183,7 @@ export default function CornerComparison({ trace = [], corners = [], pathData = 
       </div>
       <div className="coach-chart-legend mb-4 flex flex-wrap gap-x-5 gap-y-1 text-sm"><span style={{ color: TARGET }}>━ 내 주행</span><span style={{ color: REFERENCE }}>┄ {referenceLabel || '기준 주행'}</span></div>
       <div ref={mapRegionRef} className="coach-map-region">
-        <CornerMap projected={projected.target} referenceProjected={projected.reference} trackMap={projected.map} courseDiagram={courseDiagram} geographic={projected.geographic} geographicMetersPerUnit={projected.metersPerUnit} mapStatus={projected.mapStatus} referenceLineSource={hasDetail ? detailLineSource || referenceLineSource : referenceLineSource} referenceLabel={referenceLabel} detailLoading={detailLoading} corners={displayedCorners} selected={corner} onFullLap={showFullLap} selectedRange={corner ? range : null} activePct={cursorRow?.distance_pct} onSelect={selectCorner} onHover={setActivePct} focusVersion={mapFocusVersion} />
+        <CornerMap projected={projected.target} referenceProjected={projected.reference} trackMap={projected.map} courseDiagram={courseDiagram} geographic={projected.geographic} geographicMetersPerUnit={projected.metersPerUnit} geographicOrigin={projected.origin} onSatellite={photoless ? () => setPreferGps(true) : undefined} onRoadMap={photoless ? () => setPreferGps(false) : undefined} mapStatus={projected.mapStatus} referenceLineSource={hasDetail ? detailLineSource || referenceLineSource : referenceLineSource} referenceLabel={referenceLabel} detailLoading={detailLoading} corners={displayedCorners} selected={corner} onFullLap={showFullLap} selectedRange={corner ? range : null} activePct={cursorRow?.distance_pct} onSelect={selectCorner} onHover={setActivePct} focusVersion={mapFocusVersion} loss={loss} traceRows={rows} />
       </div>
       <div className="grid gap-5 lg:grid-cols-[minmax(230px,0.8fr)_minmax(0,1.8fr)]">
         <div className="min-w-0 flex flex-col gap-4">
@@ -159,30 +206,18 @@ export default function CornerComparison({ trace = [], corners = [], pathData = 
           </div>
         </div>
         <div className="min-w-0 flex flex-col gap-3">
-          {!rows.length ? <p className="rounded-xl bg-background p-6 text-muted-foreground">비교할 거리별 데이터가 없습니다. 주행 파일을 분석하면 그래프가 표시됩니다.</p> : CHANNELS.map((channel) => {
-            const hasTarget = visibleRows.some((point) => finite(point[channel.key]));
-            const hasReference = channel.reference && visibleRows.some((point) => finite(point[channel.reference]));
+          {!rows.length ? <p className="rounded-xl bg-background p-6 text-muted-foreground">비교할 거리별 데이터가 없습니다. 주행 파일을 분석하면 그래프가 표시됩니다.</p> : charts.map(({ channel, hasTarget, hasReference, element }) => {
             return <div key={channel.key} className="coach-chart-channel">
               <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs">
                 <span data-help={`chart-${channel.key}`} className="flex items-center gap-1 font-semibold text-foreground">{channel.label}{channel.unit ? ` (${channel.unit})` : ''}<HelpHint topic={`chart-${channel.key}`} /></span>
                 {cursorRow ? <span><Reading value={cursorRow[channel.key]} digits={channel.digits} unit={channel.unit} color={TARGET} />{channel.reference && <> / <Reading value={cursorRow[channel.reference]} digits={channel.digits} unit={channel.unit} color={REFERENCE} /></>}</span>
                   : <span className="text-muted-foreground">{!hasTarget && '내 주행: 측정 불가'}{!hasTarget && channel.reference && !hasReference && ' · '}{channel.reference && !hasReference && '기준: 측정 불가'}</span>}
               </div>
-              {!hasTarget && !hasReference ? <p className="py-3 text-sm text-muted-foreground">{channel.key === 'delta' ? '기준 주행이 없거나 시간 데이터가 없어 비교할 수 없습니다.' : '이 구간의 채널 데이터가 없습니다.'}</p> : <div style={{ width: '100%', height: channel.key === 'speed' ? 155 : 110 }}>
-                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-                  <ComposedChart data={visibleRows} syncId={syncId} syncMethod="value" onMouseMove={handleChartMove} margin={{ top: 5, right: 12, bottom: 0, left: 2 }}>
-                    <CartesianGrid stroke={COMPARISON_COLORS.grid} strokeDasharray="3 3" />
-                    <XAxis dataKey="distance" type="number" domain={[range[0] * distanceScale, range[1] * distanceScale]} allowDataOverflow tickFormatter={(value) => `${Math.round(value)}${isMeters ? 'm' : '%'}`} stroke={COMPARISON_COLORS.muted} tick={{ fontSize: 10 }} />
-                    <YAxis width={48} domain={channel.domain || ['auto', 'auto']} allowDecimals={!channel.stepped} stroke={COMPARISON_COLORS.muted} tick={{ fontSize: 10 }} />
-                    <Tooltip contentStyle={{ background: '#223140', borderColor: '#3a4b60', borderRadius: 10, fontSize: 12, color: '#dde5ef' }} labelFormatter={(value) => `거리 ${Number(value).toFixed(isMeters ? 0 : 1)} ${isMeters ? 'm' : '%'}`} formatter={(value, name) => [finite(value) ? `${value.toFixed(channel.digits)} ${channel.unit}` : '측정 불가', name]} />
-                    {channel.key === 'delta' && <ReferenceLine y={0} stroke={COMPARISON_COLORS.muted} />}
-                    {corner && finite(corner.apex_pct) && <ReferenceLine x={corner.apex_pct * distanceScale} stroke={COMPARISON_COLORS.muted} strokeDasharray="2 4" />}
-                    {cursorRow && <ReferenceLine x={cursorRow.distance} stroke={COMPARISON_COLORS.cursor} strokeDasharray="3 3" />}
-                    {channel.key === 'speed' && visibleRows.some((point) => point.speedBand) && <Area dataKey="speedBand" name="기준 속도 IQR" stroke="none" fill={REFERENCE} fillOpacity={.12} connectNulls={false} isAnimationActive={false} tooltipType="none" />}
-                    {hasReference && <Line dataKey={channel.reference} name={referenceLabel || '기준 주행'} stroke={REFERENCE} strokeDasharray="5 3" strokeWidth={2} type={channel.stepped ? 'stepAfter' : 'linear'} dot={false} connectNulls={false} isAnimationActive={false} />}
-                    {hasTarget && <Line dataKey={channel.key} name={channel.key === 'delta' ? '내 주행 − 기준' : '내 주행'} stroke={TARGET} strokeWidth={2} type={channel.stepped ? 'stepAfter' : 'linear'} dot={false} connectNulls={false} isAnimationActive={false} />}
-                  </ComposedChart>
-                </ResponsiveContainer>
+              {!hasTarget && !hasReference ? <p className="py-3 text-sm text-muted-foreground">{channel.key === 'delta' ? '기준 주행이 없거나 시간 데이터가 없어 비교할 수 없습니다.' : '이 구간의 채널 데이터가 없습니다.'}</p> : <div style={{ position: 'relative', width: '100%', height: channel.key === 'speed' ? 155 : 110 }}>
+                {element}
+                {finite(cursorShare) && <div aria-hidden="true" data-testid="chart-cursor" style={{ position: 'absolute', pointerEvents: 'none', top: CHART_MARGIN.top, bottom: X_AXIS_HEIGHT + CHART_MARGIN.bottom,
+                  left: `calc(${CHART_MARGIN.left + Y_AXIS_WIDTH}px + (100% - ${CHART_MARGIN.left + Y_AXIS_WIDTH + CHART_MARGIN.right}px) * ${cursorShare})`,
+                  borderLeft: `1px dashed ${COMPARISON_COLORS.cursor}` }} />}
               </div>}
             </div>;
           })}

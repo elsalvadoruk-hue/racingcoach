@@ -65,7 +65,7 @@
 .coach-help-switch { display: flex; align-items: center; gap: 9px; font-size: 12px; color: var(--coach-muted); }
 .coach-guide-link { font-size: 12px; }
 .coach-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 36px; }
-.coach-sidebar { position: sticky; top: 24px; margin-top: 30px; }
+.coach-sidebar { position: sticky; top: 24px; margin-top: 30px; align-self: start; max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
 .coach-nav-caption { color: var(--coach-muted); font-size: 10px; letter-spacing: 1.6px; padding: 0 12px 12px; }
 .coach-sidebar nav { display: flex; flex-direction: column; gap: 6px; }
 .coach-ui .coach-nav-item { width: 100%; justify-content: flex-start; gap: 12px; padding: 12px; min-height: 46px; color: var(--coach-muted); font-size: 13px; }
@@ -73,6 +73,10 @@
 .coach-nav-item[aria-current="page"] > svg { color: var(--coach-accent); }
 .coach-nav-divider { margin-top: 16px; }
 .coach-sidebar-note { display: flex; align-items: center; gap: 8px; margin: 24px 12px; color: var(--coach-muted); font-size: 11px; }
+.coach-sidebar .coach-section-nav { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; min-height: 0; flex: 1 1 auto; overflow-y: auto; scrollbar-width: thin; }
+.coach-section-link { text-align: left; padding: 7px 12px; border-radius: 8px; color: var(--coach-muted); font-size: 12px; line-height: 1.4; border-left: 2px solid transparent; background: none; cursor: pointer; }
+.coach-section-link:hover { color: var(--coach-white); background: hsl(var(--primary) / .06); }
+.coach-section-link[aria-current="location"] { color: var(--coach-white); border-left-color: var(--coach-accent); background: hsl(var(--primary) / .08); }
 .coach-status-dot { width: 6px; height: 6px; border-radius: 100%; background: var(--coach-muted); }
 .coach-status-dot.is-ready { background: var(--coach-success); box-shadow: 0 0 0 3px hsl(var(--success) / .09); }
 .coach-content { min-width: 0; padding-bottom: 32px; }
@@ -270,7 +274,7 @@
   .coach-ui .coach-nav-item { flex: 0 0 auto; width: auto; justify-content: center; gap: 5px; font-size: 12px; padding: 10px; min-height: 44px; }
   .coach-nav-label { white-space: nowrap; }
   .coach-nav-divider { margin-top: 0; }
-  .coach-sidebar-note, .coach-nav-caption { display: none; }
+  .coach-sidebar-note, .coach-nav-caption, .coach-sidebar .coach-section-nav { display: none; }
   .coach-content > * { margin-top: 18px; }
   .coach-screen-heading { padding: 6px 0; }
   .coach-screen-heading h2 { font-size: 25px; }

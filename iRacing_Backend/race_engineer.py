@@ -50,7 +50,7 @@ SCALARS = {'state': 'SessionState', 'flags': 'SessionFlags', 'time_remaining_s':
 ARRAYS = {'lap_completed': 'CarIdxLapCompleted', 'distance_pct': 'CarIdxLapDistPct',
           'position': 'CarIdxPosition', 'class_position': 'CarIdxClassPosition',
           'last_lap_s': 'CarIdxLastLapTime', 'on_pit_road': 'CarIdxOnPitRoad', 'track_surface': 'CarIdxTrackSurface',
-          'est_time_s': 'CarIdxEstTime', 'best_lap_s': 'CarIdxBestLapTime'}
+          'est_time_s': 'CarIdxEstTime', 'best_lap_s': 'CarIdxBestLapTime', 'f2_time_s': 'CarIdxF2Time'}
 
 
 def read_race(sdk, names, session_num):

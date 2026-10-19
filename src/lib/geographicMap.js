@@ -8,7 +8,9 @@ export function gpsToMercator({ lat, lon }) {
   return { x: lon * Math.PI / 180 * RADIUS, y: -RADIUS * Math.log(Math.tan(Math.PI / 4 + radians / 2)) };
 }
 
-export function imageryTiles(view, viewport) {
+// view is in Mercator metres relative to origin (see projectComparisonPaths); tiles come back in the same frame.
+export function imageryTiles(local, viewport, origin = { x: 0, y: 0 }) {
+  const view = { ...local, x: local.x + origin.x, y: local.y + origin.y };
   const resolution = Math.max(view.width / Math.max(1, viewport.width), view.height / Math.max(1, viewport.height));
   let zoom = Math.max(3, Math.min(19, Math.floor(Math.log2(2 * WORLD_HALF / (256 * resolution)))));
   let bounds;
@@ -31,7 +33,7 @@ export function imageryTiles(view, viewport) {
   for (let row = bounds.top; row <= bounds.bottom; row += 1) {
     for (let col = bounds.left; col <= bounds.right; col += 1) {
       tiles.push({ key: `${zoom}/${row}/${col}`, url: `${IMAGERY_SOURCE}/tile/${zoom}/${row}/${col}`,
-        x: -WORLD_HALF + col * bounds.size, y: -WORLD_HALF + row * bounds.size,
+        x: -WORLD_HALF + col * bounds.size - origin.x, y: -WORLD_HALF + row * bounds.size - origin.y,
         width: bounds.size, height: bounds.size });
     }
   }

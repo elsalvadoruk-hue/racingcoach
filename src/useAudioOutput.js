@@ -23,6 +23,24 @@ export const ANSWER_PRIORITY = 4;
 // Chosen by ear on artifacts/voice-pilot/joined.html (scripts/voice_pilot_joined.py).
 export const PART_OVERLAP_S = 0;
 
+// Chrome and Edge list the output devices only once the page may use the microphone. When the driver
+// presses "목록 갱신" and nothing is listed, the browser is asked once; the microphone stream is closed
+// straight away and nothing is recorded.
+const askDevicePermission = async () => {
+  try {
+    const state = await navigator.permissions?.query?.({ name: 'microphone' });
+    if (state?.state === 'denied') return 'denied';
+  } catch { /* not every browser can query this */ }
+  if (!navigator.mediaDevices?.getUserMedia) return 'unavailable';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((track) => track.stop());
+    return 'granted';
+  } catch (error) {
+    return error?.name === 'NotAllowedError' ? 'denied' : 'unavailable';
+  }
+};
+
 export default function useAudioOutput() {
   const supported = typeof HTMLMediaElement.prototype.setSinkId === 'function' && !!navigator.mediaDevices?.enumerateDevices;
   const [outputId, setOutputId] = useState(savedOutput);
@@ -80,13 +98,25 @@ export default function useAudioOutput() {
     selected.current = id; setOutputId(id);
     try { if (id) localStorage.setItem(STORAGE_KEY, id); else localStorage.removeItem(STORAGE_KEY); } catch { /* Playback still works without storage. */ }
   }, []);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async ({ ask = false } = {}) => {
     if (!supported) return;
     const serial = ++refreshSerial.current;
     try {
-      const all = await navigator.mediaDevices.enumerateDevices();
+      let all = await navigator.mediaDevices.enumerateDevices();
       if (!mounted.current || serial !== refreshSerial.current) return;
-      const outputs = all.filter((device) => device.kind === 'audiooutput' && device.deviceId && device.deviceId !== 'default');
+      const listed = (devices) => devices.filter((device) => device.kind === 'audiooutput' && device.deviceId && device.deviceId !== 'default');
+      if (ask && !listed(all).length) {
+        const permission = await askDevicePermission();
+        if (!mounted.current || serial !== refreshSerial.current) return;
+        if (permission === 'denied') {
+          setMessage('브라우저가 이 화면의 마이크 사용을 막고 있어 출력장치 목록을 읽을 수 없습니다. 주소창 왼쪽의 사이트 정보에서 마이크를 허용한 뒤 목록을 다시 갱신하세요.');
+          return;
+        }
+        if (permission === 'granted') all = await navigator.mediaDevices.enumerateDevices();
+        if (!mounted.current || serial !== refreshSerial.current) return;
+      }
+      const outputs = listed(all);
+      if (ask) setMessage(outputs.length ? '' : '이 브라우저가 알려 준 출력장치가 Windows 기본 장치뿐입니다. 장치를 연결했는지 확인하세요.');
       // Before microphone permission, browsers can hide saved device IDs. Only
       // classify removal when a previously visible device actually disappears.
       const removed = selected.current && knownDevices.current.some((device) => device.deviceId === selected.current)

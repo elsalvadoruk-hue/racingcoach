@@ -48,6 +48,33 @@ class RadioRegressions(unittest.TestCase):
         self.tick(session_flags=1)
         self.assertNotIn('fuel_low', self.keys())
 
+    def test_low_fuel_follows_the_cars_own_use_and_is_said_twice_a_stint_at_most(self):
+        calls, emit = [], self.radio.emit
+        self.radio.emit = lambda key, *a, **k: (calls.append(key) if key == 'fuel_low' else None, emit(key, *a, **k))[1]
+        said = lambda: calls
+        self.tick(session_state=4, fuel_l=6., fuel_l_per_lap=8.4)
+        self.tick(fuel_l=4.1)                                           # 4-minute multiclass car: 4.1 L is under half a lap
+        self.assertEqual(len(said()), 1)
+        for fuel in (3.5, 2., 1.):
+            self.wait(70); self.tick(fuel_l=fuel)
+        self.assertEqual(len(said()), 1)                                # not every minute
+        self.wait(70); self.tick(fuel_l=.4)
+        self.assertEqual(len(said()), 2)                                # nearly dry
+        self.wait(70); self.tick(fuel_l=60.)                            # refuelled
+        self.wait(70); self.tick(fuel_l=3.)
+        self.assertEqual(len(said()), 3)
+
+    def test_low_fuel_waits_for_half_a_lap_of_a_frugal_car_and_falls_back_before_a_lap_is_measured(self):
+        self.tick(session_state=4, fuel_l=1.2, fuel_l_per_lap=2.)      # 1.2 L is more than half a lap of 2 L
+        self.assertNotIn('fuel_low', self.keys())
+        self.tick(fuel_l=.9)
+        self.assertIn('fuel_low', self.keys())
+        self.setUp()
+        self.tick(session_state=4, fuel_l=.9)                            # no measured lap yet: the old 0.5 L limit
+        self.assertNotIn('fuel_low', self.keys())
+        self.tick(fuel_l=.4)
+        self.assertIn('fuel_low', self.keys())
+
     def test_flags_use_phonetic_names_and_cached_spotter_only(self):
         for key, name in [('blue', '블루 플래그'), ('white', '화이트 플래그'), ('red', '레드 플래그'), ('repair', '레드 닷')]:
             self.assertTrue(all(name in text for text in STATIC_CALLS[key]))

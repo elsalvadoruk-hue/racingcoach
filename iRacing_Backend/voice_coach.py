@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 from collections import OrderedDict
 import importlib.util
 import io
@@ -27,7 +28,7 @@ from voice_context import (coaching_instructions, fuel_range_question, general_q
 from live_corners import corner_answer, lap_answer
 from race_engineer import ROLES, role_voice, choose_role, measured_answer, damage_answer
 from spotter import SpotterAudio
-from radio_audio import RadioAudioCache, fixed_catalog, spoken_form
+from radio_audio import CALLS as FIXED_CALLS, RadioAudioCache, fixed_catalog, spoken_form, texts as fixed_texts
 import radio_phrases
 from radio_policy import HOLD_DEFAULT_S
 from instant_answers import instant_answer
@@ -228,8 +229,9 @@ class AudioPreparation:
 
     A few worker threads share one queue. Already cached clips cost nothing,
     so it can be started again after a stop or a failure.
+    IRACING_AUDIO_WORKERS raises the thread count for a bulk fetch from the scripts (1-16, default 4).
     """
-    WORKERS = 4
+    WORKERS = max(1, min(16, int(os.getenv('IRACING_AUDIO_WORKERS', '4') or 4)))
 
     def __init__(self, cache):
         self.cache = cache
@@ -342,6 +344,9 @@ class VoiceCoach:
         self.captures = OrderedDict()
         self.lock = threading.RLock()
         self.cloud_lock = asyncio.Lock()
+        # Pit wall reports take turns among themselves only. A question holding the cloud lock no longer
+        # holds them back when their clips are already on disk (see audio_on_disk).
+        self.report_lock = asyncio.Lock()
         self.race_options = {'reserve_laps': .5, 'pit_loss_s': None}
         self.pending_report = None
         self.radio_audio = OrderedDict()
@@ -615,6 +620,22 @@ class VoiceCoach:
                     ack, warning = None, service_error(exc)
             return {'note': public_note(note), 'audio_base64': audio, 'audio_parts': parts, 'warning': warning, 'audio_stored': False, 'ack': ack}
 
+    def audio_on_disk(self, item):
+        """True when every clip a report or radio call needs is already cached: it can be played while a
+        question is using the cloud, because nothing has to be synthesized for it."""
+        cache, role = self.fixed_audio, item.get('engineer')
+        if item.get('speech_parts'):
+            return all(cache.cached(role, sentence) for sentence in item['speech_parts'])
+        if item.get('speech_text'):
+            return cache.cached(role, item['speech_text'])
+        if item.get('speech_key'):
+            base, _, index = item['speech_key'].partition('#')
+            try:
+                return cache.cached(FIXED_CALLS[base][0], fixed_texts(base)[int(index or 0)])
+            except (KeyError, IndexError, ValueError):
+                return False
+        return False
+
     async def report(self, payload):
         options = {'reserve_laps': payload.reserve_laps, 'pit_loss_s': payload.pit_loss_s, 'fuel_save_mode': payload.fuel_save_mode}
         self.race_options = options
@@ -625,12 +646,12 @@ class VoiceCoach:
         context = self.live.context()
         view = self.live.race_view(**options)
         result = {'pit_wall': view, 'report': None}
-        if payload.level == 'off' or not context.get('connected') or self.cloud_lock.locked() or not self.store.available:
+        if payload.level == 'off' or not context.get('connected') or self.report_lock.locked() or not self.store.available:
             if payload.level == 'off' or not context.get('connected'):
                 with self.lock:
                     self.pending_report = None
             return result
-        async with self.cloud_lock:
+        async with self.report_lock:
             notes = await asyncio.to_thread(self.report_notes)
             with self.live.lock:
                 context = self.live.context()
@@ -656,14 +677,18 @@ class VoiceCoach:
                 self.pending_report = None
             audio, warning, parts = None, '', None
             if payload.speak:
+                on_disk = self.audio_on_disk(report)
+                if not on_disk and self.cloud_lock.locked():
+                    return result           # it needs synthesis while a question is using the cloud: the next poll
                 try:
-                    if report.get('speech_parts'):
-                        parts = [await asyncio.to_thread(self.fixed_audio.phrase, report['engineer'], sentence) for sentence in report['speech_parts']]
-                        audio = parts[0]
-                    elif report.get('speech_text'):
-                        audio = await asyncio.to_thread(self.fixed_audio.phrase, report['engineer'], report['speech_text'])
-                    elif report.get('speech_key'):
-                        audio = await asyncio.to_thread(self.fixed_audio.clip, report['speech_key'])
+                    async with (contextlib.nullcontext() if on_disk else self.cloud_lock):
+                        if report.get('speech_parts'):
+                            parts = [await asyncio.to_thread(self.fixed_audio.phrase, report['engineer'], sentence) for sentence in report['speech_parts']]
+                            audio = parts[0]
+                        elif report.get('speech_text'):
+                            audio = await asyncio.to_thread(self.fixed_audio.phrase, report['engineer'], report['speech_text'])
+                        elif report.get('speech_key'):
+                            audio = await asyncio.to_thread(self.fixed_audio.clip, report['speech_key'])
                 except Exception as exc:
                     warning = service_error(exc)
             # Cloud latency/disconnect/session changes must not deliver old race advice.
@@ -762,9 +787,11 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             event = coach.live.radio.get(identifier, coach.live.clock())
         if event is None:
             return {'event': None}
-        if coach.cloud_lock.locked():
+        # A call whose clips are all on disk plays even while a question is using the cloud.
+        on_disk = coach.audio_on_disk(event)
+        if not on_disk and coach.cloud_lock.locked():
             return {'busy': True}
-        async with coach.cloud_lock:
+        async with (contextlib.nullcontext() if on_disk else coach.cloud_lock):
             with coach.live.lock:
                 event = coach.live.radio.get(identifier, coach.live.clock())
             if event is None:

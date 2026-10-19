@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import math
+import statistics
 import os
 import re
 import sqlite3
@@ -44,6 +45,10 @@ from setup_profiles import supplement_setup_summary, vehicle_setup_capabilities
 from live_telemetry import LiveTelemetry
 from live_pit import PitKnowledge
 from live_formation import RaceHistory
+from timing_log import TimingLog
+from practice import PracticeStore
+import pit_service
+from live_drill import drill_plan, warmup_crossings
 from voice_notes import VoiceNoteStore, review_notes
 from voice_coach import VoiceCoach, register_voice_routes
 import corner_names
@@ -123,7 +128,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "1.0.2"   # the first version made to be shared (2026-10-12); earlier numbers were internal
+APP_VERSION = "1.1.0"   # the first version made to be shared (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -315,6 +320,23 @@ class ComparisonDetailRequest(BaseModel):
     reference_mode: Literal["LOCAL", "AGGREGATE", "SINGLE"] = "LOCAL"
 
 
+class OverlayExtraLap(BaseModel):
+    source: Literal["IBT", "GARAGE61"]
+    filename: str
+    lap: Optional[int] = None
+
+
+class LapOverlayRequest(BaseModel):
+    filename: Optional[str] = None
+    laps: list[int] = Field(default_factory=list, max_length=8)
+    extra: list[OverlayExtraLap] = Field(default_factory=list, max_length=4)
+    base_lap: Optional[int] = None
+    base_key: Optional[str] = None
+    start_pct: float = Field(default=0.0, ge=0.0, le=1.0)
+    end_pct: float = Field(default=1.0, ge=0.0, le=1.0)
+    points: int = Field(default=1500, ge=100, le=4000)
+
+
 def request_with_structured_feedback(request: Any) -> Any:
     selections = [f"{name}={getattr(request, name, None)}" for name in ("feedback_phase", "feedback_speed", "feedback_symptom") if getattr(request, name, None)]
     if not selections:
@@ -436,6 +458,8 @@ ANALYSIS_CHANNELS = {
     "LapDeltaToBestLap",
     "LapDeltaToBestLap_OK",
     "OnPitRoad",
+    "PlayerCarInPitStall",
+    "PitSvFlags",
     "IsOnTrack",
     "PlayerTrackSurface",
     "PlayerTrackSurfaceMaterial",
@@ -4492,7 +4516,39 @@ class TelemetryAnalyzer:
             if call:
                 corner.update(official_turn_number=named.get("number"), turn_name=named.get("name"), label=call)
         result["performance"]["corner_names_confirmed"] = bool(confirmed_names)
+        result["performance"]["corner_consistency"] = self._corner_consistency(corners, (lap_selection or {}).get("target_lap"))
         return json_safe(result)
+
+    def _corner_consistency(self, corners: list[dict[str, Any]], target_lap: Optional[int]) -> dict[str, Any]:
+        """Each corner's time on every valid lap (RaceStudio 3's box plots and "fastest N sectors"). The screen
+        draws the spread and compares the target lap with the corner's three fastest passes."""
+        laps = self.valid_laps
+        if len(laps) < 3:
+            return {"available": False, "reason": "FEW_LAPS", "corners": []}
+        grids = [(lap, self._lap_grid(lap)) for lap in laps]
+        rows: list[dict[str, Any]] = []
+        for corner in sorted(corners, key=lambda item: item.get("apex_pct") or 0):
+            entry, exit_pct = corner.get("entry_pct"), corner.get("exit_pct")
+            if not (isinstance(entry, (int, float)) and isinstance(exit_pct, (int, float))) or exit_pct <= entry:
+                continue
+            passes = []
+            for lap, grid in grids:
+                pct, times = grid["distance_pct"], grid["time_s"]
+                covered = np.asarray(grid.get("_coverage", np.isfinite(times)), dtype=bool)
+                inside = (pct >= entry) & (pct <= exit_pct)
+                if not np.any(inside) or not np.all(covered[inside]):
+                    continue
+                known = np.isfinite(times)
+                if pct[known][0] > entry or pct[known][-1] < exit_pct:
+                    continue
+                seconds = float(np.interp(exit_pct, pct[known], times[known]) - np.interp(entry, pct[known], times[known]))
+                if math.isfinite(seconds) and seconds > 0:
+                    passes.append({"lap": lap.lap_number, "time_s": round(seconds, 3)})
+            if len(passes) < 3:
+                continue
+            rows.append({"id": corner.get("id"), "label": corner.get("label"), "apex_pct": corner.get("apex_pct"),
+                         "entry_pct": entry, "exit_pct": exit_pct, "passes": passes})
+        return {"available": bool(rows), "target_lap": target_lap, "lap_count": len(laps), "corners": rows}
 
 
     def _structured_feedback(self, request: AnalyzeRequest, local_corners: list[dict[str, Any]], external: dict[str, Any]) -> dict[str, Any]:
@@ -5115,6 +5171,53 @@ class TelemetryAnalyzer:
             "repeatable_lap_count": repeatable_lap_count,
         }
 
+    # Where a lap's time goes (RaceStudio 3's brake/coast/full-throttle/corner lap statistics).
+    TIME_USE_BRAKE = 0.08        # brake pedal above this is braking (same as the corner analysis)
+    TIME_USE_FULL = 0.95         # throttle at or above this, off the brake, is full throttle
+    TIME_USE_OFF = 0.05          # throttle below this, off the brake, is coasting
+    TIME_USE_CORNER_G = 0.5      # lateral acceleration above this many g is cornering (counted on its own)
+    TIME_USE_GAP_S = 0.5         # a gap in the samples longer than this is not counted
+
+    def _lap_time_use(self, lap: "LapSegment") -> Optional[dict[str, Any]]:
+        """Seconds and shares of a lap spent braking, coasting, at part and full throttle, and cornering.
+
+        The first four split the lap; cornering overlaps them. Without brake or throttle the lap gets None
+        (nothing is guessed); without lateral acceleration only cornering is left out."""
+        brake, throttle = self.channels.get("Brake"), self.channels.get("Throttle")
+        session_time = self.channels.get("SessionTime")
+        start, end = lap.start_idx, lap.end_idx
+        if brake is None or throttle is None or end <= start:
+            return None
+        if session_time is not None:
+            steps = np.diff(session_time[start:end + 2].astype(float))
+            if len(steps) < end - start + 1:
+                steps = np.r_[steps, np.median(steps) if len(steps) else 0.0]
+        else:
+            steps = np.full(end - start + 1, 1.0 / max(1, self.telemetry.tick_rate))
+        steps = np.where(np.isfinite(steps) & (steps > 0) & (steps <= self.TIME_USE_GAP_S), steps, 0.0)
+        lap_brake = brake[start:end + 1].astype(float)
+        lap_throttle = throttle[start:end + 1].astype(float)
+        known = np.isfinite(lap_brake) & np.isfinite(lap_throttle)
+        braking = known & (lap_brake > self.TIME_USE_BRAKE)
+        free = known & ~braking
+        full = free & (lap_throttle >= self.TIME_USE_FULL)
+        coast = free & (lap_throttle < self.TIME_USE_OFF)
+        part = free & ~full & ~coast
+        total = float(np.sum(steps[known]))
+        if total <= 0:
+            return None
+        seconds = {name: float(np.sum(steps[mask])) for name, mask in
+                   (("brake", braking), ("coast", coast), ("part_throttle", part), ("full_throttle", full))}
+        lateral = self.channels.get("LatAccel")
+        if lateral is not None:
+            lap_lateral = np.abs(lateral[start:end + 1].astype(float))
+            seconds["corner"] = float(np.sum(steps[known & np.isfinite(lap_lateral) & (lap_lateral >= self.TIME_USE_CORNER_G * 9.80665)]))
+        return {
+            "seconds": {name: round(value, 2) for name, value in seconds.items()},
+            "share_pct": {name: round(value / total * 100.0, 1) for name, value in seconds.items()},
+            "counted_s": round(total, 2),
+        }
+
     def _lap_table(self, lap_selection: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
         valid_times = [lap.lap_time_s for lap in self.valid_laps if lap.lap_time_s]
         best = min(valid_times) if valid_times else None
@@ -5151,6 +5254,7 @@ class TelemetryAnalyzer:
                     "reproducibility_peer_laps": profile.get("peer_laps", []),
                     "reproducibility_trace_rms_s": profile.get("trace_rms_to_peers_s"),
                     "selection_roles": roles,
+                    "time_use": self._lap_time_use(lap) if lap.complete else None,
                 }
             )
         return rows
@@ -5319,6 +5423,7 @@ class TelemetryAnalyzer:
             "LongAccel",
             "VertAccel",
             "Gear",
+            "RPM",
             "Lat",
             "Lon",
             "LFrideHeight",
@@ -5342,8 +5447,19 @@ class TelemetryAnalyzer:
         else:
             # Use the real lap origin. Missing first/last samples stay missing;
             # forcing their times onto 0/official duration distorts every corner.
+            # iRacing keeps the previous lap's time in LapCurrentLapTime for 1-2 s after the line (seen in
+            # every file checked on 2026-10-15: Road America, VIR, Monza, Spa, Long Beach). Trust it only when it
+            # has already restarted; otherwise the time since the line comes from the distance into the lap.
             current_time = self.channels.get("LapCurrentLapTime")
-            origin_offset = float(current_time[start]) if current_time is not None and math.isfinite(float(current_time[start])) else 0.0
+            lap_clock = float(current_time[start]) if current_time is not None else math.nan
+            speed_channel = self.channels.get("Speed")
+            start_speed = float(speed_channel[start]) if speed_channel is not None else math.nan
+            if math.isfinite(lap_clock) and 0.0 <= lap_clock < 1.0:
+                origin_offset = lap_clock
+            elif math.isfinite(float(raw_distance[0])) and 0.0 <= float(raw_distance[0]) < 0.05 and math.isfinite(start_speed) and start_speed > 1.0:
+                origin_offset = min(1.0, float(raw_distance[0]) * self.track_length_m / start_speed)
+            else:
+                origin_offset = 0.0
             source_origin = float(source_times[start]) if source_times is not None else 0.0
             elapsed = session_time - source_origin + origin_offset
             output["time_s"] = elapsed
@@ -5392,12 +5508,50 @@ class TelemetryAnalyzer:
 
         optimal = self._personal_optimal()
         comparison.update(optimal)
+        comparison.update(self._rolling_best())
         if reference_grid is not None:
             delta = target_grid["time_s"] - reference_grid["time_s"]
             finite_delta = delta[np.isfinite(delta)]
             comparison["delta_min_s"] = round_or_none(float(np.min(finite_delta)), 3) if len(finite_delta) else None
             comparison["delta_max_s"] = round_or_none(float(np.max(finite_delta)), 3) if len(finite_delta) else None
         return comparison
+
+    def _rolling_best(self) -> dict[str, Any]:
+        """The fastest lap actually driven from any point to the same point a lap later (RaceStudio 3's best
+        rolling time), over two back-to-back valid laps. Lap times anchor each lap's ends, as for the optimal;
+        a stretch with a hole in the recording is not used."""
+        empty = {"rolling_best_time_s": None, "rolling_best_time": None, "rolling_best_start_pct": None,
+                 "rolling_best_laps": None, "rolling_best_gain_s": None}
+        laps = sorted(self.valid_laps, key=lambda lap: lap.lap_number)
+        if len(laps) < 2:
+            return empty
+        grids = {lap.lap_number: self._lap_grid(lap) for lap in laps}
+        best_time = float(min(lap.lap_time_s for lap in laps))
+        found: Optional[tuple[float, float, int, int]] = None
+        for first, second in zip(laps, laps[1:]):
+            if second.lap_number != first.lap_number + 1:
+                continue
+            ga, gb = grids[first.lap_number], grids[second.lap_number]
+            ta, tb = ga["time_s"].astype(float).copy(), gb["time_s"].astype(float).copy()
+            ca = np.asarray(ga.get("_coverage", np.isfinite(ta)), dtype=bool).copy()
+            cb = np.asarray(gb.get("_coverage", np.isfinite(tb)), dtype=bool).copy()
+            ta[0], ta[-1], tb[0], tb[-1] = 0.0, float(first.lap_time_s), 0.0, float(second.lap_time_s)
+            ca[0] = ca[-1] = cb[0] = cb[-1] = True
+            tail_known = np.logical_and.accumulate(ca[::-1])[::-1]      # first lap observed from here to its end
+            head_known = np.logical_and.accumulate(cb)                  # second lap observed from its start to here
+            rolling = (float(first.lap_time_s) - ta) + tb
+            usable = tail_known & head_known & np.isfinite(rolling)
+            if not np.any(usable):
+                continue
+            index = int(np.flatnonzero(usable)[np.argmin(rolling[usable])])
+            if found is None or rolling[index] < found[0]:
+                found = (float(rolling[index]), float(ga["distance_pct"][index]), first.lap_number, second.lap_number)
+        if found is None:
+            return empty
+        time, start_pct, lap_a, lap_b = found
+        return {"rolling_best_time_s": round(time, 4), "rolling_best_time": format_lap_time(time),
+                "rolling_best_start_pct": round(start_pct, 4), "rolling_best_laps": [lap_a, lap_b],
+                "rolling_best_gain_s": round(max(0.0, best_time - time), 3)}
 
     def _personal_optimal(self, segments: int = 20) -> dict[str, Any]:
         if not self.valid_laps:
@@ -5661,6 +5815,8 @@ class TelemetryAnalyzer:
                 "driver_action": driver_action,
                 "target": target_metrics,
                 "reference": reference_metrics,
+                "braking_band": self.speed_band(target_metrics.get("brake_speed_time"), (reference_metrics or {}).get("brake_speed_time"), True) if measurement_usable else None,
+                "drive_band": self.speed_band(target_metrics.get("drive_speed_time"), (reference_metrics or {}).get("drive_speed_time"), False) if measurement_usable else None,
             }
             results.append(result)
 
@@ -5764,7 +5920,10 @@ class TelemetryAnalyzer:
         def pct_at(index: Optional[int]) -> Optional[float]:
             return round(float(grid["distance_pct"][index]), 5) if index is not None else None
 
+        zones = self._brake_and_drive_zones(grid, channel, brake, throttle, speed, time_axis, brake_start, brake_release, full_throttle)
+
         return {
+            **zones,
             "brake_start_pct": pct_at(brake_start),
             "brake_release_pct": pct_at(brake_release),
             "throttle_first_pct": pct_at(throttle_first),
@@ -5786,6 +5945,79 @@ class TelemetryAnalyzer:
             "throttle_relifts": throttle_relifts if np.all(np.isfinite(throttle[exit_slice])) else None,
             "steering_corrections": corrections if np.all(np.isfinite(steering_segment)) else None,
         }
+
+    SPEED_STEP_KPH = 5.0          # speed-to-time readings for "how long from one speed to another"
+    G = 9.80665
+
+    def _brake_and_drive_zones(self, grid, channel, brake, throttle, speed, time_axis,
+                               brake_start: Optional[int], brake_release: Optional[int],
+                               full_throttle: Optional[int]) -> dict[str, Any]:
+        """The braking zone into a corner and the full-throttle run out of it (RaceStudio 3's
+        braking distance, average deceleration and times for speed). Only measured samples count:
+        a zone with a gap in speed or time is left out."""
+        out: dict[str, Any] = {"braking_distance_m": None, "braking_time_s": None, "brake_entry_speed_kph": None,
+                               "brake_end_speed_kph": None, "avg_decel_g": None, "peak_decel_g": None,
+                               "brake_speed_time": None, "drive_distance_m": None, "drive_top_speed_kph": None,
+                               "drive_speed_time": None}
+        pct = np.asarray(grid["distance_pct"], dtype=float)
+        n = len(pct)
+        long_accel = channel("LongAccel") if "LongAccel" in grid else None
+
+        def measured(start: int, end: int) -> bool:
+            return end > start and bool(np.all(np.isfinite(speed[start:end + 1])) and np.all(np.isfinite(time_axis[start:end + 1])))
+
+        def readings(start: int, end: int, falling: bool) -> list[list[float]]:
+            """[speed, seconds since start] each time the speed first passes a multiple of SPEED_STEP_KPH."""
+            v, t = speed[start:end + 1], time_axis[start:end + 1] - time_axis[start]
+            step = self.SPEED_STEP_KPH
+            marks = np.arange(math.floor(v[0] / step) * step, math.ceil(v.min() / step) * step - 1e-6, -step) if falling                 else np.arange(math.ceil(v[0] / step) * step, math.floor(v.max() / step) * step + 1e-6, step)
+            points = []
+            for mark in marks:
+                hit = np.flatnonzero(v <= mark if falling else v >= mark)
+                if len(hit):
+                    points.append([round(float(mark), 1), round(float(t[hit[0]]), 3)])
+            return points
+
+        if brake_start is not None and brake_release is not None and measured(brake_start, brake_release):
+            seconds = float(time_axis[brake_release] - time_axis[brake_start])
+            entry_kph, end_kph = float(speed[brake_start]), float(speed[brake_release])
+            out.update({
+                "braking_distance_m": round_or_none(float(pct[brake_release] - pct[brake_start]) * self.track_length_m, 1),
+                "braking_time_s": round_or_none(seconds, 3),
+                "brake_entry_speed_kph": round_or_none(entry_kph, 1),
+                "brake_end_speed_kph": round_or_none(end_kph, 1),
+                "brake_speed_time": readings(brake_start, brake_release, True),
+            })
+            zone = long_accel[brake_start:brake_release + 1] if long_accel is not None else None
+            if zone is not None and np.all(np.isfinite(zone)):
+                out["avg_decel_g"] = round_or_none(float(-np.mean(zone)) / self.G, 2)
+                out["peak_decel_g"] = round_or_none(float(-np.min(zone)) / self.G, 2)
+            elif seconds > 0:
+                out["avg_decel_g"] = round_or_none((entry_kph - end_kph) / 3.6 / seconds / self.G, 2)
+        if full_throttle is not None:
+            lifted = np.flatnonzero((throttle[full_throttle:] < 0.95) | (brake[full_throttle:] > 0.08) | ~np.isfinite(throttle[full_throttle:]))
+            end = full_throttle + int(lifted[0]) - 1 if len(lifted) else n - 1
+            if end - full_throttle >= 2 and measured(full_throttle, end):
+                out.update({
+                    "drive_distance_m": round_or_none(float(pct[end] - pct[full_throttle]) * self.track_length_m, 1),
+                    "drive_top_speed_kph": round_or_none(float(np.max(speed[full_throttle:end + 1])), 1),
+                    "drive_speed_time": readings(full_throttle, end, False),
+                })
+        return out
+
+    @staticmethod
+    def speed_band(target: Optional[list], reference: Optional[list], falling: bool) -> Optional[dict[str, Any]]:
+        """Time each lap took between the same two speeds (the range both covered)."""
+        if not target or not reference:
+            return None
+        mine, theirs = {point[0]: point[1] for point in target}, {point[0]: point[1] for point in reference}
+        common = sorted(set(mine) & set(theirs))
+        if len(common) < 2:
+            return None
+        start, end = (common[-1], common[0]) if falling else (common[0], common[-1])
+        target_s, reference_s = mine[end] - mine[start], theirs[end] - theirs[start]
+        return {"from_kph": start, "to_kph": end, "target_s": round(target_s, 3), "reference_s": round(reference_s, 3),
+                "delta_s": round(target_s - reference_s, 3)}
 
     def _corner_evidence(
         self,
@@ -7079,7 +7311,7 @@ class TelemetryAnalyzer:
                         f"(후반 {late_gap:.1f} km/h, gap growth {growth:+.1f} km/h)"
                     ),
                     tradeoff="고속 코너 후방 다운포스와 제동 안정성이 감소할 수 있음",
-                    validation="Garage에서 Rear wing을 정확히 1 click 낮춘 뒤 동일 조건 A/B 검증",
+                    validation="Garage에서 리어 윙을 정확히 1칸 낮춘 뒤 동일 조건 A/B 검증",
                 )
 
             adjustment.update(
@@ -7122,7 +7354,7 @@ class TelemetryAnalyzer:
                         "Toe drag가 부가 요인인지 1-click A/B로 분리 가능"
                     ),
                     tradeoff="직진 저항은 줄 수 있으나 턴인 응답과 제동 안정성이 달라질 수 있음",
-                    validation="Rear wing 후보와 동시에 바꾸지 말고 별도 run에서 Front total toe만 1 click 0 방향으로 변경",
+                    validation="리어 윙 후보와 동시에 바꾸지 말고 별도 주행에서 앞 토만 1칸 0 쪽으로 변경",
                 )
                 toe_candidate.update(
                     {
@@ -7202,7 +7434,7 @@ class TelemetryAnalyzer:
                         f"풀스로틀 복귀가 약 {full_throttle_delay:.0f}m 늦음"
                     ),
                     tradeoff="탈출 트랙션과 연석 순응성은 좋아질 수 있으나 미드코너 회전성이 감소할 수 있음",
-                    validation="Rear ARB -1만 적용하고 풀스로틀 복귀·출구속도·미드코너 손실을 A/B 비교",
+                    validation="리어 ARB -1만 적용하고 풀스로틀 복귀·출구속도·미드코너 손실을 A/B 비교",
                 )
                 category = "EXIT_TRACTION"
                 expected = "코너 탈출 트랙션과 풀스로틀 복귀 개선"
@@ -7220,7 +7452,7 @@ class TelemetryAnalyzer:
                             f"최저속도가 {min_speed_deficit:.1f} km/h 낮음"
                         ),
                         tradeoff="회전성은 좋아질 수 있으나 저속 탈출 트랙션과 연석 순응성이 감소할 수 있음",
-                        validation="Rear ARB +1만 적용하고 조향효율·최저속도·출구 트랙션을 A/B 비교",
+                        validation="리어 ARB +1만 적용하고 조향효율·최저속도·출구 트랙션을 A/B 비교",
                     )
                     category = "ROTATION_DEFICIT"
                     expected = "진입/미드코너 회전 반응 개선"
@@ -7234,7 +7466,7 @@ class TelemetryAnalyzer:
                         confidence=max(0.35, confidence - 0.05),
                         evidence=f"{corner['label']}에서 조향량 대비 회전 응답 부족이 반복됨",
                         tradeoff="기계적 전륜 그립은 증가할 수 있으나 응답이 둔해지고 차체 롤이 늘 수 있음",
-                        validation="Front ARB -1만 적용하고 같은 코너의 최저속도·조향량과 고속 안정성을 A/B 비교",
+                        validation="프런트 ARB -1만 적용하고 같은 코너의 최저속도·조향량과 고속 안정성을 A/B 비교",
                     )
                     category = "ROTATION_DEFICIT"
                     expected = "전륜 기계적 그립과 회전 응답 개선"
@@ -7250,7 +7482,7 @@ class TelemetryAnalyzer:
                         f"{corner['label']}에서 기준보다 조향 보정/스로틀 리프트가 많고 구간 손실 {delta:.3f}초가 반복됨"
                     ),
                     tradeoff="후방 안정성은 좋아질 수 있으나 미드코너 회전성이 감소할 수 있음",
-                    validation="Rear ARB -1 후 조향 보정·스로틀 리프트·코너 손실을 함께 비교",
+                    validation="리어 ARB -1 후 조향 보정·스로틀 리프트·코너 손실을 함께 비교",
                 )
                 category = "REAR_STABILITY"
                 expected = "후방 안정성과 자신감 있는 스로틀 복귀 개선"
@@ -7297,7 +7529,7 @@ class TelemetryAnalyzer:
                         "Preload가 회전 저항의 보조 원인인지 분리 시험 가능"
                     ),
                     tradeoff="진입/미드 회전은 좋아질 수 있으나 구동 안정성과 코너 탈출 거동이 달라질 수 있음",
-                    validation="ARB 후보와 동시에 바꾸지 말고 Diff preload만 1 click 낮춰 별도 A/B",
+                    validation="ARB 후보와 동시에 바꾸지 말고 디프 프리로드만 1칸 낮춰 별도 A/B",
                 )
                 diff_candidate.update(
                     {
@@ -7346,7 +7578,7 @@ class TelemetryAnalyzer:
                             "Brake bias가 진입 밸런스에 미치는 영향을 한 click로 분리 검증"
                         ),
                         tradeoff=bb_tradeoff,
-                        validation="ARB/Diff 후보와 동시에 바꾸지 말고 Brake bias만 1 click 변경해 제동 안정성·회전·ABS 사용을 비교",
+                        validation="ARB·디프 후보와 동시에 바꾸지 말고 브레이크 바이어스만 1칸 변경해 제동 안정성·회전·ABS 사용을 비교",
                     )
                     bb_candidate.update(
                         {
@@ -7386,7 +7618,7 @@ class TelemetryAnalyzer:
                     f"유효 직선 {int(straight.get('eligible_straights') or 0)}개 비교에서 반복 drag deficit은 검출되지 않음"
                 ),
                 tradeoff="고속 안정성은 좋아질 수 있으나 최고속과 직선 가속이 감소함",
-                validation="Rear wing +1 후 고속 코너 리프트·보정 감소량과 직선 최고속 손실을 동시에 검증",
+                validation="리어 윙 +1 후 고속 코너 리프트·보정 감소량과 직선 최고속 손실을 동시에 검증",
             )
             if adjustment.get("validator", {}).get("passed"):
                 adjustment.update(
@@ -7444,6 +7676,99 @@ class TelemetryAnalyzer:
             "aero": self._aero_diagnostics(),
             "fuel": self._fuel_summary(),
             "controls": self._control_summary(),
+            "damper_velocity": self._damper_velocity(),
+            "gg": self._gg_diagram(),
+        }
+
+    # G-G diagram (RaceStudio 3's scatter layout of lateral against longitudinal acceleration).
+    GG_BIN_DEG = 10                  # the grip envelope is the GG_ENVELOPE_PCT-th percentile in each direction
+    GG_ENVELOPE_PCT = 98
+    GG_MIN_SPEED_MS = 15.0           # standing and crawling samples say nothing about grip
+    GG_SAMPLE_POINTS = 1500
+
+    def _gg_diagram(self) -> dict[str, Any]:
+        """Right turns to the right (iRacing's LatAccel is positive to the left), acceleration up, braking down."""
+        lateral, longitudinal = self.channels.get("LatAccel"), self.channels.get("LongAccel")
+        speed = self.channels.get("Speed")
+        laps = [lap for lap in self.valid_laps if lap.end_idx > lap.start_idx]
+        if lateral is None or longitudinal is None or speed is None:
+            return {"available": False, "reason": "NO_ACCELERATION_CHANNELS"}
+        if not laps:
+            return {"available": False, "reason": "NO_VALID_LAP"}
+        pick = np.concatenate([np.arange(lap.start_idx, lap.end_idx + 1) for lap in laps])
+        x = -lateral[pick].astype(float) / 9.80665
+        y = longitudinal[pick].astype(float) / 9.80665
+        keep = np.isfinite(x) & np.isfinite(y) & (speed[pick].astype(float) > self.GG_MIN_SPEED_MS)
+        x, y = x[keep], y[keep]
+        if len(x) < 10 * max(1, self.telemetry.tick_rate):
+            return {"available": False, "reason": "TOO_FEW_SAMPLES"}
+        angle = (np.degrees(np.arctan2(y, x)) + 360.0) % 360.0
+        radius = np.hypot(x, y)
+        bins = int(360 / self.GG_BIN_DEG)
+        envelope: list[Optional[float]] = []
+        for index in range(bins):
+            inside = radius[(angle >= index * self.GG_BIN_DEG) & (angle < (index + 1) * self.GG_BIN_DEG)]
+            envelope.append(round(float(np.percentile(inside, self.GG_ENVELOPE_PCT)), 3) if len(inside) >= 20 else None)
+        every = max(1, len(x) // self.GG_SAMPLE_POINTS)
+        return {
+            "available": True,
+            "bin_deg": self.GG_BIN_DEG,
+            "envelope_g": envelope,
+            "points": [[round(float(a), 2), round(float(b), 2)] for a, b in zip(x[::every], y[::every])],
+            "max_brake_g": round(float(np.percentile(-y, 99)), 2),
+            "max_accel_g": round(float(np.percentile(y, 99)), 2),
+            "max_lateral_g": round(float(np.percentile(np.abs(x), 99)), 2),
+            "mean_combined_g": round(float(np.mean(radius)), 2),
+            "laps": [lap.lap_number for lap in laps],
+        }
+
+    # Damper velocity histograms (RaceStudio 3's suspension analysis). Positive is compression (bump):
+    # in iRacing files the velocity is the rate of the shock deflection, which grows as the nose dives.
+    DAMPER_WHEELS = (("LF", "LFshockVel"), ("RF", "RFshockVel"), ("LR", "LRshockVel"), ("RR", "RRshockVel"))
+    DAMPER_LIMIT_MM_S = 200          # faster than this falls into the end bins
+    DAMPER_BIN_MM_S = 10
+    DAMPER_SLOW_MM_S = 50            # a viewing split into slow and fast movement, not the car's damper knee
+
+    def _damper_velocity(self) -> dict[str, Any]:
+        """Share of time each shock spends at each velocity over the valid laps; None-free and measured only."""
+        laps = [lap for lap in self.valid_laps if lap.end_idx > lap.start_idx]
+        if not laps:
+            return {"available": False, "reason": "NO_VALID_LAP"}
+        edges = np.arange(-self.DAMPER_LIMIT_MM_S, self.DAMPER_LIMIT_MM_S + self.DAMPER_BIN_MM_S, self.DAMPER_BIN_MM_S, dtype=float)
+        wheels: dict[str, Any] = {}
+        for wheel, name in self.DAMPER_WHEELS:
+            values = self.channels.get(name)
+            if values is None:
+                continue
+            velocity = np.concatenate([values[lap.start_idx:lap.end_idx + 1].astype(float) for lap in laps]) * 1000.0
+            velocity = velocity[np.isfinite(velocity)]
+            if len(velocity) < 10 * max(1, self.telemetry.tick_rate):
+                continue
+            counts, _ = np.histogram(np.clip(velocity, edges[0] + 1e-6, edges[-1] - 1e-6), edges)
+            share = lambda mask: round(float(np.mean(mask)) * 100.0, 1)
+            bump, rebound = velocity[velocity > 0], -velocity[velocity < 0]
+            wheels[wheel] = {
+                "share_pct": [round(float(value), 2) for value in counts / len(velocity) * 100.0],
+                "bump_pct": share(velocity > 0),
+                "rebound_pct": share(velocity < 0),
+                "slow_bump_pct": share((velocity > 0) & (velocity <= self.DAMPER_SLOW_MM_S)),
+                "fast_bump_pct": share(velocity > self.DAMPER_SLOW_MM_S),
+                "slow_rebound_pct": share((velocity < 0) & (velocity >= -self.DAMPER_SLOW_MM_S)),
+                "fast_rebound_pct": share(velocity < -self.DAMPER_SLOW_MM_S),
+                "median_bump_mm_s": round_or_none(float(np.median(bump)), 1) if len(bump) else None,
+                "median_rebound_mm_s": round_or_none(float(np.median(rebound)), 1) if len(rebound) else None,
+                "p95_mm_s": round_or_none(float(np.percentile(np.abs(velocity), 95)), 1),
+                "samples": int(len(velocity)),
+            }
+        if not wheels:
+            return {"available": False, "reason": "NO_SHOCK_CHANNELS"}
+        return {
+            "available": True,
+            "edges_mm_s": [float(edge) for edge in edges],
+            "slow_limit_mm_s": self.DAMPER_SLOW_MM_S,
+            "sample_hz": int(self.telemetry.tick_rate),
+            "laps": [lap.lap_number for lap in laps],
+            "wheels": wheels,
         }
 
     def _tire_diagnostics(self, target: Optional[LapSegment]) -> dict[str, Any]:
@@ -7494,12 +7819,18 @@ class TelemetryAnalyzer:
                 self._median_channel(f"{wheel}pressure", lap_window)
                 for wheel in ("LF", "RF", "LR", "RR")
             ]
+            # The track surface over the whole lap (it changes slowly), beside the tyres at the line.
+            whole_lap = slice(lap.start_idx, lap.end_idx + 1)
+            track_temp = self._median_channel("TrackTempCrew", whole_lap)
+            if track_temp is None:
+                track_temp = self._median_channel("TrackTemp", whole_lap)
             lap_trend.append(
                 {
                     "lap_number": lap.lap_number,
                     "lap_time_s": round_or_none(lap.lap_time_s, 4),
                     "mean_surface_temp_c": round_or_none(mean_finite(surface_values), 1),
                     "mean_hot_pressure_kpa": round_or_none(mean_finite(pressure_values), 1),
+                    "mean_track_temp_c": round_or_none(track_temp, 1),
                 }
             )
 
@@ -7848,7 +8179,7 @@ class TelemetryAnalyzer:
                     confidence=min(0.78, float(policy["setup_confidence_cap"])),
                     evidence="고속 최저 차고 임계값 도달이 복수 유효 랩에서 반복됨",
                     tradeoff="공기저항과 전륜 다운포스 효율이 소폭 악화될 수 있음",
-                    validation="Front ride height를 1 mm만 올리고 동일 구간 splitter p0.1 높이와 랩타임을 A/B 비교",
+                    validation="앞 차고를 1 mm만 올리고 같은 구간의 스플리터 높이(하위 10%)와 랩타임을 A/B 비교",
                 )
                 if adjustment.get("validator", {}).get("passed"):
                     adjustment.update(
@@ -7875,7 +8206,7 @@ class TelemetryAnalyzer:
                     confidence=min(0.68, float(policy["setup_confidence_cap"])),
                     evidence="복수 유효 랩에서 조향량 증가 대비 요 응답 저하가 같은 코너에 반복됨",
                     tradeoff="저속 탈출 트랙션과 연석 순응성이 감소할 수 있음",
-                    validation="Rear ARB를 1단계만 올리고 동일 코너의 조향효율·최저속도·스로틀 복귀를 A/B 비교",
+                    validation="리어 ARB를 1단계만 올리고 동일 코너의 조향효율·최저속도·스로틀 복귀를 A/B 비교",
                 )
                 if adjustment.get("validator", {}).get("passed"):
                     adjustment.update(
@@ -7915,7 +8246,7 @@ class TelemetryAnalyzer:
                         f"{max(1, repetition.get('compared_laps', 1))} 비교 랩에 나타남; 평균 손실 {mean_loss:.3f}초"
                     ),
                     tradeoff="회전성이 좋아질 수 있으나 저속 탈출 트랙션과 연석 순응성이 감소할 수 있음",
-                    validation="확정 변경이 아니라 실험 후보입니다. Rear ARB를 1단계만 올려 같은 코너와 전체 랩을 A/B 비교",
+                    validation="확정 변경이 아니라 실험 후보입니다. 리어 ARB를 1단계만 올려 같은 코너와 전체 랩을 A/B 비교",
                 )
                 if adjustment.get("validator", {}).get("passed"):
                     adjustment.update(
@@ -8190,6 +8521,7 @@ class TelemetryAnalyzer:
                         "throttle": round(float(target.get("Throttle", np.zeros(n))[index]), 3),
                         "delta_s": round(float(delta[index]), 3),
                         "local_loss_s": round(float(local_loss[index]), 5),
+                        "time_s": round_or_none(float(target["time_s"][index]), 3) if "time_s" in target else None,
                     }
                 )
 
@@ -8352,13 +8684,17 @@ def gps_path(grid: Optional[dict[str, Any]], start: int = 0, end: Optional[int] 
     if grid is None or "Lat" not in grid or "Lon" not in grid:
         return []
     stop = len(grid["distance_pct"]) if end is None else end + 1
+    times = grid.get("time_s")
     path = []
     for index in range(start, stop):
         lat, lon = float(grid["Lat"][index]), float(grid["Lon"][index])
         valid = math.isfinite(lat) and math.isfinite(lon) and abs(lat) > 1e-7 and abs(lon) > 1e-7
+        # time since the lap's start line, for the map's ghost replay (None where not observed)
+        seconds = float(times[index]) if times is not None else math.nan
         path.append({"lat": round(lat, 8) if valid else None,
                      "lon": round(lon, 8) if valid else None,
-                     "distance_pct": round(float(grid["distance_pct"][index]), 7)})
+                     "distance_pct": round(float(grid["distance_pct"][index]), 7),
+                     "time_s": round(seconds, 3) if math.isfinite(seconds) else None})
     return path
 
 
@@ -8427,6 +8763,172 @@ def comparison_detail_payload(telemetry: ParsedTelemetry, payload: ComparisonDet
                       "reference_line_source": line_source, "quality": quality, "reference_label": reference_label,
                       "start_pct": payload.start_pct, "end_pct": payload.end_pct,
                       "target_lap": target.lap_number, "reference_lap": local_reference.lap_number if reference_grid is not None and payload.reference_mode == "LOCAL" else None})
+
+
+# Expert view: several laps of one file on one distance axis (MoTeC-style overlay). Values are the lap grids
+# the analysis already uses (observed samples interpolated on ~2 m spacing, gaps stay None).
+OVERLAY_CHANNELS = (
+    ("speed", "speed_kph", "속도", "km/h", 1.0, 1),
+    ("throttle", "Throttle", "스로틀", "%", 100.0, 1),
+    ("brake", "Brake", "브레이크", "%", 100.0, 1),
+    ("steering", "SteeringWheelAngle", "조향", "°", 180.0 / math.pi, 1),
+    ("gear", "Gear", "기어", "", 1.0, 0),
+    ("rpm", "RPM", "RPM", "rpm", 1.0, 0),
+    ("lat_g", "LatAccel", "횡G (왼쪽 코너 +)", "g", 1.0 / 9.80665, 2),
+    ("long_g", "LongAccel", "종G (가속 +)", "g", 1.0 / 9.80665, 2),
+)
+
+
+def _same_track(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Same track and layout. iRacing gives every layout its own track ID, so two IDs decide it alone
+    (an IBT of Le Mans has an empty layout name where Garage61 writes '24 Heures du Mans'); without IDs
+    the track and layout names must both match."""
+    def name(value: Any) -> str:
+        return " ".join(str(value or "").casefold().split())
+    if left.get("track_platform_id") and right.get("track_platform_id"):
+        return str(left["track_platform_id"]) == str(right["track_platform_id"])
+    return name(left.get("track_name")) == name(right.get("track_name")) and name(left.get("track_config")) == name(right.get("track_config"))
+
+
+def _on_distance_axis(grid: dict[str, Any], distance: np.ndarray) -> dict[str, np.ndarray]:
+    """A lap grid of another file or a Garage61 lap moved onto this file's distance axis. Both grids are dense
+    and even (about 2 m), so a value between two source points is interpolated only when both are measured."""
+    source = np.asarray(grid["distance_pct"], dtype=float)
+    if len(source) == len(distance) and np.allclose(source, distance):
+        return grid
+    right = np.clip(np.searchsorted(source, distance, side="left"), 1, len(source) - 1)
+    left = right - 1
+    span = np.maximum(source[right] - source[left], 1e-12)
+    weight = np.clip((distance - source[left]) / span, 0.0, 1.0)
+    moved: dict[str, np.ndarray] = {"distance_pct": distance}
+    for key, values in grid.items():
+        if key == "distance_pct" or key.startswith("_") or not isinstance(values, np.ndarray) or len(values) != len(source):
+            continue
+        values = np.asarray(values, dtype=float)
+        a, b = values[left], values[right]
+        stepped = key in {"Gear", "BrakeABSactive"}
+        out = np.where(weight < 0.5, a, b) if stepped else a + (b - a) * weight
+        out[~(np.isfinite(a) & np.isfinite(b))] = np.nan
+        out[(distance < source[0]) | (distance > source[-1])] = np.nan
+        moved[key] = out
+    return moved
+
+
+def _file_label(path: Path) -> str:
+    """'mclaren720sgt3_roadamerica full 2026-07-24 18-38-59.ibt' -> '07-24 18:38'."""
+    match = re.search(r"(\d{4})-(\d{2})-(\d{2}) (\d{2})-(\d{2})", path.stem)
+    return f"{match[2]}-{match[3]} {match[4]}:{match[5]}" if match else path.stem
+
+
+def lap_overlay_payload(telemetry: ParsedTelemetry, payload: LapOverlayRequest) -> dict[str, Any]:
+    if payload.end_pct <= payload.start_pct:
+        raise HTTPException(status_code=422, detail="end_pct는 start_pct보다 커야 합니다.")
+    analyzer = TelemetryAnalyzer(telemetry)
+    by_number = {lap.lap_number: lap for lap in telemetry.laps if lap.lap_time_s}
+    own = [by_number[number] for number in dict.fromkeys(payload.laps) if number in by_number]
+    if not own and not payload.extra:
+        raise HTTPException(status_code=422, detail="겹쳐 볼 수 있는 완주 랩이 없습니다.")
+    # Own laps keep their number as the key, so the screen's lap chips stay as they were.
+    entries: list[dict[str, Any]] = [{"key": str(lap.lap_number), "lap": lap.lap_number, "source": "OWN", "file": None,
+                                      "label": f"랩 {lap.lap_number}", "lap_time_s": lap.lap_time_s, "valid": bool(lap.valid),
+                                      "grid": analyzer._lap_grid(lap)} for lap in own]
+    # A lap that cannot be shown is left out with its reason; the other laps are still drawn.
+    skipped: list[dict[str, Any]] = []
+    for extra in payload.extra:
+        key = f"ibt:{extra.filename}#{extra.lap}" if extra.source == "IBT" else f"g61:{extra.filename}"
+        if extra.source == "IBT":
+            path = resolve_telemetry_file(extra.filename)
+            if path is None:
+                skipped.append({"key": key, "reason": "주행 파일을 찾을 수 없습니다."})
+                continue
+            other = repository.load(path)
+            if not _same_track(other.metadata, telemetry.metadata):
+                skipped.append({"key": key, "reason": "같은 트랙·레이아웃의 주행 파일이 아닙니다."})
+                continue
+            lap = next((item for item in other.laps if item.lap_number == extra.lap and item.lap_time_s), None)
+            if lap is None:
+                skipped.append({"key": key, "reason": f"그 파일에 완주한 랩 {extra.lap}이 없습니다."})
+                continue
+            entries.append({"key": f"ibt:{path.name}#{lap.lap_number}", "lap": lap.lap_number, "source": "IBT", "file": path.name,
+                            "label": f"{_file_label(path)} · 랩 {lap.lap_number}", "lap_time_s": lap.lap_time_s,
+                            "valid": bool(lap.valid), "grid": TelemetryAnalyzer(other)._lap_grid(lap),
+                            "car_name": other.metadata.get("car_name")})
+        else:
+            path = resolve_external_reference_file(extra.filename)
+            if path is None:
+                skipped.append({"key": key, "reason": "Garage61 랩을 찾을 수 없습니다."})
+                continue
+            reference = external_reference_repository.load(path)
+            if not _same_track(reference.metadata, telemetry.metadata):
+                skipped.append({"key": key, "reason": "같은 트랙·레이아웃의 Garage61 랩이 아닙니다."})
+                continue
+            entries.append({"key": f"g61:{path.name}", "lap": None, "source": "GARAGE61", "file": path.name,
+                            "label": f"Garage61 · {reference.metadata.get('driver_name') or '드라이버'}",
+                            "lap_time_s": reference.metadata.get("lap_time_s"), "valid": bool(reference.metadata.get("clean", True)),
+                            "grid": reference.grid(analyzer.grid_points, analyzer.track_length_m),
+                            "car_name": reference.metadata.get("car_name")})
+    if not entries:
+        raise HTTPException(status_code=422, detail=(skipped[0]["reason"] if skipped else "겹쳐 볼 수 있는 완주 랩이 없습니다."))
+    keys = {entry["key"] for entry in entries}
+    base = next((entry for entry in entries if entry["key"] == payload.base_key), None)
+    if base is None and payload.base_lap is not None and str(payload.base_lap) in keys:
+        base = next(entry for entry in entries if entry["key"] == str(payload.base_lap))
+    if base is None:
+        ranked = [entry for entry in entries if entry["source"] == "OWN" and entry["valid"]] or entries
+        base = min(ranked, key=lambda entry: entry["lap_time_s"] or math.inf)
+    distance = np.asarray(base["grid"]["distance_pct"], dtype=float)
+    for entry in entries:
+        entry["grid"] = _on_distance_axis(entry["grid"], distance)
+    start = int(np.searchsorted(distance, payload.start_pct, side="left"))
+    end = min(len(distance) - 1, int(np.searchsorted(distance, payload.end_pct, side="right")))
+    indices = visualization_indices(base["grid"], None, payload.points, start, end)
+    base_time = np.asarray(base["grid"]["time_s"], dtype=float)
+
+    def column(values: Optional[np.ndarray], scale: float, digits: int) -> Optional[list[Optional[float]]]:
+        if values is None:
+            return None
+        picked = np.asarray(values, dtype=float)[indices] * scale
+        if not np.any(np.isfinite(picked)):
+            return None
+        return [round_or_none(float(value), digits) for value in picked]
+
+    series: dict[str, dict[str, Any]] = {}
+    available: set[str] = set()
+    for entry in entries:
+        grid = entry["grid"]
+        values_by_channel: dict[str, Any] = {}
+        for key, channel, _label, _unit, scale, digits in OVERLAY_CHANNELS:
+            values = column(grid.get(channel), scale, digits)
+            if values is not None:
+                values_by_channel[key] = values
+                available.add(key)
+        delta = column(np.asarray(grid["time_s"], dtype=float) - base_time, 1.0, 3)
+        if delta is not None:
+            values_by_channel["delta"] = delta
+            available.add("delta")
+        series[entry["key"]] = values_by_channel
+    channels = [{"key": "delta", "label": f"시간 차이 ({base['label']} 기준, + 느림)", "unit": "s"}] if "delta" in available else []
+    channels += [{"key": key, "label": label, "unit": unit} for key, _c, label, unit, _s, _d in OVERLAY_CHANNELS if key in available]
+    return json_safe({
+        "base_lap": base["lap"] if base["source"] == "OWN" else None,
+        "base_key": base["key"],
+        "laps": [{key: entry.get(key) for key in ("key", "lap", "source", "file", "label", "valid", "car_name")}
+                 | {"lap_time_s": round_or_none(entry["lap_time_s"], 3)} for entry in entries],
+        "distance_pct": [round(float(distance[index]), 6) for index in indices],
+        "track_length_m": round_or_none(analyzer.track_length_m, 1),
+        "channels": channels,
+        "series": series,
+        "skipped": skipped,
+        "start_pct": payload.start_pct, "end_pct": payload.end_pct,
+    })
+
+
+def file_laps_payload(telemetry: ParsedTelemetry) -> dict[str, Any]:
+    """The finished laps of a file, for picking one to overlay."""
+    return {"laps": [{"lap_number": lap.lap_number, "lap_time_s": round_or_none(lap.lap_time_s, 3), "valid": bool(lap.valid)}
+                     for lap in telemetry.laps if lap.lap_time_s],
+            "track_name": telemetry.metadata.get("track_name"), "track_config": telemetry.metadata.get("track_config"),
+            "car_name": telemetry.metadata.get("car_name")}
 
 
 def nested_get(data: dict[str, Any], *path: str) -> Any:
@@ -8513,7 +9015,7 @@ def make_adjustment(
     validator_messages: list[str] = []
     passed = math.isfinite(original) and math.isfinite(value) and abs(value - original) > 1e-9
     if not passed:
-        validator_messages.append("original/value must be finite and different")
+        validator_messages.append("현재값과 목표값은 숫자이고 서로 달라야 합니다")
     if rule and passed:
         step = rule.get("step")
         minimum = rule.get("minimum")
@@ -8522,20 +9024,18 @@ def make_adjustment(
             increments = (value - original) / step
             if abs(increments - round(increments)) > 1e-6:
                 passed = False
-                validator_messages.append(f"change must use {step:g} {unit} increments")
+                validator_messages.append(f"{step:g} {unit} 단위로만 바꿀 수 있습니다")
         if minimum is not None and value < minimum - 1e-9:
             passed = False
-            validator_messages.append(f"value is below configured minimum {minimum:g} {unit}")
+            validator_messages.append(f"설정 최소값 {minimum:g} {unit}보다 작습니다")
         if maximum is not None and value > maximum + 1e-9:
             passed = False
-            validator_messages.append(f"value is above configured maximum {maximum:g} {unit}")
-        if passed:
-            validator_messages.append("current value and configured increment validated")
-            if maximum is None:
-                validator_messages.append("Garage maximum is not encoded in this IBT; verify before applying")
+            validator_messages.append(f"설정 최대값 {maximum:g} {unit}보다 큽니다")
+        if passed and maximum is None:
+            validator_messages.append("주행 파일에 Garage 최대값이 없어 적용 전에 Garage에서 범위를 확인하세요")
     elif not rule:
         passed = False
-        validator_messages.append("no adjustment rule is registered for this setting")
+        validator_messages.append("이 항목은 조정 규칙이 등록되어 있지 않습니다")
 
     return {
         "setting": setting,
@@ -9189,7 +9689,7 @@ def detailed_corner_diagnosis(corner: dict[str, Any], track_length_m: float, sou
     elif (steer_delta or 0.0) >= 3.0 and (efficiency_delta is None or efficiency_delta < 0.0):
         cause = "ROTATION_DEFICIT"
         action = "추가 조향으로 버티지 말고 브레이크 릴리즈와 진입 속도를 조정해 같은 회전을 더 적은 조향으로 만드십시오."
-        success = ["평균 조향량 2° 이상 감소", "최저속도 유지 또는 증가", "steering efficiency 개선"]
+        success = ["평균 조향량 2° 이상 감소", "최저속도 유지 또는 증가", "조향 대비 회전량 증가"]
     elif str(corner.get("issue_type") or "") == "MID_CORNER":
         cause = "EXCESS_COASTING"
         action = "미드코너에서 입력 공백을 줄이고 최저속도를 유지하는 데 집중하십시오."
@@ -10804,6 +11304,9 @@ live_telemetry = LiveTelemetry()
 # Pit facts learned from driven stops live beside the database (seeded by scripts/learn_pit_history.py).
 live_telemetry.pit_knowledge = PitKnowledge(os.getenv("IRACING_PIT_KNOWLEDGE_PATH") or MEMORY_DB_PATH.parent / "pit-knowledge.json")
 live_telemetry.race_history = RaceHistory(os.getenv("IRACING_RACE_HISTORY_PATH") or MEMORY_DB_PATH.parent / "race-history.json")
+live_telemetry.timing_log = TimingLog(os.getenv("IRACING_TIMING_LOG_DIR") or MEMORY_DB_PATH.parent / "timing-logs")
+# One driving focus at a time, checked on the next run of the same car/track/layout (practice.py).
+practice_store = PracticeStore(os.getenv("IRACING_PRACTICE_PATH") or MEMORY_DB_PATH.parent / "practice-tasks.json")
 
 
 def last_analysed_session(identity: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -11061,6 +11564,13 @@ async def load_analysis(request: AnalyzeRequest) -> dict[str, Any]:
             sensitivity_profile,
             fingerprint,
         )
+        result["practice_focuses"] = practice_focus_sets(result, sensitivity_profile, fingerprint)
+        result["pit_service"] = await asyncio.to_thread(pit_service_payload, telemetry, path.name)
+        try:
+            result["practice"] = await asyncio.to_thread(practice_store.record, result)
+        except Exception:
+            logger.exception("Could not check the practice focus; file analysis retained")
+            result["practice"] = {"active": None, "check": None, "history": {"by_cause": [], "recent": []}, "error": "연습 과제 확인을 완료하지 못했습니다."}
         try:
             result["voice_review"] = await asyncio.to_thread(
                 review_notes, voice_note_store, TelemetryAnalyzer(telemetry), result, request)
@@ -11520,6 +12030,24 @@ async def analyze_telemetry(payload: AnalyzeRequest = Body(default=AnalyzeReques
     return await load_analysis(payload)
 
 
+@app.post("/api/lap-overlay")
+async def get_lap_overlay(payload: LapOverlayRequest) -> dict[str, Any]:
+    path = resolve_telemetry_file(payload.filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="선택한 IBT 파일을 찾을 수 없습니다.")
+    telemetry = await asyncio.to_thread(repository.load, path)
+    return await asyncio.to_thread(lap_overlay_payload, telemetry, payload)
+
+
+@app.get("/api/file-laps")
+async def get_file_laps(filename: str) -> dict[str, Any]:
+    path = await asyncio.to_thread(resolve_telemetry_file, filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="선택한 IBT 파일을 찾을 수 없습니다.")
+    telemetry = await asyncio.to_thread(repository.load, path)
+    return file_laps_payload(telemetry)
+
+
 @app.post("/api/comparison-detail")
 async def get_comparison_detail(payload: ComparisonDetailRequest) -> dict[str, Any]:
     path = resolve_telemetry_file(payload.filename)
@@ -11527,6 +12055,164 @@ async def get_comparison_detail(payload: ComparisonDetailRequest) -> dict[str, A
         raise HTTPException(status_code=404, detail="선택한 IBT 파일을 찾을 수 없습니다.")
     telemetry = await asyncio.to_thread(repository.load, path)
     return await asyncio.to_thread(comparison_detail_payload, telemetry, payload)
+
+
+def pit_service_payload(telemetry: ParsedTelemetry, file_name: str) -> dict[str, Any]:
+    """Concurrent or sequential tyre changes, as this file's stops showed (pit_service). An official series
+    keeps what it showed, so the pit wall can plan tyres in its next race without being told."""
+    try:
+        found = pit_service.detect(telemetry.channels)
+    except Exception:
+        logger.exception("Could not read the pit stops of %s", file_name)
+        return {"rule": None, "stops": [], "reason": "ERROR", "series_id": None, "remembered": None}
+    series_id = str((telemetry.session_info.get("WeekendInfo") or {}).get("SeriesID") or "").strip()
+    series_id = None if series_id in ("", "0") else series_id
+    knowledge = live_telemetry.pit_knowledge
+    if found["rule"] and series_id:
+        knowledge.remember_series_rule(series_id, found["rule"], file_name, len(found["stops"]))
+    return {**found, "series_id": series_id, "remembered": knowledge.series_rule(series_id) if series_id else None}
+
+
+class PracticeStartRequest(BaseModel):
+    filename: str
+    focus_index: int = Field(0, ge=0, le=10)
+    # which list the focus came from: the driver's own laps or the Garage61 fast laps (None = the coach's list)
+    source: Optional[Literal["PERSONAL", "GARAGE61"]] = None
+
+
+def practice_focus_sets(result: dict[str, Any], sensitivity_profile: dict[str, Any], fingerprint: dict[str, Any]) -> dict[str, list]:
+    """Practice focuses ranked against the driver's own reference lap and, when this analysis has them,
+    against the Garage61 fast laps, so the driver can pick which the "one thing" is measured against."""
+    coach = (result.get("closed_loop_coach") or {}).get("ranked_focuses") or []
+    if not (result.get("external_reference") or {}).get("top_losses"):
+        return {"PERSONAL": coach, "GARAGE61": []}
+    personal = build_closed_loop_coach({**result, "external_reference": {}}, sensitivity_profile, fingerprint)
+    return {"PERSONAL": personal.get("ranked_focuses") or [], "GARAGE61": coach}
+
+
+class DrillStartRequest(BaseModel):
+    filename: str
+    corner_label: str
+    warmup: bool = True
+
+
+def drill_lap_time(result: dict[str, Any]) -> Optional[float]:
+    """The lap the task was set on, else the median valid lap: it decides how long the tyres take to warm."""
+    target = (result.get("comparison") or {}).get("target_time_s")
+    if isinstance(target, (int, float)) and target > 0:
+        return float(target)
+    times = [lap.get("lap_time_s") for lap in result.get("laps") or [] if lap.get("status") == "VALID"]
+    times = [value for value in times if isinstance(value, (int, float)) and value > 0]
+    return float(statistics.median(times)) if times else None
+
+
+def drill_fuel(result: dict[str, Any], filename: str, warm_laps: int = 2) -> Optional[dict[str, Any]]:
+    """Fuel to put in for the drill. Each run back to the saved point restores the fuel it was saved with,
+    so the attempts run on what is in the tank at the save: aim for the task lap's fuel there, which means
+    that lap's starting fuel plus the warm-up laps (whole litres, rounded up). None when unknown."""
+    target_lap = (result.get("comparison") or {}).get("target_lap")
+    used = [lap.get("fuel_used_l") for lap in result.get("laps") or [] if lap.get("status") == "VALID"]
+    used = [value for value in used if isinstance(value, (int, float)) and value > 0]
+    path = resolve_telemetry_file(filename)
+    if target_lap is None or not used or path is None:
+        return None
+    telemetry = repository.load(path)
+    lap = next((item for item in telemetry.laps if item.lap_number == target_lap), None)
+    fuel = telemetry.channels.get("FuelLevel")
+    if lap is None or fuel is None:
+        return None
+    start = float(fuel[lap.start_idx])
+    if not math.isfinite(start) or start <= 0:
+        return None
+    per_lap = float(statistics.median(used))
+    return {"lap": target_lap, "lap_start_l": round(start, 1), "per_lap_l": round(per_lap, 2),
+            "warm_laps": warm_laps, "suggest_l": int(math.ceil(start + warm_laps * per_lap))}
+
+
+class PracticeCloseRequest(BaseModel):
+    status: Literal["DONE", "DROPPED"]
+
+
+@app.post("/api/practice/start")
+async def start_practice(payload: PracticeStartRequest) -> dict[str, Any]:
+    """Keep one of the last analysis' ranked focuses as the driver's practice task."""
+    result = shared_sync_state.get("analysis_result") or {}
+    if (result.get("file") or {}).get("name") != payload.filename:
+        raise HTTPException(status_code=409, detail="이 파일을 먼저 분석한 뒤 과제를 시작해 주세요.")
+    focuses = ((result.get("practice_focuses") or {}).get(payload.source) if payload.source
+               else (result.get("closed_loop_coach") or {}).get("ranked_focuses")) or []
+    if payload.focus_index >= len(focuses):
+        raise HTTPException(status_code=404, detail="고를 수 있는 과제가 없습니다.")
+    try:
+        task = await asyncio.to_thread(practice_store.start, result, focuses[payload.focus_index])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result["practice"] = await asyncio.to_thread(practice_store.record, result)
+    return {"task": task, "practice": result["practice"]}
+
+
+@app.post("/api/practice/{task_id}/drill")
+async def start_drill(task_id: str, payload: DrillStartRequest) -> dict[str, Any]:
+    """Corner drill with Active Reset for one corner of a running practice task (live_drill). The plan comes
+    from the analysis on screen; the live session measures the attempts."""
+    result = shared_sync_state.get("analysis_result") or {}
+    if (result.get("file") or {}).get("name") != payload.filename:
+        raise HTTPException(status_code=409, detail="과제를 정한 차·트랙의 주행 파일을 먼저 분석해 주세요.")
+    task = next((t for t in practice_store.data["tasks"] if t.get("id") == task_id and t.get("status") == "ACTIVE"), None)
+    if task is None:
+        raise HTTPException(status_code=404, detail="진행 중인 과제를 찾을 수 없습니다.")
+    base = next((c.get("metrics") or {} for c in task.get("corners") or [] if c.get("label") == payload.corner_label), {})
+    length = (result.get("visualizations") or {}).get("track_length_m") or (result.get("session") or {}).get("track_length_m")
+    # The beeps follow the faster laps the task was measured against: Garage61 when the task came from them
+    # and they are in this analysis, else the driver's own reference lap.
+    external = result.get("external_reference") or {}
+    use_garage61 = str(task.get("reference_source") or "").startswith("GARAGE61") and external.get("status") == "READY" and external.get("corners")
+    corners = external["corners"] if use_garage61 else (result.get("performance") or {}).get("corners") or []
+    try:
+        plan = drill_plan(corners, payload.corner_label, task.get("root_cause"), base, length)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    local_lap = (result.get("comparison") or {}).get("reference_lap")
+    plan.update({"task_id": task_id, "title": task.get("title"), "track_name": task.get("track_name"),
+                 "reference_source": "GARAGE61" if use_garage61 else "PERSONAL",
+                 "reference_label": ((external.get("aggregate") or {}).get("reference_label") or "Garage61 빠른 랩") if use_garage61
+                 else (f"내 기준 랩 {local_lap}" if local_lap is not None else "내 기준 랩")})
+    plan["lap_time_s"] = drill_lap_time(result)
+    plan["warmup_crossings"] = warmup_crossings(plan["lap_time_s"])
+    try:
+        plan["fuel"] = await asyncio.to_thread(drill_fuel, result, payload.filename, plan["warmup_crossings"])
+    except Exception:
+        logger.exception("Could not suggest the drill fuel")
+        plan["fuel"] = None
+    with live_telemetry.lock:
+        return live_telemetry.drill.start(plan, warmup=payload.warmup)
+
+
+@app.post("/api/drill/skip-warmup")
+async def skip_drill_warmup() -> dict[str, Any]:
+    with live_telemetry.lock:
+        return live_telemetry.drill.skip_warmup()
+
+
+@app.get("/api/drill")
+async def drill_status() -> dict[str, Any]:
+    with live_telemetry.lock:
+        return live_telemetry.drill.view()
+
+
+@app.delete("/api/drill")
+async def stop_drill() -> dict[str, Any]:
+    with live_telemetry.lock:
+        return live_telemetry.drill.stop()
+
+
+@app.post("/api/practice/{task_id}/close")
+async def close_practice(task_id: str, payload: PracticeCloseRequest) -> dict[str, Any]:
+    try:
+        task = await asyncio.to_thread(practice_store.close, task_id, payload.status)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="과제를 찾을 수 없습니다.") from exc
+    return {"task": task, "history": practice_store.history()}
 
 
 @app.get("/api/corner-names")
@@ -11673,6 +12359,20 @@ async def compare_setup_experiments(payload: ExperimentRequest) -> dict[str, Any
         setup_evidence=setup_evidence,
     )
     comparison["trial_id"] = payload.trial_id
+    # Every valid lap of each run, for the distribution view (RaceStudio 3's box plots across sessions).
+    comparison["lap_distribution"] = {
+        side: [{"lap": lap.get("lap_number"), "time_s": lap.get("lap_time_s")} for lap in (run.get("laps") or [])
+               if lap.get("status") == "VALID" and isinstance(lap.get("lap_time_s"), (int, float))]
+        for side, run in (("baseline", baseline), ("candidate", candidate))
+    }
+    comparison["gg"] = {
+        "baseline": (baseline.get("vehicle") or {}).get("gg"),
+        "candidate": (candidate.get("vehicle") or {}).get("gg"),
+    }
+    comparison["damper_velocity"] = {
+        "baseline": (baseline.get("vehicle") or {}).get("damper_velocity"),
+        "candidate": (candidate.get("vehicle") or {}).get("damper_velocity"),
+    }
     matched_conditions = comparison["conditions_quality"]
     comparison["conditions"] = {"baseline": matched_conditions["baseline"], "candidate": matched_conditions["candidate"],
                                 "differences": {item["key"]: {"baseline": item["baseline"], "candidate": item["candidate"]}

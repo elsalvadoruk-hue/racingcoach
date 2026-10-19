@@ -20,9 +20,12 @@ from live_corners import LiveCornerCoach, call_seconds, CALL_EARLY_S
 from live_formation import FormationBrief, RaceHistory, history_facts
 from radio_audio import shown_text
 from live_controls import ControlAdvisor
+from live_drill import CornerDrill, VOICE_KINDS as DRILL_VOICE
+from radio_audio import CALLS as FIXED_CALLS
 from live_sectors import LapSectors, RivalSectors, place_name
 from live_damage import DamageWatch, PitStopWatch, damage_parts, repair_parts
 from live_pit import COLD_TYRE_S, PitKnowledge, PitLossWatch, TyreWatch, stall_estimate, tyre_advice
+from timing_log import TimingLog
 
 logger = logging.getLogger('iRacingLive')
 
@@ -38,6 +41,7 @@ def session_identity(weekend, driver_info):
     driver = next((d for d in drivers if d.get('CarIdx') == driver_info.get('DriverCarIdx')), {})
     return {
         'session_id': str(weekend.get('SessionID') or ''),
+        'series_id': str(weekend.get('SeriesID') or ''),
         'subsession_id': str(weekend.get('SubSessionID') or ''),
         'track_id': str(weekend.get('TrackID') or ''),
         'track_path': weekend.get('TrackName') or '',
@@ -117,8 +121,11 @@ class LiveTelemetry:
         self.damage = DamageWatch()
         self.pit_stop = PitStopWatch()
         self.pit_knowledge = PitKnowledge()   # in memory until the backend gives it a file beside the database
+        self.timing_log = TimingLog()         # raw race timing (F2Time study); written only once the backend gives it a folder
         self.tyres = TyreWatch()
         self.pit_loss = PitLossWatch()
+        self.drill = CornerDrill()          # today's practice corner with Active Reset (live_drill)
+        self._drill_spoken = 0
         self.pit_rule = None                  # 'CONCURRENT' or 'SEQUENTIAL', as the driver set it for this series
         self._tyres_fitted = None
         self.race_options = {'reserve_laps': .5, 'pit_loss_s': None, 'fuel_save_mode': 'finish'}
@@ -174,10 +181,24 @@ class LiveTelemetry:
             sample = {**sample, **self.speech_windows.view(sample), 'speech_hold_s': self.speech_hold_s}
             if race is not None:
                 self.pit_wall.ingest(race, self.run_id, session_time)
+                try:
+                    self.timing_log.record(race, self.run_id, session_time)
+                except Exception:
+                    if not self._briefed.get('timing_log_failed'):
+                        self._briefed['timing_log_failed'] = True
+                        logger.exception('Race timing log failed; recording stopped for this run')
             self._track_fuel(sample)
+            sample['fuel_l_per_lap'] = max(self.fuel_history) if self.fuel_history else None
             self.spotter.ingest(sample, self.run_id, now)
             self.radio.ingest(sample, self.run_id, now, race)
             self._coach_corners(identity, sample, now)
+            try:
+                self.drill.ingest(sample, self.radio.metadata.get('track_length_m'))
+                self._speak_drill(now)
+            except Exception:
+                if not self._briefed.get('drill_failed'):
+                    self._briefed['drill_failed'] = True
+                    logger.exception('Corner drill failed; continuing without it')
             try:
                 self._track_sectors(identity, sample, race, session_time)
             except Exception:
@@ -190,6 +211,15 @@ class LiveTelemetry:
             self.samples.append({**sample, 'session_time': session_time, 'wall_time': now, 'run_id': self.run_id})
             self.state = 'CONNECTED'
             self.message = 'iRacing 실시간 텔레메트리를 읽고 있습니다.'
+
+    def _speak_drill(self, now):
+        """The drill's warm-up and finish are said by the coach; its beeps go on the fast path (spotter_status)."""
+        for event in self.drill.events:
+            if event['serial'] <= self._drill_spoken or event['kind'] not in DRILL_VOICE:
+                continue
+            key = 'drill_' + event['kind']
+            self.radio.emit(key, now, FIXED_CALLS[key][1], role='coach', priority=2, ttl=40, cooldown=0, speech_key=key)
+        self._drill_spoken = self.drill.serial
 
     def _coach_corners(self, identity, sample, now):
         # Coaching is optional; a fault here must never reset the spotter.
@@ -561,6 +591,9 @@ class LiveTelemetry:
         fuel_rate = self.pit_stop.fuel_rate() or known_car.get('fuel_rate_lps')
         wear = self.tyres.rate or known_car.get('wear_pct_per_lap')
         transit, fill = known_track.get('transit_loss_s'), view.get('fuel_next_stop_l')
+        # The driver's setting first; otherwise the rule a past drive file of this series showed (pit_service).
+        remembered = None if self.pit_rule else self.pit_knowledge.series_rule(self.identity.get('series_id'))
+        rule = self.pit_rule or remembered
         race = self.pit_wall.race
         race_s = race.get('session_duration_s')
         if type(race_s) not in (int, float) or not 0 < race_s < 86400:
@@ -577,17 +610,18 @@ class LiveTelemetry:
             after = max(0., remaining - available) if remaining is not None else None
             next_stint = min(after, reach) if after is not None and reach else after
             # Whole laps, so that the plan does not change wording from one poll to the next.
-            decision, parts = tyre_advice(race_s, self.pit_rule, fill, fuel_rate, wear,
+            decision, parts = tyre_advice(race_s, rule, fill, fuel_rate, wear,
                                           on_set + math.floor(available) if on_set is not None else None,
                                           math.ceil(next_stint) if next_stint is not None else None, ticked, bool(snapshot.get('declared_wet')),
                                           self.tyres.stints, view.get('pace_s'))
         change = decision == 'change' or (decision != 'keep' and ticked is True)
-        stall = stall_estimate(fill, fuel_rate, change, self.pit_rule) if fill is not None else None
+        stall = stall_estimate(fill, fuel_rate, change, rule) if fill is not None else None
         auto = transit + stall + (COLD_TYRE_S if change else 0.) if transit and stall is not None else None
         return {'pit_transit_loss_s': transit, 'pit_stall_estimate_s': round(stall, 1) if stall is not None else None,
                 'pit_loss_auto_s': round(auto, 1) if auto is not None else None, 'fuel_rate_lps': fuel_rate,
                 'tyre_wear_pct_per_lap': wear, 'tyre_laps_on_set': on_set, 'tyre_stints_on_set': self.tyres.stints, 'tyre_decision': decision,
-                'tyre_parts': [[key, values] for key, values in parts], 'pit_rule': self.pit_rule}
+                'tyre_parts': [[key, values] for key, values in parts], 'pit_rule': rule,
+                'pit_rule_source': 'DRIVER' if self.pit_rule else 'RECORD' if remembered else None}
 
     def race_view(self, reserve_laps=.5, pit_loss_s=None, fuel_save_mode='finish'):
         with self.lock:
@@ -604,6 +638,8 @@ class LiveTelemetry:
             view = self.spotter.view(self.clock(), after, connected=self.state == 'CONNECTED')
             view['radio'] = self.radio.view(self.clock()) if self.state == 'CONNECTED' else {'connected': False, 'events': [], 'history': [], 'capabilities': {}}
             view['settings'] = self.spotter_settings()
+            # Only the beeps travel on the fast path; the attempts table is read with /drill.
+            view['drill'] = {'active': self.drill.plan is not None, 'serial': self.drill.serial, 'events': self.drill.events[-6:]}
             return view
 
     def spotter_settings(self):

@@ -329,3 +329,28 @@ test('a chain that is cut reports one interruption and does not start its next s
   await act(async () => players[0].onended?.());
   expect(players).toHaveLength(2);                       // only the urgent call was added
 });
+
+test('pressing refresh with no devices listed asks the browser once, closes the microphone and lists the outputs', async () => {
+  const hidden = [{ kind: 'audiooutput', deviceId: '', label: '' }];
+  media.enumerateDevices.mockResolvedValue(hidden);
+  const track = { stop: jest.fn() };
+  media.getUserMedia = jest.fn(async () => { media.enumerateDevices.mockResolvedValue([headset, speaker]); return { getTracks: () => [track] }; });
+  const { result } = renderHook(useAudioOutput);
+  await act(async () => {});
+  expect(result.current.devices).toEqual([]);
+  expect(media.getUserMedia).not.toHaveBeenCalled();           // opening the page never asks
+  await act(async () => result.current.refresh({ ask: true }));
+  expect(media.getUserMedia).toHaveBeenCalledWith({ audio: true });
+  expect(track.stop).toHaveBeenCalled();
+  expect(result.current.devices).toEqual([headset, speaker]);
+  delete media.getUserMedia;
+});
+
+test('a blocked microphone says how to allow it instead of listing only the default device silently', async () => {
+  media.enumerateDevices.mockResolvedValue([{ kind: 'audiooutput', deviceId: '', label: '' }]);
+  media.getUserMedia = jest.fn(async () => { const error = new Error('blocked'); error.name = 'NotAllowedError'; throw error; });
+  const { result } = renderHook(useAudioOutput);
+  await act(async () => result.current.refresh({ ask: true }));
+  expect(result.current.message).toContain('마이크를 허용');
+  delete media.getUserMedia;
+});

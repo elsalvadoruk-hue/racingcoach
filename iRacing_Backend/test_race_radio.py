@@ -44,6 +44,8 @@ class RaceRadioTests(unittest.TestCase):
 
     def test_basic_flags_and_personal_penalty_without_inventing_reason(self):
         self.tick(session_flags=0x10000 | 0x20 | 0x8)
+        self.assertEqual(set(self.keys()), {'black', 'yellow'})       # blue only once it has stayed up
+        self.wait(1.6)
         self.assertEqual(set(self.keys()), {'black', 'blue', 'yellow'})
         black = next(e for e in self.events() if e['key'] == 'black')
         self.assertNotIn('과속', black['text'])
@@ -58,11 +60,11 @@ class RaceRadioTests(unittest.TestCase):
         self.assertEqual(self.keys(), ['caution'])
 
     def test_variant_rotates_after_clear_and_cooldown(self):
-        self.tick(session_flags=0x20)
+        self.tick(session_flags=0x20); self.wait(1.6)
         first = self.events()[0]
         self.tick(session_flags=0)
         self.wait(31)
-        self.tick(session_flags=0x20)
+        self.tick(session_flags=0x20); self.wait(1.6)
         second = self.events()[0]
         self.assertNotEqual(first['variant'], second['variant'])
         self.assertNotEqual(first['text'], second['text'])
@@ -84,7 +86,7 @@ class RaceRadioTests(unittest.TestCase):
         self.assertIn('briefing', self.keys())
 
     def test_previous_session_history_is_not_used_after_run_reset(self):
-        self.tick(session_flags=0x20)
+        self.tick(session_flags=0x20); self.wait(1.6)
         self.radio.ack(self.events()[0]['id'], self.now)
         self.tick(run='next', session_flags=0)
         self.assertFalse(self.radio.history)
@@ -123,7 +125,7 @@ class RaceRadioTests(unittest.TestCase):
         self.assertNotIn('position', self.keys())
 
     def test_pit_service_and_speed_are_available_even_when_overlap_is_paused(self):
-        self.tick(on_pit_road=True, speed_mps=23., pit_service_status=1)
+        self.tick(on_pit_road=True, speed_mps=24., pit_service_status=1)
         self.assertEqual(set(self.keys()), {'pit_enter', 'pit_speed', 'service_start'})
         self.tick(speed_mps=0., pit_service_status=100)
         self.assertNotIn('pit_speed', self.keys())
@@ -183,7 +185,7 @@ class RaceRadioTests(unittest.TestCase):
         self.assertFalse(self.events())
 
     def test_ack_stops_retry_and_history_is_bounded(self):
-        self.tick(session_flags=0x20)
+        self.tick(session_flags=0x20); self.wait(1.6)
         event = self.events()[0]
         self.assertTrue(self.radio.ack(event['id'], self.now))
         self.assertFalse(self.events())
@@ -274,3 +276,29 @@ class RadioRouteTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BlueAndPitSpeedTests(unittest.TestCase):
+    setUp = RaceRadioTests.setUp
+    tick = RaceRadioTests.tick
+    wait = RaceRadioTests.wait
+    events = RaceRadioTests.events
+    keys = RaceRadioTests.keys
+
+    def test_a_blue_flag_up_for_a_moment_is_not_called(self):
+        self.tick(session_flags=0x20); self.wait(1.2)                 # 1.3 s just over the line at a rolling start
+        self.tick(session_flags=0)
+        self.wait(5)
+        self.assertNotIn('blue', [e['key'] for e in self.radio.pending])
+        self.tick(session_flags=0x20); self.wait(1.6)                 # a real one stays up
+        self.assertIn('blue', self.keys())
+        self.wait(10)
+        self.assertEqual([e['key'] for e in self.radio.pending].count('blue'), 1)   # once while it stays up
+
+    def test_the_limiter_hovering_just_over_the_limit_is_not_called_but_real_overspeed_is(self):
+        self.tick(on_pit_road=True, speed_mps=81.5 / 3.6)              # 80 km/h limit, limiter on: +1.5 km/h
+        self.assertNotIn('pit_speed', self.keys())
+        self.tick(speed_mps=82.9 / 3.6)
+        self.assertNotIn('pit_speed', self.keys())
+        self.tick(speed_mps=84. / 3.6)                                  # entering the lane still braking
+        self.assertIn('pit_speed', self.keys())

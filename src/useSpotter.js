@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { RESUMABLE, MAX_RESUMES, DEFAULT_RATE } from './voiceAudio';
+import { eventSound, playBeep } from './drillBeeps';
 
 const SETTINGS_KEY = 'iracing.spotter.settings';
 export const SPOTTER_VOICES = [['Fenrir', '남성 · 기본'], ['Algieba', '남성'], ['Schedar', '남성'], ['Aoede', '여성']];
@@ -15,7 +16,11 @@ const savedSettings = () => {
   } catch { return DEFAULT_SETTINGS; }
 };
 
-export default function useSpotter(apiBase, { play, setPriorityGate, cancelPriority, audioBusy, muted, volume }, { busy = false, specialists = true, level = 'all', recordDelivery } = {}) {
+export default function useSpotter(apiBase, { play, setPriorityGate, cancelPriority, audioBusy, muted, volume, outputId }, { busy = false, specialists = true, level = 'all', recordDelivery } = {}) {
+  // The drill beeps follow the radio's output device and volume without reconnecting the socket.
+  const outputRef = useRef(outputId); outputRef.current = outputId;
+  const volumeRef = useRef(volume); volumeRef.current = volume ?? 1;
+  const mutedRef = useRef(muted); mutedRef.current = Boolean(muted);
   const [enabled, setEnabled] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [view, setView] = useState(null);
@@ -151,8 +156,9 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
     if (!current.radio?.connected || current.occupied || Date.now() - lastFrame.current > 600) return;
     const events = [...radioQueue.current.values()].filter((event) => !heard.current.has(event.id)
       && !processing.current.has(event.id) && Date.now() < event.local_expires
-      && (settings.level === 'all' || !['pace_detail', 'incident_coaching', 'corner_focus', 'straight_brief'].includes(event.key))
-      && (settings.specialists || event.engineer === 'spotter'))
+      // The corner drill's warm-up voice is part of a drill the driver started: always played.
+      && (event.key?.startsWith('drill_') || settings.level === 'all' || !['pace_detail', 'incident_coaching', 'corner_focus', 'straight_brief'].includes(event.key))
+      && (settings.specialists || event.engineer === 'spotter' || event.key?.startsWith('drill_')))
       .sort((a, b) => b.priority - a.priority || a.serial - b.serial);
     const workloadFor = (e) => e.brief ? (state.current.radio?.brief_quiet ?? state.current.radio?.quiet) : state.current.radio?.quiet;
     // The server applies the driver's hold (no start while braking/steering or shortly before it).
@@ -237,6 +243,7 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
     const ticket = epoch.current;
     let serverOffset = null;
     let lastSerial = -1;
+    let drillSerial = null;                 // the corner drill's beeps (live_drill): only those newer than the first frame
     const lost = () => {
       const wasActive = state.current.active || state.current.radio?.connected;
       state.current = { active: false };
@@ -299,6 +306,15 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
           release.current = setTimeout(() => { if (!state.current.occupied) setPriorityGate?.(false); }, 700);
         } else setPriorityGate?.(false);
         pumpRadio();
+        if (frame.drill) {
+          if (drillSerial != null && frame.drill.serial > drillSerial) {
+            for (const event of frame.drill.events || []) {
+              const sound = event.serial > drillSerial ? eventSound(event) : null;
+              if (sound) playBeep(sound, { outputId: outputRef.current, volume: volumeRef.current, muted: mutedRef.current });
+            }
+          }
+          drillSerial = frame.drill.serial ?? drillSerial;
+        }
         if (!frame.active) {
           if (previous.active && !frame.radio?.connected) announce('unavailable', () => !stopped && !state.current.active && ticket === epoch.current);
           return;
@@ -333,5 +349,13 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
   const test = () => {
     if (!state.current.occupied) announce('test', () => !state.current.occupied);
   };
+  // The spotter speaks from this tab: closing or reloading it while on asks first (the browser shows its own wording).
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const ask = (event) => { event.preventDefault(); event.returnValue = ''; return ''; };
+    window.addEventListener('beforeunload', ask);
+    return () => window.removeEventListener('beforeunload', ask);
+  }, [enabled]);
+
   return { enabled, preparing, view, error, voice, settings, settingsBusy, changeSettings, toggle: enable, test };
 }
