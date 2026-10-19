@@ -221,7 +221,6 @@ export const SECTION_NAV = {
     { id: 'setup-decision', label: '셋업 결정' },
     { id: 'ab-manager', label: '셋업 A/B 비교' },
     { id: 'decision', label: '원인 분류' },
-    { id: 'ai-planner', label: 'AI 셋업 실험 계획' },
     { id: 'tire-snapshot', label: '타이어 종료 스냅샷' },
     { id: 'ride-aero', label: '차고·서스펜션·에어로' },
     { id: 'damper-velocity', label: '댐퍼 속도 분포' },

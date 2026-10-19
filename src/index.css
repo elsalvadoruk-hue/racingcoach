@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* The final 30% is amplification; show its range even before the driver enters it. */
+.voice-volume-slider { appearance: none; cursor: pointer; background: transparent; }
+.voice-volume-slider::-webkit-slider-runnable-track { height: 6px; border-radius: 999px; background: linear-gradient(to right, hsl(var(--primary)) 0% 76.923%, hsl(var(--destructive)) 76.923% 100%); }
+.voice-volume-slider::-moz-range-track { height: 6px; border-radius: 999px; background: linear-gradient(to right, hsl(var(--primary)) 0% 76.923%, hsl(var(--destructive)) 76.923% 100%); }
+.voice-volume-slider::-webkit-slider-thumb { appearance: none; width: 18px; height: 18px; margin-top: -6px; border-radius: 50%; border: 2px solid hsl(var(--background)); background: hsl(var(--primary)); }
+.voice-volume-slider::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; border: 2px solid hsl(var(--background)); background: hsl(var(--primary)); }
+.voice-volume-slider[data-boosted="true"]::-webkit-slider-thumb { background: hsl(var(--destructive)); }
+.voice-volume-slider[data-boosted="true"]::-moz-range-thumb { background: hsl(var(--destructive)); }
+.voice-volume-slider[data-boosted="true"] + output { color: hsl(var(--destructive)); }
+.voice-volume-slider:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 4px; border-radius: 4px; }
+
 @layer base {
   :root {
     color-scheme: dark;

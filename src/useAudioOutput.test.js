@@ -11,6 +11,24 @@ const originalMedia = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices')
 const originalSink = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'setSinkId');
 let media, players;
 
+test('130% is saved while native media stays within its allowed range, with an explicit fallback', async () => {
+  const { result, unmount } = renderHook(useAudioOutput);
+  act(() => result.current.changeVolume(1.3));
+  act(() => result.current.changePitwallRate(1));
+  await act(async () => result.current.play('boosted'));
+  expect(players[0].volume).toBe(1);
+  expect(players[0].playbackRate).toBe(1);
+  expect(result.current.message).toContain('100%로 재생'); // no Web Audio in this browser mock
+  expect(result.current.volume).toBe(1.3);
+  unmount();
+  const restored = renderHook(useAudioOutput);
+  expect(restored.result.current.volume).toBe(1.3);
+  expect(restored.result.current.pitwallRate).toBe(1);
+  await waitFor(() => expect(restored.result.current.devices).toHaveLength(2));
+  act(() => restored.result.current.changeVolume(9));
+  expect(restored.result.current.volume).toBe(1.3);
+});
+
 test('real audio duration must fit the current learned straight before playback', async () => {
   const { result } = renderHook(useAudioOutput);
   global.Audio.mockImplementationOnce(() => {
@@ -89,9 +107,10 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
-test('automatic replies, replay and local test sound use the chosen device at 1.15 speed', async () => {
+test.each(['coach', 'spotter'])('answers from %s and replay retain the speaker channel and selected device', async (engineer) => {
+  localStorage.setItem('iracing.voice.playback', JSON.stringify({ rate: 1.4, spotterRate: 1, pitwallRate: 1.3 }));
   const fetchMock = global.fetch = jest.fn(async (url) => ({ ok: true, json: async () =>
-    url.endsWith('/utterances') ? { note: { id: 1, created_at: 1, text: '앞이 밀려', reply: '진입 속도를 줄여보세요.' }, audio_base64: 'answer' }
+    url.endsWith('/utterances') ? { note: { id: 1, created_at: 1, text: '앞이 밀려', reply: '진입 속도를 줄여보세요.', context: { engineer } }, audio_base64: 'answer' }
       : url.endsWith('/captures') ? { capture_id: 'capture' } : url.endsWith('/notes') ? { notes: [] } : {} }));
   render(<LiveCoach apiBase="http://localhost:8000" visible />);
   await screen.findByRole('option', { name: 'USB Headset' });
@@ -113,9 +132,9 @@ test('automatic replies, replay and local test sound use the chosen device at 1.
   await waitFor(() => expect(players[2]?.play).toHaveBeenCalled());
   expect(fetchMock.mock.calls).toHaveLength(requests);
   expect(players[2].src).toMatch(/^data:audio\/wav;base64,/);
-  players.forEach((player) => {
+  players.forEach((player, index) => {
     expect(player.setSinkId).toHaveBeenCalledWith('headset');
-    expect(player.playbackRate).toBe(1.15); expect(player.preservesPitch).toBe(true);
+    expect(player.playbackRate).toBe(index < 2 && engineer === 'spotter' ? 1 : 1.3); expect(player.preservesPitch).toBe(true);
     expect(player.volume).toBe(.45); expect(player.muted).toBe(false);
   });
   expect(players[0].pause).toHaveBeenCalled();
@@ -139,7 +158,7 @@ test('saved output survives remount and is not discarded before microphone permi
   expect(players[0].volume).toBe(.35); expect(players[0].muted).toBe(true);
   act(() => second.result.current.changeVolume(0));
   expect(players[0].volume).toBe(0); expect(players[0].muted).toBe(false);
-  expect(JSON.parse(localStorage.getItem('iracing.voice.playback'))).toEqual({ volume: 0, muted: false, rate: 1.15 });
+  expect(JSON.parse(localStorage.getItem('iracing.voice.playback'))).toEqual({ volume: 0, muted: false, rate: 1.3, spotterRate: 1.15, pitwallRate: 1.15 });
 });
 
 test('unplugging an available selected device stops playback and restores system default', async () => {
@@ -282,13 +301,14 @@ test('the answer to the driver is interrupted by nothing but the driver himself'
 
 test('several whole sentences play back to back as one call and nothing slips in between', async () => {
   const { result } = renderHook(useAudioOutput);
+  expect(result.current).toMatchObject({ spotterRate: 1.15, pitwallRate: 1.15, rate: 1.3 });
   const delivery = jest.fn();
   await act(async () => result.current.play(['first', 'second'], 'audio/mpeg', { priority: 1, onStatus: delivery }));
   expect(players).toHaveLength(1);
   expect(players[0].play).toHaveBeenCalled();
   await act(async () => players[0].onended());
   expect(players).toHaveLength(2);                       // the second sentence follows at once
-  expect(players[1].playbackRate).toBe(1.15);
+  expect(players[1].playbackRate).toBe(1.3);
   await waitFor(() => expect(players[1].play).toHaveBeenCalled());
   expect(delivery).not.toHaveBeenCalledWith('completed', expect.anything());
   let started;
@@ -299,29 +319,49 @@ test('several whole sentences play back to back as one call and nothing slips in
   expect(result.current.audioBusy()).toBe(false);
 });
 
-test('the speed setting is for calls of several sentences; one sentence and the formation briefing stay at 1.15', async () => {
+test('three absolute rates are independent, multipart overrides the role and formation stays fixed', async () => {
   const { result } = renderHook(useAudioOutput);
-  act(() => result.current.changeRate(1.25));
-  expect(result.current.rate).toBe(1.25);
-  expect(JSON.parse(localStorage.getItem('iracing.voice.playback')).rate).toBe(1.25);
-  await act(async () => result.current.play('one', 'audio/mpeg', { priority: 1 }));
-  expect(players[0].playbackRate).toBe(1.15);
+  act(() => { result.current.changeSpotterRate(1); result.current.changePitwallRate(1.25); result.current.changeRate(1.4); });
+  await act(async () => result.current.play('left', 'audio/mpeg', { channel: 'spotter' }));
+  expect(players[0].playbackRate).toBe(1);
   await act(async () => players[0].onended());
-  await act(async () => result.current.play(['first', 'second'], 'audio/mpeg', { priority: 1 }));
-  expect(players[1].playbackRate).toBe(1.25);
+  await act(async () => result.current.play(['one'], 'audio/mpeg', { channel: 'pitwall' }));
+  expect(players[1].playbackRate).toBe(1.25); // A one-element array is still a single sentence.
   await act(async () => players[1].onended());
-  expect(players[2].playbackRate).toBe(1.25);              // every sentence of the call
-  await act(async () => players[2].onended());
-  await act(async () => result.current.play(['hello', 'grid'], 'audio/mpeg', { priority: 1, rate: 1.15 }));
-  expect(players[3].playbackRate).toBe(1.15);              // a call that names its own speed keeps it
-  act(() => result.current.changeRate(3));
-  expect(result.current.rate).toBe(1.4);                   // within the slider's range
-  act(() => result.current.changeRate(1));
-  expect(result.current.rate).toBe(1.15);                  // never slower than the timing assumes
+  for (const channel of ['spotter', 'pitwall']) {
+    const offset = players.length;
+    await act(async () => result.current.play(['first', 'second'], 'audio/mpeg', { channel }));
+    expect(players[offset].playbackRate).toBe(1.4); // Absolute, not 1.25 * 1.4.
+    act(() => result.current.changeRate(1));
+    await act(async () => players[offset].onended());
+    expect(players[offset + 1].playbackRate).toBe(1.4); // Capture speed for the whole call.
+    expect(players[offset + 1].preservesPitch).toBe(true);
+    await act(async () => players[offset + 1].onended());
+    act(() => result.current.changeRate(1.4));
+  }
+  await act(async () => result.current.play(['hello', 'grid'], 'audio/mpeg', { channel: 'spotter', rate: 1.15 }));
+  expect(players[6].playbackRate).toBe(1.15);
+  act(() => result.current.changeSpotterRate(3));
+  act(() => result.current.changePitwallRate(0));
+  expect(result.current.spotterRate).toBe(1.4);
+  expect(result.current.pitwallRate).toBe(1);
+  expect(result.current.rate).toBe(1.4);
+});
+
+test('old multipart preference migrates without changing single sentence defaults and all three restore', async () => {
+  localStorage.setItem('iracing.voice.playback', JSON.stringify({ rate: 1.3, volume: .6 }));
+  const { result, unmount } = renderHook(useAudioOutput);
+  expect(result.current).toMatchObject({ rate: 1.3, spotterRate: 1.15, pitwallRate: 1.15 });
+  act(() => { result.current.changeSpotterRate(1); result.current.changePitwallRate(1.2); });
+  unmount();
+  const restored = renderHook(useAudioOutput);
+  expect(restored.result.current).toMatchObject({ rate: 1.3, spotterRate: 1, pitwallRate: 1.2, volume: .6 });
+  await waitFor(() => expect(restored.result.current.devices).toHaveLength(2));
 });
 
 test('a chain that is cut reports one interruption and does not start its next sentence', async () => {
   const { result } = renderHook(useAudioOutput);
+  expect(result.current).toMatchObject({ spotterRate: 1.15, pitwallRate: 1.15, rate: 1.3 });
   const delivery = jest.fn();
   await act(async () => result.current.play(['first', 'second'], 'audio/mpeg', { priority: 1, onStatus: delivery }));
   await act(async () => result.current.play('left', 'audio/mpeg', { priority: 3 }));
@@ -353,4 +393,66 @@ test('a blocked microphone says how to allow it instead of listing only the defa
   await act(async () => result.current.refresh({ ask: true }));
   expect(result.current.message).toContain('마이크를 허용');
   delete media.getUserMedia;
+});
+
+test('devicechange and repeated refresh during permission cannot cancel the requested output discovery', async () => {
+  media.enumerateDevices.mockResolvedValue([]);
+  let permit;
+  const stop = jest.fn();
+  media.getUserMedia = jest.fn(() => new Promise(resolve => { permit = resolve; }));
+  const { result } = renderHook(useAudioOutput);
+  await act(async () => {});
+  let pending;
+  act(() => { pending = result.current.refresh({ ask: true }); });
+  await waitFor(() => expect(media.getUserMedia).toHaveBeenCalledTimes(1));
+  expect(result.current.refreshing).toBe(true);
+  act(() => {
+    media.dispatchEvent(new Event('devicechange'));
+    window.dispatchEvent(new Event('focus'));
+    result.current.refresh({ ask: true });
+  });
+  await act(async () => {
+    media.enumerateDevices.mockResolvedValue([headset, speaker]);
+    permit({ getTracks: () => [{ stop }] });
+    await pending;
+  });
+  expect(media.getUserMedia).toHaveBeenCalledTimes(1);
+  expect(stop).toHaveBeenCalledTimes(1);
+  expect(result.current.devices).toEqual([headset, speaker]);
+  expect(result.current.refreshing).toBe(false);
+});
+
+test('returning to the app discovers connections missed in the background without requesting permission', async () => {
+  media.enumerateDevices.mockResolvedValue([speaker]);
+  media.getUserMedia = jest.fn();
+  const { result, unmount } = renderHook(useAudioOutput);
+  await waitFor(() => expect(result.current.devices).toEqual([speaker]));
+  media.enumerateDevices.mockResolvedValue([headset, speaker]);
+  await act(async () => window.dispatchEvent(new Event('focus')));
+  expect(result.current.devices).toEqual([headset, speaker]);
+  act(() => result.current.changeOutput('headset'));
+  media.enumerateDevices.mockResolvedValue([speaker]);
+  await act(async () => document.dispatchEvent(new Event('visibilitychange')));
+  expect(result.current.devices).toEqual([speaker]);
+  expect(result.current.outputId).toBe('');
+  expect(media.getUserMedia).not.toHaveBeenCalled();
+  unmount();
+  media.enumerateDevices.mockClear();
+  window.dispatchEvent(new Event('focus'));
+  document.dispatchEvent(new Event('visibilitychange'));
+  media.dispatchEvent(new Event('devicechange'));
+  expect(media.enumerateDevices).not.toHaveBeenCalled();
+});
+
+test('an older device list cannot overwrite a newer connection refresh', async () => {
+  const { result } = renderHook(useAudioOutput);
+  await waitFor(() => expect(result.current.devices).toEqual([headset, speaker]));
+  let stale;
+  media.enumerateDevices.mockImplementationOnce(() => new Promise(resolve => { stale = resolve; }));
+  let pending;
+  act(() => { pending = result.current.refresh(); });
+  media.enumerateDevices.mockResolvedValue([speaker]);
+  await act(async () => media.dispatchEvent(new Event('devicechange')));
+  await act(async () => { stale([headset, speaker]); await pending; });
+  expect(result.current.devices).toEqual([speaker]);
 });

@@ -1,3 +1,4 @@
+import VoiceVolumeSlider from './VoiceVolumeSlider';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group';
@@ -9,7 +10,7 @@ import { Textarea } from './ui/textarea';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Mic, MicOff, Radio, Route, Square, Volume2, VolumeX } from 'lucide-react';
 import { HelpHint } from './HelpGuide';
-import { encodeWav, VoiceRecorder, RESUMABLE, MAX_RESUMES, DEFAULT_RATE, RATE_MIN, RATE_MAX } from '../voiceAudio';
+import { encodeWav, VoiceRecorder, RESUMABLE, MAX_RESUMES, DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX } from '../voiceAudio';
 import useAudioOutput from '../useAudioOutput';
 import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import PitWall, { ENGINEERS, PIT_WALL_KEY, readPitPreferences } from './PitWall';
@@ -27,7 +28,7 @@ const phaseText = (note) => {
 const errorMessage = (error) => error.name === 'NotAllowedError' ? '마이크 권한이 필요합니다. 브라우저 주소창의 마이크 권한을 확인하세요.' : error.message;
 const SPOTTER_ROLE = { label: '스포터', style: 'border-success/30 bg-success/10 text-success' };
 
-function NoteText({ note }) {
+export function NoteText({ note }) {
   const engineer = note.context?.engineer === 'spotter' ? SPOTTER_ROLE : ENGINEERS[note.context?.engineer || 'coach'];
   return <><div className="coach-note-meta"><Badge variant="secondary">{engineer?.label || '엔지니어'}{note.source === 'AUTO_REPORT' ? note.context?.report_delivery === 'PREPARED' ? ' · 전달 대기' : ' · 자동 보고' : ''}</Badge><time className="text-xs text-muted-foreground">{new Date(note.created_at * 1000).toLocaleTimeString('ko-KR')}</time></div>
     <p className="mt-2 text-xs text-muted-foreground">{phaseText(note)}</p>
@@ -68,10 +69,11 @@ export function CornerCoach({ coach, connected, controls }) {
     </CardContent></section></Card>;
 }
 
-export default function LiveCoach({ apiBase, visible, onSaved }) {
+export default function LiveCoach({ apiBase, visible, onSaved, children, monitor = false }) {
   const [status, setStatus] = useState(null);
   const [notes, setNotes] = useState([]);
   const [armed, setArmed] = useState(false);
+  const [inputDevice, setInputDevice] = useState(() => { try { return localStorage.getItem('iracing.voice.inputDevice') || ''; } catch { return ''; } });
   const [phase, setPhase] = useState('idle');
   const [mode, setMode] = useState('measured');
   const [speak, setSpeak] = useState(true);
@@ -80,6 +82,7 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
   const [socketReady, setSocketReady] = useState(false);
   const [lastAudio, setLastAudio] = useState(null);
   const lastMime = useRef('audio/mpeg');
+  const lastChannel = useRef('pitwall');
   const [wallEnabled, setWallEnabled] = useState(false);
   const [wallPreferences, setWallPreferences] = useState(readPitPreferences);
   const [wallView, setWallView] = useState(null);
@@ -89,11 +92,11 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
     key: note.context?.report_key || 'answer', engineer: note.context?.engineer || 'coach', text: spokenText || note.reply || '',
     session_time: note.context?.snapshot?.session_time, lap_number: note.context?.snapshot?.lap_number,
     distance_pct: note.context?.snapshot?.distance_pct }), []);
-  const { outputId, devices: outputDevices, supported: outputSupported, message: outputMessage, refresh: refreshOutputs, changeOutput, play, volume, muted, changeVolume, toggleMute, rate, changeRate, effect, changeEffect, isPlaying, isPriorityBlocked } = audioOutput;
+  const { outputId, devices: outputDevices, supported: outputSupported, message: outputMessage, refresh: refreshOutputs, changeOutput, play, volume, muted, changeVolume, toggleMute, rate, changeRate, spotterRate, changeSpotterRate, pitwallRate, changePitwallRate, effect, changeEffect, isPlaying, isPriorityBlocked } = audioOutput;
   const stopSpeaking = audioOutput.stopNormal || audioOutput.stop;
   const blocked = useRef(null), busyAudio = useRef(null), reportResumes = useRef(new Map());
   blocked.current = audioOutput.isPriorityBlocked; busyAudio.current = audioOutput.audioBusy;
-  const recorder = useRef(null), state = useRef({ phase: 'idle', armed: false });
+  const recorder = useRef(null), microphoneEpoch = useRef(0), state = useRef({ phase: 'idle', armed: false });
   const spotter = useSpotter(apiBase, audioOutput, { busy: phase !== 'idle', specialists: wallEnabled && wallPreferences.level !== 'off', level: wallPreferences.level, recordDelivery });
   useEffect(() => { if (spotter.enabled) setWallEnabled(true); }, [spotter.enabled]);
   const turn = useRef(null), stopRequested = useRef(false), timeout = useRef(null);
@@ -127,7 +130,8 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
   const answerTurn = useRef(0);
   const speakAnswer = useCallback((audio, note, attempt = 0) => {
     const ticket = ++answerTurn.current;
-    return play(audio, 'audio/mpeg', { priority: ANSWER, onStatus: (status, reason) => {
+    return play(audio, 'audio/mpeg', { priority: ANSWER,
+      channel: note.context?.engineer === 'spotter' ? 'spotter' : 'pitwall', onStatus: (status, reason) => {
       recordDelivery(deliveryEvent(note), status, reason);
       // A side-by-side call cut the answer off: say it again from the start once the radio is free.
       if (status !== 'interrupted' || !['preempted', 'nearby_car'].includes(reason) || attempt >= MAX_RESUMES) return;
@@ -148,7 +152,9 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
       setNotes((current) => [response.note, ...current.filter((note) => note.id !== response.note.id)].slice(0, 200));
       // An answer made of prepared sentences arrives as several clips and plays as one call.
       const answerAudio = response.audio_parts?.length > 1 ? response.audio_parts : response.audio_base64;
-      setError(response.warning || ''); lastMime.current = 'audio/mpeg'; setLastAudio(answerAudio || null);
+      setError(response.warning || ''); lastMime.current = 'audio/mpeg';
+      lastChannel.current = response.note.context?.engineer === 'spotter' ? 'spotter' : 'pitwall';
+      setLastAudio(answerAudio || null);
       saved.current?.(response.note);
       if (answerAudio && options.current.speak) await speakAnswer(answerAudio, response.note);
     } catch (failure) { if (mounted.current) setError(errorMessage(failure)); }
@@ -186,11 +192,11 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
   useEffect(() => {
     mounted.current = true;
     const currentState = state.current;
-    return () => { mounted.current = false; currentState.armed = false; clearTimeout(timeout.current); recorder.current?.close(); stopSpeaking(); };
+    return () => { mounted.current = false; microphoneEpoch.current += 1; currentState.armed = false; clearTimeout(timeout.current); recorder.current?.close(); stopSpeaking(); };
   }, [stopSpeaking]);
   useEffect(() => { if (visible || armed) refreshOutputs(); }, [visible, armed, refreshOutputs]);
   useEffect(() => {
-    if (!visible && !armed && !wallEnabled && !spotter.enabled) return undefined;
+    if (!monitor && !visible && !armed && !wallEnabled && !spotter.enabled) return undefined;
     let stopped = false, running = false;
     const load = async () => {
       if (running) return;
@@ -199,10 +205,10 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
       catch (failure) { if (!stopped) setError(errorMessage(failure)); }
       finally { running = false; }
     };
-    load(); const id = setInterval(load, 1200);
+    load(); const id = setInterval(load, !visible && !armed && !wallEnabled && !spotter.enabled ? 15000 : 1200);
     if (visible) request('/notes').then((data) => { if (!stopped) setNotes(data.notes || []); }).catch(() => {});
     return () => { stopped = true; clearInterval(id); };
-  }, [visible, armed, wallEnabled, spotter.enabled, request]);
+  }, [monitor, visible, armed, wallEnabled, spotter.enabled, request]);
   useEffect(() => {
     if (!visible && !wallEnabled) return undefined;
     let stopped = false, running = false, lastPoll = 0;
@@ -223,7 +229,7 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
         saved.current?.(note);
         const mime = response.report.audio_mime || 'audio/mpeg';
         if (audio && wallOptions.current.speak) {
-          lastMime.current = mime; setLastAudio(audio);
+          lastMime.current = mime; lastChannel.current = 'pitwall'; setLastAudio(audio);
           const urgent = response.report.priority >= 3;
           const reportCurrent = () => {
             if (!drivingConnected.current) return false;
@@ -297,6 +303,7 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
   }, [armed, wallEnabled, apiBase]);
 
   const prepare = async () => {
+    const microphoneTicket = ++microphoneEpoch.current;
     setError('');
     if (armed) {
       state.current.armed = false; setArmed(false); clearTimeout(timeout.current);
@@ -307,10 +314,10 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
     changePhase('arming');
     try {
       const capture = new VoiceRecorder(); recorder.current = capture;
-      await capture.open();
-      if (!mounted.current) { capture.close(); return; }
+      await capture.open(inputDevice);
+      if (!mounted.current || microphoneTicket !== microphoneEpoch.current || recorder.current !== capture) { capture.close(); return; }
       state.current.armed = true; setArmed(true); changePhase('idle');
-    } catch (failure) { setError(errorMessage(failure)); recorder.current?.close(); recorder.current = null; changePhase('idle'); }
+    } catch (failure) { if (microphoneTicket === microphoneEpoch.current && mounted.current) { setError(errorMessage(failure)); recorder.current?.close(); recorder.current = null; changePhase('idle'); } }
   };
   const submitText = async () => {
     if (!text.trim() || state.current.phase !== 'idle') return;
@@ -330,17 +337,33 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
     });
   };
   const toggleWall = () => { reportEpoch.current += 1; setWallEnabled((current) => !current); stopSpeaking(); };
+  const changeInputDevice = (value) => {
+    // A recorder keeps its original stream. Close it before selecting a new microphone.
+    if (state.current.phase === 'sending') return;
+    microphoneEpoch.current += 1;
+    state.current.armed = false; setArmed(false); clearTimeout(timeout.current);
+    recorder.current?.close(); recorder.current = null; changePhase('idle');
+    setInputDevice(value === 'default' ? '' : value);
+    try { localStorage.setItem('iracing.voice.inputDevice', value === 'default' ? '' : value); } catch { /* Selection remains usable. */ }
+  };
   const testVoice = async (role) => {
     if (state.current.phase !== 'idle') return;
     reportEpoch.current += 1; stopSpeaking(); setError(''); changePhase('sending');
     try {
       const response = await request(`/voices/${role}/test`, {});
-      if (mounted.current) { lastMime.current = 'audio/mpeg'; setLastAudio(response.audio_base64); await play(response.audio_base64); }
+      if (mounted.current) { lastMime.current = 'audio/mpeg'; lastChannel.current = 'pitwall'; setLastAudio(response.audio_base64); await play(response.audio_base64); }
     } catch (failure) { if (mounted.current) setError(errorMessage(failure)); }
     finally { changePhase('idle'); }
   };
   const snapshot = status?.snapshot || {}, speech = status?.speech || {};
   const active = phase === 'recording' || phase === 'starting';
+  // The desktop surface reuses this host so audio priorities, expiry and F8 have one owner.
+  if (typeof children === 'function') return children({ apiBase, status, notes, armed, phase, mode, speak, error, socketReady,
+    inputDevice, changeInputDevice, audioOutput, spotter, wallEnabled, wallPreferences, wallView,
+    prepare, start: () => start(), finish, setMode, setSpeak: (value) => { setSpeak(value); if (!value) stopSpeaking(); },
+    toggleWall, changeWallPreferences, testVoice, testOutput, stopSpeaking,
+    refreshNotes: async () => { const data = await request('/notes'); if (mounted.current) setNotes(data.notes || []); },
+    replay: lastAudio ? () => { stopSpeaking(); play(lastAudio, lastMime.current, { channel: lastChannel.current }); } : null });
   return <section id="live-coach" hidden={!visible} aria-label="실시간 음성 코치" className="flex flex-col gap-5">
     <SpotterPanel spotter={spotter} muted={muted} volume={volume} audioError={outputMessage} />
     <PitWall enabled={wallEnabled} onToggle={toggleWall} preferences={wallPreferences} onChange={changeWallPreferences} view={wallView} engineers={status?.engineers} onTestVoice={testVoice} busy={phase !== 'idle'} speaking={isPlaying} />
@@ -366,7 +389,7 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
         <ToggleGroup type="multiple" variant="outline" value={[mode]} onValueChange={values => setMode(values.find(key => key !== mode) || mode)} disabled={phase !== 'idle'} aria-label="질문 답변 방식" className="flex flex-wrap justify-start gap-2">{[['measured', '측정값 답변'], ['ai', 'AI 원인 분석'], ['memo', '메모만 기록']].map(([key, label]) => <ToggleGroupItem key={key} value={key} className="min-h-11 px-3">{label}</ToggleGroupItem>)}</ToggleGroup>
         <label className="flex items-center gap-2 text-sm text-foreground"><input type="checkbox" checked={speak} onChange={(event) => { setSpeak(event.target.checked); if (!event.target.checked) stopSpeaking(); }} />음성으로 답변</label>
         <Button variant="outline" type="button" onClick={stopSpeaking} className="flex items-center gap-1  border  px-3 py-2 text-sm "><VolumeX size={15} />답변 중단</Button>
-        {lastAudio && <Button variant="outline" type="button" onClick={() => { stopSpeaking(); play(lastAudio, lastMime.current); }} className="flex items-center gap-1 text-sm "><Volume2 size={15} />답변 다시 듣기</Button>}
+        {lastAudio && <Button variant="outline" type="button" onClick={() => { stopSpeaking(); play(lastAudio, lastMime.current, { channel: lastChannel.current }); }} className="flex items-center gap-1 text-sm "><Volume2 size={15} />답변 다시 듣기</Button>}
       </div>
       <div className="mt-5 rounded-lg border bg-muted/30 p-5">
         <label htmlFor="voice-output" className="flex items-center gap-2 text-sm font-semibold text-success"><Volume2 size={17} />오디오 출력장치<HelpHint topic="voiceOutput" /></label>
@@ -383,15 +406,17 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
         <div className="mt-4 border-t border-success/20 pt-4">
           <div className="flex items-center justify-between gap-3"><label htmlFor="voice-volume" className="flex items-center gap-2 text-sm font-semibold text-success">답변 볼륨<HelpHint topic="voiceVolume" /></label><output htmlFor="voice-volume" className="min-w-[60px] text-right font-mono text-sm text-success">{muted ? '음소거' : `${Math.round(volume * 100)}%`}</output></div>
           <div className="mt-2 flex items-center gap-3">
-            <input id="voice-volume" type="range" min="0" max="100" step="1" value={Math.round(volume * 100)} onChange={(event) => changeVolume(Number(event.target.value) / 100)} aria-valuetext={`${Math.round(volume * 100)}%${muted ? ' · 음소거' : ''}`} aria-describedby="voice-volume-help" className="h-11 min-w-0 flex-1 cursor-pointer accent-emerald-400" />
+            <VoiceVolumeSlider id="voice-volume" value={Math.round(volume * 100)} onChange={value => changeVolume(value / 100)} aria-valuetext={`${Math.round(volume * 100)}%${muted ? ' · 음소거' : ''}`} aria-describedby="voice-volume-help" className="h-11 min-w-0 flex-1" />
             <Button variant="outline" type="button" onClick={toggleMute} aria-pressed={muted} className={`flex min-h-[44px] shrink-0 items-center gap-2  border px-3 py-2 text-sm ${muted ? '  ' : ' '}`}>{muted ? <VolumeX size={15} /> : <Volume2 size={15} />}{muted ? '음소거 해제' : '음소거'}</Button>
           </div>
-          <p id="voice-volume-help" className="mt-1 text-xs leading-relaxed text-muted-foreground">재생 중에도 바로 적용하며 볼륨과 음소거 상태를 저장합니다. 슬라이더를 움직이면 음소거가 해제됩니다. 마이크 입력과 게임 볼륨은 별도로 조절하세요.</p>
+          <p id="voice-volume-help" className="mt-1 text-xs leading-relaxed text-muted-foreground">0~130%로 조절하며 빨간 구간은 100% 초과 증폭입니다. 소리가 찌그러지면 낮추세요. 재생 중에도 바로 적용하며 볼륨과 음소거 상태를 저장합니다. 슬라이더를 움직이면 음소거가 해제됩니다. 마이크 입력과 게임 볼륨은 별도로 조절하세요.</p>
         </div>
         <div className="mt-4 border-t border-success/20 pt-4">
-          <div className="flex items-center justify-between gap-3"><label htmlFor="voice-rate" className="text-sm font-semibold text-success">여러 문장 안내 속도</label><output htmlFor="voice-rate" className="min-w-[60px] text-right font-mono text-sm text-success">{(rate ?? DEFAULT_RATE).toFixed(2)}배</output></div>
-          <input id="voice-rate" type="range" min={RATE_MIN} max={RATE_MAX} step="0.05" value={rate ?? DEFAULT_RATE} onChange={(event) => changeRate?.(Number(event.target.value))} aria-valuetext={`${(rate ?? DEFAULT_RATE).toFixed(2)}배`} aria-describedby="voice-rate-help" className="mt-2 h-11 w-full cursor-pointer accent-emerald-400" />
-          <p id="voice-rate-help" className="mt-1 text-xs leading-relaxed text-muted-foreground">여러 문장을 이어서 말하는 안내(랩 종료 보고, 긴 직선 한 줄, 수리 판단, 질문 답변 등)의 속도입니다. 한 문장짜리 안내는 1.15배 그대로입니다. 목소리 높이는 그대로이고 다음 안내부터 적용됩니다. 1.15배부터 1.4배까지 고를 수 있고, 포메이션 랩 안내는 1.15배로 둡니다.</p>
+          {[[spotterRate, changeSpotterRate, 'spotter', '스포터 속도'], [pitwallRate, changePitwallRate, 'pitwall', '피트월 속도'], [rate, changeRate, 'multiple', '여러 문장 속도']].map(([value, change, id, label]) => <div key={id} className="mt-2">
+            <div className="flex items-center justify-between gap-3"><label htmlFor={`voice-rate-${id}`} className="text-sm font-semibold text-success">{label}</label><output htmlFor={`voice-rate-${id}`} className="min-w-[60px] text-right font-mono text-sm text-success">{(value ?? (id === 'multiple' ? MULTIPART_DEFAULT_RATE : DEFAULT_RATE)).toFixed(2)}배</output></div>
+            <input id={`voice-rate-${id}`} type="range" min={RATE_MIN} max={RATE_MAX} step="0.05" value={value ?? (id === 'multiple' ? MULTIPART_DEFAULT_RATE : DEFAULT_RATE)} onChange={event => change?.(Number(event.target.value))} aria-valuetext={`${(value ?? (id === 'multiple' ? MULTIPART_DEFAULT_RATE : DEFAULT_RATE)).toFixed(2)}배`} aria-describedby="voice-rate-help" className="mt-2 h-11 w-full cursor-pointer accent-emerald-400" />
+          </div>)}
+          <p id="voice-rate-help" className="mt-1 text-xs leading-relaxed text-muted-foreground">각각 1.0~1.4배입니다. 기본은 스포터·피트월 1.15배, 여러 문장 1.30배입니다. 여러 문장 안내는 담당 속도와 곱하지 않고 ‘여러 문장 속도’만 적용합니다. 포메이션 브리핑은 1.15배 고정입니다. 음높이를 유지하며 다음 안내부터 적용됩니다.</p>
         </div>
         {effect && <div className="mt-4 border-t border-success/20 pt-4" aria-label="무전 효과">
           <div className="flex flex-wrap items-center gap-3">
@@ -410,10 +435,10 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label className="flex items-center gap-3 text-sm text-foreground">음성 크기
-              <input type="range" min="20" max="150" step="5" value={effect.voice} disabled={effect.level === 'off'} onChange={(event) => changeEffect({ voice: Number(event.target.value) })} aria-valuetext={`${effect.voice}%`} className="h-11 min-w-0 flex-1 cursor-pointer accent-emerald-400" />
+              <input type="range" min="20" max="150" step="5" value={effect.voice} disabled={effect.level === 'off'} onChange={(event) => changeEffect({ voice: Number(event.target.value) })} aria-valuetext={`${effect.voice}%`} className="h-11 min-w-0 flex-1" />
               <output className="min-w-[48px] text-right font-mono text-sm">{effect.voice}%</output></label>
             <label className="flex items-center gap-3 text-sm text-foreground">잡음 크기
-              <input type="range" min="0" max="400" step="10" value={effect.noise} disabled={effect.level === 'off'} onChange={(event) => changeEffect({ noise: Number(event.target.value) })} aria-valuetext={`${effect.noise}%`} className="h-11 min-w-0 flex-1 cursor-pointer accent-emerald-400" />
+              <input type="range" min="0" max="400" step="10" value={effect.noise} disabled={effect.level === 'off'} onChange={(event) => changeEffect({ noise: Number(event.target.value) })} aria-valuetext={`${effect.noise}%`} className="h-11 min-w-0 flex-1" />
               <output className="min-w-[48px] text-right font-mono text-sm">{effect.noise}%</output></label>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">스포터와 엔지니어의 모든 음성에 무전기 느낌의 필터를 겁니다. 음성 파일은 그대로이고 다음 안내부터 적용됩니다. “테스트 소리”로 들어 보세요. 세기가 강하면 숫자가 덜 또렷할 수 있습니다.</p>

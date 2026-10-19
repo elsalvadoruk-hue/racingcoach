@@ -1,5 +1,5 @@
 // A radio sound laid over the voices while they play. The clips themselves are untouched:
-// the audio element (1.15x, pitch kept) is routed through a few filters, so the effect can be
+// the audio element (driver's speed, pitch kept) is routed through a few filters, so the effect can be
 // switched off, turned up or down, and costs nothing to produce.
 //
 // Values were chosen by ear on artifacts/voice-pilot/radio-effect.html (scripts/voice_pilot_radio.py).
@@ -47,31 +47,38 @@ export function storeSettings(settings) {
   try { localStorage.setItem(KEY, JSON.stringify(settings)); } catch { /* The effect still applies for this page. */ }
 }
 
-let context = null, contextSink = '', noiseBuffer = null, popsReady = false, popsLoading = false;
+let context = null, contextSink = '', sinkFlight = null, noiseBuffer = null, popsReady = false, popsLoading = false;
 const Context = () => (typeof window !== 'undefined' ? window.AudioContext || window.webkitAudioContext : null);
 
 // Called from clicks (enabling the spotter, the test sound, changing the setting): a context may only start then.
 export function warm(settings, sinkId = '') {
-  if (!settings || settings.level === 'off' || !Context()) return;
+  if (!settings || !Context()) return;
   try {
     context = context || new (Context())();
-    if (context.state === 'suspended') context.resume().catch(() => {});
+    // With autoplay blocked, resume() can remain pending until a future gesture. Let the native
+    // player report that restriction instead of occupying the radio queue indefinitely.
+    const resuming = context.state === 'suspended'
+      ? Promise.race([context.resume().catch(() => {}), new Promise(resolve => setTimeout(resolve, 100))]) : undefined;
     // The pops run in a worklet; until it has loaded (or where there is none) clips play without them.
-    if (!popsReady && !popsLoading && context.audioWorklet) {
+    if (settings.level !== 'off' && !popsReady && !popsLoading && context.audioWorklet) {
       popsLoading = true;
       context.audioWorklet.addModule(`${process.env.PUBLIC_URL || ''}/radio-pop-worklet.js`)
         .then(() => { popsReady = true; }, () => {}).finally(() => { popsLoading = false; });
     }
+    if (sinkFlight) return Promise.all([resuming, sinkFlight.then(() => warm(settings, sinkId))]);
     if (sinkId !== contextSink && typeof context.setSinkId === 'function') {
       const wanted = sinkId;
-      context.setSinkId(wanted).then(() => { contextSink = wanted; }, () => {});
+      sinkFlight = context.setSinkId(wanted).then(() => { contextSink = wanted; }, () => {})
+        .finally(() => { sinkFlight = null; });
+      return Promise.all([resuming, sinkFlight]);
     }
+    return resuming;
   } catch { context = null; }
 }
 
 // True only when a clip routed through the context is certain to be heard on the chosen device.
 export function ready(settings, sinkId = '') {
-  return !!settings && settings.level !== 'off' && !!context && context.state === 'running' && contextSink === sinkId;
+  return !!settings && !!context && !sinkFlight && context.state === 'running' && contextSink === sinkId;
 }
 
 function curve(drive) {                         // soft clipping: the grit of an overdriven handset
@@ -103,8 +110,17 @@ function burst(seconds, level) {                 // the squelch: a short rush of
 export function attach(audio, settings, { sinkId = '', volume = 1, muted = false } = {}) {
   if (!ready(settings, sinkId)) return null;
   const preset = PRESETS[settings.level];
+  let source;
   try {
-    const source = context.createMediaElementSource(audio);
+    // Always route through a gain when Web Audio is ready, including with radio effects off.
+    // HTMLMediaElement.volume stays within 0..1; only the excess above 100% goes here.
+    const boost = context.createGain(); boost.gain.value = Math.max(1, volume);
+    if (!preset) {
+      source = context.createMediaElementSource(audio);
+      source.connect(boost).connect(context.destination);
+      return { boosted: true, start() {}, update(next) { boost.gain.value = Math.max(1, next.volume); },
+        release() { source.disconnect(); boost.disconnect(); } };
+    }
     const pops = POPS[settings.pops] && popsReady ? POPS[settings.pops] : null;
     const high = context.createBiquadFilter(); high.type = 'highpass'; high.frequency.value = pops ? POP_LOW_CUT : preset.low; high.Q.value = 0.7;
     const low = context.createBiquadFilter(); low.type = 'lowpass'; low.frequency.value = preset.high; low.Q.value = 0.7;
@@ -113,25 +129,32 @@ export function attach(audio, settings, { sinkId = '', volume = 1, muted = false
     const squeeze = context.createDynamicsCompressor();
     squeeze.threshold.value = -24; squeeze.ratio.value = 8; squeeze.attack.value = 0.003; squeeze.release.value = 0.12;
     const level = context.createGain(); level.gain.value = 0.9 * (pops ? preset.bassMakeup : preset.makeup) * settings.voice / 100;
-    const nodes = [source, high, low, mid, shaper, squeeze, level];
+    source = context.createMediaElementSource(audio);
+    const nodes = [source, high, low, mid, shaper, squeeze, level, boost];
     let input = source;
     if (pops) {
       // Ahead of the filters: the microphone overloads first, the radio passes on what is left.
       const node = new AudioWorkletNode(context, 'radio-pop', { processorOptions: pops });
       input = source.connect(node); nodes.push(node);
     }
-    input.connect(high).connect(low).connect(mid).connect(shaper).connect(squeeze).connect(level).connect(context.destination);
+    input.connect(high).connect(low).connect(mid).connect(shaper).connect(squeeze).connect(level).connect(boost).connect(context.destination);
     // The noises do not pass through the element, so its volume and mute are applied to them here.
-    const loudness = muted ? 0 : volume * settings.noise / 100;
-    let hiss = null, released = false;
+    let loudness = muted ? 0 : volume * settings.noise / 100;
+    let hiss = null, hissGain = null, released = false;
     return {
+      boosted: true,
+      update(next) {
+        boost.gain.value = Math.max(1, next.volume);
+        loudness = next.muted ? 0 : next.volume * settings.noise / 100;
+        if (hissGain) hissGain.gain.value = preset.hiss * loudness;
+      },
       start(first = true) {
         if (released) return;
         if (settings.squelch && first) burst(0.05, 0.05 * loudness);
         if (settings.hiss && loudness > 0) {
           hiss = context.createBufferSource(); hiss.buffer = noise(); hiss.loop = true;
           const band = context.createBiquadFilter(); band.type = 'bandpass'; band.frequency.value = 2000; band.Q.value = 0.5;
-          const gain = context.createGain(); gain.gain.value = preset.hiss * loudness;
+          const gain = context.createGain(); gain.gain.value = preset.hiss * loudness; hissGain = gain;
           hiss.connect(band).connect(gain).connect(context.destination); hiss.start();
           nodes.push(band, gain);
         }
@@ -145,8 +168,12 @@ export function attach(audio, settings, { sinkId = '', volume = 1, muted = false
         nodes.forEach((node) => { try { node.disconnect(); } catch { /* Already gone. */ } });
       },
     };
-  } catch { return null; }
+  } catch {
+    // Once captured, an element cannot return to native output. Keep a plain audible route.
+    if (source) { try { source.disconnect(); source.connect(context.destination); } catch { /* Context failed. */ } }
+    return source ? { start() {}, update() {}, release() { source.disconnect(); } } : null;
+  }
 }
 
 // For tests: forget the context.
-export function reset() { context = null; contextSink = ''; noiseBuffer = null; popsReady = false; popsLoading = false; }
+export function reset() { context = null; contextSink = ''; sinkFlight = null; noiseBuffer = null; popsReady = false; popsLoading = false; }

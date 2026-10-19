@@ -11,6 +11,7 @@ from reference_routes import ReferenceRoutesServices, register_routes as registe
 from settings_routes import SettingsRoutesServices, register_routes as register_settings_routes
 from practice_routes import PracticeRoutesServices, register_routes as register_practice_routes
 from memory_routes import MemoryRoutesServices, register_routes as register_memory_routes
+from workspace_routes import WorkspaceRoutesServices, register_routes as register_workspace_routes
 from api_route_models import (
     AppSettingsBody,
     SecretBody,
@@ -288,7 +289,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "1.2.0"   # the first version made to be shared (2026-10-12); earlier numbers were internal
+APP_VERSION = "1.3.0"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -2641,73 +2642,13 @@ def ai_external_reference_context(result: dict[str, Any]) -> dict[str, Any]:
 
 
 async def add_ai_briefing(result: dict[str, Any], request: AnalyzeRequest) -> dict[str, Any]:
+    """Keep legacy callers local after retiring non-voice AI requests."""
     result["ai_usage"] = ai_usage_record(
         purpose="ENGINEER_BRIEFING",
         requested=request.include_ai,
-        status="NOT_REQUESTED" if not request.include_ai else "PENDING",
+        status="REMOVED" if request.include_ai else "NOT_REQUESTED",
+        error="음성 외 AI 분석 요청은 종료되었습니다. 로컬 분석 결과를 제공합니다." if request.include_ai else None,
     )
-    if not request.include_ai:
-        return result
-    if ai_client is None:
-        result["ai_usage"] = ai_usage_record(
-            purpose="ENGINEER_BRIEFING",
-            requested=True,
-            status="UNAVAILABLE",
-            error="GCP Vertex AI client is not connected",
-        )
-        return result
-
-    payload = {
-        "session": result.get("session"),
-        "session_policy": result.get("session_policy"),
-        "data_quality": result.get("data_quality"),
-        "comparison": result.get("comparison"),
-        "classification": result.get("performance", {}).get("classification"),
-        "top_losses": result.get("performance", {}).get("top_losses", [])[:3],
-        "vehicle": result.get("vehicle"),
-        "setup_recommendation": result.get("setup_recommendation"),
-        "external_reference": ai_external_reference_context(result),
-        "user_feedback": request.user_feedback,
-        "voice_review": result.get("voice_review"),
-        "long_term_memory": ai_memory_context(result),
-    }
-    prompt = (
-        "You are a race-engineering briefing editor. Explain only the supplied deterministic JSON. "
-        "Do not invent telemetry, corner names, setup values, legal ranges, lap-time gains, or fuel recommendations. "
-        "Use long_term_memory only as historical evidence and clearly distinguish current-session facts from past patterns. "
-        "external_reference contains only anonymized local aggregate metrics; do not infer driver identity or raw Garage61 data. "
-        "For QUALIFYING, the normal run is one out-lap plus up to two timed laps; never request three timed laps. "
-        "The setup_recommendation object is authoritative. Return Korean JSON with keys summary and sections.\n\n"
-        + json.dumps(payload, ensure_ascii=False)
-    )
-
-    def call() -> Any:
-        return ai_client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=structured_generation_config(AIBriefingSchema, 0.12),
-        )
-
-    try:
-        response = await asyncio.to_thread(call)
-        briefing = parse_structured_response(response.text, AIBriefingSchema).model_dump()
-        briefing["source"] = "GCP_VERTEX_AI_BRIEFING"
-        result["briefing"] = briefing
-        result["ai_usage"] = ai_usage_record(
-            purpose="ENGINEER_BRIEFING",
-            requested=True,
-            used=True,
-            response=response,
-            status="SUCCESS",
-        )
-    except Exception as exc:
-        logger.warning("AI briefing failed; deterministic briefing retained: %s", exc)
-        result["ai_usage"] = ai_usage_record(
-            purpose="ENGINEER_BRIEFING",
-            requested=True,
-            status="FAILED_LOCAL_FALLBACK",
-            error=str(exc),
-        )
     return result
 
 
@@ -3139,96 +3080,11 @@ def materialize_experiment_plan(
 
 
 async def generate_ai_experiment_plan(request: ExperimentPlanRequest) -> dict[str, Any]:
-    request = request_with_structured_feedback(request)
-    if ai_client is None:
-        raise HTTPException(
-            status_code=503,
-            detail="GCP Vertex AI가 연결되지 않아 AI Setup Experiment Planner를 실행할 수 없습니다.",
-        )
-    result = await load_analysis(
-        AnalyzeRequest(
-            session_mode=request.session_mode,
-            pit_rule=request.pit_rule,
-            user_feedback=request.user_feedback,
-            feedback_phase=request.feedback_phase,
-            feedback_speed=request.feedback_speed,
-            feedback_symptom=request.feedback_symptom,
-            setup_mode=request.setup_mode,
-            target_lap=request.target_lap,
-            reference_lap=request.reference_lap,
-            include_ai=False,
-            filename=request.filename,
-            external_reference_files=request.external_reference_files,
-        )
+    """Retired endpoint: existing plans remain readable in the local store."""
+    raise HTTPException(
+        status_code=410,
+        detail="음성 외 AI 분석 요청은 종료되었습니다. 로컬 셋업 후보와 A/B 비교를 사용하세요.",
     )
-    assigned_modes = result.get("memory", {}).get("assigned_modes", []) or []
-    if request.session_mode.value not in assigned_modes:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "선택한 텔레메트리의 세션 유형이 DB에 확정되지 않았습니다. "
-                "상단에서 퀄리파잉·3-Lap 베이스·인듀런스 중 하나를 먼저 선택하십시오."
-            ),
-        )
-    evidence = build_planner_evidence(result, request)
-    candidates = build_experiment_candidates(result, request)
-    payload = {
-        "session": result.get("session"),
-        "session_policy": result.get("session_policy"),
-        "data_quality": result.get("data_quality"),
-        "classification": result.get("performance", {}).get("classification"),
-        "user_feedback": request.user_feedback.strip(),
-        "evidence_catalog": evidence,
-        "allowed_candidates": candidates,
-        "external_reference": ai_external_reference_context(result),
-        "long_term_memory": ai_memory_context(result),
-    }
-    prompt = (
-        "You are the AI Setup Experiment Planner for iRacing. Select exactly one allowed candidate for the next controlled test. "
-        "Do not alter candidate actions, setup numbers, success rules, revert rules, or sample counts. "
-        "Prefer a driving test when evidence is ambiguous. Select SETUP_TEST only when an allowed SETUP candidate exists. "
-        "Use LONG_TERM_MEMORY evidence to avoid repeating failed experiments, but do not claim causality from one historical run. "
-        "When a past A/B result is KEEP or REVERT under similar conditions, cite its HISTORY evidence ID in evidence_ids. "
-        "For QUALIFYING, the full run is one out-lap plus no more than two timed laps; never request three timed laps. "
-        "Use only supplied evidence IDs and write hypothesis/rationale in Korean. Return JSON matching the schema.\n\n"
-        + json.dumps(payload, ensure_ascii=False)
-    )
-
-    def call() -> Any:
-        return ai_client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=structured_generation_config(AIPlannerSelectionSchema, 0.08),
-        )
-
-    try:
-        response = await asyncio.to_thread(call)
-        selection = parse_structured_response(response.text, AIPlannerSelectionSchema)
-        plan = materialize_experiment_plan(selection, candidates, evidence, result, request)
-        persisted = False
-        if plan_store is not None:
-            try:
-                await asyncio.to_thread(plan_store.save, plan)
-                persisted = True
-            except Exception as exc:
-                logger.warning("Could not persist experiment plan: %s", exc)
-        return {
-            "status": "success",
-            "plan": plan,
-            "persisted": persisted,
-            "ai_usage": ai_usage_record(
-                purpose="SETUP_EXPERIMENT_PLANNER",
-                requested=True,
-                used=True,
-                response=response,
-                status="SUCCESS",
-            ),
-        }
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("AI experiment planner failed")
-        raise HTTPException(status_code=502, detail=f"GCP AI 실험 계획 생성 실패: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -4313,6 +4169,30 @@ get_memory_status = _handlers.get_memory_status
 get_memory_sessions = _handlers.get_memory_sessions
 get_memory_session = _handlers.get_memory_session
 compare_setup_experiments = _handlers.compare_setup_experiments
+
+
+_handlers = register_workspace_routes(app, WorkspaceRoutesServices(
+    get_telemetry_analyzer=lambda: TelemetryAnalyzer,
+    get_ibt_reader=lambda: IBTReader,
+    get_repository=lambda: repository,
+    get_external_reference_repository=lambda: external_reference_repository,
+    resolve_telemetry_file=lambda *args, **kwargs: resolve_telemetry_file(*args, **kwargs),
+    resolve_external_reference_file=lambda *args, **kwargs: resolve_external_reference_file(*args, **kwargs),
+    telemetry_file_visibility=lambda *args, **kwargs: telemetry_file_visibility(*args, **kwargs),
+    quick_file_visibility=lambda *args, **kwargs: quick_file_visibility(*args, **kwargs),
+    list_ibt_files=lambda *args, **kwargs: list_ibt_files(*args, **kwargs),
+    list_external_reference_metadata=lambda *args, **kwargs: list_external_reference_metadata(*args, **kwargs),
+    comparison_detail_payload=lambda *args, **kwargs: comparison_detail_payload(*args, **kwargs),
+    file_laps_payload=lambda *args, **kwargs: file_laps_payload(*args, **kwargs),
+    lap_overlay_payload=lambda *args, **kwargs: lap_overlay_payload(*args, **kwargs),
+    load_analysis=lambda *args, **kwargs: load_analysis(*args, **kwargs),
+    compare_setup_experiments=lambda *args, **kwargs: compare_setup_experiments(*args, **kwargs),
+    build_closed_loop_coach=lambda *args, **kwargs: build_closed_loop_coach(*args, **kwargs),
+    extract_setup_summary=lambda *args, **kwargs: extract_setup_summary(*args, **kwargs),
+    setup_exploration_candidate=lambda *args, **kwargs: setup_exploration_candidate(*args, **kwargs),
+    json_safe=lambda *args, **kwargs: json_safe(*args, **kwargs),
+))
+workspace_request = _handlers.workspace_request
 
 
 def loopback_sockets(port: int) -> list:

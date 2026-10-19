@@ -133,7 +133,7 @@ export function useAnalysisWorkspace() {
     setFiles(nextFiles);
     setFileIndex({ index_status: payload.index_status, pending_count: payload.pending_count, index_signature: payload.index_signature });
     const restored = nextFiles.find((file) => file.name === restoredFileRef.current && file.analyzable !== false);
-    const firstAnalyzable = restored || nextFiles.find((file) => file.analyzable === true);
+    const firstAnalyzable = restored || nextFiles.find((file) => file.analyzable !== false);
     if (!selectedFileRef.current && firstAnalyzable) {
       restoreFileDraft(firstAnalyzable.name);
       setSelectedFile(firstAnalyzable.name);
@@ -331,7 +331,6 @@ export function useAnalysisWorkspace() {
 
   const runAnalysis = useCallback(
     async ({
-      includeAI = false,
       quiet = false,
       filename = null,
       sessionModeOverride = null,
@@ -343,11 +342,16 @@ export function useAnalysisWorkspace() {
       forceAutoLaps = false,
       targetLapOverride = undefined,
       referenceLapOverride = undefined,
+      onFailure = null,
     } = {}) => {
       const effectiveFilename = filename || selectedFileRef.current || null;
       if (!effectiveFilename || effectiveFilename !== selectedFileRef.current) return null;
       const knownFile = filesRef.current.find((item) => item.name === effectiveFilename);
-      if (knownFile?.analyzable === false) { setError(knownFile.eligibility_reason || knownFile.reason || '이 파일은 분석할 유효랩이 없습니다.'); return null; }
+      if (knownFile?.analyzable === false) {
+        const unavailable = new Error(knownFile.eligibility_reason || knownFile.reason || '이 파일은 분석할 유효랩이 없습니다.');
+        unavailable.status = 422;
+        setError(unavailable.message); onFailure?.(unavailable); return null;
+      }
       analysisRequestRef.current.controller?.abort();
       const requestId = analysisRequestRef.current.id + 1;
       const controller = new AbortController();
@@ -400,7 +404,6 @@ export function useAnalysisWorkspace() {
             setup_mode: effectiveFeedback.setupMode,
             target_lap: requestedTargetLap,
             reference_lap: requestedReferenceLap,
-            include_ai: includeAI,
             filename: effectiveFilename,
             persist_memory: shouldPersist,
             replace_existing_mode: Boolean(replaceMemoryMode),
@@ -408,6 +411,11 @@ export function useAnalysisWorkspace() {
           }),
         });
         if (!isCurrent()) return null;
+        if (payload.data_quality?.analysis_scope === 'UNAVAILABLE') {
+          const unavailable = new Error('이 주행에는 유효한 완주 랩이나 분석 가능한 정상 구간이 없습니다.');
+          unavailable.status = 422;
+          throw unavailable;
+        }
         setAnalysis(payload);
         setAnalysisSnapshot(snapshot);
         setDetail(null);
@@ -431,7 +439,7 @@ export function useAnalysisWorkspace() {
         await loadMemory();
         return payload;
       } catch (requestError) {
-        if (isCurrent() && requestError.name !== 'AbortError') setError(requestError.message);
+        if (isCurrent() && requestError.name !== 'AbortError') { setError(requestError.message); onFailure?.(requestError); }
         return null;
       } finally {
         if (isCurrent()) setLoading(false);
@@ -445,13 +453,13 @@ export function useAnalysisWorkspace() {
     await runAnalysis({ includeAI: false, quiet: true });
   }, [loadMemory, runAnalysis]);
 
-  useWorkspaceInitialization({ loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus, maybeStartGarage61Collection, restoreFileDraft, runAnalysisRef, selectedFileRef, setError, setInitialLoading, setPitRule, setSelectedFile, setSessionMode });
+  useWorkspaceInitialization({ loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus, maybeStartGarage61Collection, restoreFileDraft, runAnalysisRef, selectedFileRef, setError, setInitialLoading, setPitRule, setSelectedFile, setSessionMode, activeTrialRef, setTargetLapManual, setReferenceLapManual });
 
   useEffect(() => {
     runAnalysisRef.current = runAnalysis;
   }, [runAnalysis]);
 
-  useTelemetryEvents({ activeTrialRef, analysisRequestRef, loadExternalReferences, loadFiles, loadStatus, maybeStartGarage61Collection, restoreFileDraft, runAnalysisRef, selectedFileRef, sessionMode, setAnalysis, setError, setLoading, setNewFileNotice, setPitRule, setReferenceLap, setReferenceLapManual, setSelectedFile, setSessionMode, setStatus, setTargetLap, setTargetLapManual, signatureRef, waitingFileRef });
+  useTelemetryEvents({ initialLoading, activeTrialRef, analysisRequestRef, loadExternalReferences, loadFiles, loadStatus, maybeStartGarage61Collection, restoreFileDraft, runAnalysisRef, selectedFileRef, sessionMode, setAnalysis, setError, setLoading, setNewFileNotice, setPitRule, setReferenceLap, setReferenceLapManual, setSelectedFile, setSessionMode, setStatus, setTargetLap, setTargetLapManual, signatureRef, waitingFileRef });
 
   useEffect(() => {
     if (fileIndex?.index_status !== 'SCANNING') return undefined;
@@ -729,7 +737,36 @@ export function useAnalysisWorkspace() {
   const tableCornerLoader = useMemo(() => (analysisSnapshot ? cornerWindowLoader(analysisSnapshot.referenceMode || 'LOCAL') : null), [analysisSnapshot, cornerWindowLoader]);
 
 
+  // Accept a calculated workspace selection while retaining the existing SSE,
+  // collector, experiment and browser preference lifecycle.
+  const adoptDesktopAnalysis = (sessionData, result) => {
+    const payload = result.analysisResult || sessionData.analysisResult;
+    if (!payload) return;
+    const filename = sessionData.filename;
+    const changedFile = filename !== selectedFileRef.current;
+    const nextDraft = changedFile ? readDraft(filename) : null;
+    const nextFeedback = nextDraft ? { feedbackPhase: nextDraft.feedbackPhase || '', feedbackSpeed: nextDraft.feedbackSpeed || '',
+      feedbackSymptom: nextDraft.feedbackSymptom || '', setupMode: nextDraft.setupMode || 'EXPLORE', userFeedback: nextDraft.userFeedback || '' }
+      : { feedbackPhase, feedbackSpeed, feedbackSymptom, setupMode, userFeedback };
+    analysisRequestRef.current.controller?.abort();
+    if (changedFile) restoreFileDraft(filename);
+    selectedFileRef.current = filename;
+    setSelectedFile(filename);
+    const refs = sessionData.external || [];
+    const mode = refs.length > 1 ? 'AGGREGATE' : refs.length ? 'SINGLE' : 'LOCAL';
+    setSelectedExternalReferences(refs); setReferenceMode(mode);
+    setTargetLap(String(sessionData.defaultTarget));
+    setReferenceLap(sessionData.defaultReference == null ? '' : String(sessionData.defaultReference));
+    setTargetLapManual(true); setReferenceLapManual(true);
+    setSessionMode(payload.session_policy?.session_mode || initialModeForFile(sessionData.session));
+    setAnalysis(payload); setDetail(null); setLoading(false); setError(''); setNewFileNotice('');
+    setAnalysisSnapshot({ filename, ...nextFeedback,
+      referenceMode: mode, references: refs, targetLap: sessionData.defaultTarget, referenceLap: sessionData.defaultReference });
+    void loadExternalReferences(filename, false);
+  };
+
     return {
+      adoptDesktopAnalysis,
       activeTab, activeTrial, analysis, analysisIsCurrent, analysisSnapshot, applyExternalReferences,
       beginTrial, canAttachTrial, canStartTrial, cancelGarage61Collection, classification,
       cleanSectionOnly, comparison, comparisonCorners, comparisonPath, comparisonTrace, completeTrial,

@@ -50,6 +50,27 @@ test('closing a task returns to the suggestion and keeps the history', async () 
   expect(screen.getByTestId('practice-history-THROTTLE_RETURN_LATE')).toHaveTextContent('종료 1 · 개선 확인 0 · 확인된 시간 0.20초');
 });
 
+test('notifies its desktop parent after successful start and close so the summary stays synchronized', async () => {
+  const onPracticeChange = jest.fn();
+  const started = { active, check: null, history: { by_cause: [] } };
+  const history = { by_cause: [{ root_cause: 'THROTTLE_RETURN_LATE', title: '풀스로틀 복귀 지연', tried: 1, done: 1, gain_s: 0 }] };
+  global.fetch = jest.fn(async (url) => ({ ok: true, json: async () => url.endsWith('/start') ? { practice: started } : url.endsWith('/close') ? { history } : {} }));
+  render(<PracticeCoach apiBase="" filename="a.ibt" practice={{ active: null, history: { by_cause: [] } }} coach={coach} onPracticeChange={onPracticeChange} />);
+  fireEvent.click(screen.getByText('이 과제로 연습 시작'));
+  await waitFor(() => expect(onPracticeChange).toHaveBeenCalledWith(started));
+  fireEvent.click(screen.getByText('연습 종료로 기록'));
+  await waitFor(() => expect(onPracticeChange).toHaveBeenLastCalledWith({ active: null, check: null, history }));
+});
+
+test('a rejected practice start does not change the parent summary', async () => {
+  const onPracticeChange = jest.fn();
+  global.fetch = jest.fn(async () => ({ ok: false, json: async () => ({ detail: '분석한 파일을 다시 확인하세요.' }) }));
+  render(<PracticeCoach apiBase="" filename="a.ibt" practice={null} coach={coach} onPracticeChange={onPracticeChange} />);
+  fireEvent.click(screen.getByText('이 과제로 연습 시작'));
+  expect(await screen.findByText('분석한 파일을 다시 확인하세요.')).toBeInTheDocument();
+  expect(onPracticeChange).not.toHaveBeenCalled();
+});
+
 test('says so when there is nothing to work on', () => {
   render(<PracticeCoach apiBase="" filename="b.ibt" practice={null} coach={{ ranked_focuses: [] }} />);
   expect(screen.getByText(/고칠 만한 반복 손실을 찾지 못했습니다/)).toBeInTheDocument();

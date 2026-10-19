@@ -14,7 +14,7 @@ const FIELDS = [['width', '가로 크기 (%)', 75, 200], ['height', '세로 크�
   ['x', '가로 위치 (px)', -100000, 100000], ['y', '세로 위치 (px)', -100000, 100000],
   ['content_opacity', '표시 불투명도', 0, 100], ['background_opacity', '배경 불투명도', 0, 100]];
 
-export default function OverlaySettings({ apiBase, visible = true }) {
+export default function OverlaySettings({ apiBase, visible = true, fetcher = fetch }) {
   const [view, setView] = useState(null);
   const [draft, setDraft] = useState({});
   const [busy, setBusy] = useState(false);
@@ -25,7 +25,7 @@ export default function OverlaySettings({ apiBase, visible = true }) {
   const generation = useRef(0);
   const opacity = useRef({ pending: {}, timer: null, flight: null });
   const request = useCallback(async (path = '', method = 'GET', body) => {
-    const response = await fetch(`${apiBase}/api/overlay${path}`, body === undefined ? { method }
+    const response = await fetcher(`${apiBase}/api/overlay${path}`, body === undefined ? { method }
       : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await response.json();
     if (response.status === 404 && path === '/visibility') {
@@ -33,7 +33,7 @@ export default function OverlaySettings({ apiBase, visible = true }) {
     }
     if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '오버레이 설정을 적용하지 못했습니다.');
     return data;
-  }, [apiBase]);
+  }, [apiBase, fetcher]);
   useEffect(() => {
     const stream = opacity.current;
     mounted.current = true;

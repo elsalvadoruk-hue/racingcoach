@@ -65,7 +65,8 @@ class AnalyzeRequest(BaseModel):
     setup_mode: Literal["EXPLORE", "EVIDENCE"] = "EXPLORE"
     target_lap: Optional[int] = None
     reference_lap: Optional[int] = None
-    include_ai: bool = False
+    # Accepted from older clients only; analysis always stays local.
+    include_ai: bool = Field(default=False, json_schema_extra={"deprecated": True}, description="Retired; analysis never calls AI.")
     filename: Optional[str] = None
     # Local analysis is read-only by default. The frontend sets this only after
     # the user explicitly assigns a session type to the selected IBT.
@@ -151,6 +152,8 @@ class ExperimentRequest(BaseModel):
     goal: Literal["COMFORT", "PACE", "ENDURANCE"] = "COMFORT"
     driver_feedback: Optional[ExperimentDriverFeedback] = None
     trial_id: Optional[str] = Field(default=None, max_length=160)
+    # The workbench's single planned adjustment is verified before persistence.
+    planned_change: Optional[dict[str, Any]] = None
 
 
 class BriefingSectionSchema(BaseModel):

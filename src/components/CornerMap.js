@@ -8,7 +8,9 @@ import { COMPARISON_COLORS } from '../chartTheme';
 import GeographicMapTilesPlain from './GeographicMapTiles';
 import { IMAGERY_CREDIT } from '../lib/geographicMap';
 import { colourRuns } from '../lib/lossColours';
-import { gapAt, positionAt, replaySpan, timeline } from '../lib/ghost';
+import { gapAt, heldPositionAt as heldAt, replayPair, timeline } from '../lib/ghost';
+
+const EMPTY_LINE = [];
 
 const ASPECT = 600 / 360;
 // The imagery only changes with the camera; a hover or a moving ghost must not redraw it.
@@ -19,7 +21,6 @@ const savedLoss = () => { try { return window.localStorage.getItem(LOSS_KEY) !==
 const GHOST_SPEEDS = [1, 2, 4];
 const clock = (seconds) => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(1).padStart(4, '0')}`;
 // A car that has finished (or not yet started) its observed stretch stays at its first or last point.
-const heldAt = (line, t) => (line.length < 2 ? null : positionAt(line, Math.min(line[line.length - 1].t, Math.max(line[0].t, t))));
 const EMPTY_PATH = [];
 const finite = Number.isFinite;
 const nearest = (points, pct) => points.reduce((best, point) => (
@@ -136,7 +137,7 @@ function segments(points) {
   }, []);
 }
 
-export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, trackMap, courseDiagram, geographic = false, geographicMetersPerUnit, geographicOrigin, mapStatus = 'unavailable', referenceLineSource, onFullLap, onSatellite, onRoadMap, referenceLabel = '기준 주행', detailLoading = false, corners, selected, selectedRange, activePct, onSelect, onHover, focusVersion, loss = null, traceRows = EMPTY_PATH }) {
+export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, trackMap, courseDiagram, geographic = false, geographicMetersPerUnit, geographicOrigin, mapStatus = 'unavailable', referenceLineSource, onFullLap, onSatellite, onRoadMap, referenceLabel = '기준 주행', detailLoading = false, corners, selected, selectedRange, activePct, onSelect, onHover, focusVersion, loss = null, traceRows = EMPTY_PATH, compactControls = false }) {
   const svgRef = useRef(null);
   const drag = useRef(null);
   const manual = useRef(false);
@@ -154,12 +155,13 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
   const [failedSatellite, setFailedSatellite] = useState(null);
   const [failedDiagram, setFailedDiagram] = useState(null);
   const [lossOn, setLossOn] = useState(savedLoss);
-  // Ghost replay: both laps' cars on the map at the same time since their lap start.
-  const targetLine = useMemo(() => timeline(projected), [projected]);
-  const referenceLine = useMemo(() => timeline(referenceProjected), [referenceProjected]);
+  const targetTimeline = useMemo(() => timeline(projected), [projected]);
+  const referenceTimeline = useMemo(() => timeline(referenceProjected), [referenceProjected]);
   const rangeStart = selectedRange?.[0], rangeEnd = selectedRange?.[1];
-  const span = useMemo(() => replaySpan(targetLine, referenceLine, finite(rangeStart) ? [rangeStart, rangeEnd] : null),
-    [targetLine, referenceLine, rangeStart, rangeEnd]);
+  const replay = useMemo(() => replayPair(targetTimeline, referenceTimeline, finite(rangeStart) ? [rangeStart, rangeEnd] : null),
+    [targetTimeline, referenceTimeline, rangeStart, rangeEnd]);
+  const targetLine = replay?.target || EMPTY_LINE, referenceLine = replay?.reference || EMPTY_LINE;
+  const span = replay?.span;
   const [ghost, setGhost] = useState(null);           // the shown time (controls, readout), ten times a second
   const [playing, setPlaying] = useState(false);
   const [ghostSpeed, setGhostSpeed] = useState(1);
@@ -169,7 +171,7 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
   const followView = useRef(null);
   const spanStart = span?.[0], spanEnd = span?.[1];
   const showGhost = (t) => { ghostRef.current = t; setGhost(t); };
-  useEffect(() => { ghostRef.current = null; setGhost(null); setPlaying(false); }, [spanStart, spanEnd]);
+  useEffect(() => { ghostRef.current = null; setGhost(null); setPlaying(false); }, [replay]);
   // While playing, the dots (and a following camera) move every frame by writing the SVG directly. React
   // re-renders the map only ten times a second and the graphs not at all, so they do not hold the dots back.
   useEffect(() => {
@@ -263,7 +265,9 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
   const fullView = useMemo(() => fitMapView(allPoints, aspect), [allPoints, aspect]);
   const focusedPoints = useMemo(() => {
     if (diagramMode || !selected) return allPoints;
-    const points = allPoints.filter(point => point.distance_pct >= selected.entry_pct && point.distance_pct <= selected.exit_pct);
+    const points = allPoints.filter(point => selectedRange
+      ? point.distance_pct >= selectedRange[0] && point.distance_pct <= selectedRange[1]
+      : point.distance_pct >= selected.entry_pct && point.distance_pct <= selected.exit_pct);
     if (points.length > 1) return points;
     return allPoints.filter(point => selectedRange && point.distance_pct >= selectedRange[0] && point.distance_pct <= selectedRange[1]);
   }, [allPoints, selected, selectedRange, diagramMode]);
@@ -417,9 +421,7 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
   const scaleTarget = metersPerUnit ? 90 * unit * metersPerUnit : 0;
   const scaleOrder = scaleTarget > 0 ? 10 ** Math.floor(Math.log10(scaleTarget)) : 1;
   const scaleMeters = [5, 2, 1].map(value => value * scaleOrder).find(value => value <= scaleTarget) || scaleOrder;
-  return <div className="coach-map-workspace">
-    <div className="coach-map-toolbar">
-      <div><h3>{diagramMode ? courseDiagram.displayName : selected ? selected.label || selected.id : '전체 트랙'}</h3><p id={hintId}>휠로 확대·축소 · 왼쪽 버튼을 누른 채 드래그하여 이동</p></div>
+  const mapActions = (
       <div className="flex flex-wrap items-center gap-2">
         {courseDiagram && <ToggleGroup type="single" size="sm" variant="outline" value={diagramMode ? 'course' : 'comparison'} onValueChange={value => { if (value) setDisplayMode(value); }} aria-label="지도 보기">
           <ToggleGroupItem value="comparison" aria-label="주행선 비교 보기" disabled={!projected.length}>주행 비교</ToggleGroupItem>
@@ -442,7 +444,8 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
         {selected && !diagramMode && onFullLap && <Button variant="outline" onClick={onFullLap}>전체 랩으로</Button>}
         {!diagramMode && loss && <Button variant="outline" aria-pressed={lossColoured} onClick={toggleLoss} data-testid="map-loss-toggle">{lossColoured ? '손실 색칠 끄기' : '손실 색칠'}</Button>}
       </div>
-    </div>
+  );
+  const backgroundSource = (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3" data-testid="map-background-source">
       <Badge variant="secondary">{diagramMode ? 'iRacing 코스 안내' : geographicVisible ? 'GPS 위성 지도' : roadAvailable ? (trackMap.provenance?.geometry === 'traced' ? '항공사진으로 그린 도로 지도' : trackMap.provenance?.geometry === 'laps' ? '주행 랩으로 그린 도로 지도' : trackMap.provenance?.geometry === 'fitted' ? 'iRacing 공식 트랙맵' : 'DZ replay 도로 지도') : 'GPS 라인 비교'}</Badge>
       {diagramMode ? <>
@@ -458,7 +461,8 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
       </> : <span className="text-xs text-muted-foreground">{trackMap ? '도로 지도 파일을 불러오지 못했습니다.' : mapStatus === 'gps-mismatch' ? 'GPS 위치가 지도 범위와 맞지 않아 주행선만 표시합니다.' : '이 레이아웃에는 등록된 도로 지도가 없습니다.'}</span>}
       {!diagramMode && satelliteFailed && <span role="status" className="text-xs text-muted-foreground">위성 배경을 불러오지 못해 도로 지도를 표시합니다.</span>}
     </div>
-    {!diagramMode && <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 pb-3 text-sm" data-testid="map-line-source">
+  );
+  const lineSource = (!diagramMode && <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 pb-3 text-sm" data-testid="map-line-source">
       <span style={{ color: COMPARISON_COLORS.target }}>━ 내 실제 주행</span>
       {hasReference && <span style={{ color: COMPARISON_COLORS.reference }} title={referenceLineSource?.reference_file}>┄ {lineLabel} · 실제 랩</span>}
       {hasReference && referenceLineSource?.chart_basis === 'AGGREGATE' && <span className="text-xs text-muted-foreground">지도: 대표 실제 랩 · 그래프: 여러 랩 종합 기준</span>}
@@ -467,17 +471,23 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
         초록 = 기준보다 시간을 번 곳 · 빨강 = 잃은 곳 (100m당 {loss.scale.toFixed(2)}초 이상이면 가장 진함)
       </span>}
       {detailLoading && <span role="status" className="text-xs text-muted-foreground">정밀 GPS 경로 불러오는 중…</span>}
-    </div>}
-    {/* Fixed widths throughout: the label of the play button, the clock and the gap change while playing and
-        must not push the other controls around. Buttons on one row, the time bar and readout on the next. */}
+    </div>);
+  return <div className={`coach-map-workspace${compactControls ? ' compact-map-workspace' : ''}`}>
+    {compactControls ? <p id={hintId} className="sr-only">휠로 확대·축소 · 왼쪽 버튼을 누른 채 드래그하여 이동</p> : <>
+      <div className="coach-map-toolbar"><div><h3>{diagramMode ? courseDiagram.displayName : selected ? selected.label || selected.id : '전체 트랙'}</h3><p id={hintId}>휠로 확대·축소 · 왼쪽 버튼을 누른 채 드래그하여 이동</p></div>{mapActions}</div>
+      {backgroundSource}{lineSource}
+    </>}
+    {compactControls && (diagramMode || !span) && <div className="compact-map-actions">{mapActions}</div>}
     {!diagramMode && span && <div className="flex flex-col gap-2 px-4 pb-3 text-sm" data-testid="ghost-controls">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2" data-testid="ghost-button-row">
         <Button variant="outline" size="sm" onClick={playGhost} aria-pressed={playing} data-testid="ghost-play" className="w-44 justify-start">
           {playing ? <Pause data-icon="inline-start" aria-hidden="true" /> : <Play data-icon="inline-start" aria-hidden="true" />}{playing ? '멈춤' : finite(ghost) ? '이어서 재생' : selectedRange ? '이 구간 고스트 재생' : '고스트 재생'}
         </Button>
         <ToggleGroup type="single" size="sm" variant="outline" value={String(ghostSpeed)} onValueChange={value => { if (value) setGhostSpeed(Number(value)); }} aria-label="재생 속도">
           {GHOST_SPEEDS.map(speed => <ToggleGroupItem key={speed} value={String(speed)} aria-label={`${speed}배속`}>{speed}×</ToggleGroupItem>)}
         </ToggleGroup>
+        {compactControls && mapActions}
+        {selectedRange && <span className="text-xs text-muted-foreground">구간 시작에서 동시 출발</span>}
         {finite(ghost) && <>
           <Button variant="outline" size="sm" aria-pressed={follow} onClick={() => setFollow(value => !value)} className="w-28">{follow ? '따라가기 끄기' : '따라가기'}</Button>
           <Button variant="outline" size="sm" onClick={() => { setPlaying(false); showGhost(null); }}>고스트 끄기</Button>
@@ -488,10 +498,11 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
         <input type="range" aria-label="고스트 시간" data-testid="ghost-time" className="min-w-0 flex-1" min={span[0]} max={span[1]} step=".05" value={ghost}
           onChange={event => { setPlaying(false); showGhost(Number(event.target.value)); }} />
         <span className="w-64 shrink-0 whitespace-nowrap font-mono text-xs tabular-nums" data-testid="ghost-readout">
-          {clock(ghost)}{finite(ghostGap) && ` · ${Math.abs(ghostGap) < .005 ? '같음' : ghostGap > 0 ? `기준보다 ${ghostGap.toFixed(2)}초 느림` : `기준보다 ${(-ghostGap).toFixed(2)}초 빠름`}`}
+          {selectedRange ? '구간 ' : ''}{clock(ghost)}{finite(ghostGap) && ` · ${Math.abs(ghostGap) < .005 ? '같음' : ghostGap > 0 ? `기준보다 ${ghostGap.toFixed(2)}초 느림` : `기준보다 ${(-ghostGap).toFixed(2)}초 빠름`}`}
         </span>
       </div>}
     </div>}
+
     {diagramMode && failedDiagram === courseDiagram.assets.active && <Alert className="mb-3"><AlertDescription>공식 코스 지도를 불러오지 못했습니다. 주행 비교에서 GPS 라인을 확인하세요.</AlertDescription></Alert>}
     {!diagramMode && !hasReference && !detailLoading && <Alert className="mb-3" data-testid="map-reference-unavailable"><AlertDescription>이 구간에 비교 가능한 기준 GPS 좌표가 없습니다. 기준 라인을 표시할 수 없습니다.</AlertDescription></Alert>}
     <div className="relative">
@@ -529,5 +540,6 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
       <svg width={scaleMeters / metersPerUnit / unit + 2} height="6" className="block" aria-hidden="true"><path d={`M1 1 V5 H${scaleMeters / metersPerUnit / unit + 1} V1`} fill="none" stroke={COMPARISON_COLORS.cursor} strokeWidth="2" /></svg>
     </div>}
     </div>
+    {compactControls && <div className="compact-map-footer">{backgroundSource}<details className="compact-map-info"><summary>지도 설명·색상 안내</summary>{lineSource}<p>실세계 항공사진은 촬영 시점에 따라 iRacing 코스 모델과 다를 수 있습니다. GPS는 관측된 주행선이며 공식 도로 경계가 아닙니다. 휠로 확대하고 좌클릭 드래그로 이동하세요.</p></details></div>}
   </div>;
 }

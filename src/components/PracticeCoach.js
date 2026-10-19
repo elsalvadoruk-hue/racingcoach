@@ -42,7 +42,7 @@ function InputChange({ row, target }) {
 }
 
 export default function PracticeCoach({ apiBase, filename, practice, coach, visualizations, trackLength, corners = [], loadWindow, referenceLabel,
-  externalCorners = [], externalLoadWindow, externalLabel, focusSets, garage61Available = false, onUseGarage61 }) {
+  externalCorners = [], externalLoadWindow, externalLabel, focusSets, garage61Available = false, onUseGarage61, onPracticeChange }) {
   const [view, setView] = useState(practice);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -70,11 +70,14 @@ export default function PracticeCoach({ apiBase, filename, practice, coach, visu
   };
   const start = async () => {
     const data = await call('/api/practice/start', focusSets ? { filename, focus_index: choice, source: pickedSource } : { filename, focus_index: choice });
-    if (data) setView(data.practice);
+    if (data) { setView(data.practice); onPracticeChange?.(data.practice); }
   };
   const close = async (status) => {
     const data = await call(`/api/practice/${view.active.id}/close`, { status });
-    if (data) setView({ active: null, check: null, history: data.history });
+    if (data) {
+      const next = { active: null, check: null, history: data.history };
+      setView(next); onPracticeChange?.(next);
+    }
   };
 
   const active = view?.active;

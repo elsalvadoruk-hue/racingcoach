@@ -3,28 +3,31 @@ import App from './App';
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, '', '/');
   Element.prototype.scrollIntoView = jest.fn();
   global.EventSource = class { close() {} };
   global.fetch = jest.fn(async (url) => ({
     ok: true,
     json: async () => url.endsWith('/api/files') ? { files: [] }
+      : url.includes('/api/overlay') ? { enabled: false, available: false, settings: {}, rows: [], auto_show: false, voices: {} }
+      : url.endsWith('/api/settings') ? { version: '1.2.0', settings: { telemetry_dirs: [] }, google: {}, garage61: {}, audio: { radio_clips: 0, spotter_clips: 0 }, telemetry_folders: [] }
       : url.includes('/api/memory/sessions') ? { sessions: [] }
       : url.endsWith('/api/status') ? { telemetry: null, ai_enabled: false }
       : { enabled: true, counts: { sessions: 0 } },
   }));
 });
 
-test('the top hover-help switch restores its saved state after remount', async () => {
+test('the hover-help preference survives the desktop migration and remount', async () => {
   const view = render(<App />);
   await screen.findByRole('heading', { name: '분석할 주행을 선택하세요.' });
+  fireEvent.click(screen.getByRole('button', { name: '설정', exact: true }));
   const toggle = screen.getByRole('switch', { name: '마우스 오버 설명' });
   expect(toggle).toBeChecked();
   fireEvent.click(toggle);
   expect(toggle).not.toBeChecked();
   view.unmount();
   render(<App />);
-  await screen.findByRole('heading', { name: '분석할 주행을 선택하세요.' });
-  expect(screen.getByRole('switch', { name: '마우스 오버 설명' })).not.toBeChecked();
+  expect(await screen.findByRole('switch', { name: '마우스 오버 설명' })).not.toBeChecked();
 });
 
 afterEach(() => {
@@ -41,14 +44,14 @@ test('an empty telemetry folder renders an explanation instead of staying in loa
 test('a disconnected backend exposes its failure and leaves the app usable', async () => {
   global.fetch.mockRejectedValue(new Error('Backend unavailable for test'));
   render(<App />);
-  expect(await screen.findByText('Backend unavailable for test')).toBeInTheDocument();
+  expect((await screen.findAllByText('Backend unavailable for test')).length).toBeGreaterThan(0);
   expect(screen.getByRole('heading', { name: 'iRacing 주행 코치' })).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '처음 사용 가이드', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: '사용 가이드', exact: true }));
   expect(screen.getByRole('article', { name: '사용 매뉴얼' })).toBeVisible();
   expect(screen.getByRole('heading', { name: '5. 변경 전 A → 변경 후 B 실험하기' })).toBeVisible();
   expect(screen.getByRole('button', { name: '증상 입력 화면 열기' })).toBeDisabled();
-  fireEvent.click(screen.getByRole('button', { name: '연결 상태 확인' }));
-  expect(screen.getByRole('heading', { name: '연결과 데이터 상태' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: '설정', exact: true }));
+  expect(screen.getByText('설치 설정')).toBeVisible();
 });
 
 test('manual opens with an empty telemetry folder and can return to the starting screen', async () => {

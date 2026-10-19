@@ -7,6 +7,38 @@ const points = Array.from({ length: 101 }, (_, i) => ({ distance_pct: i / 100, x
 const corner = { id: 'C17', label: '자동 구간 17', entry_pct: .45, exit_pct: .55, apex_pct: .5 };
 const camera = () => screen.getByTestId('comparison-map').getAttribute('viewBox').split(' ').map(Number);
 
+test('segment ghosts discard earlier lap deficits, keep local pace and reset for an equal-duration different segment', () => {
+  const target = points.map(p => ({ ...p, time_s: 100 * p.distance_pct + 35 }));
+  const reference = points.map(p => ({ ...p, time_s: 98 * p.distance_pct }));
+  const props = { projected: target, referenceProjected: reference, corners: [corner], selected: corner, onSelect: jest.fn(), onHover: jest.fn() };
+  const { rerender } = render(<CornerMap {...props} selectedRange={[.4, .6]} />);
+  fireEvent.click(screen.getByTestId('ghost-play'));
+  expect(screen.getByTestId('ghost-time')).toHaveAttribute('min', '0');
+  expect(Number(screen.getByTestId('ghost-target').getAttribute('cx'))).toBeCloseTo(200);
+  expect(Number(screen.getByTestId('ghost-reference').getAttribute('cx'))).toBeCloseTo(200);
+  fireEvent.change(screen.getByTestId('ghost-time'), { target: { value: '10' } });
+  expect(Number(screen.getByTestId('ghost-target').getAttribute('cx'))).toBeCloseTo(250);
+  expect(Number(screen.getByTestId('ghost-reference').getAttribute('cx'))).toBeGreaterThan(250);
+  expect(screen.getByTestId('ghost-readout')).toHaveTextContent('기준보다 0.20초 느림');
+  rerender(<CornerMap {...props} selectedRange={[.6, .8]} />);
+  expect(screen.queryByTestId('ghost-target')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByTestId('ghost-play'));
+  expect(Number(screen.getByTestId('ghost-target').getAttribute('cx'))).toBeCloseTo(300);
+  expect(Number(screen.getByTestId('ghost-reference').getAttribute('cx'))).toBeCloseTo(300);
+});
+
+test('optional compact controls join playback and map actions, retain visible imagery credit and move explanations below the map', () => {
+  const timed = points.map(point => ({ ...point, time_s: point.distance_pct * 100 }));
+  render(<CornerMap projected={timed} referenceProjected={timed} geographic geographicMetersPerUnit={1} corners={[corner]} selected={corner} selectedRange={[.4, .6]} onSelect={jest.fn()} onHover={jest.fn()} compactControls />);
+  const zoom = screen.getByRole('button', { name: '지도 확대' });
+  expect(zoom.closest('[data-testid="ghost-button-row"]')).toContainElement(screen.getByTestId('ghost-play'));
+  const source = screen.getByTestId('map-background-source');
+  expect(source.closest('.compact-map-footer')).not.toBeNull();
+  expect(source).toHaveTextContent('Esri');
+  expect(screen.getByTestId('map-line-source').closest('details')).not.toHaveAttribute('open');
+  const before = camera(); fireEvent.click(zoom); expect(camera()).not.toEqual(before);
+});
+
 test('global imagery failure preserves both actual GPS lines and can be removed without changing the camera', () => {
   render(<CornerMap projected={points} referenceProjected={points.map(p => ({ ...p, y: p.y + 10 }))} geographic geographicMetersPerUnit={1} corners={[corner]} selected={corner} selectedRange={[.4, .6]} onSelect={jest.fn()} onHover={jest.fn()} />);
   const tileImages = screen.getByTestId('map-geographic-background').querySelectorAll('image');
@@ -81,7 +113,7 @@ test('fits both actual lines and never draws across reference GPS holes', () => 
   const reference = points.map((point, index) => ({ ...point, y: point.y + 80, breakBefore: index === 51 }));
   render(<CornerMap projected={points} referenceProjected={reference} corners={[corner]} selected={corner} selectedRange={[.4, .6]} activePct={.5} onSelect={jest.fn()} onHover={jest.fn()} />);
   const [x, y, width, height] = camera();
-  [...points, ...reference].filter(p => p.distance_pct >= .45 && p.distance_pct <= .55).forEach(p => {
+  [...points, ...reference].filter(p => p.distance_pct >= .4 && p.distance_pct <= .6).forEach(p => {
     expect(p.x).toBeGreaterThanOrEqual(x);
     expect(p.x).toBeLessThanOrEqual(x + width);
     expect(p.y).toBeGreaterThanOrEqual(y);

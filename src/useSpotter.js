@@ -114,7 +114,7 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
     const event = { id: `${state.current.run_id || 'local'}:overlap:${Date.now()}:${key}`, run_id: state.current.run_id, key, text: selected?.text };
     const status = (value, reason) => { logEvent(event, value, reason); onStatus?.(value, reason); };
     if (audio && !settings.muted && settings.volume > 0) {
-      try { return await settings.play(audio, 'audio/mpeg', { priority: 3, valid, onStatus: status }); }
+      try { return await settings.play(audio, 'audio/mpeg', { priority: 3, channel: 'spotter', valid, onStatus: status }); }
       catch { status('failed', 'playback_error'); return false; }
     }
     status(audio ? 'muted' : 'failed', audio ? 'volume_or_mute' : 'missing_clip');
@@ -200,9 +200,10 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
       const acknowledge = () => fetch(`${apiBase}/api/live-coach/spotter/radio/${encodeURIComponent(event.id)}/ack`, { method: 'POST' }).catch(() => {});
       let began = false;
       const started = silent || await output.current.play(audio, mime, {
-        priority: event.priority, interrupt: event.priority >= 2,
-        // The speed setting is for the race; the formation lap briefing keeps its unhurried pace.
+        channel: event.engineer === 'spotter' ? 'spotter' : 'pitwall',
+        // Keep the formation briefing at the pace chosen by listening.
         rate: event.key === 'formation_brief' ? DEFAULT_RATE : undefined,
+        priority: event.priority, interrupt: event.priority >= 2,
         valid: () => valid() && (event.priority >= 2 || quietFor(event)),
         workloadValid: event.key.startsWith('pit_box_') || event.key.startsWith('traffic_') ? valid : event.priority < 2 ? () => workloadFor(event) && !state.current.occupied
           && Date.now() - lastFrame.current < 600 : undefined,

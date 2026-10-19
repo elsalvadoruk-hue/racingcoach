@@ -3,7 +3,6 @@ from __future__ import annotations
 from math import isfinite
 from time import monotonic
 from tkinter import font as tkfont
-from PIL import ImageTk
 from overlay_gear import gear_display
 if __package__:
     from .overlay_theme import COLORS
@@ -69,14 +68,13 @@ class OverlayRendering:
         c = self.canvas
         c.delete("all")
         self.background_canvas.delete("all")
-        self.trace_item = None
-        self.trace_images = []
+        self.native.clear_image()
+        self.trace_ready = False
         self.trace_labels = {}
         self.gear_item = None
         self.card_ticket = None
         self.notice_ticket = None
         self.celebration_item = None
-        self.celebration_images = []
         if self.display_mode == 'live':
             practice = self.live_view.get('practice') or {}
             self.live_labels = {
@@ -262,9 +260,16 @@ class OverlayRendering:
         self.draw()
 
     def cancel_celebration(self):
+        # Live packets also call this when no celebration is active.  The
+        # shared image surface then contains the graph: hiding it would flash
+        # the whole graph off and on at the telemetry update rate.
+        if self.celebration_item is not None:
+            self.native.clear_image()
+            self.canvas.delete('celebration')
+            self.canvas.itemconfigure('all', state='normal')
+            self.background_canvas.itemconfigure('all', state='normal')
         self.celebration_started = None
         self.celebration_item = None
-        self.celebration_images = []
 
     def preview_celebration(self):
         self.autoplay.set(False)
@@ -288,23 +293,15 @@ class OverlayRendering:
         if self.celebration_item is None:
             self.canvas.itemconfigure("all", state="hidden")
             self.background_canvas.itemconfigure("all", state="hidden")
-            self.celebration_images = [ImageTk.PhotoImage(frame, master=self.root) for _ in range(2)]
-            self.celebration_front = 0
-            self.celebration_item = self.canvas.create_image(
-                0, 0, image=self.celebration_images[0], anchor="nw", tags=("celebration",))
-            self.text(195, 71, "5/5 달성!", size=38, color="success", bold=True,
-                      anchor="center", tags=("celebration",))
+            self.celebration_item = self.text(195, 71, "5/5 달성!", size=38, color="success", bold=True,
+                                              anchor="center", tags=("celebration",))
             title = self.live_celebration_title if self.display_mode == 'live' else GOAL_BY_KEY[self.goal_key.get()].title
             self.text(195, 106, self.fit_text(title, 360, 12, True), size=12,
                       color="text", bold=True, anchor="center", tags=("celebration",))
-        else:
-            back = 1-self.celebration_front
-            self.celebration_images[back].paste(frame)
-            self.canvas.itemconfigure(self.celebration_item, image=self.celebration_images[back])
-            self.celebration_front = back
+        self.native.present_image(self.root, frame, (0, 0), self.content_opacity.get(), self.hud_visible)
         # Fade text with the particles without changing the user's layer opacity.
         fade = max(0, min(1, (self.celebration_renderer.DURATION-elapsed)/0.55))
-        for item, color in zip(self.canvas.find_withtag("celebration")[1:], ("success", "text")):
+        for item, color in zip(self.canvas.find_withtag("celebration"), ("success", "text")):
             rgb = bytes.fromhex(COLORS[color].lstrip("#"))
             key = bytes.fromhex(COLORS["transparent"].lstrip("#"))
             fill = "#"+"".join(f"{round(a*fade+b*(1-fade)):02x}" for a, b in zip(rgb, key))
@@ -324,7 +321,7 @@ class OverlayRendering:
                   size=10, color="warning" if missing else "muted")
 
     def draw_trace(self, now=None):
-        """Swap complete graph frames without clearing visible canvas items."""
+        """Present complete RGBA frames without color-key edge artifacts."""
         if self.display_mode == 'live' and (self.live_view.get('practice') or {}).get('phase') == 'RESULT':
             return
         basic = self.display_mode == 'live' and not self.live_view.get('practice')
@@ -335,7 +332,7 @@ class OverlayRendering:
         position = 40 if self.scene.get() == "before" else goal.start_m + elapsed*25
         if self.display_mode == 'live':
             ticket = (self.live_generation, self.scale_x, self.scale_y)
-            if self.trace_item is not None and getattr(self, 'live_drawn', None) == ticket:
+            if self.trace_ready and getattr(self, 'live_drawn', None) == ticket:
                 return
             self.live_drawn = ticket
             comparison = self.live_view.get('comparison')
@@ -349,22 +346,15 @@ class OverlayRendering:
         else:
             frame, live = self.trace_renderer.frame(goal, position, self.scale_x, self.scale_y, COLORS)
         tag = ("trace",)
-        if self.trace_item is None:
-            self.trace_images = [ImageTk.PhotoImage(frame, master=self.root) for _ in range(2)]
-            self.trace_front = 0
-            self.trace_item = self.canvas.create_image(
-                self.x(bounds[0]), self.y(bounds[1]),
-                image=self.trace_images[0], anchor="nw", tags=tag)
+        if not self.trace_ready:
+            self.trace_ready = True
             self.rect(6, top, 288 if basic else 336, height, "surface", tags=tag, background=True)
             for x in ((304, 324) if basic else (352, 372)):
                 self.rect(x, top, 10, height, "surface", tags=tag, background=True)
             if self.display_mode != 'live':
                 self.text(286, 27, "지금", size=8, color="muted", anchor="n", tags=tag)
-        else:
-            back = 1-self.trace_front
-            self.trace_images[back].paste(frame)
-            self.canvas.itemconfigure(self.trace_item, image=self.trace_images[back])
-            self.trace_front = back
+        self.native.present_image(self.root, frame, (self.x(bounds[0]), self.y(bounds[1])),
+                                  self.content_opacity.get(), self.hud_visible)
         if basic:
             self.draw_gear()
             return

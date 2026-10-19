@@ -31,7 +31,7 @@ test('only explicit enable prepares clips and starts a dedicated websocket witho
   expect(result.current.voice).toBe('Fenrir');
   send(sockets[0], frame(2, 'left'));
   expect(audio.setPriorityGate).toHaveBeenCalledWith(true);
-  expect(audio.play).toHaveBeenCalledWith('left', 'audio/mpeg', expect.objectContaining({ priority: 3 }));
+  expect(audio.play).toHaveBeenCalledWith('left', 'audio/mpeg', expect.objectContaining({ priority: 3, channel: 'spotter' }));
   const valid = audio.play.mock.calls[0][2].valid;
   expect(valid()).toBe(true);
   send(sockets[0], frame(3, 'right', { serial: 2, events: [{ serial: 2, key: 'right', state: 3, run_id: 'run', expires_in_ms: 500 }] }));
@@ -148,7 +148,7 @@ test('prepared routine speech waits until the hold allows a start while urgent s
   expect(audio.play.mock.calls[0][2].windowSeconds).toBeUndefined();
   expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/render'))).toHaveLength(1);
   send(sockets[0], frame(2, 'left', { radio: { connected: true, quiet: false, speech_window_s: 0 } }));
-  expect(audio.play).toHaveBeenCalledWith('left', 'audio/mpeg', expect.objectContaining({ priority: 3 }));
+  expect(audio.play).toHaveBeenCalledWith('left', 'audio/mpeg', expect.objectContaining({ priority: 3, channel: 'spotter' }));
 });
 
 test('lap audio prepares before a short driving window and synthesis is reused once', async () => {
@@ -448,4 +448,15 @@ test('closing the tab while the spotter is on asks first, and not once it is off
   expect(leave()).toBe(true);
   await enable(result);
   expect(leave()).toBe(false);
+});
+
+
+test.each([['lap_time', 'spotter', 'spotter', undefined], ['repair_detail', 'race', 'pitwall', undefined], ['drill_ready', 'coach', 'pitwall', undefined], ['pit_soon', 'strategy', 'pitwall', undefined], ['formation_brief', 'spotter', 'spotter', 1.15]])('radio %s selects the speaker channel and preserves formation speed', async (key, engineer, channel, rate) => {
+  const event = radioEvent(key, { engineer, priority: 2 });
+  global.fetch = jest.fn(async url => ({ ok: true, json: async () =>
+    url.endsWith('/render') ? { event, audio_parts: ['first', 'second'] } : manifest }));
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  send(sockets[0], radioFrame([event]));
+  await waitFor(() => expect(audio.play).toHaveBeenCalledWith(['first', 'second'], 'audio/mpeg', expect.objectContaining({ channel, rate })));
 });

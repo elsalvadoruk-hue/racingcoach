@@ -1,5 +1,6 @@
 """Changing measurements must reach an already visible card without restarting it."""
 import unittest
+from types import MethodType
 from time import monotonic
 from unittest.mock import Mock
 
@@ -42,6 +43,31 @@ class CardRenderingTests(unittest.TestCase):
 
 
 class LiveCadenceTests(unittest.TestCase):
+    def test_live_packets_keep_the_graph_visible_when_no_celebration_is_active(self):
+        app = Mock(
+            display_mode='live', hud_visible=True, live_generation=4,
+            live_view={'run_id': 'race'}, celebration_started=None, celebration_item=None,
+            live_structure=(False, None, False, None, (), None, 'race', None),
+        )
+        app.cancel_celebration = MethodType(OverlaySample.cancel_celebration, app)
+        for index in range(3):
+            OverlaySample.display(app, {'mode': 'live', 'visible': True, 'run_id': 'race',
+                'points': [{'session_time': index/30, 'throttle': .8, 'brake': 0.}]})
+        app.native.clear_image.assert_not_called()
+        app.draw.assert_not_called()
+        self.assertEqual(app.draw_trace.call_count, 3)
+
+    def test_cancelling_a_rendered_celebration_restores_labels_and_clears_it_once(self):
+        app = Mock(celebration_started=12., celebration_item=42)
+        OverlaySample.cancel_celebration(app)
+        OverlaySample.cancel_celebration(app)
+        app.native.clear_image.assert_called_once_with()
+        app.canvas.delete.assert_called_once_with('celebration')
+        app.canvas.itemconfigure.assert_called_once_with('all', state='normal')
+        app.background_canvas.itemconfigure.assert_called_once_with('all', state='normal')
+        self.assertIsNone(app.celebration_started)
+        self.assertIsNone(app.celebration_item)
+
     def test_notice_change_keeps_existing_graph_items_and_fast_paint_path(self):
         app = Mock(
             display_mode='live', hud_visible=True, live_generation=4,

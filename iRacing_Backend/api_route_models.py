@@ -24,7 +24,7 @@ class PracticeStartRequest(BaseModel):
     filename: str
     focus_index: int = Field(0, ge=0, le=10)
     # which list the focus came from: the driver's own laps or the Garage61 fast laps (None = the coach's list)
-    source: Optional[Literal["PERSONAL", "GARAGE61"]] = None
+    source: Optional[Literal["PERSONAL", "GARAGE61", "WORKSPACE"]] = None
 
 
 class DrillStartRequest(BaseModel):

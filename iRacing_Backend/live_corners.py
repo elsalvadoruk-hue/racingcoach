@@ -226,8 +226,8 @@ class LiveCornerCoach:
 
 
 def call_seconds(text):
-    """How long a corner call takes at the 1.15 playback rate. Measured clips: 31 letters 4.7 to 6.4 s, 23 letters 3.8 to 4.2 s."""
-    return len(''.join((text or '').split())) / 5.5 + 1.
+    """Budget at 1.0x; the original estimate was measured with clips played at 1.15x."""
+    return (len(''.join((text or '').split())) / 5.5 + 1.) * 1.15
 
 
 def lap_answer(view):

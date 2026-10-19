@@ -1,4 +1,4 @@
-// Ghost replay on the map: where each lap's car was at the same time since its lap start.
+// Ghost replay uses measured passage times. Selected segments have independent entry clocks.
 // The map points carry time_s (seconds since the start line, from the analysis grid). A lap's timeline is
 // its points in order of time, kept only where time keeps rising; positions between points are
 // interpolated, and nothing is drawn outside what was observed.
@@ -6,23 +6,26 @@ const finite = Number.isFinite;
 
 export function timeline(points) {
   const line = [];
+  let missing = false;
   for (const point of Array.isArray(points) ? points : []) {
-    if (!finite(point.time_s) || !finite(point.x) || !finite(point.y) || !finite(point.distance_pct)) continue;
-    if (line.length && point.time_s <= line[line.length - 1].t) continue;
-    line.push({ t: point.time_s, x: point.x, y: point.y, pct: point.distance_pct, gapBefore: Boolean(point.breakBefore) });
+    if (!finite(point.time_s) || !finite(point.x) || !finite(point.y) || !finite(point.distance_pct)
+      || (line.length && (point.time_s <= line[line.length - 1].t || point.distance_pct < line[line.length - 1].pct))) { missing = true; continue; }
+    line.push({ t: point.time_s, x: point.x, y: point.y, pct: point.distance_pct, gapBefore: Boolean(point.breakBefore || missing) });
+    missing = false;
   }
   return line;
 }
 
 function search(line, key, value) {
   let lo = 0, hi = line.length - 1;
-  if (hi < 1 || value < line[0][key] || value > line[hi][key]) return null;
+  if (hi < 1 || !finite(value) || value < line[0][key] || value > line[hi][key]) return null;
   while (hi - lo > 1) {
     const mid = (lo + hi) >> 1;
     if (line[mid][key] <= value) lo = mid; else hi = mid;
   }
   const a = line[lo], b = line[hi];
   const f = b[key] === a[key] ? 0 : (value - a[key]) / (b[key] - a[key]);
+  if (b.gapBefore && f > 0 && f < 1) return null;
   return { a, b, f };
 }
 
@@ -54,10 +57,39 @@ export function replaySpan(target, reference, range) {
   return span[1] > span[0] ? span : null;
 }
 
+// Both cars enter the same physical segment at elapsed zero. Keep their actual durations;
+// the faster car waits at the end. Whole-lap playback retains the lap's observed clock.
+export function replayPair(target, reference, range) {
+  if (target.length < 2 || reference.length < 2) return null;
+  if (!range) return { target, reference, span: replaySpan(target, reference, null) };
+  if (!range.every(finite) || range[1] <= range[0]) return null;
+  const start = Math.max(range[0], target[0].pct, reference[0].pct);
+  const end = Math.min(range[1], target[target.length - 1].pct, reference[reference.length - 1].pct);
+  if (end <= start) return null;
+  const clip = line => {
+    const entry = timeAtPct(line, start), exit = timeAtPct(line, end);
+    if (!finite(entry) || !finite(exit) || exit <= entry) return null;
+    const between = line.filter(p => p.pct > start && p.pct < end);
+    if (between.some(p => p.gapBefore) || line.some(p => p.gapBefore && p.pct > start && p.pct <= end)) return null;
+    return [{ ...positionAt(line, entry), t: 0 },
+      ...between.map(p => ({ ...p, t: p.t - entry })),
+      { ...positionAt(line, exit), t: exit - entry }];
+  };
+  const mine = clip(target), theirs = clip(reference);
+  return mine && theirs ? { target: mine, reference: theirs,
+    span: [0, Math.max(mine[mine.length - 1].t, theirs[theirs.length - 1].t)] } : null;
+}
+
+export function heldPositionAt(line, t) {
+  return line.length < 2 || !finite(t) ? null
+    : positionAt(line, Math.max(line[0].t, Math.min(line[line.length - 1].t, t)));
+}
+
 // Seconds the player is behind (+) or ahead (−) of the reference at the player's current lap position.
 export function gapAt(target, reference, t) {
-  const here = positionAt(target, t);
+  const elapsed = target.length ? Math.min(t, target[target.length - 1].t) : t;
+  const here = positionAt(target, elapsed);
   if (!here) return null;
   const theirs = timeAtPct(reference, here.pct);
-  return finite(theirs) ? t - theirs : null;
+  return finite(theirs) ? elapsed - theirs : null;
 }

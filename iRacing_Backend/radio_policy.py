@@ -16,8 +16,8 @@ def quiet_window(sample, brief=False):
 
 
 def speech_seconds(text):
-    """Conservative Korean speech estimate at the shared 1.15 playback rate."""
-    return max(2., len(''.join((text or '').split())) / 4.5 + 1.)
+    """Budget at the slowest selectable speed (1.0x), including the former 1.15x margin."""
+    return max(2., len(''.join((text or '').split())) / 4.5 + 1.) * 1.15
 
 
 HOLD_DEFAULT_S = 1.

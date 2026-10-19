@@ -20,7 +20,9 @@ export async function requestJson(path, options = {}) {
     payload = null;
   }
   if (!response.ok) {
-    throw new Error(payload?.detail || `HTTP ${response.status}`);
+    const error = new Error(payload?.detail || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return payload;
   } catch (error) {

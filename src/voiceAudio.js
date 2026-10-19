@@ -32,9 +32,10 @@ export function encodeWav(chunks, sampleRate, targetRate = 16000) {
 }
 
 export class VoiceRecorder {
-  async open() {
+  async open(inputDevice = '') {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('Chrome 또는 Edge의 localhost 화면에서 마이크를 사용하세요.');
-    this.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+      ...(inputDevice && inputDevice !== 'default' ? { deviceId: { exact: inputDevice } } : {}) } });
     try {
       const Context = window.AudioContext || window.webkitAudioContext;
       this.context = new Context({ sampleRate: 16000 });
@@ -69,12 +70,13 @@ export class VoiceRecorder {
 // A call cut off for one of these reasons was not the driver's choice: it is said again
 // from the start once the radio is free, if it is still true by then.
 // How fast the voices are played, pitch kept (HTMLAudioElement.playbackRate with preservesPitch). The
-// clips are unchanged, so any speed costs nothing. 1.15 was set by ear and stays for one-sentence calls;
-// calls of several sentences ran long, so for them the driver may go faster (not slower: the server
-// times corner calls and straight lines for clips played at 1.15). Kept here, not in useAudioOutput,
-// which the tests replace whole.
+// clips are unchanged, so any speed costs nothing. Spotter, pit wall and multipart calls
+// have separate absolute settings: roles default to 1.15, multipart calls to 1.30.
+// Formation briefing keeps its fixed 1.15.
+// The server budgets time-sensitive calls at the slowest supported speed (1.0).
 export const DEFAULT_RATE = 1.15;
-export const RATE_MIN = 1.15, RATE_MAX = 1.4;
+export const MULTIPART_DEFAULT_RATE = 1.3;
+export const RATE_MIN = 1, RATE_MAX = 1.4;
 
 export const RESUMABLE = ['preempted', 'nearby_car'];
 export const MAX_RESUMES = 2;

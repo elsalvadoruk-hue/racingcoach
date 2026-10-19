@@ -7,7 +7,7 @@ export const LAP_COLOURS = ['#38bdf8', '#f97316', '#a3e635', '#f472b6', '#facc15
 const DEFAULT_CHANNELS = ['delta', 'speed', 'throttle', 'brake', 'steering'];
 const LANE_HEIGHT = { delta: 90, speed: 150 };
 const LANE_DEFAULT = 70;
-const W = 1000;
+const DEFAULT_WIDTH = 1000;
 const LEFT = 120;
 const RIGHT = 12;
 const MAX_LAPS = 8;
@@ -159,7 +159,7 @@ export function PanBar({ range, onChange }) {
 
 const extraKey = (extra) => (extra.source === 'IBT' ? `ibt:${extra.filename}#${extra.lap}` : `g61:${extra.filename}`);
 
-export default function LapOverlay({ laps = [], corners = [], preferredLaps = [], load, otherFiles = [], references = [], loadLaps }) {
+export default function LapOverlay({ laps = [], corners = [], preferredLaps = [], load, otherFiles = [], references = [], loadLaps, fillHeight = false, readoutGroupSize = 0 }) {
   const complete = useMemo(() => laps.filter((lap) => finite(lap.lap_time_s)), [laps]);
   const [chosen, setChosen] = useState(() => defaultLaps(laps, preferredLaps));
   const [extras, setExtras] = useState([]);
@@ -179,6 +179,7 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
   const [drag, setDrag] = useState(null);
   const [history, setHistory] = useState([]);
   const svgRef = useRef(null);
+  const [chartSize, setChartSize] = useState(null);
   const lapKey = laps.map((lap) => lap.lap_number).join(',');
 
   useEffect(() => { setChosen(defaultLaps(laps, preferredLaps)); setExtras([]); setBaseKey(null); setRange([0, 1]); setFetchRange([0, 1]); setHistory([]); setCorner(''); }, [lapKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -254,19 +255,26 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
   const lapNumbers = (data?.laps || []).map((lap) => lap.key ?? String(lap.lap)).filter((key) => allKeys.includes(key));
   const baseOf = data?.base_key ?? (data?.base_lap != null ? String(data.base_lap) : null);
   const lanes = [];
+  const minimumPlotHeight = shown.length * 56 + 26;
+  const naturalHeight = shown.reduce((sum, channel) => sum + (LANE_HEIGHT[channel.key] || LANE_DEFAULT) + 14, 26);
+  const H = fillHeight && chartSize ? Math.max(minimumPlotHeight, chartSize.height) : Math.max(60, naturalHeight);
+  const W = fillHeight && chartSize ? chartSize.width : DEFAULT_WIDTH;
+  const laneWeight = shown.reduce((sum, channel) => sum + (LANE_HEIGHT[channel.key] || LANE_DEFAULT), 0);
+  const extraHeight = Math.max(0, H - 26 - shown.length * (42 + 14));
   let top = 8;
   shown.forEach((channel) => {
-    const height = LANE_HEIGHT[channel.key] || LANE_DEFAULT;
+    const weight = LANE_HEIGHT[channel.key] || LANE_DEFAULT;
+    const height = fillHeight ? 42 + extraHeight * weight / Math.max(1, laneWeight) : weight;
     const values = lapNumbers.flatMap((key) => (data.series[key]?.[channel.key] || []).slice(i0, i1 + 1)).filter(finite);
     let lo = values.length ? Math.min(...values) : 0;
     let hi = values.length ? Math.max(...values) : 1;
     if (channel.key === 'throttle' || channel.key === 'brake') { lo = 0; hi = 100; }
     if (channel.key === 'delta') { const span = Math.max(Math.abs(lo), Math.abs(hi), 0.05); lo = -span; hi = span; }
+    if (channel.key === 'steering') { const span = Math.max(Math.abs(lo), Math.abs(hi), 1); lo = -span; hi = span; }
     if (hi - lo < 1e-6) { hi = lo + 1; }
     lanes.push({ channel, top, height, lo, hi });
     top += height + 14;
   });
-  const H = Math.max(60, top + 18);
   const span = Math.max(1e-6, range[1] - range[0]);
   const x = (pct) => LEFT + ((pct - range[0]) / span) * (W - LEFT - RIGHT);
   const indexAt = (clientX) => {
@@ -291,6 +299,25 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
   // The mouse wheel over the chart moves the window left and right once zoomed in (the whole lap leaves the
   // page to scroll). A native listener, because React's wheel handler is passive.
   const chartReady = Boolean(data && lanes.length);
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!fillHeight || !svg) return undefined;
+    const measure = () => {
+      const width = svg.clientWidth, height = svg.clientHeight;
+      if (width <= LEFT + RIGHT || height <= 0) return;
+      setChartSize(previous => previous?.width === width && previous?.height === height ? previous : { width, height });
+    };
+    // Match SVG coordinates to the visible pixels so a shallow graph does not
+    // flatten its axis labels or stretch them horizontally on wide monitors.
+    measure();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(measure);
+      observer.observe(svg);
+      return () => observer.disconnect();
+    }
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [fillHeight, chartReady]);
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return undefined;
@@ -324,9 +351,16 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
       <p className="text-sm text-muted-foreground">
         이 파일의 여러 랩을 같은 거리축에 겹쳐 봅니다. 같은 트랙의 다른 주행 파일이나 Garage61 랩도 더할 수 있습니다. 그래프 위에서 마우스를 움직이면 그 지점의 모든 랩 값이 오른쪽 표에 나옵니다. 오른쪽으로 끌면 그 구간이 확대되고, 왼쪽으로 끌면 한 단계 축소됩니다. 확대한 뒤에는 그래프 위에서 마우스 휠을 굴리거나 아래 막대를 끌어 좌우로 옮깁니다. 시간 차이는 기준 랩(★)보다 그 지점까지 몇 초 늦었는지(+)입니다.
       </p>
-      <div className="flex flex-col gap-2">
-        <span className="text-xs font-semibold text-muted-foreground">랩 (최대 {MAX_LAPS}개 · ★ 기준 랩)</span>
-        <div className="flex flex-wrap gap-2">
+      <div className="overlay-lap-picker flex flex-col gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs font-semibold text-muted-foreground">랩 (최대 {MAX_LAPS}개 · ★ 기준 랩)</span>
+          <div className="overlay-selection-summary flex flex-wrap items-center gap-2 text-xs" aria-label="선택한 비교 랩">
+            <span className="text-muted-foreground">선택 {chosen.length}/{MAX_LAPS}{extras.length > 0 ? ` · 외부 ${extras.length}개` : ''}</span>
+            {allKeys.map(key => <span key={key} className="font-mono" style={{ color: colourOf(key) }}>{tagOf(key)}{key === baseOf ? '★' : ''}</span>)}
+            <span className="text-muted-foreground">전체 {complete.length}랩 · 목록에서 스크롤</span>
+          </div>
+        </div>
+        <div className="overlay-lap-list flex flex-wrap gap-2" role="group" aria-label="겹쳐 볼 랩 목록" tabIndex={0}>
           {complete.map((lap) => {
             const on = chosen.includes(lap.lap_number);
             const isBase = on && baseOf === String(lap.lap_number);
@@ -368,6 +402,7 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
         </div>
       </div>
       <AddLaps otherFiles={otherFiles} references={references} loadLaps={loadLaps} onAdd={addExtra} full={extras.length >= MAX_EXTRA} />
+      <div className="overlay-chart-controls flex flex-col gap-4">
       <div className="flex flex-col gap-2">
         <span className="text-xs font-semibold text-muted-foreground">채널</span>
         <div className="flex flex-wrap gap-2">
@@ -389,12 +424,14 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
         {zoomed && <span className="font-mono text-xs text-muted-foreground">{metres(range[0])} ~ {metres(range[1])}</span>}
         {loading && <span className="text-xs text-muted-foreground">불러오는 중…</span>}
       </div>
+      </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
       {!chosen.length && !extras.length && <p className="text-sm text-muted-foreground">겹쳐 볼 랩을 하나 이상 고르세요.</p>}
       {data && lanes.length > 0 && (
         <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_260px]">
           <div className="min-w-0">
-          <svg id="lap-overlay-chart" ref={svgRef} viewBox={`0 0 ${W} ${H}`} className="w-full select-none rounded-lg border border-border bg-muted/20" role="img" aria-label="여러 랩 겹쳐 보기 그래프"
+          <div className="overlay-plot-scroll" data-testid="overlay-plot-scroll">
+          <svg id="lap-overlay-chart" ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio={fillHeight ? 'none' : 'xMidYMid meet'} style={fillHeight ? { minHeight: minimumPlotHeight } : undefined} className="w-full select-none rounded-lg border border-border bg-muted/20" role="img" aria-label="여러 랩 겹쳐 보기 그래프"
             onMouseMove={(event) => { const i = indexAt(event.clientX); setCursor(i); if (drag) setDrag({ ...drag, to: i }); }}
             onMouseLeave={() => { setCursor(null); setDrag(null); }}
             onMouseDown={(event) => { const i = indexAt(event.clientX); if (i != null) setDrag({ from: i, to: i }); }}
@@ -410,8 +447,8 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
                 <text x="6" y={lane.top + 12} fontSize="11" fill="currentColor" className="text-foreground">{lane.channel.label.split(' (')[0]}</text>
                 <text x="6" y={lane.top + 26} fontSize="10" fill="currentColor" className="text-muted-foreground">{formatValue(lane.hi, lane.channel.unit)} {lane.channel.unit}</text>
                 <text x="6" y={lane.top + lane.height - 2} fontSize="10" fill="currentColor" className="text-muted-foreground">{formatValue(lane.lo, lane.channel.unit)}</text>
-                {lane.channel.key === 'delta' && (
-                  <line x1={LEFT} x2={W - RIGHT} y1={lane.top + lane.height / 2} y2={lane.top + lane.height / 2} stroke="currentColor" className="text-border" strokeDasharray="4 4" />
+                {['delta', 'steering'].includes(lane.channel.key) && (
+                  <line data-testid={lane.channel.key === 'steering' ? 'overlay-steering-zero-guide' : undefined} x1={LEFT} x2={W - RIGHT} y1={lane.top + lane.height / 2} y2={lane.top + lane.height / 2} stroke="currentColor" className="text-border" strokeDasharray="4 4" />
                 )}
                 {lapNumbers.map((key) => {
                   const values = data.series[key]?.[lane.channel.key];
@@ -429,24 +466,27 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
             )}
             {cursor != null && <line x1={x(distances[cursor])} x2={x(distances[cursor])} y1={0} y2={H} stroke="currentColor" className="text-foreground/60" />}
           </svg>
+          </div>
           <PanBar range={range} onChange={(next) => { setRange(next); setCorner(''); }} />
           </div>
           <div className="rounded-lg border border-border p-3 text-sm" data-testid="lap-overlay-readout">
             <p className="mb-2 font-mono text-xs text-muted-foreground">{cursor != null ? `커서 ${metres(distances[cursor])}` : '그래프 위에 마우스를 올리세요'}</p>
             {cursor != null && (
-              <table className="w-full font-mono text-xs">
+              <div className="overlay-readout-groups">{Array.from({ length: Math.ceil(lapNumbers.length / (readoutGroupSize || lapNumbers.length)) }, (_, group) => {
+                const groupLaps = lapNumbers.slice(group * (readoutGroupSize || lapNumbers.length), (group + 1) * (readoutGroupSize || lapNumbers.length));
+                return <table key={group} className="w-full font-mono text-xs">
                 <thead>
-                  <tr className="text-muted-foreground"><th className="text-left font-normal">채널</th>{lapNumbers.map((key) => <th key={key} className="text-right font-semibold" style={{ color: colourOf(key) }}>{tagOf(key)}{key === baseOf ? '★' : ''}</th>)}</tr>
+                  <tr className="text-muted-foreground"><th className="text-left font-normal">채널</th>{groupLaps.map((key) => <th key={key} className="text-right font-semibold" style={{ color: colourOf(key) }}>{tagOf(key)}{key === baseOf ? '★' : ''}</th>)}</tr>
                 </thead>
                 <tbody>
                   {lanes.map((lane) => (
                     <tr key={lane.channel.key}>
                       <td className="pr-2 text-muted-foreground">{lane.channel.label.split(' (')[0]}</td>
-                      {lapNumbers.map((key) => <td key={key} className="text-right text-foreground">{formatValue(data.series[key]?.[lane.channel.key]?.[cursor], lane.channel.unit)}</td>)}
+                      {groupLaps.map((key) => <td key={key} className="text-right text-foreground">{formatValue(data.series[key]?.[lane.channel.key]?.[cursor], lane.channel.unit)}</td>)}
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table>; })}</div>
             )}
           </div>
         </div>

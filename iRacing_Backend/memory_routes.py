@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from fastapi import Query
 import asyncio
 from analysis_models import AnalyzeRequest, ExperimentPlanRequest, ExperimentRequest, SessionMode
+from workspace_setup import verify_planned_change
 
 logger = logging.getLogger("iRacingSetupTuner")
 
@@ -138,6 +139,8 @@ def register_routes(app, services: MemoryRoutesServices):
             driver_feedback=payload.driver_feedback.model_dump() if payload.driver_feedback else None,
             setup_evidence=setup_evidence,
         )
+        if payload.planned_change is not None:
+            verify_planned_change(comparison, payload.planned_change)
         comparison["trial_id"] = payload.trial_id
         # Every valid lap of each run, for the distribution view (RaceStudio 3's box plots across sessions).
         comparison["lap_distribution"] = {

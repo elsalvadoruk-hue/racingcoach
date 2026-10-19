@@ -88,13 +88,12 @@ export function LongTermMemoryPanel({ memoryStatus, sessions = [], currentMemory
         )}
       </div>
 
-      <div>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-muted-foreground">최근 DB 저장 세션</h4>
-          <span className="text-sm font-mono text-muted-foreground">최근 {sessions.length}개</span>
-        </div>
-        <HistoryPanel history={sessions} />
-      </div>
+      <details>
+        <summary className="cursor-pointer text-sm font-semibold text-muted-foreground">
+          최근 DB 저장 세션 <span className="ml-3 font-mono font-normal">최근 {sessions.length}개</span>
+        </summary>
+        <div className="mt-3"><HistoryPanel history={sessions} /></div>
+      </details>
     </div>
   );
 }

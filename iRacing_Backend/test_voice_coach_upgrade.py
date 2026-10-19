@@ -150,6 +150,11 @@ class LiveCornerTests(unittest.TestCase):
         short_pct, short = first_call([40., 4.2])
         self.assertEqual(short['fits'], 1)
         self.assertGreater(short_pct, pct)
+        # The longest observed 31-letter clip took 6.4s at 1.15x. At 1.0x it needs 7.36s.
+        from live_corners import call_seconds
+        _, normal = first_call([call_seconds("가" * 31)])
+        budget = normal["margin_pct"] * LENGTH / 60. * .9
+        self.assertGreaterEqual(budget, 6.4 * 1.15 + .5)
         # Neither fits: nothing is said.
         coach = self.coach()
         run = session(coach)

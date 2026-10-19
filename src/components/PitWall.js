@@ -29,18 +29,8 @@ export function readPitPreferences() {
 }
 const value = (number, unit = '', digits = 1) => number == null ? '수집 중' : `${Number(number).toFixed(digits)}${unit}`;
 
-export default function PitWall({ enabled, onToggle, preferences, onChange, view, engineers, onTestVoice, busy, speaking }) {
-  const target = preferences.fuel_save_mode === 'off' ? '피드백 꺼짐' : view?.fuel_save_target_l_per_lap == null
-    ? view?.fuel_l_per_lap != null && view?.remaining_laps != null ? view?.fuel_save_feasible === false ? '절약으로는 불가 · 급유 필요' : '현재 계산상 절약 불필요' : '완주 거리·소비량 수집 중'
-    : value(view.fuel_save_target_l_per_lap, 'L/랩', 2);
-  return <Card asChild><section aria-label="레이스 피트월" className="coach-panel">
-    <LiveHeader title="레이스 피트월" topic="pitWall" icon={RadioTower} description="주행 코치 · 레이스 엔지니어 · 전략 엔지니어"
-      action={<Button variant={enabled ? 'outline' : 'default'} aria-pressed={enabled} onClick={onToggle}>{enabled ? <Square data-icon="inline-start" /> : <Play data-icon="inline-start" />}{enabled ? '자동 보고 중지' : '자동 보고 시작'}</Button>} />
-    <p role="status" className="text-sm text-muted-foreground">{enabled && preferences.level !== 'off' ? speaking ? '엔지니어 발화 중 · 다음 보고는 순서대로 전달' : view?.active ? '자동 보고 활성 · 상황 변화를 확인 중' : '자동 보고 활성 · 진행 중인 Race 세션 대기' : '자동 보고 꺼짐 · 음성 또는 텍스트 질문은 사용 가능'}</p>
-    <div className="coach-pit-metrics">
-      {[['클래스 순위', value(view?.class_position, '위', 0)], ['예상 남은 거리', view?.remaining_laps == null ? '수집 중' : `${Number(view.remaining_laps).toFixed(1)}랩${view?.finish_may_extend ? ' · 한 랩 늘 수 있음' : view?.finish_may_shorten ? ' · 한 랩 줄 수 있음' : ''}`], ['다음 급유 · 여유분 포함', view?.fuel_next_stop_full ? `가득${view?.stops_needed > 1 ? ` · 급유 약 ${view.stops_needed}번` : ''}` : value(view?.fuel_next_stop_l ?? view?.fuel_to_add_l, 'L')], ['피트 복귀 예상', view?.rejoin_class_position_estimate == null ? '조건 확인 필요' : `약 ${view.rejoin_class_position_estimate}위`]].map(([label, content]) => <LiveMetric key={label} label={label} value={content} />)}
-    </div>
-    <Separator className="my-6" />
+export function PitWallSettings({ preferences, onChange, view }) {
+  return (
     <FieldSet><FieldLegend>보고와 연료 전략</FieldLegend>
       <FieldGroup className="coach-live-fields">
         <Field><FieldLabel htmlFor="wall-level">자동 보고 범위</FieldLabel><NativeSelect id="wall-level" aria-label="자동 보고 범위" value={preferences.level} onChange={e => onChange({ level: e.target.value })}><option value="important">중요한 것만</option><option value="all">일반 보고 포함</option><option value="off">질문에만 답변</option></NativeSelect></Field>
@@ -54,6 +44,22 @@ export default function PitWall({ enabled, onToggle, preferences, onChange, view
       </FieldGroup>
       <p className="mt-3 text-xs leading-relaxed text-muted-foreground">켜면 제동·조향 중이거나 설정한 초 안에 제동·조향이 다가올 때 새 안내를 시작하지 않습니다. 이미 말하고 있는 안내는 끊지 않습니다. 좌우 차량·깃발 같은 급한 호출은 이 설정과 관계없이 바로 나옵니다. 다가오는 제동 지점은 깨끗한 랩 2개를 달린 뒤부터 알 수 있습니다.</p>
     </FieldSet>
+  );
+}
+
+export default function PitWall({ enabled, onToggle, preferences, onChange, view, engineers, onTestVoice, busy, speaking }) {
+  const target = preferences.fuel_save_mode === 'off' ? '피드백 꺼짐' : view?.fuel_save_target_l_per_lap == null
+    ? view?.fuel_l_per_lap != null && view?.remaining_laps != null ? view?.fuel_save_feasible === false ? '절약으로는 불가 · 급유 필요' : '현재 계산상 절약 불필요' : '완주 거리·소비량 수집 중'
+    : value(view.fuel_save_target_l_per_lap, 'L/랩', 2);
+  return <Card asChild><section aria-label="레이스 피트월" className="coach-panel">
+    <LiveHeader title="레이스 피트월" topic="pitWall" icon={RadioTower} description="주행 코치 · 레이스 엔지니어 · 전략 엔지니어"
+      action={<Button variant={enabled ? 'outline' : 'default'} aria-pressed={enabled} onClick={onToggle}>{enabled ? <Square data-icon="inline-start" /> : <Play data-icon="inline-start" />}{enabled ? '자동 보고 중지' : '자동 보고 시작'}</Button>} />
+    <p role="status" className="text-sm text-muted-foreground">{enabled && preferences.level !== 'off' ? speaking ? '엔지니어 발화 중 · 다음 보고는 순서대로 전달' : view?.active ? '자동 보고 활성 · 상황 변화를 확인 중' : '자동 보고 활성 · 진행 중인 Race 세션 대기' : '자동 보고 꺼짐 · 음성 또는 텍스트 질문은 사용 가능'}</p>
+    <div className="coach-pit-metrics">
+      {[['클래스 순위', value(view?.class_position, '위', 0)], ['예상 남은 거리', view?.remaining_laps == null ? '수집 중' : `${Number(view.remaining_laps).toFixed(1)}랩${view?.finish_may_extend ? ' · 한 랩 늘 수 있음' : view?.finish_may_shorten ? ' · 한 랩 줄 수 있음' : ''}`], ['다음 급유 · 여유분 포함', view?.fuel_next_stop_full ? `가득${view?.stops_needed > 1 ? ` · 급유 약 ${view.stops_needed}번` : ''}` : value(view?.fuel_next_stop_l ?? view?.fuel_to_add_l, 'L')], ['피트 복귀 예상', view?.rejoin_class_position_estimate == null ? '조건 확인 필요' : `약 ${view.rejoin_class_position_estimate}위`]].map(([label, content]) => <LiveMetric key={label} label={label} value={content} />)}
+    </div>
+    <Separator className="my-6" />
+    <PitWallSettings preferences={preferences} onChange={onChange} view={view} />
     <div className="coach-fuel-grid">
       <LiveMetric label="현재 절약 목표 소비량" value={target} />
       <LiveMetric label="최근 깨끗한 완료 랩 소비량" value={value(view?.fuel_last_lap?.use_l, 'L', 2)} note={view?.fuel_last_lap?.target_l != null ? `해당 랩 시작 목표 ${value(view.fuel_last_lap.target_l, 'L', 2)}` : '완료 랩에서 계산합니다.'} />
@@ -70,7 +76,7 @@ export default function PitWall({ enabled, onToggle, preferences, onChange, view
     </div>
     <Separator className="my-6" />
     <h3 className="text-sm font-medium">엔지니어 목소리</h3>
-    <div className="coach-role-grid">{Object.entries(ENGINEERS).map(([key, role]) => <Card key={key} className="bg-muted/40 shadow-none"><CardHeader className="p-4 pb-3"><CardTitle className="text-sm">{role.label}</CardTitle><CardDescription>{role.description}</CardDescription></CardHeader><CardContent className="p-4 pt-0"><p className="text-xs text-muted-foreground">{(engineers?.[key]?.voice || role.voice).replace('ko-KR-Chirp3-HD-', '')} · 남성 · 1.15배속</p><Button variant="outline" size="sm" onClick={() => onTestVoice(key)} disabled={busy} className="mt-3"><Volume2 data-icon="inline-start" />목소리 들어보기</Button></CardContent></Card>)}</div>
+    <div className="coach-role-grid">{Object.entries(ENGINEERS).map(([key, role]) => <Card key={key} className="bg-muted/40 shadow-none"><CardHeader className="p-4 pb-3"><CardTitle className="text-sm">{role.label}</CardTitle><CardDescription>{role.description}</CardDescription></CardHeader><CardContent className="p-4 pt-0"><p className="text-xs text-muted-foreground">{(engineers?.[key]?.voice || role.voice).replace('ko-KR-Chirp3-HD-', '')} · 남성 · 공통 재생 속도</p><Button variant="outline" size="sm" onClick={() => onTestVoice(key)} disabled={busy} className="mt-3"><Volume2 data-icon="inline-start" />목소리 들어보기</Button></CardContent></Card>)}</div>
     <div className="coach-live-info">
       <p>자동 보고는 AI 토큰을 사용하지 않습니다. 고정 음성은 최초 합성 후 재사용하고, 정확한 수치는 화면과 기록에 남깁니다. 새 질문 답변의 음성 합성에는 비용이 발생할 수 있습니다.</p>
       <p>일반 보고는 제동·조향 부담이 적을 때 전달합니다. 질문·녹음·옆 차량 접근 중에는 기다리고, 깃발은 스포터가 안내합니다. 페이지를 다시 열면 자동 보고를 켜세요.</p>

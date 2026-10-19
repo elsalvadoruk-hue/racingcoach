@@ -29,6 +29,69 @@ function fakeContext({ state = 'running', sink = true } = {}) {
 const settings = (patch = {}) => radioEffect.cleanSettings({ level: 'medium', ...patch });
 afterEach(() => { radioEffect.reset(); delete window.AudioContext; localStorage.clear(); });
 
+test('plain speech gains 30% without radio filters and responds to live volume changes', () => {
+  const { Context, made } = fakeContext();
+  window.AudioContext = Context;
+  const plain = settings({ level: 'off' });
+  radioEffect.warm(plain);
+  const audio = { volume: 1, preservesPitch: true };
+  const output = radioEffect.attach(audio, plain, { volume: 1.3 });
+  expect(output).not.toBeNull();
+  const gain = made.find(item => item.kind === 'gain');
+  expect(gain.gain.value).toBe(1.3);
+  expect(made.filter(item => item.kind === 'filter')).toHaveLength(0);
+  expect(made.find(item => item.kind === 'source').audio).toBe(audio);
+  output.update({ volume: .5, muted: true });
+  expect(gain.gain.value).toBe(1); // native element handles attenuation and mute
+  output.update({ volume: 1.2, muted: false });
+  expect(gain.gain.value).toBe(1.2);
+  output.release();
+  expect(made.every(item => item.disconnected)).toBe(true);
+});
+
+test('an autoplay-blocked context does not leave voice playback waiting forever', async () => {
+  const { Context } = fakeContext({ state: 'suspended' });
+  window.AudioContext = Context;
+  Context.prototype.resume = () => new Promise(() => {});
+  const plain = settings({ level: 'off' });
+  await radioEffect.warm(plain);
+  expect(radioEffect.ready(plain)).toBe(false);
+  expect(radioEffect.attach({}, plain, { volume: 1.3 })).toBeNull();
+});
+
+test('radio voice and background noise follow live boost and mute without stacking gain', () => {
+  const { Context, made } = fakeContext();
+  window.AudioContext = Context;
+  radioEffect.warm(settings());
+  const output = radioEffect.attach({}, settings(), { volume: 1.3 });
+  const boost = made.find(item => item.kind === 'gain');
+  output.start(false);
+  const hiss = made.filter(item => item.kind === 'gain').pop();
+  expect(boost.gain.value).toBe(1.3);
+  expect(hiss.gain.value).toBeCloseTo(.010 * 1.3);
+  output.update({ volume: 1.1, muted: true });
+  expect(hiss.gain.value).toBe(0);
+  output.update({ volume: .6, muted: false });
+  expect(boost.gain.value).toBe(1);
+  expect(hiss.gain.value).toBeCloseTo(.010 * .6);
+  output.release();
+});
+
+test('overlapping device changes finish in order and never attach while routing is pending', async () => {
+  const { Context } = fakeContext();
+  window.AudioContext = Context;
+  let finishFirst;
+  Context.prototype.setSinkId = jest.fn().mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve; }))
+    .mockResolvedValueOnce();
+  const first = radioEffect.warm(settings(), 'headset');
+  const second = radioEffect.warm(settings(), 'speaker');
+  expect(radioEffect.attach({}, settings(), { sinkId: '' })).toBeNull();
+  finishFirst(); await first; await second;
+  expect(Context.prototype.setSinkId.mock.calls).toEqual([['headset'], ['speaker']]);
+  expect(radioEffect.ready(settings(), 'speaker')).toBe(true);
+  expect(radioEffect.ready(settings(), 'headset')).toBe(false);
+});
+
 test('settings are off by default and anything odd is brought back into range', () => {
   expect(radioEffect.savedSettings()).toEqual({ level: 'off', squelch: true, hiss: true, pops: 'normal', voice: 100, noise: 100 });
   expect(radioEffect.cleanSettings({ level: 'louder', voice: 900, noise: -5, squelch: false })).toEqual({ level: 'off', squelch: false, hiss: true, pops: 'normal', voice: 150, noise: 0 });
@@ -136,9 +199,9 @@ test('muted or with the noise turned down, only the voice is filtered', () => {
 test('a chosen output device is only used when the context can be sent there', async () => {
   const able = fakeContext();
   window.AudioContext = able.Context;
-  radioEffect.warm(settings(), 'headset');
+  const routing = radioEffect.warm(settings(), 'headset');
   expect(radioEffect.ready(settings(), 'headset')).toBe(false);                 // not confirmed yet
-  await Promise.resolve();
+  await routing;
   expect(radioEffect.ready(settings(), 'headset')).toBe(true);
   expect(radioEffect.ready(settings(), '')).toBe(false);                        // and no longer on the default device
   radioEffect.reset();

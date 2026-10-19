@@ -1,10 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import App from './App';
-
-jest.mock('./components/CornerComparison', () => () => <div>입력 비교 차트</div>);
-
-// Whole-app flows render every tab; several take 3-4 s alone and pass the 5 s default when the full suite runs in band.
-jest.setTimeout(20000);
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { useAnalysisWorkspace } from './analysis/useAnalysisWorkspace';
 
 const files = ['A.ibt', 'B.ibt', 'C.ibt'].map((name) => ({
   name, analyzable: true, valid_laps: 3, lap_count: 4, car_name: 'GT3', track_name: 'Spa',
@@ -39,277 +34,271 @@ afterEach(() => {
   delete global.EventSource;
 });
 
-test('analysis replaces pending metadata with measured lap availability', async () => {
-  const originalFetch = global.fetch.getMockImplementation();
-  let metadataReady = false;
-  global.fetch.mockImplementation((url, options) => {
-    if (url.includes('/api/files')) return response({ files: files.map((file) => file.name === 'A.ibt' && metadataReady
-      ? { ...file, metadata_pending: false, valid_laps: 1, lap_count: 1 }
-      : { ...file, metadata_pending: true, analyzable: null, valid_laps: null, lap_count: null }) });
-    if (url.endsWith('/api/analyze')) {
-      metadataReady = true;
-      return response({ ...analysisFor('A.ibt'),
-      data_quality: { state: 'PARTIAL', valid_laps: 1, complete_laps: 1, coaching_ready: true },
-      laps: [{ lap_number: 1, status: 'VALID' }] });
-    }
-    return originalFetch(url, options);
-  });
-  render(<App />);
-  await screen.findAllByText('Target A.ibt');
-  const selected = screen.getByRole('button', { name: /A\.ibt/ });
-  await waitFor(() => expect(selected).toHaveTextContent('유효 1 / 1랩'));
-  expect(selected).not.toHaveTextContent('확인 중');
-});
+const ready = async () => {
+  const view = renderHook(() => useAnalysisWorkspace());
+  await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+  await waitFor(() => expect(view.result.current.analysis).toBeTruthy());
+  return view;
+};
+const requests = () => global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/analyze')).map(([, options]) => JSON.parse(options.body));
 
-test('tabs preserve feedback selections and coach links open the matching screen', async () => {
-  render(<App />);
-  await screen.findAllByText('Target A.ibt');
-  fireEvent.click(screen.getByRole('button', { name: '셋업 실험' }));
-  fireEvent.click(screen.getByRole('button', { name: '진입', exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: '고속', exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: '언더스티어', exact: true }));
-  fireEvent.change(screen.getByRole('textbox', { name: '드라이버 추가 피드백' }), { target: { value: 'T1에서 밀림' } });
-  fireEvent.click(screen.getByRole('button', { name: '주행 요약' }));
-  fireEvent.click(screen.getByRole('button', { name: '셋업 후보', exact: true }));
-  expect(screen.getByRole('textbox', { name: '드라이버 추가 피드백' })).toHaveValue('T1에서 밀림');
-  expect(screen.getByRole('button', { name: '고속', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  fireEvent.click(screen.getByRole('button', { name: '피드백으로 분석 갱신' }));
-  await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('/api/analyze'), expect.objectContaining({
-    body: expect.stringContaining('"feedback_phase":"ENTRY"'),
-  })));
-});
-
-test('manual links reveal real feature sections and preserve the current feedback', async () => {
-  render(<App />);
-  await screen.findAllByText('Target A.ibt');
-  fireEvent.click(screen.getByRole('button', { name: '증상 입력하러 가기' }));
-  fireEvent.change(screen.getByRole('textbox', { name: '드라이버 추가 피드백' }), { target: { value: '가이드 확인 전 작성' } });
-  fireEvent.click(screen.getByRole('button', { name: '처음 사용 가이드', exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: '증상 입력 화면 열기' }));
-  expect(screen.getByRole('textbox', { name: '드라이버 추가 피드백' })).toHaveValue('가이드 확인 전 작성');
-  fireEvent.click(screen.getByRole('button', { name: '사용 가이드', exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: '셋업 A/B 비교 열기' }));
-  expect(screen.getByRole('heading', { name: '셋업 A/B 비교', exact: true })).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: '사용 가이드', exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: 'Garage61 기준 주행 열기' }));
-  expect(screen.getByRole('heading', { name: 'Garage61 기준 주행', exact: true })).toBeVisible();
-});
-
-test('a late response from the previous IBT never replaces the selected file analysis', async () => {
-  render(<App />);
-  await screen.findAllByText('Target A.ibt');
-  const originalFetch = global.fetch.getMockImplementation();
-  let resolveOldRequest;
-  global.fetch.mockImplementation((url, options) => {
-    if (url.endsWith('/api/analyze') && JSON.parse(options.body).filename === 'B.ibt') {
-      return new Promise((resolve) => { resolveOldRequest = resolve; });
-    }
-    return originalFetch(url, options);
-  });
-  fireEvent.click(screen.getByRole('button', { name: /A\.ibt/ }));
-  fireEvent.click(screen.getByRole('option', { name: /B\.ibt/ }));
-  await waitFor(() => expect(resolveOldRequest).toBeDefined());
-  fireEvent.click(screen.getByRole('button', { name: /B\.ibt/ }));
-  fireEvent.click(screen.getByRole('option', { name: /C\.ibt/ }));
-  await screen.findAllByText('Target C.ibt');
-  await act(async () => resolveOldRequest(response(analysisFor('B.ibt'))));
-  expect(screen.getAllByText('Target C.ibt')[0]).toBeVisible();
-  expect(screen.queryByText('Target B.ibt')).not.toBeInTheDocument();
-});
-
-test('an active trial keeps A across a new file, requires explicit B, and restores after reload', async () => {
-  const view = render(<App />);
-  await screen.findAllByText('Target A.ibt');
-  fireEvent.click(screen.getByRole('button', { name: '셋업 실험', exact: true }));
-  fireEvent.change(screen.getByRole('combobox', { name: '실험 목표' }), { target: { value: 'COMFORT' } });
-  fireEvent.click(screen.getAllByRole('button', { name: '이 변경 시험하기' })[0]);
-  const trial = screen.getByRole('region', { name: '진행 중 셋업 실험' });
-  expect(trial).toHaveTextContent('A: A.ibt');
-  fireEvent.click(screen.getAllByRole('button', { name: /A\.ibt/ })[0]);
-  fireEvent.click(screen.getByRole('option', { name: /B\.ibt/ }));
-  await screen.findAllByText('Target B.ibt');
-  expect(trial).toHaveTextContent('A: A.ibt');
-  expect(trial).toHaveTextContent('변경 후 주행 연결 대기');
-  fireEvent.click(screen.getByRole('button', { name: '현재 주행을 변경 후 B로 연결' }));
-  fireEvent.change(screen.getByRole('combobox', { name: '주행 후 운전 편의' }), { target: { value: '4' } });
-  fireEvent.click(screen.getByRole('button', { name: 'A/B 결과 확인' }));
-  await waitFor(() => expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/experiments/compare')).length).toBe(1));
-  const firstComparison = JSON.parse(global.fetch.mock.calls.find(([url]) => url.endsWith('/api/experiments/compare'))[1].body);
-  expect(firstComparison).toMatchObject({ baseline_file: 'A.ibt', candidate_file: 'B.ibt', goal: 'COMFORT', driver_feedback: null });
-  fireEvent.change(screen.getByRole('combobox', { name: '주행 후 증상 변화' }), { target: { value: 'IMPROVED' } });
-  fireEvent.change(screen.getByRole('combobox', { name: '주행 후 운전 편의' }), { target: { value: '4' } });
-  fireEvent.change(screen.getByRole('textbox', { name: '셋업 변경 부작용' }), { target: { value: '탈출은 약간 불안' } });
-  view.unmount();
-  render(<App />);
-  expect(screen.getByRole('region', { name: '진행 중 셋업 실험' })).toHaveTextContent('A: A.ibt');
-  expect(screen.getByRole('region', { name: '진행 중 셋업 실험' })).toHaveTextContent('B: B.ibt');
-  expect(screen.getByRole('combobox', { name: '주행 후 운전 편의' })).toHaveValue('4');
-  expect(screen.getByRole('textbox', { name: '셋업 변경 부작용' })).toHaveValue('탈출은 약간 불안');
-  await screen.findAllByText('Target B.ibt');
-});
-
-test('a candidate cannot start after its symptom input changes until analysis is refreshed', async () => {
-  render(<App />);
-  await screen.findAllByText('Target A.ibt');
-  fireEvent.click(screen.getByRole('button', { name: '셋업 실험', exact: true }));
-  expect(screen.getAllByRole('button', { name: '이 변경 시험하기' })[0]).toBeEnabled();
-  fireEvent.click(screen.getByRole('button', { name: '언더스티어', exact: true }));
-  expect(screen.getAllByRole('button', { name: '이 변경 시험하기' })[0]).toBeDisabled();
-  expect(screen.getByText(/이전 분석 조건의 결과/)).toBeInTheDocument();
-});
-
-test('a new telemetry event offers B without replacing the active trial baseline', async () => {
+test('startup skips an empty newest recording and keeps the previous usable run after its SSE announcement', async () => {
   let source;
   global.EventSource = class { constructor() { source = this; } close() {} };
-  render(<App />);
-  await screen.findAllByText('Target A.ibt');
-  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'A.ibt', file_signature: [1] } }) }));
-  fireEvent.click(screen.getByRole('button', { name: '셋업 실험', exact: true }));
-  fireEvent.click(screen.getAllByRole('button', { name: '이 변경 시험하기' })[0]);
-  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'B.ibt', file_signature: [2] } }) }));
-  expect(await screen.findByRole('button', { name: '새 주행 확인' })).toBeInTheDocument();
-  expect(screen.getByRole('region', { name: '진행 중 셋업 실험' })).toHaveTextContent('A: A.ibt');
-  expect(screen.queryByText('Target B.ibt')).not.toBeInTheDocument();
-});
-
-test('a locked new recording preserves the previous analysis then opens after unlocking', async () => {
-  let source;
-  global.EventSource = class { constructor() { source = this; } close() {} };
+  const newest = { ...files[0], analyzable: false, reason: 'No observed laps', valid_laps: 0 };
   const original = global.fetch.getMockImplementation();
-  let locked = true;
+  global.fetch.mockImplementation((url, options) => url.includes('/api/files') ? response({ files: [newest, files[1]] })
+    : url.endsWith('/api/status') ? response({ telemetry: { ...newest, file_name: newest.name, file_signature: [1] } })
+    : original(url, options));
+  const { result } = await ready();
+  expect(result.current.selectedFile).toBe('B.ibt');
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { ...newest, file_name: newest.name, file_signature: [1] } }) }));
+  expect(result.current.selectedFile).toBe('B.ibt');
+  expect(result.current.analysis.comparison.target_time).toBe('Target B.ibt');
+  expect(requests().map(request => request.filename)).toEqual(['B.ibt']);
+});
+
+test('startup tries the previous recording when pending metadata proves the latest has no usable laps', async () => {
+  const original = global.fetch.getMockImplementation();
   global.fetch.mockImplementation((url, options) => {
-    if (url.includes('/api/files')) return response({ files: files.map((file) => file.name === 'B.ibt' && locked
-      ? { ...file, analyzable: false, retryable: true, status: 'WAITING_FILE', reason: 'IBT 파일 읽기 대기' } : file) });
+    if (url.includes('/api/files')) return response({ files: [{ ...files[0], analyzable: null, metadata_pending: true }, files[1]] });
+    if (url.endsWith('/api/analyze') && JSON.parse(options.body).filename === 'A.ibt') {
+      return Promise.resolve({ ok: false, status: 422, json: async () => ({ detail: 'No clean laps or segments' }) });
+    }
     return original(url, options);
   });
-  render(<App />);
-  await screen.findAllByText('Target A.ibt');
-  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'A.ibt', file_signature: [1] } }) }));
-  const callsBefore = global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/analyze')).length;
-  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'B.ibt', file_signature: [2], retryable: true, analyzable: false, reason: 'IBT 파일 읽기 대기' } }) }));
-  expect(screen.getAllByText('Target A.ibt')[0]).toBeVisible();
-  expect(screen.queryByText('Target B.ibt')).not.toBeInTheDocument();
-  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/analyze')).length).toBe(callsBefore);
-  locked = false;
-  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'B.ibt', file_signature: [2], retryable: false } }) }));
-  await screen.findAllByText('Target B.ibt');
+  const { result } = await ready();
+  expect(requests().map(request => request.filename)).toEqual(['A.ibt', 'B.ibt']);
+  expect(result.current.selectedFile).toBe('B.ibt');
+  expect(result.current.error).toBe('');
 });
 
-test('starting with only a locked file waits and analyzes it when the same signature unlocks', async () => {
+test('a server failure stops startup without scanning older recordings', async () => {
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.endsWith('/api/analyze')
+    ? Promise.resolve({ ok: false, status: 500, json: async () => ({ detail: 'Analysis server failure' }) }) : original(url, options));
+  const { result } = renderHook(() => useAnalysisWorkspace());
+  await waitFor(() => expect(result.current.initialLoading).toBe(false));
+  expect(requests().map(request => request.filename)).toEqual(['A.ibt']);
+  expect(result.current.error).toBe('Analysis server failure');
+});
+
+test('a successful response with unavailable measurements falls back without adopting the empty analysis', async () => {
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.endsWith('/api/analyze') && JSON.parse(options.body).filename === 'A.ibt'
+    ? response({ ...analysisFor('A.ibt'), comparison: null, data_quality: { analysis_scope: 'UNAVAILABLE', valid_laps: 0, coaching_ready: false } })
+    : original(url, options));
+  const { result } = await ready();
+  expect(requests().map(request => request.filename)).toEqual(['A.ibt', 'B.ibt']);
+  expect(result.current.analysisSnapshot.filename).toBe('B.ibt');
+});
+
+test('an unusable newly parsed SSE recording preserves the last analysis and file ownership', async () => {
   let source;
   global.EventSource = class { constructor() { source = this; } close() {} };
+  const { result } = await ready();
   const original = global.fetch.getMockImplementation();
-  let locked = true;
+  global.fetch.mockImplementation((url, options) => url.endsWith('/api/analyze') && JSON.parse(options.body).filename === 'B.ibt'
+    ? Promise.resolve({ ok: false, status: 422, json: async () => ({ detail: 'No clean laps or segments' }) }) : original(url, options));
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'B.ibt', file_signature: [2] } }) }));
+  await waitFor(() => expect(result.current.error).toBe('No clean laps or segments'));
+  expect(result.current.selectedFile).toBe('A.ibt');
+  expect(result.current.analysisSnapshot.filename).toBe('A.ibt');
+  expect(result.current.analysis.comparison.target_time).toBe('Target A.ibt');
+});
+
+test('a late startup lookup cannot replace a manual file choice', async () => {
+  const original = global.fetch.getMockImplementation();
+  let finish;
+  global.fetch.mockImplementation((url, options) => url.includes('/api/external-references?filename=A.ibt')
+    ? new Promise(resolve => { finish = resolve; }) : original(url, options));
+  const { result } = renderHook(() => useAnalysisWorkspace());
+  await waitFor(() => expect(finish).toBeDefined());
+  await act(async () => result.current.handleFileChange('C.ibt'));
+  await act(async () => finish(response({ files: [], recommended_selection: [] })));
+  await waitFor(() => expect(result.current.initialLoading).toBe(false));
+  expect(requests().map(request => request.filename)).toEqual(['C.ibt']);
+  expect(result.current.analysisSnapshot.filename).toBe('C.ibt');
+});
+
+test('automatic and requested post-drive analysis never request AI', async () => {
+  const { result } = await ready();
+  await act(async () => result.current.runAnalysis());
+  expect(requests().length).toBeGreaterThan(1);
+  requests().forEach(body => expect(body).not.toHaveProperty('include_ai'));
+  expect(global.fetch.mock.calls.some(([url]) => url.includes('/api/ai/'))).toBe(false);
+});
+
+test('analysis replaces pending metadata with measured lap availability', async () => {
+  const original = global.fetch.getMockImplementation();
+  let metadataReady = false;
   global.fetch.mockImplementation((url, options) => {
-    const file = { ...files[0], analyzable: locked ? false : true, retryable: locked, status: locked ? 'WAITING_FILE' : 'READY', reason: locked ? 'IBT 파일 읽기 대기' : null };
+    if (url.includes('/api/files')) return response({ files: files.map(f => ({ ...f, metadata_pending: !metadataReady, valid_laps: metadataReady ? 1 : null })) });
+    if (url.endsWith('/api/analyze')) { metadataReady = true; return response({ ...analysisFor('A.ibt'),
+      data_quality: { state: 'PARTIAL', valid_laps: 1, complete_laps: 1, coaching_ready: true },
+      laps: [{ lap_number: 1, status: 'VALID' }] }); }
+    return original(url, options);
+  });
+  const { result } = await ready();
+  expect(result.current.selectedFileEntry.valid_laps).toBe(1);
+  expect(result.current.selectedFileEntry.metadata_pending).toBe(false);
+});
+
+test('feedback and analysis mode survive screen navigation', async () => {
+  const { result } = await ready();
+  act(() => { result.current.setFeedbackPhase('ENTRY'); result.current.setFeedbackSpeed('HIGH');
+    result.current.setFeedbackSymptom('UNDERSTEER'); result.current.setUserFeedback('Turn one');
+    result.current.setSetupMode('EVIDENCE'); result.current.selectTab('summary'); });
+  act(() => result.current.navigateToSection('briefing'));
+  expect(result.current.userFeedback).toBe('Turn one');
+  expect(result.current.activeTab).toBe('setup');
+  await act(async () => result.current.runAnalysis());
+  expect(requests().at(-1)).toMatchObject({ feedback_phase: 'ENTRY', feedback_speed: 'HIGH', feedback_symptom: 'UNDERSTEER', setup_mode: 'EVIDENCE' });
+});
+
+test('a late response cannot replace a newer selected IBT', async () => {
+  const { result } = await ready();
+  const original = global.fetch.getMockImplementation();
+  let finish;
+  global.fetch.mockImplementation((url, options) => url.endsWith('/api/analyze') && JSON.parse(options.body).filename === 'B.ibt'
+    ? new Promise(resolve => { finish = resolve; }) : original(url, options));
+  let pending;
+  act(() => { pending = result.current.handleFileChange('B.ibt'); });
+  await waitFor(() => expect(finish).toBeDefined());
+  await act(async () => result.current.handleFileChange('C.ibt'));
+  await act(async () => { finish(response(analysisFor('B.ibt'))); await pending; });
+  expect(result.current.selectedFile).toBe('C.ibt');
+  expect(result.current.analysis.comparison.target_time).toBe('Target C.ibt');
+});
+
+test('trial A, explicit B and driver feedback survive file changes and reload', async () => {
+  const view = await ready();
+  act(() => view.result.current.beginTrial({ setting: 'brake_bias_pct', original_value: 55, value: 54 }));
+  expect(view.result.current.activeTrial.baseline_file).toBe('A.ibt');
+  await act(async () => view.result.current.handleFileChange('B.ibt'));
+  expect(view.result.current.activeTrial.candidate_file).toBeNull();
+  expect(view.result.current.canAttachTrial).toBe(true);
+  act(() => view.result.current.patchTrial({ candidate_file: 'B.ibt', driver_feedback: { change: 'IMPROVED', rating: 4, side_effects: 'Exit' } }));
+  view.unmount();
+  const { result } = await ready();
+  expect(result.current.activeTrial).toMatchObject({ baseline_file: 'A.ibt', candidate_file: 'B.ibt', driver_feedback: { rating: 4, side_effects: 'Exit' } });
+});
+
+test('a changed symptom blocks a stale setup candidate until recalculated', async () => {
+  const { result } = await ready();
+  expect(result.current.canStartTrial).toBe(true);
+  act(() => result.current.setFeedbackSymptom('UNDERSTEER'));
+  expect(result.current.canStartTrial).toBe(false);
+  await act(async () => result.current.runAnalysis());
+  expect(result.current.canStartTrial).toBe(true);
+});
+
+test('new telemetry offers B without replacing a trial baseline', async () => {
+  let source;
+  global.EventSource = class { constructor() { source = this; } close() {} };
+  const { result } = await ready();
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'A.ibt', file_signature: [1] } }) }));
+  act(() => result.current.beginTrial({ setting: 'brake_bias_pct', original_value: 55, value: 54 }));
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'B.ibt', file_signature: [2] } }) }));
+  await waitFor(() => expect(result.current.newFileNotice).toBe('B.ibt'));
+  expect(result.current.selectedFile).toBe('A.ibt');
+  expect(result.current.activeTrial.baseline_file).toBe('A.ibt');
+});
+
+test('a locked new recording preserves the previous analysis until unlocked', async () => {
+  let source, locked = true;
+  global.EventSource = class { constructor() { source = this; } close() {} };
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.includes('/api/files') ? response({ files: files.map(f => f.name === 'B.ibt' && locked
+    ? { ...f, analyzable: false, retryable: true } : f) }) : original(url, options));
+  const { result } = await ready();
+  const before = requests().length;
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'B.ibt', file_signature: [2], retryable: true } }) }));
+  expect(result.current.selectedFile).toBe('A.ibt'); expect(requests()).toHaveLength(before);
+  locked = false;
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'B.ibt', file_signature: [2], retryable: false } }) }));
+  await waitFor(() => expect(result.current.analysis?.comparison.target_time).toBe('Target B.ibt'));
+});
+
+test('startup with a locked file waits then analyzes the same signature on unlock', async () => {
+  let source, locked = true;
+  global.EventSource = class { constructor() { source = this; } close() {} };
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => {
+    const file = { ...files[0], analyzable: !locked, retryable: locked };
     if (url.includes('/api/files')) return response({ files: [file] });
     if (url.endsWith('/api/status')) return response({ telemetry: { ...file, file_name: file.name, file_signature: [1] } });
     return original(url, options);
   });
-  render(<App />);
-  await screen.findByText('IBT 파일 읽기 대기');
-  expect(global.fetch.mock.calls.some(([url]) => url.endsWith('/api/analyze'))).toBe(false);
+  const { result } = renderHook(() => useAnalysisWorkspace());
+  await waitFor(() => expect(result.current.initialLoading).toBe(false));
+  expect(requests()).toHaveLength(0);
   locked = false;
   await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'A.ibt', file_signature: [1], retryable: false } }) }));
-  await screen.findAllByText('Target A.ibt');
+  await waitFor(() => expect(result.current.analysis).toBeTruthy());
 });
 
-test('late reference discovery uses recommendations despite an initially autosaved empty draft', async () => {
-  const original = global.fetch.getMockImplementation();
-  let resolveReferences;
-  const pending = new Promise((resolve) => { resolveReferences = resolve; });
+test('late reference discovery respects recommendations despite an empty autosaved draft', async () => {
+  const original = global.fetch.getMockImplementation(); let finish;
+  const pending = new Promise(resolve => { finish = resolve; });
   global.fetch.mockImplementation((url, options) => url.includes('/api/external-references') ? pending : original(url, options));
-  render(<App />);
-  await waitFor(() => expect(JSON.parse(localStorage.getItem('iracing-tuner.workflow.v1')).drafts['A.ibt'].referenceFiles).toEqual([]));
-  await act(async () => resolveReferences(response({ files: [{ name: 'one.csv', usable: true }], recommended_selection: ['one.csv'] })));
-  await waitFor(() => {
-    const calls = global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/analyze'));
-    expect(calls.length).toBeGreaterThan(0);
-    expect(JSON.parse(calls[0][1].body).external_reference_files).toEqual(['one.csv']);
-  });
-  expect(screen.getByRole('combobox', { name: '비교 기준 방식' })).toHaveValue('AGGREGATE');
-  expect(screen.getByRole('button', { name: '비교 기준 적용' })).toBeEnabled();
+  const { result } = renderHook(() => useAnalysisWorkspace());
+  await waitFor(() => expect(result.current.selectedFile).toBe('A.ibt'));
+  await act(async () => finish(response({ files: [{ name: 'one.csv', usable: true }], recommended_selection: ['one.csv'] })));
+  await waitFor(() => expect(requests().length).toBeGreaterThan(0));
+  expect(requests()[0].external_reference_files).toEqual(['one.csv']);
 });
 
-test('local, aggregate and single reference modes send consistent explicit references', async () => {
+test('local, aggregate and single modes send exact reference selections', async () => {
+  const { result } = await ready();
+  act(() => { result.current.setReferenceMode('AGGREGATE'); result.current.setSelectedExternalReferences(['one.csv', 'two.csv']); });
+  await act(async () => result.current.runAnalysis());
+  expect(requests().at(-1).external_reference_files).toEqual(['one.csv', 'two.csv']);
+  act(() => result.current.setReferenceMode('SINGLE'));
+  await act(async () => result.current.runAnalysis());
+  expect(requests().at(-1).external_reference_files).toEqual(['one.csv']);
+  act(() => result.current.setReferenceMode('LOCAL'));
+  await act(async () => result.current.runAnalysis());
+  expect(requests().at(-1).external_reference_files).toEqual([]);
+});
+
+test('clean corner observations never invent a valid lap comparison', async () => {
   const original = global.fetch.getMockImplementation();
-  global.fetch.mockImplementation((url, options) => {
-    if (url.includes('/api/external-references')) return Promise.resolve(response({ files: [
-      { name: 'one.csv', driver_name: 'Driver One', usable: true }, { name: 'two.csv', driver_name: 'Driver Two', usable: true },
-    ], recommended_selection: ['one.csv', 'two.csv'] }));
-    if (url.endsWith('/api/analyze')) {
-      const request = JSON.parse(options.body); const value = analysisFor(request.filename);
-      if (request.external_reference_files.length) value.external_reference = { status: 'READY', aggregate: { target_time: 'Target A.ibt', reference_median_time: 'External reference', gap_to_reference_median_s: 2 }, corners: [], visualizations: { trace: [] }, top_losses: [] };
-      return Promise.resolve(response(value));
-    }
-    return original(url, options);
-  });
-  render(<App />);
-  await screen.findAllByText('External reference');
-  fireEvent.change(screen.getByRole('combobox', { name: '비교 기준 방식' }), { target: { value: 'LOCAL' } });
-  fireEvent.click(screen.getByRole('button', { name: '비교 기준 적용' }));
-  await waitFor(() => expect(screen.queryAllByText('External reference')).toHaveLength(0));
-  const lastRequest = () => JSON.parse(global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/analyze')).slice(-1)[0][1].body);
-  expect(lastRequest().external_reference_files).toEqual([]);
-  fireEvent.change(screen.getByRole('combobox', { name: '비교 기준 방식' }), { target: { value: 'SINGLE' } });
-  fireEvent.change(screen.getByRole('combobox', { name: 'Garage61 실제 기준 랩' }), { target: { value: 'two.csv' } });
-  fireEvent.click(screen.getByRole('button', { name: '비교 기준 적용' }));
-  await screen.findAllByText('External reference');
-  expect(lastRequest().external_reference_files).toEqual(['two.csv']);
+  global.fetch.mockImplementation((url, options) => url.endsWith('/api/analyze') ? response({ ...analysisFor('A.ibt'), comparison: null,
+    data_quality: { valid_laps: 0, coaching_ready: true, analysis_scope: 'CLEAN_SEGMENTS_ONLY', clean_segment_count: 1 },
+    coaching: { clean_segment_corners: [{ id: 'C1', label: 'T1', lap_number: 2, target: { min_speed_kph: 75 } }] } }) : original(url, options));
+  const { result } = await ready();
+  expect(result.current.cleanSectionOnly).toBe(true);
+  expect(result.current.displayComparison).toBeNull();
+  expect(result.current.comparisonCorners).toHaveLength(1);
 });
 
-test('clean corner observations enable exploration without inventing valid lap pace', async () => {
+test('desktop selection updates existing origin preferences and telemetry ownership', async () => {
+  const { result } = await ready();
+  const payload = analysisFor('C.ibt');
+  act(() => result.current.adoptDesktopAnalysis({ filename: 'C.ibt', defaultTarget: 3, defaultReference: 2,
+    external: ['one.csv'], session: {}, analysisResult: payload }, {}));
+  expect(result.current.selectedFileRef.current).toBe('C.ibt');
+  expect(result.current.analysisSnapshot).toMatchObject({ filename: 'C.ibt', referenceMode: 'SINGLE', references: ['one.csv'], targetLap: 3 });
+  await waitFor(() => expect(JSON.parse(localStorage.getItem('iracing-tuner.workflow.v1')).preferences.selectedFile).toBe('C.ibt'));
+});
+
+test('the last desktop lap pair restores on startup without changing saved reference ownership', async () => {
+  localStorage.setItem('iracing.desktop.last-session.v1', JSON.stringify({ filename: 'A.ibt', target_lap: 4, reference_lap: 3, external_reference_files: [] }));
+  const { result } = await ready();
+  expect(requests()[0]).toMatchObject({ target_lap: 4, reference_lap: 3, external_reference_files: [] });
+  expect(result.current.targetLapManual).toBe(true);
+  expect(result.current.referenceLapManual).toBe(true);
+});
+
+test('a stale saved lap falls back to automatic selection after the server rejects it', async () => {
+  localStorage.setItem('iracing.desktop.last-session.v1', JSON.stringify({ filename: 'A.ibt', target_lap: 99, reference_lap: 3, external_reference_files: [] }));
   const original = global.fetch.getMockImplementation();
-  global.fetch.mockImplementation((url, options) => {
-    if (!url.endsWith('/api/analyze')) return original(url, options);
-    const value = analysisFor('A.ibt');
-    value.comparison = null;
-    value.data_quality = { valid_laps: 0, coaching_ready: true, analysis_scope: 'CLEAN_SEGMENTS_ONLY', clean_segment_count: 1, state: 'PARTIAL', messages: [] };
-    value.coaching = { clean_segment_corners: [{ id: 'C1', label: 'T1', lap_number: 2, entry_pct: .1, apex_pct: .12, exit_pct: .15, speed_class: 'LOW', target: { min_speed_kph: 75 }, scope: 'COACHING_ONLY' }] };
-    return Promise.resolve(response(value));
-  });
-  render(<App />);
-  expect(await screen.findByText(/유효 완주랩 0개 · 깨끗한 코너 구간만 관측/)).toBeInTheDocument();
-  expect(screen.queryByText('Target A.ibt')).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '셋업 실험', exact: true }));
-  expect(screen.getAllByRole('button', { name: '이 변경 시험하기' })[0]).toBeEnabled();
+  global.fetch.mockImplementation((url, options) => url.endsWith('/api/analyze') && JSON.parse(options.body).target_lap === 99
+    ? Promise.resolve({ ok: false, status: 422, json: async () => ({ detail: '선택한 랩이 없습니다.' }) }) : original(url, options));
+  const { result } = await ready();
+  expect(requests()).toHaveLength(2);
+  expect(requests()[1]).toMatchObject({ target_lap: null, reference_lap: null });
+  expect(result.current.error).toBe('');
 });
 
-test('exploration is selected by default and evidence mode is sent without losing feedback', async () => {
-  const originalFetch = global.fetch.getMockImplementation();
-  global.fetch.mockImplementation((url, options) => {
-    if (url.endsWith('/api/analyze')) {
-      const request = JSON.parse(options.body);
-      const exploratory = request.setup_mode === 'EXPLORE' && request.feedback_symptom;
-      const candidate = { setting: 'rear_arb_blades', label: 'Rear ARB blades', original_value: 3, value: 4,
-        unit: 'blade', tier: 'EXPLORATORY', confidence: .35, source: 'DRIVER_FEEDBACK_EXPLORATION' };
-      return Promise.resolve(response({ ...analysisFor(request.filename),
-        setup_recommendation: { setup_mode: request.setup_mode, decision: exploratory ? 'TEST' : 'HOLD',
-          decision_basis: exploratory ? 'DRIVER_FEEDBACK_EXPLORATION' : 'NO_ACTIONABLE_SETUP_EVIDENCE',
-          experimental_candidates: exploratory ? [candidate] : [],
-          exploration: { reason: exploratory ? '선택한 증상으로 작은 변경을 시험합니다.' : '증상을 선택하세요.' } },
-      }));
-    }
-    return originalFetch(url, options);
-  });
-  render(<App />);
-  await screen.findAllByText('Target A.ibt');
-  fireEvent.click(screen.getByRole('button', { name: '셋업 실험', exact: true }));
-  expect(screen.getByRole('button', { name: '탐색 추천', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  fireEvent.click(screen.getByRole('button', { name: '탐색 추천', exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: '진입', exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: '고속', exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: '언더스티어', exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: '피드백으로 분석 갱신', exact: true }));
-  expect(await screen.findByText('탐색 후보 · 근거 약함')).toBeVisible();
-  fireEvent.click(screen.getByRole('button', { name: '근거 우선 추천', exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: '주행 요약', exact: true }));
-  fireEvent.click(screen.getByRole('button', { name: '셋업 실험', exact: true }));
-  expect(screen.getByRole('button', { name: '근거 우선 추천', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  expect(screen.getByRole('button', { name: '언더스티어', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  fireEvent.click(screen.getByRole('button', { name: '피드백으로 분석 갱신', exact: true }));
-  await waitFor(() => expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('/api/analyze'), expect.objectContaining({
-    body: expect.stringContaining('"setup_mode":"EVIDENCE"'),
-  })));
-  await waitFor(() => expect(screen.queryByText('탐색 후보 · 근거 약함')).not.toBeInTheDocument());
-});

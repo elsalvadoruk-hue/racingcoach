@@ -3,7 +3,7 @@ import { initialModeForFile } from './analysisShared';
 import { API_BASE } from './analysisClient';
 
 export function useTelemetryEvents({
-  activeTrialRef, analysisRequestRef, loadExternalReferences, loadFiles, loadStatus,
+  initialLoading, activeTrialRef, analysisRequestRef, loadExternalReferences, loadFiles, loadStatus,
   maybeStartGarage61Collection, restoreFileDraft, runAnalysisRef, selectedFileRef, sessionMode,
   setAnalysis, setError, setLoading, setNewFileNotice, setPitRule, setReferenceLap,
   setReferenceLapManual, setSelectedFile, setSessionMode, setStatus, setTargetLap, setTargetLapManual,
@@ -12,11 +12,16 @@ export function useTelemetryEvents({
   useEffect(() => {
     let eventSource = null;
     let polling = null;
+    let cancelled = false;
+    let eventGeneration = 0;
 
     const handleStatus = async (payload) => {
       const telemetry = payload?.telemetry;
       if (!telemetry) return;
       setStatus(payload);
+      // Initialization owns restoration. A fresh SSE subscription announces
+      // the latest file again after that restoration has finished.
+      if (initialLoading) return;
       if (telemetry.retryable) {
         waitingFileRef.current = telemetry.file_name;
         await loadFiles();
@@ -27,34 +32,31 @@ export function useTelemetryEvents({
       const signature = JSON.stringify(telemetry.file_signature || []);
       if (unlocked || (signatureRef.current ? signature !== signatureRef.current : telemetry.file_name !== selectedFileRef.current)) {
         signatureRef.current = signature;
+        const generation = ++eventGeneration;
         if (activeTrialRef.current) {
           setNewFileNotice(telemetry.file_name);
           await loadFiles();
           return;
         }
+        const previousFile = selectedFileRef.current;
+        const refreshedFiles = await loadFiles();
+        const fileEntry = refreshedFiles.find((item) => item.name === telemetry.file_name);
+        const selectedByRefresh = !previousFile && selectedFileRef.current === telemetry.file_name;
+        if (cancelled || generation !== eventGeneration || (selectedFileRef.current !== previousFile && !selectedByRefresh)) return;
+        // An empty/out/locked recording must never erase the last usable run.
+        if (fileEntry?.analyzable === false || telemetry.analyzable === false) return;
         analysisRequestRef.current.controller?.abort();
-        setAnalysis(null);
         setLoading(true);
         setSelectedFile(telemetry.file_name);
         selectedFileRef.current = telemetry.file_name;
         restoreFileDraft(telemetry.file_name);
-        const refreshedFiles = await loadFiles();
-        const fileEntry = refreshedFiles.find((item) => item.name === telemetry.file_name);
-        if (selectedFileRef.current !== telemetry.file_name) return;
-        if (fileEntry?.analyzable === false) { setLoading(false); setError(fileEntry.reason || '새 주행의 유효랩이 부족합니다.'); return; }
         const nextMode = initialModeForFile(fileEntry);
         const nextPitRule = nextMode === 'ENDURANCE' ? 'CONCURRENT' : 'NOT_APPLICABLE';
-        setSessionMode(nextMode);
-        setPitRule(nextPitRule);
-        setTargetLap('');
-        setReferenceLap('');
-        setTargetLapManual(false);
-        setReferenceLapManual(false);
         const referencePayload = await loadExternalReferences(telemetry.file_name, true);
-        if (selectedFileRef.current !== telemetry.file_name) return;
+        if (cancelled || generation !== eventGeneration || selectedFileRef.current !== telemetry.file_name) return;
         const runner = runAnalysisRef.current;
         if (runner) {
-          await runner({
+          const result = await runner({
             includeAI: false,
             quiet: true,
             filename: telemetry.file_name,
@@ -64,6 +66,17 @@ export function useTelemetryEvents({
             forceAutoLaps: true,
             externalReferencesOverride: (referencePayload.applied_selection || referencePayload.recommended_selection || []).slice(0, referencePayload.display_limit || referencePayload.max_selection || 9),
           });
+          if (cancelled || generation !== eventGeneration || selectedFileRef.current !== telemetry.file_name) return;
+          if (!result) {
+            selectedFileRef.current = previousFile;
+            setSelectedFile(previousFile);
+            restoreFileDraft(previousFile);
+            return;
+          }
+          setSessionMode(nextMode);
+          setPitRule(nextPitRule);
+          setTargetLapManual(false);
+          setReferenceLapManual(false);
         }
         void maybeStartGarage61Collection(telemetry.file_name, referencePayload);
       } else if (!signatureRef.current) {
@@ -98,10 +111,11 @@ export function useTelemetryEvents({
     }
 
     return () => {
+      cancelled = true;
       eventSource?.close();
       if (polling) window.clearInterval(polling);
     };
-  }, [loadExternalReferences, loadFiles, loadStatus, maybeStartGarage61Collection, restoreFileDraft, sessionMode,
+  }, [initialLoading, loadExternalReferences, loadFiles, loadStatus, maybeStartGarage61Collection, restoreFileDraft, sessionMode,
     activeTrialRef, analysisRequestRef, runAnalysisRef, selectedFileRef, setAnalysis, setError, setLoading,
     setNewFileNotice, setPitRule, setReferenceLap, setReferenceLapManual, setSelectedFile, setSessionMode,
     setStatus, setTargetLap, setTargetLapManual, signatureRef, waitingFileRef]);

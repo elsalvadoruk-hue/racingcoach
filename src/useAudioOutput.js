@@ -1,19 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as radioEffect from './radioEffect';
-import { DEFAULT_RATE, RATE_MIN, RATE_MAX } from './voiceAudio';
+import { DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX } from './voiceAudio';
 
 const STORAGE_KEY = 'iracing.voice.outputDevice';
 const savedOutput = () => { try { return localStorage.getItem(STORAGE_KEY) || ''; } catch { return ''; } };
 const PLAYBACK_KEY = 'iracing.voice.playback';
-const clampVolume = (value) => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
-export { DEFAULT_RATE, RATE_MIN, RATE_MAX };
-const clampRate = (value) => typeof value === 'number' && Number.isFinite(value)
-  ? Math.round(Math.max(RATE_MIN, Math.min(RATE_MAX, value)) * 100) / 100 : DEFAULT_RATE;
+const clampVolume = (value) => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1.3, value)) : 1;
+export { DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX };
+const clampRate = (value, fallback = DEFAULT_RATE) => typeof value === 'number' && Number.isFinite(value)
+  ? Math.round(Math.max(RATE_MIN, Math.min(RATE_MAX, value)) * 100) / 100 : fallback;
 const savedPlayback = () => {
   try {
     const saved = JSON.parse(localStorage.getItem(PLAYBACK_KEY));
-    return { volume: clampVolume(saved?.volume), muted: saved?.muted === true, rate: clampRate(saved?.rate) };
-  } catch { return { volume: 1, muted: false, rate: DEFAULT_RATE }; }
+    return { volume: clampVolume(saved?.volume), muted: saved?.muted === true, rate: clampRate(saved?.rate, MULTIPART_DEFAULT_RATE),
+      spotterRate: clampRate(saved?.spotterRate), pitwallRate: clampRate(saved?.pitwallRate) };
+  } catch { return { volume: 1, muted: false, rate: MULTIPART_DEFAULT_RATE, spotterRate: DEFAULT_RATE, pitwallRate: DEFAULT_RATE }; }
 };
 
 // The answer to a question the driver asked over the radio is what he most wants to hear:
@@ -44,6 +45,7 @@ const askDevicePermission = async () => {
 export default function useAudioOutput() {
   const supported = typeof HTMLMediaElement.prototype.setSinkId === 'function' && !!navigator.mediaDevices?.enumerateDevices;
   const [outputId, setOutputId] = useState(savedOutput);
+  const [refreshing, setRefreshing] = useState(false);
   const [devices, setDevices] = useState([]);
   const [message, setMessage] = useState('');
   const [playback, setPlayback] = useState(savedPlayback);
@@ -54,6 +56,7 @@ export default function useAudioOutput() {
   const selected = useRef(outputId), knownDevices = useRef([]), player = useRef(null);
   const priorityGate = useRef(false);
   const mounted = useRef(true), refreshSerial = useRef(0);
+  const permissionFlight = useRef(null), refreshQueued = useRef(false);
   const stop = useCallback((reason = 'stopped') => {
     if (typeof reason !== 'string') reason = 'driver_or_radio_pause';
     const current = player.current;
@@ -79,14 +82,24 @@ export default function useAudioOutput() {
   const audioBusy = useCallback(() => !!player.current, []);
   const updatePlayback = useCallback((patch) => {
     const next = { ...playbackSettings.current, ...patch };
-    next.volume = clampVolume(next.volume); next.rate = clampRate(next.rate);
+    next.volume = clampVolume(next.volume); next.rate = clampRate(next.rate, MULTIPART_DEFAULT_RATE);
+    next.spotterRate = clampRate(next.spotterRate); next.pitwallRate = clampRate(next.pitwallRate);
     playbackSettings.current = next; setPlayback(next);
-    if (player.current) { player.current.volume = next.volume; player.current.muted = next.muted; }
+    if (player.current) {
+      player.current.volume = Math.min(1, next.volume); player.current.muted = next.muted;
+      player.current._effect?.update?.(next);
+      if (next.volume > 1 && !player.current._effect?.boosted) setMessage('현재 음성은 100%로 재생됩니다. 증폭은 다음 안내부터 적용되며 최신 Chrome 또는 Edge가 필요합니다.');
+    }
     try { localStorage.setItem(PLAYBACK_KEY, JSON.stringify(next)); } catch { /* Controls still work without storage. */ }
   }, []);
-  const changeVolume = useCallback((volume) => updatePlayback({ volume, muted: false }), [updatePlayback]);
+  const changeVolume = useCallback((volume) => {
+    radioEffect.warm(effectSettings.current, selected.current);
+    updatePlayback({ volume, muted: false });
+  }, [updatePlayback]);
   // From the next clip on; a call already being spoken keeps its speed.
   const changeRate = useCallback((rate) => updatePlayback({ rate }), [updatePlayback]);
+  const changeSpotterRate = useCallback((spotterRate) => updatePlayback({ spotterRate }), [updatePlayback]);
+  const changePitwallRate = useCallback((pitwallRate) => updatePlayback({ pitwallRate }), [updatePlayback]);
   // The radio effect applies from the next clip on. Changing it is a click, which lets the audio context start.
   const changeEffect = useCallback((patch) => {
     const next = radioEffect.cleanSettings({ ...effectSettings.current, ...patch });
@@ -98,51 +111,83 @@ export default function useAudioOutput() {
     selected.current = id; setOutputId(id);
     try { if (id) localStorage.setItem(STORAGE_KEY, id); else localStorage.removeItem(STORAGE_KEY); } catch { /* Playback still works without storage. */ }
   }, []);
-  const refresh = useCallback(async ({ ask = false } = {}) => {
+  const refresh = useCallback(({ ask = false } = {}) => {
     if (!supported) return;
+    // Permission can itself trigger devicechange/focus. Finish the user's request first,
+    // then recheck any connection change without opening another permission prompt.
+    if (permissionFlight.current) {
+      if (!ask) refreshQueued.current = true;
+      return permissionFlight.current;
+    }
     const serial = ++refreshSerial.current;
-    try {
-      let all = await navigator.mediaDevices.enumerateDevices();
-      if (!mounted.current || serial !== refreshSerial.current) return;
-      const listed = (devices) => devices.filter((device) => device.kind === 'audiooutput' && device.deviceId && device.deviceId !== 'default');
-      if (ask && !listed(all).length) {
-        const permission = await askDevicePermission();
+    if (ask) setRefreshing(true);
+    const run = async () => {
+      try {
+        let all = await navigator.mediaDevices.enumerateDevices();
         if (!mounted.current || serial !== refreshSerial.current) return;
-        if (permission === 'denied') {
-          setMessage('브라우저가 이 화면의 마이크 사용을 막고 있어 출력장치 목록을 읽을 수 없습니다. 주소창 왼쪽의 사이트 정보에서 마이크를 허용한 뒤 목록을 다시 갱신하세요.');
-          return;
+        const listed = (devices) => devices.filter((device) => device.kind === 'audiooutput' && device.deviceId && device.deviceId !== 'default');
+        if (ask && !listed(all).length) {
+          const permission = await askDevicePermission();
+          if (!mounted.current || serial !== refreshSerial.current) return;
+          if (permission === 'denied') {
+            setMessage('브라우저가 이 화면의 마이크 사용을 막고 있어 출력장치 목록을 읽을 수 없습니다. 주소창 왼쪽의 사이트 정보에서 마이크를 허용한 뒤 목록을 다시 갱신하세요.');
+            return;
+          }
+          if (permission === 'granted') all = await navigator.mediaDevices.enumerateDevices();
+          if (!mounted.current || serial !== refreshSerial.current) return;
         }
-        if (permission === 'granted') all = await navigator.mediaDevices.enumerateDevices();
-        if (!mounted.current || serial !== refreshSerial.current) return;
-      }
-      const outputs = listed(all);
-      if (ask) setMessage(outputs.length ? '' : '이 브라우저가 알려 준 출력장치가 Windows 기본 장치뿐입니다. 장치를 연결했는지 확인하세요.');
-      // Before microphone permission, browsers can hide saved device IDs. Only
-      // classify removal when a previously visible device actually disappears.
-      const removed = selected.current && knownDevices.current.some((device) => device.deviceId === selected.current)
-        && !outputs.some((device) => device.deviceId === selected.current);
-      knownDevices.current = outputs; setDevices(outputs);
-      if (removed) {
-        stop('output_removed'); saveOutput('');
-        setMessage('선택한 출력장치의 연결이 끊겨 Windows 기본 장치로 변경했습니다.');
-      }
-    } catch { if (mounted.current && serial === refreshSerial.current) setMessage('출력장치 목록을 읽지 못했습니다. 장치 연결과 브라우저 권한을 확인하고 목록을 갱신하세요.'); }
+        const outputs = listed(all);
+        if (ask) setMessage(outputs.length ? '' : '이 브라우저가 알려 준 출력장치가 Windows 기본 장치뿐입니다. 장치를 연결했는지 확인하세요.');
+        // Before microphone permission, browsers can hide saved device IDs. Only
+        // classify removal when a previously visible device actually disappears.
+        const removed = selected.current && knownDevices.current.some((device) => device.deviceId === selected.current)
+          && !outputs.some((device) => device.deviceId === selected.current);
+        knownDevices.current = outputs; setDevices(outputs);
+        if (removed) {
+          stop('output_removed'); saveOutput('');
+          setMessage('선택한 출력장치의 연결이 끊겨 Windows 기본 장치로 변경했습니다.');
+        }
+      } catch { if (mounted.current && serial === refreshSerial.current) setMessage('출력장치 목록을 읽지 못했습니다. 장치 연결과 브라우저 권한을 확인하고 목록을 갱신하세요.'); }
+    };
+    const flight = run();
+    if (ask) {
+      permissionFlight.current = flight;
+      flight.finally(() => {
+        if (permissionFlight.current !== flight) return;
+        permissionFlight.current = null;
+        if (!mounted.current) return;
+        setRefreshing(false);
+        if (refreshQueued.current) { refreshQueued.current = false; refresh(); }
+      });
+    }
+    return flight;
   }, [supported, stop, saveOutput]);
   useEffect(() => {
     mounted.current = true;
     refresh();
     const media = navigator.mediaDevices;
+    const visible = () => { if (document.visibilityState === 'visible') refresh(); };
     media?.addEventListener?.('devicechange', refresh);
-    return () => { mounted.current = false; refreshSerial.current += 1; media?.removeEventListener?.('devicechange', refresh); stop('page_closed'); };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', visible);
+    return () => {
+      mounted.current = false; refreshSerial.current += 1; refreshQueued.current = false;
+      media?.removeEventListener?.('devicechange', refresh);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', visible);
+      stop('page_closed');
+    };
   }, [refresh, stop]);
   const changeOutput = useCallback((id) => {
     stop('output_changed'); saveOutput(id); setMessage('');
     radioEffect.warm(effectSettings.current, id);
   }, [stop, saveOutput]);
-  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, windowSeconds, workloadValid, whilePlaying, rate } = {}) => {
-    // The driver's speed is for calls of several sentences, which ran long; one sentence stays at the
-    // pace set by ear (2026-10-14). A call may still name its own speed (the formation lap briefing).
-    const speed = rate ?? (Array.isArray(encoded) && encoded.length > 1 ? playbackSettings.current.rate ?? DEFAULT_RATE : DEFAULT_RATE);
+  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall' } = {}) => {
+    // Multipart calls use their own absolute rate, never a multiplier of the role's rate.
+    // Capture it once so every sentence keeps the same speed until this call ends.
+    const multipart = Array.isArray(encoded) && encoded.length > 1;
+    const speed = clampRate(rate ?? (multipart ? playbackSettings.current.rate
+      : channel === 'spotter' ? playbackSettings.current.spotterRate : playbackSettings.current.pitwallRate));
     if (!valid() || (priority < 3 && priorityGate.current)
       || (player.current && ((!interrupt) || (priority > 0 && priority <= player.current._priority) || (priority === 0 && player.current._priority > 0)))) return false;
     stop('preempted'); setMessage('');
@@ -168,12 +213,14 @@ export default function useAudioOutput() {
         const next = new Audio(`data:${mime};base64,${rest.shift()}`);
         next._priority = priority; next._finish = current._finish;
         next.playbackRate = speed; next.preservesPitch = true;
-        next.volume = playbackSettings.current.volume; next.muted = playbackSettings.current.muted;
+        next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;
         chain(next);
         player.current = next;
-        const start = () => {
+        const start = async () => {
+          await radioEffect.warm(effectSettings.current, selected.current);
           if (terminal || player.current !== next) return;
           next._effect = radioEffect.attach(next, effectSettings.current, { sinkId: selected.current, ...playbackSettings.current });
+          next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;
           next._effect?.start(false);
           Promise.resolve(next.play()).catch(() => { current._finish('failed', 'playback_error'); if (player.current === next) stop(); });
         };
@@ -190,7 +237,7 @@ export default function useAudioOutput() {
     };
     chain(current);
     current.playbackRate = speed; current.preservesPitch = true;
-    current.volume = playbackSettings.current.volume; current.muted = playbackSettings.current.muted;
+    current.volume = Math.min(1, playbackSettings.current.volume); current.muted = playbackSettings.current.muted;
     try {
       if (supported) {
         try { await current.setSinkId(selected.current); }
@@ -229,8 +276,12 @@ export default function useAudioOutput() {
       }
       if (workloadValid && !workloadValid()) { current._finish('cancelled', 'driving_workload'); stop(); return false; }
       // Routed through the radio effect only when that is certain to be heard on the chosen device.
-      radioEffect.warm(effectSettings.current, selected.current);
+      await radioEffect.warm(effectSettings.current, selected.current);
+      if (!mounted.current || player.current !== current || terminal) return false;
+      if (!valid() || (priority < 3 && priorityGate.current) || (workloadValid && !workloadValid())) { stop(); return false; }
       current._effect = radioEffect.attach(current, effectSettings.current, { sinkId: selected.current, ...playbackSettings.current });
+      current.volume = Math.min(1, playbackSettings.current.volume); current.muted = playbackSettings.current.muted;
+      if (playbackSettings.current.volume > 1 && !current._effect?.boosted) setMessage('이 브라우저 또는 출력장치에서는 증폭을 사용할 수 없어 100%로 재생합니다. 최신 Chrome 또는 Edge와 출력장치 설정을 확인하세요.');
       current._effect?.start(true);
       await current.play();
       if (!mounted.current || player.current !== current || terminal) return false;
@@ -249,7 +300,8 @@ export default function useAudioOutput() {
       current._finish('failed', failure.name || 'playback_error'); stop();
     }
   }, [supported, stop, saveOutput]);
-  return { outputId, devices, supported, message, refresh, changeOutput, play, stop, stopNormal,
+  return { outputId, devices, supported, message, refresh, refreshing, changeOutput, play, stop, stopNormal,
     setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, isPlaying,
-    volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, rate: playback.rate, changeRate, effect, changeEffect };
+    volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, rate: playback.rate, changeRate,
+    spotterRate: playback.spotterRate, changeSpotterRate, pitwallRate: playback.pitwallRate, changePitwallRate, effect, changeEffect };
 }

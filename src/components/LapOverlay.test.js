@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import LapOverlay, { defaultLaps, PanBar } from './LapOverlay';
 
 const laps = [
@@ -58,6 +58,27 @@ test('channels can be switched off', async () => {
   expect(screen.getAllByText('스로틀').length).toBeGreaterThan(1);       // button + lane label
   fireEvent.click(screen.getByRole('button', { name: '스로틀' }));
   expect(screen.getAllByText('스로틀')).toHaveLength(1);
+});
+
+test('expert steering uses a symmetric scale with zero at the lane centre', async () => {
+  const load = jest.fn(async body => {
+    const result = payload(body);
+    result.channels.push({ key: 'steering', label: '조향', unit: '°' });
+    Object.values(result.series).forEach(series => { series.steering = [-10, -30, -60]; });
+    return result;
+  });
+  render(<LapOverlay laps={laps} load={load} />);
+  const zero = await screen.findByTestId('overlay-steering-zero-guide');
+  const lane = zero.parentElement;
+  const background = lane.querySelector('rect');
+  const middle = Number(background.getAttribute('y')) + Number(background.getAttribute('height')) / 2;
+  expect(Number(zero.getAttribute('y1'))).toBe(middle);
+  expect(lane).toHaveTextContent('60.0 °');
+  expect(lane).toHaveTextContent('-60.0');
+  for (const path of lane.querySelectorAll('path')) {
+    const ys = [...path.getAttribute('d').matchAll(/[ML][\d.]+ ([\d.]+)/g)].map(match => Number(match[1]));
+    expect(ys.every(value => value > middle)).toBe(true);
+  }
 });
 
 test('a failed request is shown', async () => {
@@ -188,4 +209,53 @@ test('the wheel over a zoomed chart moves it left and right without asking the s
   await waitFor(() => expect(screen.getByText(/\d+ m ~ \d+ m/).textContent).not.toBe(before));
   await new Promise((resolve) => { setTimeout(resolve, 200); });
   expect(load.mock.calls.length).toBe(calls);                // still inside the stretch already fetched
+});
+
+test('compact readout groups keep every selected lap visible at the shared cursor', async () => {
+  const load = jest.fn((body) => Promise.resolve(payload(body)));
+  render(<LapOverlay laps={laps} load={load} readoutGroupSize={1} fillHeight />);
+  const svg = await screen.findByRole('img', { name: '여러 랩 겹쳐 보기 그래프' });
+  svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 400 });
+  fireEvent.mouseMove(svg, { clientX: 600 });
+  const readout = screen.getByTestId('lap-overlay-readout');
+  expect(readout.querySelectorAll('table')).toHaveLength(2);
+  const headings = [...readout.querySelectorAll('thead th')].map(element => element.textContent);
+  expect(headings).toEqual(expect.arrayContaining(['3★', '1']));
+  expect(readout.querySelectorAll('tbody tr')).toHaveLength(6);
+});
+
+test('a long lap list keeps the selected laps and base visible separately and retains the eight-lap limit', async () => {
+  const many = Array.from({ length: 89 }, (_, index) => ({ lap_number: index + 2, lap_time_s: 110 - index / 100, status: 'VALID' }));
+  const load = jest.fn(async body => ({ ...payload(body), base_key: body.base_key || String(body.laps[0]) }));
+  render(<LapOverlay laps={many} preferredLaps={[88]} load={load} fillHeight />);
+  await screen.findByRole('img', { name: '여러 랩 겹쳐 보기 그래프' });
+  const list = screen.getByRole('group', { name: '겹쳐 볼 랩 목록' });
+  const summary = screen.getByLabelText('선택한 비교 랩');
+  expect(within(list).getByText('랩 2')).toBeInTheDocument();
+  expect(within(list).getByText('랩 90')).toBeInTheDocument();
+  expect(summary).toHaveTextContent('88★');
+  expect(summary).toHaveTextContent('전체 89랩');
+  for (let lap = 2; lap <= 10; lap += 1) fireEvent.click(within(list).getByText(`랩 ${lap}`, { exact: true }));
+  await waitFor(() => expect(load.mock.calls.at(-1)[0].laps).toHaveLength(8));
+  expect(summary).toHaveTextContent('선택 8/8');
+  expect(summary).toHaveTextContent('88★');
+  expect(within(list).getAllByRole('button', { pressed: true })).toHaveLength(8);
+});
+
+test('the stretched chart follows its visible pixel dimensions and cleans up its resize observer', async () => {
+  const previous = global.ResizeObserver;
+  let resize;
+  const disconnect = jest.fn();
+  global.ResizeObserver = class { constructor(callback) { resize = callback; } observe() {} disconnect() { disconnect(); } };
+  try {
+    const load = jest.fn(async body => payload(body));
+    const view = render(<LapOverlay laps={laps} load={load} fillHeight />);
+    const svg = await screen.findByRole('img', { name: '여러 랩 겹쳐 보기 그래프' });
+    Object.defineProperties(svg, { clientWidth: { configurable: true, value: 1440 }, clientHeight: { configurable: true, value: 400 } });
+    act(() => resize());
+    expect(svg).toHaveAttribute('viewBox', '0 0 1440 400');
+    expect(svg.querySelector('text')).toHaveAttribute('font-size', '11');
+    view.unmount();
+    expect(disconnect).toHaveBeenCalledTimes(1);
+  } finally { global.ResizeObserver = previous; }
 });

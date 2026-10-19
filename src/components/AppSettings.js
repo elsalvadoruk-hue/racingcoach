@@ -3,7 +3,7 @@ import { Button } from './ui/button';
 
 // Everything an installation has to be told once: where the telemetry is, the Google key and the Garage61 token.
 // Secrets are sent to the local app and are never shown again.
-export default function AppSettings({ apiBase, visible = true }) {
+export default function AppSettings({ apiBase, visible = true, fetcher = fetch }) {
   const [view, setView] = useState(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -16,14 +16,14 @@ export default function AppSettings({ apiBase, visible = true }) {
   const call = useCallback(async (path = '', method = 'GET', body, done = '') => {
     setBusy(true);
     try {
-      const response = await fetch(`${apiBase}/api/settings${path}`, body === undefined ? { method }
+      const response = await fetcher(`${apiBase}/api/settings${path}`, body === undefined ? { method }
         : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '설정을 저장하지 못했습니다.');
       setView(data); setProject(data.settings?.gcp_project_id || ''); setError(''); setNotice(done);
       return true;
     } catch (failure) { setError(failure.message); setNotice(''); return false; } finally { setBusy(false); }
-  }, [apiBase]);
+  }, [apiBase, fetcher]);
   useEffect(() => { if (visible) call(); }, [visible, call]);
 
   if (!view) return error ? <p role="alert" className="text-sm text-warning">{error}</p> : null;

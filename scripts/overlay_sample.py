@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 from ctypes import wintypes
+from contextlib import ExitStack
 import os
 import json
 from pathlib import Path
@@ -18,8 +19,6 @@ import threading
 from time import monotonic
 import tkinter as tk
 from tkinter import font as tkfont
-
-from PIL import ImageTk
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "iRacing_Backend"))
 from overlay_preferences import PreferencesStore, default_path, fit_position
@@ -54,6 +53,15 @@ else:
 class OverlaySample(OverlayRendering, OverlayCommands):
     def __init__(self, scene="during", goal="abs", autoplay=True, preferences_path=None, managed=False, hidden=False):
         self.native = NativeWindows()
+        self.window_lifetime = ExitStack()
+        try:
+            self.window_lifetime.enter_context(self.native.block_activation(managed))
+            self.initialize(scene, goal, autoplay, preferences_path, managed, hidden)
+        except BaseException:
+            self.window_lifetime.close()
+            raise
+
+    def initialize(self, scene, goal, autoplay, preferences_path, managed, hidden):
         self.preferences = PreferencesStore(preferences_path) if preferences_path is not None else None
         self.managed = managed
         self.hud_visible = not hidden
@@ -101,17 +109,13 @@ class OverlaySample(OverlayRendering, OverlayCommands):
         self.resize_origin = None
         self.closed = False
         self.trace_renderer = TraceRenderer()
-        self.trace_item = None
-        self.trace_images = []
-        self.trace_front = 0
+        self.trace_ready = False
         self.trace_labels = {}
         self.gear_item = None
         self.attempts = (False, True, False, True, True)
         self.celebration_renderer = CelebrationRenderer()
         self.celebration_started = None
         self.celebration_item = None
-        self.celebration_images = []
-        self.celebration_front = 0
         self.background = tk.Toplevel(self.root)
         self.background.withdraw()
         self.background.title(TITLE + " 배경")
@@ -133,19 +137,27 @@ class OverlaySample(OverlayRendering, OverlayCommands):
             canvas.bind("<B1-Motion>", self.drag)
             canvas.bind("<ButtonRelease-1>", self.finish_drag)
             canvas.bind("<Motion>", self.pointer_motion)
-        self.controls = tk.Toplevel(self.root)
-        self.controls.withdraw()
-        self.controls.title("오버레이 샘플 조작")
-        self.controls.attributes("-topmost", True)
-        self.controls.resizable(False, False)
-        self.controls.configure(bg=COLORS["background"])
-        self.controls.protocol("WM_DELETE_WINDOW", self.close)
+        # The web app owns managed controls. Creating the unused Tk control
+        # toplevel can activate its wrapper during startup, even if withdrawn.
+        self.controls = None
+        if not managed:
+            self.controls = tk.Toplevel(self.root)
+            self.controls.withdraw()
+            self.controls.title("오버레이 샘플 조작")
+            self.controls.attributes("-topmost", True)
+            self.controls.resizable(False, False)
+            self.controls.configure(bg=COLORS["background"])
+            self.controls.protocol("WM_DELETE_WINDOW", self.close)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.root.bind_all("<Escape>", lambda event: self.close())
         self.root.bind_all("<Control-0>", lambda event: self.reset_size())
-        self.make_controls()
+        if self.controls is not None:
+            self.make_controls()
         self.draw()
         self.root.update_idletasks()
+        # Set styles on the final wrappers before their first visible map.
+        self.native.click_through(self.background, False, no_activate=True)
+        self.native.click_through(self.root, False, no_activate=managed)
         left, top, right, bottom = self.native.primary_work_area()
         hud_width, hud_height = self.x(WIDTH), self.y(HEIGHT)
         x = left + max(0, (right - left - hud_width) // 2)
@@ -154,28 +166,28 @@ class OverlaySample(OverlayRendering, OverlayCommands):
         self.background.geometry(f"{hud_width}x{hud_height}+0+0")
         for window in (self.root, self.background):
             self.native.round_corners(window, hud_width, hud_height, self.px(CORNER_RADIUS))
-        self.background.deiconify()
-        self.root.deiconify()
-        self.controls.update_idletasks()
-        if not managed:
+        if not hidden:
+            self.native.show_without_activation(self.background)
+            self.native.show_without_activation(self.root)
+        if self.controls is not None:
+            self.controls.update_idletasks()
             self.controls.deiconify()
         self.root.update()
         self.native.move(self.root, x, y)
-        self.native.click_through(self.background, False, no_activate=True)
         self.root.bind("<Configure>", self.sync_background)
         self.sync_background()
         # Leave the HUD's growing right/bottom edges clear of its controls.
-        control_x = x - self.controls.winfo_width() - self.ui_px(24)
-        control_y = y
-        if control_x < left:
-            control_x = left
-            control_y = min(y + hud_height + self.ui_px(28),
-                            bottom - self.controls.winfo_height() - self.ui_px(45))
-        self.native.move(self.controls, control_x, control_y)
+        if self.controls is not None:
+            control_x = x - self.controls.winfo_width() - self.ui_px(24)
+            control_y = y
+            if control_x < left:
+                control_x = left
+                control_y = min(y + hud_height + self.ui_px(28),
+                                bottom - self.controls.winfo_height() - self.ui_px(45))
+            self.native.move(self.controls, control_x, control_y)
         if self.preferences is not None:
             self.restore_preferences()
         if managed:
-            self.controls.withdraw()
             threading.Thread(target=self.read_commands, name="overlay-controls", daemon=True).start()
             self.control_timer = self.root.after(COMMAND_POLL_INTERVAL_MS, self.poll_commands)
         if hidden:
@@ -216,6 +228,8 @@ class OverlaySample(OverlayRendering, OverlayCommands):
                             else (self.background_opacity, self.background))
         variable.set(percentage)
         window.attributes("-alpha", percentage/100 if self.hud_visible else 0)
+        if layer == 'content':
+            self.native.sync_image(self.root, percentage, self.hud_visible)
 
     def display(self, values):
         mode, visible = values['mode'], values['visible']
@@ -259,11 +273,13 @@ class OverlaySample(OverlayRendering, OverlayCommands):
             if visible:
                 # Render the new session before exposing either layer again.
                 self.draw()
-                self.background.deiconify(); self.root.deiconify()
+                self.native.show_without_activation(self.background)
+                self.native.show_without_activation(self.root)
                 self.root.attributes('-alpha', self.content_opacity.get()/100)
                 self.background.attributes('-alpha', self.background_opacity.get()/100)
                 self.sync_background()
             else:
+                self.native.sync_image(self.root, self.content_opacity.get(), False)
                 self.root.withdraw(); self.background.withdraw()
         if changed:
             self.draw()
@@ -335,6 +351,7 @@ class OverlaySample(OverlayRendering, OverlayCommands):
                                  self.root.winfo_y(), self.root.winfo_width(), self.root.winfo_height())
         for window in (self.root, self.background):
             self.native.round_corners(window, self.root.winfo_width(), self.root.winfo_height(), self.px(CORNER_RADIUS))
+        self.native.sync_image(self.root, self.content_opacity.get(), self.hud_visible)
 
 
     def tick(self):
@@ -503,7 +520,7 @@ class OverlaySample(OverlayRendering, OverlayCommands):
         try:
             through = self.display_mode == 'live' or self.locked.get()
             self.native.click_through(self.background, through, no_activate=True)
-            self.native.click_through(self.root, through)
+            self.native.click_through(self.root, through, no_activate=self.managed)
         except OSError as error:
             self.locked.set(False)
             self.status.set(f"클릭 통과를 바꾸지 못했습니다: {error}")
@@ -557,7 +574,11 @@ class OverlaySample(OverlayRendering, OverlayCommands):
             self.root.after_cancel(self.animation_timer)
         if self.control_timer is not None:
             self.root.after_cancel(self.control_timer)
-        self.root.destroy()
+        self.native.close_image()
+        try:
+            self.root.destroy()
+        finally:
+            self.window_lifetime.close()
 
     def run(self):
         self.root.mainloop()
