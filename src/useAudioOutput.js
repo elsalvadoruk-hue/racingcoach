@@ -4,6 +4,7 @@ import { DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX } from './voic
 
 const STORAGE_KEY = 'iracing.voice.outputDevice';
 const savedOutput = () => { try { return localStorage.getItem(STORAGE_KEY) || ''; } catch { return ''; } };
+const MISSING_OUTPUT_MESSAGE = '선택한 출력장치를 사용할 수 없어 임시로 Windows 기본 장치로 재생합니다. 저장된 선택은 유지하며 같은 장치가 연결되면 다음 안내부터 돌아갑니다.';
 const PLAYBACK_KEY = 'iracing.voice.playback';
 const clampVolume = (value) => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1.3, value)) : 1;
 export { DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX };
@@ -54,6 +55,7 @@ export default function useAudioOutput() {
   const [effect, setEffect] = useState(radioEffect.savedSettings);
   const effectSettings = useRef(effect);
   const selected = useRef(outputId), knownDevices = useRef([]), player = useRef(null);
+  const unavailableOutput = useRef('');
   const priorityGate = useRef(false);
   const mounted = useRef(true), refreshSerial = useRef(0);
   const permissionFlight = useRef(null), refreshQueued = useRef(false);
@@ -108,6 +110,7 @@ export default function useAudioOutput() {
   }, []);
   const toggleMute = useCallback(() => updatePlayback({ muted: !playbackSettings.current.muted }), [updatePlayback]);
   const saveOutput = useCallback((id) => {
+    unavailableOutput.current = '';
     selected.current = id; setOutputId(id);
     try { if (id) localStorage.setItem(STORAGE_KEY, id); else localStorage.removeItem(STORAGE_KEY); } catch { /* Playback still works without storage. */ }
   }, []);
@@ -140,12 +143,17 @@ export default function useAudioOutput() {
         if (ask) setMessage(outputs.length ? '' : '이 브라우저가 알려 준 출력장치가 Windows 기본 장치뿐입니다. 장치를 연결했는지 확인하세요.');
         // Before microphone permission, browsers can hide saved device IDs. Only
         // classify removal when a previously visible device actually disappears.
-        const removed = selected.current && knownDevices.current.some((device) => device.deviceId === selected.current)
+        const removed = selected.current && outputs.length > 0 && knownDevices.current.some((device) => device.deviceId === selected.current)
           && !outputs.some((device) => device.deviceId === selected.current);
         knownDevices.current = outputs; setDevices(outputs);
         if (removed) {
-          stop('output_removed'); saveOutput('');
-          setMessage('선택한 출력장치의 연결이 끊겨 Windows 기본 장치로 변경했습니다.');
+          // Bluetooth endpoints may disappear briefly. Only an explicit user choice changes storage.
+          unavailableOutput.current = selected.current;
+          stop('output_removed');
+          setMessage('선택한 출력장치의 연결이 끊겼습니다. 저장된 선택은 유지하며 사용할 수 없는 동안에는 임시로 Windows 기본 장치로 재생합니다.');
+        } else if (unavailableOutput.current === selected.current && outputs.some((device) => device.deviceId === selected.current)) {
+          unavailableOutput.current = '';
+          setMessage('선택한 출력장치가 다시 연결되었습니다. 다음 안내부터 이 장치로 재생합니다.');
         }
       } catch { if (mounted.current && serial === refreshSerial.current) setMessage('출력장치 목록을 읽지 못했습니다. 장치 연결과 브라우저 권한을 확인하고 목록을 갱신하세요.'); }
     };
@@ -161,7 +169,7 @@ export default function useAudioOutput() {
       });
     }
     return flight;
-  }, [supported, stop, saveOutput]);
+  }, [supported, stop]);
   useEffect(() => {
     mounted.current = true;
     refresh();
@@ -203,6 +211,34 @@ export default function useAudioOutput() {
     };
     player.current = current;
     setIsPlaying(true);
+    // Keep every sentence and its Web Audio effect on the same actual output for this call.
+    // Try the saved device again on each new call, even if devicechange was missed.
+    let sinkId = selected.current;
+    const active = (part) => mounted.current && !terminal && player.current === part;
+    const routingFailed = (part, failure) => {
+      if (!active(part)) return false;
+      setMessage(failure?.name === 'NotAllowedError'
+        ? '선택한 출력장치의 사용 권한이 없습니다. 마이크 준비로 권한을 허용한 뒤 장치를 다시 선택하세요.'
+        : '선택한 출력장치로 연결하지 못했습니다. 장치 연결을 확인하거나 Windows 기본 장치를 선택하세요.');
+      current._finish('failed', 'output_routing'); stop(); return false;
+    };
+    const route = async (part) => {
+      if (!supported) return active(part);
+      try {
+        await part.setSinkId(sinkId);
+        if (active(part) && sinkId && unavailableOutput.current === sinkId) unavailableOutput.current = '';
+      } catch (failure) {
+        if (!active(part)) return false;
+        if (failure?.name !== 'NotFoundError' || !sinkId) return routingFailed(part, failure);
+        unavailableOutput.current = sinkId;
+        sinkId = '';
+        try { await part.setSinkId(sinkId); }
+        catch (fallbackFailure) { return routingFailed(part, fallbackFailure); }
+        if (!active(part)) return false;
+        setMessage(MISSING_OUTPUT_MESSAGE);
+      }
+      return active(part);
+    };
     const followed = new Set();
     const follow = (part) => {
       if (terminal || player.current !== part || followed.has(part)) return;
@@ -217,14 +253,19 @@ export default function useAudioOutput() {
         chain(next);
         player.current = next;
         const start = async () => {
-          await radioEffect.warm(effectSettings.current, selected.current);
-          if (terminal || player.current !== next) return;
-          next._effect = radioEffect.attach(next, effectSettings.current, { sinkId: selected.current, ...playbackSettings.current });
-          next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;
-          next._effect?.start(false);
-          Promise.resolve(next.play()).catch(() => { current._finish('failed', 'playback_error'); if (player.current === next) stop(); });
+          try {
+            if (!await route(next)) return;
+            await radioEffect.warm(effectSettings.current, sinkId);
+            if (!active(next)) return;
+            next._effect = radioEffect.attach(next, effectSettings.current, { sinkId, ...playbackSettings.current });
+            next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;
+            next._effect?.start(false);
+            await next.play();
+          } catch {
+            if (active(next)) { current._finish('failed', 'playback_error'); stop(); }
+          }
         };
-        if (supported) Promise.resolve(next.setSinkId(selected.current)).then(start, start); else start();
+        start();
     };
     const chain = (part) => {
       part.onended = () => follow(part);
@@ -239,23 +280,7 @@ export default function useAudioOutput() {
     current.playbackRate = speed; current.preservesPitch = true;
     current.volume = Math.min(1, playbackSettings.current.volume); current.muted = playbackSettings.current.muted;
     try {
-      if (supported) {
-        try { await current.setSinkId(selected.current); }
-        catch (failure) {
-          if (!mounted.current || player.current !== current) return;
-          if (failure.name === 'NotFoundError') {
-            saveOutput('');
-            await current.setSinkId('');
-            if (!mounted.current || player.current !== current) return;
-            setMessage('저장된 출력장치를 찾지 못해 Windows 기본 장치로 재생합니다. 원하는 장치를 다시 선택하세요.');
-          } else {
-            setMessage(failure.name === 'NotAllowedError'
-              ? '선택한 출력장치의 사용 권한이 없습니다. 마이크 준비로 권한을 허용한 뒤 장치를 다시 선택하세요.'
-              : '선택한 출력장치로 연결하지 못했습니다. 장치 연결을 확인하거나 Windows 기본 장치를 선택하세요.');
-            current._finish('failed', 'output_routing'); stop(); return false;
-          }
-        }
-      }
+      if (!await route(current)) return false;
       // A later reply, output change, stop, or unmount cancels pending routing.
       if (!mounted.current || player.current !== current) return false;
       if (!valid() || (priority < 3 && priorityGate.current)) { stop(); return false; }
@@ -276,10 +301,10 @@ export default function useAudioOutput() {
       }
       if (workloadValid && !workloadValid()) { current._finish('cancelled', 'driving_workload'); stop(); return false; }
       // Routed through the radio effect only when that is certain to be heard on the chosen device.
-      await radioEffect.warm(effectSettings.current, selected.current);
+      await radioEffect.warm(effectSettings.current, sinkId);
       if (!mounted.current || player.current !== current || terminal) return false;
       if (!valid() || (priority < 3 && priorityGate.current) || (workloadValid && !workloadValid())) { stop(); return false; }
-      current._effect = radioEffect.attach(current, effectSettings.current, { sinkId: selected.current, ...playbackSettings.current });
+      current._effect = radioEffect.attach(current, effectSettings.current, { sinkId, ...playbackSettings.current });
       current.volume = Math.min(1, playbackSettings.current.volume); current.muted = playbackSettings.current.muted;
       if (playbackSettings.current.volume > 1 && !current._effect?.boosted) setMessage('이 브라우저 또는 출력장치에서는 증폭을 사용할 수 없어 100%로 재생합니다. 최신 Chrome 또는 Edge와 출력장치 설정을 확인하세요.');
       current._effect?.start(true);
@@ -299,7 +324,7 @@ export default function useAudioOutput() {
         : '소리를 재생하지 못했습니다. 출력장치 연결을 확인하고 다시 시도하세요.');
       current._finish('failed', failure.name || 'playback_error'); stop();
     }
-  }, [supported, stop, saveOutput]);
+  }, [supported, stop]);
   return { outputId, devices, supported, message, refresh, refreshing, changeOutput, play, stop, stopNormal,
     setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, isPlaying,
     volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, rate: playback.rate, changeRate,

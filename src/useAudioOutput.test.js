@@ -1,6 +1,7 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import useAudioOutput from './useAudioOutput';
 import LiveCoach from './components/LiveCoach';
+import * as radioEffect from './radioEffect';
 
 const storageKey = 'iracing.voice.outputDevice';
 const headset = { kind: 'audiooutput', deviceId: 'headset', label: 'USB Headset' };
@@ -161,23 +162,31 @@ test('saved output survives remount and is not discarded before microphone permi
   expect(JSON.parse(localStorage.getItem('iracing.voice.playback'))).toEqual({ volume: 0, muted: false, rate: 1.3, spotterRate: 1.15, pitwallRate: 1.15 });
 });
 
-test('unplugging an available selected device stops playback and restores system default', async () => {
+test('a Bluetooth disconnect preserves the saved choice and reconnect restores the next call without replaying old audio', async () => {
   const { result } = renderHook(useAudioOutput);
   await waitFor(() => expect(result.current.devices).toHaveLength(2));
   act(() => result.current.changeOutput('headset'));
   await act(async () => result.current.play('reply'));
   media.enumerateDevices.mockResolvedValue([speaker]);
   await act(async () => media.dispatchEvent(new Event('devicechange')));
-  expect(result.current.outputId).toBe('');
-  expect(localStorage.getItem(storageKey)).toBeNull();
+  expect(result.current.outputId).toBe('headset');
+  expect(localStorage.getItem(storageKey)).toBe('headset');
   expect(players[0].pause).toHaveBeenCalled();
-  expect(result.current.message).toContain('연결이 끊겨');
+  expect(result.current.message).toContain('연결이 끊');
+  expect(players).toHaveLength(1);
+  media.enumerateDevices.mockResolvedValue([headset, speaker]);
+  await act(async () => media.dispatchEvent(new Event('devicechange')));
+  expect(result.current.message).toContain('다시 연결');
+  expect(players).toHaveLength(1);
   await act(async () => result.current.play('next'));
-  expect(players[1].setSinkId).toHaveBeenCalledWith('');
+  expect(players[1].setSinkId.mock.calls).toEqual([['headset']]);
+  expect(players[1].play).toHaveBeenCalled();
 });
 
-test('missing saved device falls back to default with a visible explanation', async () => {
+test('missing saved device uses default temporarily while retaining the preference and effect routing', async () => {
   localStorage.setItem(storageKey, 'missing');
+  const warm = jest.spyOn(radioEffect, 'warm').mockImplementation(() => {});
+  const attach = jest.spyOn(radioEffect, 'attach').mockReturnValue(null);
   const { result } = renderHook(useAudioOutput);
   global.Audio.mockImplementationOnce(() => {
     const player = { pause: jest.fn(), play: jest.fn(async () => {}), setSinkId: jest.fn()
@@ -187,8 +196,15 @@ test('missing saved device falls back to default with a visible explanation', as
   await act(async () => result.current.play('reply'));
   expect(players[0].setSinkId.mock.calls).toEqual([['missing'], ['']]);
   expect(players[0].play).toHaveBeenCalled();
-  expect(result.current.outputId).toBe('');
+  expect(result.current.outputId).toBe('missing');
+  expect(localStorage.getItem(storageKey)).toBe('missing');
   expect(result.current.message).toContain('기본 장치로 재생');
+  expect(warm).toHaveBeenLastCalledWith(expect.any(Object), '');
+  expect(attach).toHaveBeenLastCalledWith(players[0], expect.any(Object), expect.objectContaining({ sinkId: '' }));
+  // A new call retries the saved output even when the browser missed a connection event.
+  await act(async () => result.current.play('restored'));
+  expect(players[1].setSinkId.mock.calls).toEqual([['missing']]);
+  expect(attach).toHaveBeenLastCalledWith(players[1], expect.any(Object), expect.objectContaining({ sinkId: 'missing' }));
 });
 
 test('denied device permission does not send sound to an unintended output', async () => {
@@ -434,7 +450,7 @@ test('returning to the app discovers connections missed in the background withou
   media.enumerateDevices.mockResolvedValue([speaker]);
   await act(async () => document.dispatchEvent(new Event('visibilitychange')));
   expect(result.current.devices).toEqual([speaker]);
-  expect(result.current.outputId).toBe('');
+  expect(result.current.outputId).toBe('headset');
   expect(media.getUserMedia).not.toHaveBeenCalled();
   unmount();
   media.enumerateDevices.mockClear();
@@ -455,4 +471,119 @@ test('an older device list cannot overwrite a newer connection refresh', async (
   await act(async () => media.dispatchEvent(new Event('devicechange')));
   await act(async () => { stale([headset, speaker]); await pending; });
   expect(result.current.devices).toEqual([speaker]);
+});
+
+test('a temporarily hidden or empty device list leaves playing audio and the preference intact', async () => {
+  const { result } = renderHook(useAudioOutput);
+  await waitFor(() => expect(result.current.devices).toHaveLength(2));
+  act(() => result.current.changeOutput('headset'));
+  await act(async () => result.current.play('answer'));
+  for (const devices of [[], [{ kind: 'audiooutput', deviceId: '', label: '' }], [headset, speaker]]) {
+    media.enumerateDevices.mockResolvedValue(devices);
+    await act(async () => media.dispatchEvent(new Event('devicechange')));
+    expect(players[0].pause).not.toHaveBeenCalled();
+    expect(result.current.outputId).toBe('headset');
+    expect(localStorage.getItem(storageKey)).toBe('headset');
+  }
+});
+
+test.each(['', 'speaker'])('an explicit choice of %s during disconnect wins over the old device returning', async (choice) => {
+  const { result } = renderHook(useAudioOutput);
+  await waitFor(() => expect(result.current.devices).toHaveLength(2));
+  act(() => result.current.changeOutput('headset'));
+  media.enumerateDevices.mockResolvedValue([speaker]);
+  await act(async () => media.dispatchEvent(new Event('devicechange')));
+  act(() => result.current.changeOutput(choice));
+  media.enumerateDevices.mockResolvedValue([headset, speaker]);
+  await act(async () => media.dispatchEvent(new Event('devicechange')));
+  await act(async () => result.current.play('new-call'));
+  expect(result.current.outputId).toBe(choice);
+  expect(localStorage.getItem(storageKey)).toBe(choice || null);
+  if (choice) expect(players[0].setSinkId.mock.calls).toEqual([[choice]]);
+});
+
+test('temporary fallback survives page reload with the original device still selected', async () => {
+  localStorage.setItem(storageKey, 'headset');
+  const first = renderHook(useAudioOutput);
+  await waitFor(() => expect(first.result.current.devices).toHaveLength(2));
+  media.enumerateDevices.mockResolvedValue([speaker]);
+  await act(async () => media.dispatchEvent(new Event('devicechange')));
+  global.Audio.mockImplementationOnce(src => {
+    const player = { src, pause: jest.fn(), play: jest.fn(async () => {}), setSinkId: jest.fn()
+      .mockRejectedValueOnce(new DOMException('gone', 'NotFoundError')).mockResolvedValueOnce() };
+    players.push(player); return player;
+  });
+  await act(async () => first.result.current.play('temporary'));
+  expect(players[0].setSinkId.mock.calls).toEqual([['headset'], ['']]);
+  first.unmount();
+  media.enumerateDevices.mockResolvedValue([headset, speaker]);
+  const second = renderHook(useAudioOutput);
+  await waitFor(() => expect(second.result.current.devices).toHaveLength(2));
+  await act(async () => second.result.current.play('after-reload'));
+  expect(second.result.current.outputId).toBe('headset');
+  expect(players[1].setSinkId.mock.calls).toEqual([['headset']]);
+});
+
+test.each(['NotAllowedError', 'AbortError', 'NotFoundError'])('multipart routing handles %s explicitly and keeps effects on the actual output', async (name) => {
+  const warm = jest.spyOn(radioEffect, 'warm').mockImplementation(() => {});
+  const attach = jest.spyOn(radioEffect, 'attach').mockReturnValue(null);
+  const { result } = renderHook(useAudioOutput);
+  act(() => result.current.changeOutput('headset'));
+  const delivery = jest.fn();
+  await act(async () => result.current.play(['first', 'second'], 'audio/mpeg', { onStatus: delivery }));
+  global.Audio.mockImplementationOnce(src => {
+    const player = { src, pause: jest.fn(), play: jest.fn(async () => {}), setSinkId: jest.fn()
+      .mockRejectedValueOnce(new DOMException('device failure', name)).mockResolvedValueOnce() };
+    players.push(player); return player;
+  });
+  await act(async () => players[0].onended());
+  expect(localStorage.getItem(storageKey)).toBe('headset');
+  if (name === 'NotFoundError') {
+    expect(players[1].setSinkId.mock.calls).toEqual([['headset'], ['']]);
+    expect(players[1].play).toHaveBeenCalled();
+    expect(warm).toHaveBeenLastCalledWith(expect.any(Object), '');
+    expect(attach).toHaveBeenLastCalledWith(players[1], expect.any(Object), expect.objectContaining({ sinkId: '' }));
+    act(() => players[1].onended());
+    expect(delivery).toHaveBeenCalledWith('completed', '');
+  } else {
+    expect(players[1].setSinkId.mock.calls).toEqual([['headset']]);
+    expect(players[1].play).not.toHaveBeenCalled();
+    expect(delivery).toHaveBeenCalledWith('failed', 'output_routing');
+    expect(result.current.isPlaying).toBe(false);
+  }
+});
+
+test('an old routing rejection cannot replace a newer output choice or fall back after cancellation', async () => {
+  const { result } = renderHook(useAudioOutput);
+  act(() => result.current.changeOutput('headset'));
+  let rejectSink;
+  global.Audio.mockImplementationOnce(() => {
+    const player = { pause: jest.fn(), play: jest.fn(), setSinkId: jest.fn(() => new Promise((resolve, reject) => { rejectSink = reject; })) };
+    players.push(player); return player;
+  });
+  let pending;
+  act(() => { pending = result.current.play('old-call'); });
+  act(() => result.current.changeOutput('speaker'));
+  await act(async () => {
+    rejectSink(new DOMException('gone', 'NotFoundError'));
+    await pending;
+  });
+  expect(players[0].setSinkId.mock.calls).toEqual([['headset']]);
+  expect(players[0].play).not.toHaveBeenCalled();
+  expect(localStorage.getItem(storageKey)).toBe('speaker');
+  await act(async () => result.current.play('new-call'));
+  expect(players[1].setSinkId.mock.calls).toEqual([['speaker']]);
+});
+
+test('default output users continue playing through device list changes without acquiring microphone permission', async () => {
+  media.getUserMedia = jest.fn();
+  const { result } = renderHook(useAudioOutput);
+  await waitFor(() => expect(result.current.devices).toHaveLength(2));
+  await act(async () => result.current.play('default-call'));
+  media.enumerateDevices.mockResolvedValue([speaker]);
+  await act(async () => media.dispatchEvent(new Event('devicechange')));
+  expect(players[0].pause).not.toHaveBeenCalled();
+  expect(players[0].setSinkId.mock.calls).toEqual([['']]);
+  expect(result.current.outputId).toBe('');
+  expect(media.getUserMedia).not.toHaveBeenCalled();
 });

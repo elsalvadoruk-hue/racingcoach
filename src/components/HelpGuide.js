@@ -379,7 +379,7 @@ const SECTIONS = [
     { h: '소리 조절' },
     { list: [
       '볼륨은 0~130%로 조절하며 100% 초과 구간과 손잡이는 빨간색입니다. 증폭으로 소리가 찌그러지면 낮추세요. 볼륨 슬라이더와 음소거 버튼은 재생 중에도 바로 적용됩니다. 마이크 입력과 게임 볼륨은 별개입니다.',
-      '출력장치를 바꾸면 말하던 답변은 멈춥니다. 쓰던 장치가 뽑히면 Windows 기본 장치로 넘어갑니다.',
+      '출력장치를 바꾸면 말하던 답변은 멈춥니다. 쓰던 장치가 끊겨도 저장된 선택은 유지합니다. 사용할 수 없는 동안에는 임시로 Windows 기본 장치로 재생하며 같은 장치가 돌아오면 다음 안내부터 원래 장치로 재생합니다. Windows 기본 출력을 직접 선택하면 그 선택을 유지합니다.',
       '장치 이름이 안 보이면 상단 “출력장치”의 “목록 갱신”을 누르고 브라우저의 마이크 접근을 허용해 주세요. 확인용 마이크는 바로 종료합니다. 장치 연결·분리와 앱으로 돌아올 때 목록을 자동 갱신합니다. 출력장치 선택은 최신 Chrome과 Edge에서 됩니다.',
     ] },
   ], action: ['음성 코치 열기', 'live-coach'] },
@@ -815,7 +815,7 @@ const SECTIONS = [
     ] },
     { list: [
       '처음 설치하거나 기존 음성이 누락됐으면 전체 음성팩 1.3.0을 받습니다. 버전을 모를 때도 전체 음성팩을 사용할 수 있습니다.',
-      '1.3.0: 음성 추가 없음. 1.2.0의 전체 음성이 이미 있으면 음성은 다시 받을 필요가 없습니다.',
+      '1.3.1: Bluetooth 출력장치가 끊겨도 선택을 유지합니다. 1.3.0 음성이 있으면 음성팩은 다시 받을 필요가 없습니다.',
       '음성 ZIP을 풀 때 data/data 또는 음성팩이름/data처럼 중첩하지 마세요. 별도 데이터 폴더나 음성 경로를 지정했다면 그 실제 경로에 합칩니다.',
       '그대로 남는 것: 분석 기록, 음성 메모, 폴더 설정, Google 키, Garage61 토큰, 확정한 코너 번호, 피트 기록, 스포터·피트월 설정.',
       '버전별 변경 내역과 음성 공유 폴더 링크는 GitHub Releases와 README에서 확인합니다. 오프라인 패치 노트도 유지합니다.',
@@ -912,7 +912,7 @@ export function UserManual({ onNavigate, hasAnalysis }) {
   }, [sections]);
   return <Card asChild><article className="coach-manual" aria-label="사용 매뉴얼">
     <CardHeader className="coach-manual-intro p-0">
-      <div><CardTitle asChild><h2 className="flex items-center gap-2"><BookOpen aria-hidden="true" size={18} />기능별 사용법</h2></CardTitle><CardDescription>1.3.0 데스크톱 화면 기준입니다. 처음이면 1장, 비교 조작은 2~3장, 셋업 실험은 4~6장, 기록은 7장, 주행 중 음성은 8~12장, 폴더와 키 설정은 18장을 보세요.</CardDescription></div>
+      <div><CardTitle asChild><h2 className="flex items-center gap-2"><BookOpen aria-hidden="true" size={18} />기능별 사용법</h2></CardTitle><CardDescription>1.3.1 데스크톱 화면 기준입니다. 처음이면 1장, 비교 조작은 2~3장, 셋업 실험은 4~6장, 기록은 7장, 주행 중 음성은 8~12장, 폴더와 키 설정은 18장을 보세요.</CardDescription></div>
       <Field className="coach-manual-search"><FieldLabel htmlFor="manual-search" className="sr-only">사용 가이드 검색</FieldLabel><Input ref={searchRef} id="manual-search" aria-label="사용 가이드 검색" type="search" placeholder="기능이나 문제를 검색하세요" value={search} onChange={event => setSearch(event.target.value)} /></Field>
     </CardHeader>
     {!hasAnalysis && <p className="mt-4 text-sm text-muted-foreground">주행 분석이 없어도 매뉴얼을 읽을 수 있습니다. 기능을 사용하려면 IBT 파일을 선택하세요.</p>}
