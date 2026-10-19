@@ -4,6 +4,7 @@
 !/.gitattributes
 !/.env.development
 !/README.md
+!/LICENSE.md
 !/패치 노트.txt
 !/package.json
 !/package-lock.json
