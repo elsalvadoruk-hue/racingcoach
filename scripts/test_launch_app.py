@@ -188,6 +188,9 @@ elif sys.argv[1:3] == ['-m', 'pip']:
     with open(os.path.join(os.path.dirname(__file__), 'pip-call.txt'), 'w') as log:
         log.write(' '.join(sys.argv[3:]) + '\\n' + os.environ.get('PYYAML_FORCE_LIBYAML', '<unset>'))
     sys.exit({pip_exit})
+elif len(sys.argv) > 1 and sys.argv[1].replace(chr(92), '/') == 'scripts/install_ui.py':
+    print('MOCK_SCREEN_SETUP')
+    sys.exit({ui_exit})
 """
 
 
@@ -195,7 +198,7 @@ elif sys.argv[1:3] == ['-m', 'pip']:
 class InstallerTests(unittest.TestCase):
     """설치.bat installs with the picked Python and explains a failure on a new one."""
 
-    def install(self, minor, pip_exit):
+    def install(self, minor, pip_exit, ui_exit=0):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder) / "한글 폴더 (1)"
             (root / "scripts").mkdir(parents=True)
@@ -204,7 +207,7 @@ class InstallerTests(unittest.TestCase):
             shutil.copy2(project / "scripts" / "find_python.bat", root / "scripts" / "find_python.bat")
             fake = Path(folder) / "python"
             fake.mkdir()
-            (fake / "fake.py").write_text(FAKE_PIP_PYTHON.format(minor=minor, pip_exit=pip_exit), encoding="utf-8")
+            (fake / "fake.py").write_text(FAKE_PIP_PYTHON.format(minor=minor, pip_exit=pip_exit, ui_exit=ui_exit), encoding="utf-8")
             (fake / "python.cmd").write_text(f'@"{sys.executable}" "%~dp0fake.py" %*\r\n', encoding="ascii")
             path = os.pathsep.join([str(fake), os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")])
             env = dict(os.environ, PATH=path)
@@ -217,11 +220,18 @@ class InstallerTests(unittest.TestCase):
     def test_pyyaml_is_installed_without_compiling_its_optional_part(self):
         code, output, call = self.install(12, 0)
         self.assertEqual(code, 0, output)
+        self.assertIn("MOCK_SCREEN_SETUP", output)
         arguments, pyyaml_setting = call.splitlines()
         self.assertIn("--prefer-binary", arguments)
         self.assertIn("requirements_core.txt", arguments)
         self.assertEqual(pyyaml_setting, "0")
         self.assertNotIn("newer than the tested", output)
+
+    def test_screen_failure_is_not_reported_as_success(self):
+        code, output, _ = self.install(12, 0, ui_exit=1)
+        self.assertEqual(code, 1)
+        self.assertIn("Screen setup failed", output)
+        self.assertNotIn("Done. Start the app", output)
 
     def test_a_failure_on_a_new_python_points_to_3_12(self):
         code, output, _ = self.install(15, 1)

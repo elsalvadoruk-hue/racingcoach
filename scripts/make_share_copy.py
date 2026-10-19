@@ -34,7 +34,7 @@ ROOT_FILES = ("실행.bat", "설치.bat", "패치 노트.txt", "README.md", "pac
               "tailwind.config.js", "postcss.config.js", ".gitignore", "log-upload-url.txt")
 ROOT_FOLDERS = ("src", "public", "build", "manual")
 BACKEND_SKIP = ("gcp-key.json", "garage61_api_token.txt")
-SCRIPTS = ("launch_app.py", "serve_ui.py", "prepare_radio_audio.py", "test_launch_app.py", "make_share_copy.py", "make_patch.py", "read_coach_log.py", "read_timing_log.py",
+SCRIPTS = ("launch_app.py", "install_ui.py", "serve_ui.py", "prepare_radio_audio.py", "test_launch_app.py", "make_share_copy.py", "make_patch.py", "read_coach_log.py", "read_timing_log.py",
            # 설치.bat and 실행.bat pick a supported Python through this.
            "find_python.bat",
            # The web settings tab and the driving overlay run this window process.

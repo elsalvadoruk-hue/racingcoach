@@ -26,6 +26,10 @@
 !/iRacing_Backend/requirements*.txt
 /scripts/*
 !/scripts/launch_app.py
+!/scripts/install_ui.py
+!/scripts/test_install_ui.py
+!/scripts/make_voice_pack.py
+!/scripts/test_make_voice_pack.py
 !/scripts/serve_ui.py
 !/scripts/prepare_radio_audio.py
 !/scripts/test_launch_app.py
@@ -47,6 +51,7 @@
 !/scripts/test_audit_git.py
 /releases/*
 !/releases/[0-9]*.json
+!/releases/voice-[0-9]*.json
 
 # Never commit credentials, recordings, telemetry, caches or local settings.
 **/node_modules/
