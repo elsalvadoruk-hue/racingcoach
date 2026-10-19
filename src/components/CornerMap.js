@@ -45,7 +45,7 @@ function segments(points) {
   }, []);
 }
 
-export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, trackMap, courseDiagram, geographic = false, geographicMetersPerUnit, mapStatus = 'unavailable', referenceLineSource, referenceLabel = '기준 주행', detailLoading = false, corners, selected, selectedRange, activePct, onSelect, onHover, focusVersion }) {
+export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, trackMap, courseDiagram, geographic = false, geographicMetersPerUnit, mapStatus = 'unavailable', referenceLineSource, onFullLap, referenceLabel = '기준 주행', detailLoading = false, corners, selected, selectedRange, activePct, onSelect, onHover, focusVersion }) {
   const svgRef = useRef(null);
   const drag = useRef(null);
   const manual = useRef(false);
@@ -250,6 +250,8 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
         <Button variant="outline" size="icon" aria-label="지도 확대" onClick={() => zoom(.8)}><Plus aria-hidden="true" /></Button>
         <Button variant="outline" onClick={() => reset()}><LocateFixed data-icon="inline-start" aria-hidden="true" />{diagramMode ? '코스 맞춤' : selected ? '선택 구간 맞춤' : '지도 맞춤'}</Button>
         <Button variant="outline" onClick={() => reset(fullView)}><Maximize data-icon="inline-start" aria-hidden="true" />전체 지도</Button>
+        {/* "전체 지도" only zooms out; this leaves the corner, so the graphs show the whole lap too. */}
+        {selected && !diagramMode && onFullLap && <Button variant="outline" onClick={onFullLap}>전체 랩으로</Button>}
       </div>
     </div>
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3" data-testid="map-background-source">

@@ -68,5 +68,13 @@ export class VoiceRecorder {
 
 // A call cut off for one of these reasons was not the driver's choice: it is said again
 // from the start once the radio is free, if it is still true by then.
+// How fast the voices are played, pitch kept (HTMLAudioElement.playbackRate with preservesPitch). The
+// clips are unchanged, so any speed costs nothing. 1.15 was set by ear and stays for one-sentence calls;
+// calls of several sentences ran long, so for them the driver may go faster (not slower: the server
+// times corner calls and straight lines for clips played at 1.15). Kept here, not in useAudioOutput,
+// which the tests replace whole.
+export const DEFAULT_RATE = 1.15;
+export const RATE_MIN = 1.15, RATE_MAX = 1.4;
+
 export const RESUMABLE = ['preempted', 'nearby_car'];
 export const MAX_RESUMES = 2;

@@ -225,7 +225,10 @@ class LiveTelemetry:
     # Each further sentence of the same call needs three more seconds of straight.
     BRIEF_STRAIGHT_S, BRIEF_EVERY_S, BRIEF_SENTENCE_S = 8., 40., 3.
     BRIEF_REPEAT_S = {'gap_ahead': 90., 'gap_behind': 90., 'position': 300., 'time': 600., 'leader_lap': 600., 'ahead_lap': 300.,
-                      'rival_ahead': 180., 'rival_behind': 180., 'catch': 600., 'defend': 300., 'theoretical': 600.}
+                      'rival_ahead': 180., 'rival_behind': 180., 'catch': 600., 'defend': 300., 'theoretical': 600.,
+                      'rejoin': 180., 'stint_ahead': 300., 'stint_behind': 300.}
+    STINT_DIFFERENT_LAPS = 3     # a stint this many laps longer or shorter than ours is worth saying
+    REJOIN_FUEL_LAPS = 6         # where a stop now comes out is said from this many laps of fuel left
     QUALI_BRIEFS = ('corner', 'delta', 'theoretical')   # what helps a qualifying lap; other cars are never mentioned
 
     def _track_sectors(self, identity, sample, race, session_time):
@@ -348,6 +351,28 @@ class LiveTelemetry:
                 options.append(('defend', 'race', groups))
             if near:   # the plain gap takes its turn after the lines that say more
                 options.append((f'gap_{side}', 'race', [near]))
+        # Where a stop now would bring us out, near the stop: the car we would rejoin closest to.
+        close, fuel_laps = view.get('rejoin_close'), view.get('fuel_laps')
+        if (close and close.get('class_position') and view.get('stops_needed') and type(fuel_laps) in (int, float)
+                and 1.3 <= fuel_laps <= self.REJOIN_FUEL_LAPS):
+            first = [('rejoin_ahead_of' if close['margin_s'] >= 0 else 'rejoin_behind', {'pos': close['class_position']})]
+            if abs(close['margin_s']) >= .1:
+                first.append(('rejoin_margin', {'gap': abs(close['margin_s'])}))
+            groups = [first]
+            if close.get('stint_laps'):
+                groups.append([('stint_that', {'laps': close['stint_laps']})])
+            options.append(('rejoin', 'strategy', groups))
+        # How long the cars ahead and behind have run since their last stop, against our own stint.
+        own_stint = view.get('own_stint_laps')
+        for side in ('ahead', 'behind'):
+            car = view.get(side)
+            laps = car.get('stint_laps') if car else None
+            if (own_stint is None or not laps or car.get('on_pit_road') or sample.get('on_pit_road')
+                    or abs(laps - own_stint) < self.STINT_DIFFERENT_LAPS or laps > 60 or abs(laps - own_stint) > 40
+                    or self._briefed.get(f'stint_{side}_told') == (car['idx'], car.get('stint_since'), own_stint - laps > 0)):
+                continue
+            options.append((f'stint_{side}', 'strategy', [[(f'stint_{side}', {'laps': laps}),
+                            ('stint_more' if laps > own_stint else 'stint_less', {'laps': abs(laps - own_stint)})]]))
         if view.get('class_position'):
             options.append(('position', 'spotter', [[('position_now', {'pos': view['class_position']})]]))
         left = sample.get('session_time_remaining_s')
@@ -466,6 +491,12 @@ class LiveTelemetry:
                 self._briefed['theoretical_lap_s'] = self.lap_sectors.theoretical()['lap_s']
             elif name == 'stint':
                 self._stint['average'] = None
+            elif name in ('stint_ahead', 'stint_behind'):
+                # Once for each stint of that car, unless the comparison turns round.
+                car = (self.pit_wall.view(sample) or {}).get(name.split('_')[1]) or {}
+                own_stint = self.pit_wall.view(sample).get('own_stint_laps')
+                if car and own_stint is not None and car.get('stint_laps') is not None:
+                    self._briefed[f'{name}_told'] = (car['idx'], car.get('stint_since'), own_stint - car['stint_laps'] > 0)
             elif name.startswith('rival_'):
                 told = [key for key in keys if key.endswith(('_faster_at', '_slower_at'))]
                 self._briefed[f'{name}_told'] = 'faster' if told and told[-1].endswith('_faster_at') else 'slower'

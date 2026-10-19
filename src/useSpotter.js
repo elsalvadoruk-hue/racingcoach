@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RESUMABLE, MAX_RESUMES } from './voiceAudio';
+import { RESUMABLE, MAX_RESUMES, DEFAULT_RATE } from './voiceAudio';
 
 const SETTINGS_KEY = 'iracing.spotter.settings';
 export const SPOTTER_VOICES = [['Fenrir', '남성 · 기본'], ['Algieba', '남성'], ['Schedar', '남성'], ['Aoede', '여성']];
@@ -195,6 +195,8 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
       let began = false;
       const started = silent || await output.current.play(audio, mime, {
         priority: event.priority, interrupt: event.priority >= 2,
+        // The speed setting is for the race; the formation lap briefing keeps its unhurried pace.
+        rate: event.key === 'formation_brief' ? DEFAULT_RATE : undefined,
         valid: () => valid() && (event.priority >= 2 || quietFor(event)),
         workloadValid: event.key.startsWith('pit_box_') || event.key.startsWith('traffic_') ? valid : event.priority < 2 ? () => workloadFor(event) && !state.current.occupied
           && Date.now() - lastFrame.current < 600 : undefined,

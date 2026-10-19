@@ -30,8 +30,8 @@ const settings = (patch = {}) => radioEffect.cleanSettings({ level: 'medium', ..
 afterEach(() => { radioEffect.reset(); delete window.AudioContext; localStorage.clear(); });
 
 test('settings are off by default and anything odd is brought back into range', () => {
-  expect(radioEffect.savedSettings()).toEqual({ level: 'off', squelch: true, hiss: true, voice: 100, noise: 100 });
-  expect(radioEffect.cleanSettings({ level: 'louder', voice: 900, noise: -5, squelch: false })).toEqual({ level: 'off', squelch: false, hiss: true, voice: 150, noise: 0 });
+  expect(radioEffect.savedSettings()).toEqual({ level: 'off', squelch: true, hiss: true, pops: 'normal', voice: 100, noise: 100 });
+  expect(radioEffect.cleanSettings({ level: 'louder', voice: 900, noise: -5, squelch: false })).toEqual({ level: 'off', squelch: false, hiss: true, pops: 'normal', voice: 150, noise: 0 });
   radioEffect.storeSettings(settings({ level: 'harder', noise: 250 }));
   expect(radioEffect.savedSettings()).toMatchObject({ level: 'harder', noise: 250 });
 });
@@ -67,6 +67,56 @@ test('a clip is routed through the filters, with hiss and squelch, and let go wh
   expect(source.disconnected).toBe(true);
   effect.release(true);                                                         // letting go twice does nothing more
   expect(noises()).toHaveLength(3);
+});
+
+test('a stronger level is not a louder voice: each one is brought back to the plain loudness', () => {
+  const { Context, made } = fakeContext();
+  window.AudioContext = Context;
+  const voiceGain = (patch) => {
+    radioEffect.warm(settings(patch));
+    radioEffect.attach({}, settings(patch), { volume: 1 });
+    return made.filter((item) => item.kind === 'gain').pop().gain.value;
+  };
+  const gains = ['light', 'medium', 'strong', 'harder'].map((level) => voiceGain({ level }));
+  expect(gains).toEqual([...gains].sort((a, b) => b - a));                       // the harder the effect, the lower the gain
+  expect(gains[3]).toBeLessThan(gains[0] * 0.5);
+  expect(voiceGain({ level: 'medium', voice: 50 })).toBeCloseTo(gains[1] / 2);   // the voice slider still scales it
+});
+
+test('microphone pops come from a worklet ahead of the radio filters, once it has loaded, in two strengths or off', async () => {
+  const { Context, made } = fakeContext();
+  const loaded = [];
+  Context.prototype.audioWorklet = { addModule: (url) => { loaded.push(url); return Promise.resolve(); } };
+  window.AudioContext = Context;
+  const built = [];
+  window.AudioWorkletNode = function AudioWorkletNode(context, name, options) {
+    const item = { kind: 'pops', name, options, connected: [], connect(target) { item.connected.push(target); return target; }, disconnect() {} };
+    built.push(item); made.push(item); return item;
+  };
+  const lowCut = () => made.filter((item) => item.kind === 'filter')[made.filter((item) => item.kind === 'filter').length - 3].frequency.value;
+  radioEffect.warm(settings({ level: 'harder' }));
+  expect(radioEffect.attach({}, settings({ level: 'harder' }), { volume: 1 })).not.toBeNull();   // not loaded yet: no pops
+  expect(built).toHaveLength(0);
+  expect(lowCut()).toBe(520);                                                    // and the level's own low cut
+  await Promise.resolve(); await Promise.resolve();
+  radioEffect.warm(settings());
+  expect(loaded).toEqual(['/radio-pop-worklet.js']);                             // loaded once
+  radioEffect.attach({}, settings({ level: 'harder' }), { volume: 1 });
+  expect(built).toHaveLength(1);
+  expect(built[0].name).toBe('radio-pop');
+  expect(built[0].options.processorOptions).toEqual({ amp: 2, clip: 1.2 });      // the default, "3-2"
+  expect(lowCut()).toBe(150);                                                    // the thump needs the lows
+  const source = made.filter((item) => item.kind === 'source').pop();
+  expect(source.connected[0]).toBe(built[0]);                                    // the voice reaches the pops first
+  expect(built[0].connected[0].kind).toBe('filter');                             // and then the radio band
+  radioEffect.attach({}, settings({ level: 'harder', pops: 'strong' }), { volume: 1 });
+  expect(built[1].options.processorOptions).toEqual({ amp: 3, clip: 1.05 });
+  radioEffect.attach({}, settings({ level: 'harder', pops: 'off' }), { volume: 1 });
+  expect(built).toHaveLength(2);
+  expect(lowCut()).toBe(520);
+  expect(radioEffect.cleanSettings({ pops: false }).pops).toBe('off');           // saved by the version with a check box
+  expect(radioEffect.cleanSettings({ pops: true }).pops).toBe('normal');
+  delete window.AudioWorkletNode;
 });
 
 test('muted or with the noise turned down, only the voice is filtered', () => {

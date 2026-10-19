@@ -7,7 +7,7 @@ afterEach(() => { jest.useRealTimers(); jest.restoreAllMocks(); });
 
 test('starts the download, follows progress and stops polling when complete', async () => {
   jest.useFakeTimers();
-  const idle = { state: 'IDLE', total: 559, ready: 40, missing: 519, characters_missing: 5000, failed: 0, message: '' };
+  const idle = { state: 'IDLE', total: 559, ready: 40, missing: 519, characters_missing: 5000, failed: 0, message: '', spotter_voice: 'Aoede' };
   const fetchMock = jest.spyOn(global, 'fetch')
     .mockImplementationOnce(() => reply(idle))
     .mockImplementationOnce(() => reply({ ...idle, state: 'RUNNING' }))
@@ -15,6 +15,7 @@ test('starts the download, follows progress and stops polling when complete', as
     .mockImplementation(() => reply({ ...idle, state: 'COMPLETE', ready: 559, missing: 0, characters_missing: 0 }));
   render(<RadioAudioPrepare apiBase="http://api" />);
   expect(await screen.findByText('40 / 559개 준비됨 · 남은 519개, 약 5000자')).toBeInTheDocument();
+  expect(screen.getByText(/지금 고른 스포터 목소리\(Aoede\)의 음성 수입니다/)).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '빠진 음성 받기' }));
   expect(fetchMock).toHaveBeenLastCalledWith('http://api/api/live-coach/radio-audio/prepare', { method: 'POST' });
   expect(await screen.findByRole('button', { name: '멈추기' })).toBeInTheDocument();

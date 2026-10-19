@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Button } from './ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
+import { Textarea } from './ui/textarea';
 
 const when = (seconds) => new Date(seconds * 1000).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -13,6 +15,8 @@ export default function SessionLogExport({ apiBase, visible = true }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [sending, setSending] = useState(null);    // the session whose send window is open
+  const [sendError, setSendError] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -38,15 +42,19 @@ export default function SessionLogExport({ apiBase, visible = true }) {
     } catch (failure) { setError(failure.message); } finally { setBusy(''); }
   };
 
-  const send = async (session) => {
-    setBusy(session.run_id); setNotice(''); setError('');
+  // "보내기" on a session only opens a window for the note; the log goes when "보내기" is pressed there.
+  const open = (session) => { setSending(session); setSendError(''); setNotice(''); setError(''); };
+  const close = () => { if (!busy) { setSending(null); setSendError(''); } };
+  const send = async () => {
+    const session = sending;
+    setBusy(session.run_id); setSendError('');
     try {
       const response = await fetch(`${apiBase}/api/session-logs/${session.run_id}/send`, { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ questions, note }) });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '로그를 보내지 못했습니다.');
-      setNotice(`${when(session.started_at)} 주행의 로그를 보냈습니다. 고맙습니다.`); setNote('');
-    } catch (failure) { setError(failure.message); } finally { setBusy(''); }
+      setNotice(`${when(session.started_at)} 주행의 로그를 보냈습니다. 고맙습니다.`); setNote(''); setSending(null);
+    } catch (failure) { setSendError(failure.message); } finally { setBusy(''); }
   };
 
   if (!sessions) return error ? <p role="alert" className="text-sm text-warning">{error}</p> : null;
@@ -61,8 +69,6 @@ export default function SessionLogExport({ apiBase, visible = true }) {
       <input type="checkbox" checked={questions} onChange={(event) => setQuestions(event.target.checked)} />
       마이크로 한 질문과 답변도 포함
     </label>
-    {canSend && <input className="mt-3 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground" value={note} maxLength={500}
-      onChange={(event) => setNote(event.target.value)} placeholder="함께 보낼 메모 (예: 12랩쯤 연료 안내가 실제와 달랐음)" aria-label="함께 보낼 메모" />}
     {sessions.length === 0 ? <p className="mt-3 text-sm text-muted-foreground">아직 기록된 주행이 없습니다. 스포터를 켜고 주행하면 여기에 나옵니다.</p>
       : <ul className="mt-3 flex flex-col gap-2">
         {sessions.map((session) => <li key={session.run_id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border p-3">
@@ -72,7 +78,7 @@ export default function SessionLogExport({ apiBase, visible = true }) {
               `보고 ${session.reports}건`, session.questions ? `질문 ${session.questions}건` : null].filter(Boolean).join(' · ')}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {canSend && <Button type="button" disabled={Boolean(busy)} onClick={() => send(session)}
+            {canSend && <Button type="button" disabled={Boolean(busy)} onClick={() => open(session)}
               aria-label={`${when(session.started_at)} 주행 로그 보내기`}>{busy === session.run_id ? '처리 중' : '보내기'}</Button>}
             <Button type="button" variant="outline" disabled={Boolean(busy)} onClick={() => save(session)}
               aria-label={`${when(session.started_at)} 주행 로그 파일 받기`}>로그 파일 받기</Button>
@@ -81,5 +87,24 @@ export default function SessionLogExport({ apiBase, visible = true }) {
       </ul>}
     {notice && <p role="status" className="mt-3 text-sm text-foreground">{notice}</p>}
     {error && <p role="alert" className="mt-3 text-sm text-warning">{error}</p>}
+    {sending && <Dialog open onOpenChange={(isOpen) => { if (!isOpen) close(); }}>
+      <DialogContent onEscapeKeyDown={(event) => { if (busy) event.preventDefault(); }} onInteractOutside={(event) => { if (busy) event.preventDefault(); }}>
+        <DialogHeader>
+          <DialogTitle>주행 로그 보내기</DialogTitle>
+          <DialogDescription>{when(sending.started_at)} · {sending.track || '트랙 미확인'}{sending.car ? ` · ${sending.car}` : ''}</DialogDescription>
+        </DialogHeader>
+        <label htmlFor="log-note" className="text-sm font-semibold text-foreground">함께 보낼 메모</label>
+        <Textarea id="log-note" value={note} maxLength={500} rows={4} autoFocus disabled={Boolean(busy)}
+          onChange={(event) => setNote(event.target.value)} placeholder="어느 랩쯤 무엇이 이상했는지 적어 주세요. (예: 12랩쯤 연료 안내가 실제와 달랐음)" />
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {questions ? '마이크로 한 질문과 답변이 포함됩니다.' : '마이크로 한 질문과 답변은 포함되지 않습니다.'} 메모는 비워 둬도 됩니다.
+        </p>
+        {sendError && <p role="alert" className="text-sm text-warning">{sendError}</p>}
+        <DialogFooter className="gap-2">
+          <Button type="button" variant="outline" onClick={close} disabled={Boolean(busy)}>취소</Button>
+          <Button type="button" onClick={send} disabled={Boolean(busy)}>{busy ? '보내는 중' : '보내기'}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>}
   </div>;
 }

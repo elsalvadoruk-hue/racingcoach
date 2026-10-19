@@ -92,6 +92,20 @@ test('selecting a corner on the map zooms the shared range and the reset restore
   expect(screen.getByTestId('comparison-map')).toHaveAttribute('viewBox', fullMap);
 });
 
+test('the whole lap is one click away next to the corners and on the map', () => {
+  render(<CornerComparison trace={trace} corners={corners} pathData={pathData} trackLengthM={5000} referenceLabel="Garage61 비교랩" />);
+  expect(screen.getByRole('button', { name: '전체 랩', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  expect(screen.queryByRole('button', { name: '전체 랩으로' })).toBeNull();            // nothing to leave yet
+  fireEvent.click(screen.getByRole('button', { name: 'Corner 1', exact: true }));
+  expect(screen.getByRole('button', { name: '전체 랩', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  fireEvent.click(screen.getByRole('button', { name: '전체 랩으로' }));                 // from the map toolbar
+  expect(screen.getByTestId('comparison-selection')).toHaveTextContent('전체 랩 비교');
+  expect(screen.getByTestId('comparison-range')).toHaveTextContent('0–5000 m');
+  fireEvent.click(screen.getByRole('button', { name: 'Corner 1', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: '전체 랩', exact: true }));        // from the corner buttons
+  expect(screen.getByTestId('comparison-range')).toHaveTextContent('0–5000 m');
+});
+
 test('corner buttons work without GPS and missing reference inputs are identified', () => {
   render(<CornerComparison trace={[{ distance_pct: 0.25, target_speed_kph: 80 }]} corners={corners} />);
   expect(screen.getByText(/GPS 좌표가 없어/)).toBeInTheDocument();

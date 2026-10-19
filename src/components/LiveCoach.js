@@ -9,9 +9,9 @@ import { Textarea } from './ui/textarea';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Mic, MicOff, Radio, Route, Square, Volume2, VolumeX } from 'lucide-react';
 import { HelpHint } from './HelpGuide';
-import { encodeWav, VoiceRecorder, RESUMABLE, MAX_RESUMES } from '../voiceAudio';
+import { encodeWav, VoiceRecorder, RESUMABLE, MAX_RESUMES, DEFAULT_RATE, RATE_MIN, RATE_MAX } from '../voiceAudio';
 import useAudioOutput from '../useAudioOutput';
-import { EFFECT_LEVELS } from '../radioEffect';
+import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import PitWall, { ENGINEERS, PIT_WALL_KEY, readPitPreferences } from './PitWall';
 import useSpotter from '../useSpotter';
 import SpotterPanel from './SpotterPanel';
@@ -89,7 +89,7 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
     key: note.context?.report_key || 'answer', engineer: note.context?.engineer || 'coach', text: spokenText || note.reply || '',
     session_time: note.context?.snapshot?.session_time, lap_number: note.context?.snapshot?.lap_number,
     distance_pct: note.context?.snapshot?.distance_pct }), []);
-  const { outputId, devices: outputDevices, supported: outputSupported, message: outputMessage, refresh: refreshOutputs, changeOutput, play, volume, muted, changeVolume, toggleMute, effect, changeEffect, isPlaying, isPriorityBlocked } = audioOutput;
+  const { outputId, devices: outputDevices, supported: outputSupported, message: outputMessage, refresh: refreshOutputs, changeOutput, play, volume, muted, changeVolume, toggleMute, rate, changeRate, effect, changeEffect, isPlaying, isPriorityBlocked } = audioOutput;
   const stopSpeaking = audioOutput.stopNormal || audioOutput.stop;
   const blocked = useRef(null), busyAudio = useRef(null), reportResumes = useRef(new Map());
   blocked.current = audioOutput.isPriorityBlocked; busyAudio.current = audioOutput.audioBusy;
@@ -384,6 +384,11 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
           </div>
           <p id="voice-volume-help" className="mt-1 text-xs leading-relaxed text-muted-foreground">재생 중에도 바로 적용하며 볼륨과 음소거 상태를 저장합니다. 슬라이더를 움직이면 음소거가 해제됩니다. 마이크 입력과 게임 볼륨은 별도로 조절하세요.</p>
         </div>
+        <div className="mt-4 border-t border-success/20 pt-4">
+          <div className="flex items-center justify-between gap-3"><label htmlFor="voice-rate" className="text-sm font-semibold text-success">여러 문장 안내 속도</label><output htmlFor="voice-rate" className="min-w-[60px] text-right font-mono text-sm text-success">{(rate ?? DEFAULT_RATE).toFixed(2)}배</output></div>
+          <input id="voice-rate" type="range" min={RATE_MIN} max={RATE_MAX} step="0.05" value={rate ?? DEFAULT_RATE} onChange={(event) => changeRate?.(Number(event.target.value))} aria-valuetext={`${(rate ?? DEFAULT_RATE).toFixed(2)}배`} aria-describedby="voice-rate-help" className="mt-2 h-11 w-full cursor-pointer accent-emerald-400" />
+          <p id="voice-rate-help" className="mt-1 text-xs leading-relaxed text-muted-foreground">여러 문장을 이어서 말하는 안내(랩 종료 보고, 긴 직선 한 줄, 수리 판단, 질문 답변 등)의 속도입니다. 한 문장짜리 안내는 1.15배 그대로입니다. 목소리 높이는 그대로이고 다음 안내부터 적용됩니다. 1.15배부터 1.4배까지 고를 수 있고, 포메이션 랩 안내는 1.15배로 둡니다.</p>
+        </div>
         {effect && <div className="mt-4 border-t border-success/20 pt-4" aria-label="무전 효과">
           <div className="flex flex-wrap items-center gap-3">
             <label htmlFor="radio-effect" className="text-sm font-semibold text-success">무전 효과</label>
@@ -392,6 +397,12 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
             </NativeSelect>
             <label className="flex items-center gap-2 text-sm text-foreground"><input type="checkbox" checked={effect.squelch} disabled={effect.level === 'off'} onChange={(event) => changeEffect({ squelch: event.target.checked })} />시작·끝 무전 잡음(칙)</label>
             <label className="flex items-center gap-2 text-sm text-foreground"><input type="checkbox" checked={effect.hiss} disabled={effect.level === 'off'} onChange={(event) => changeEffect({ hiss: event.target.checked })} />말하는 동안 바탕 잡음</label>
+            <div className="flex items-center gap-3 sm:ml-4 sm:border-l sm:border-border sm:pl-6">
+              <label htmlFor="radio-pops" className="text-sm text-foreground">팝노이즈</label>
+              <NativeSelect id="radio-pops" value={effect.pops} disabled={effect.level === 'off'} onChange={(event) => changeEffect({ pops: event.target.value })} className="min-h-[44px] w-auto">
+                {POP_MODES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </NativeSelect>
+            </div>
           </div>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label className="flex items-center gap-3 text-sm text-foreground">음성 크기
@@ -402,6 +413,7 @@ export default function LiveCoach({ apiBase, visible, onSaved }) {
               <output className="min-w-[48px] text-right font-mono text-sm">{effect.noise}%</output></label>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">스포터와 엔지니어의 모든 음성에 무전기 느낌의 필터를 겁니다. 음성 파일은 그대로이고 다음 안내부터 적용됩니다. “테스트 소리”로 들어 보세요. 세기가 강하면 숫자가 덜 또렷할 수 있습니다.</p>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">팝노이즈: 마이크에 입을 바짝 대고 말할 때 ㅂ·ㅍ 소리에서 숨이 마이크에 부딪혀 “퍽” 하고 목소리가 잠깐 깨지는 소리입니다. 실제 무전처럼 들리게 넣었습니다. 켜 두면 무전이 저음을 조금 더 살립니다.</p>
         </div>}
         {outputMessage && <p role="status" className="mt-3 text-sm text-warning">{outputMessage}</p>}
       </div>

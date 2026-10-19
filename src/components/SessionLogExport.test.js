@@ -32,23 +32,31 @@ test('says so when nothing was driven yet', async () => {
   expect(await screen.findByText(/아직 기록된 주행이 없습니다/)).toBeInTheDocument();
 });
 
-test('sends the chosen session with a note when a receiving address is set up, and only on the click', async () => {
+test('sending opens a window for the note, sends only on its button, and can be cancelled', async () => {
   const fetchMock = jest.spyOn(global, 'fetch')
     .mockImplementationOnce(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ sessions: [session], send_available: true }) }))
     .mockImplementationOnce(() => Promise.resolve({ ok: false, json: () => Promise.resolve({ detail: '로그를 보내지 못했습니다. 인터넷 연결을 확인하거나 파일을 받아서 직접 보내 주세요.' }) }))
     .mockImplementationOnce(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ sent: true, name: 'coach-log-lemans-full-20261012-2005.zip' }) }));
   render(<SessionLogExport apiBase="http://api" />);
   expect(await screen.findByText(/앱을 만든 사람의 Google Drive에 전달됩니다/)).toBeInTheDocument();
-  expect(fetchMock).toHaveBeenCalledTimes(1);                                   // listing only: nothing has been sent
+  expect(screen.queryByLabelText('함께 보낼 메모')).toBeNull();                 // no note box until a session is chosen
+  // Cancel: the window closes and nothing is sent.
+  await userEvent.click(screen.getByRole('button', { name: /주행 로그 보내기/ }));
+  expect(screen.getByRole('dialog')).toHaveTextContent('Circuit des 24 Heures du Mans');
+  await userEvent.click(screen.getByRole('button', { name: '취소' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(fetchMock).toHaveBeenCalledTimes(1);                                   // listing only
+  // Send: a failure keeps the window and the note for another try.
+  await userEvent.click(screen.getByRole('button', { name: /주행 로그 보내기/ }));
   await userEvent.type(screen.getByLabelText('함께 보낼 메모'), '12랩쯤 연료 안내가 달랐음');
-  await userEvent.click(screen.getByRole('button', { name: /주행 로그 보내기/ }));
+  await userEvent.click(screen.getByRole('button', { name: '보내기' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('로그를 보내지 못했습니다.');
-  expect(screen.getByLabelText('함께 보낼 메모')).toHaveValue('12랩쯤 연료 안내가 달랐음');      // kept for another try
-  await userEvent.click(screen.getByRole('button', { name: /주행 로그 보내기/ }));
+  expect(screen.getByLabelText('함께 보낼 메모')).toHaveValue('12랩쯤 연료 안내가 달랐음');
+  await userEvent.click(screen.getByRole('button', { name: '보내기' }));
   expect(await screen.findByRole('status')).toHaveTextContent('주행의 로그를 보냈습니다.');
   expect(fetchMock).toHaveBeenLastCalledWith(`http://api/api/session-logs/${session.run_id}/send`, expect.objectContaining({
     method: 'POST', body: JSON.stringify({ questions: false, note: '12랩쯤 연료 안내가 달랐음' }) }));
-  expect(screen.getByLabelText('함께 보낼 메모')).toHaveValue('');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
 });
 
 test('offers no send button when no receiving address is set up', async () => {

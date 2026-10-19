@@ -23,15 +23,16 @@ export default function RadioAudioPrepare({ apiBase }) {
   }, [status?.state, call]);
   if (!status) return error ? <p role="alert" className="mt-3 text-sm text-warning">{error}</p> : null;
   const running = status.state === 'RUNNING';
-  return <div className="mt-4 rounded-lg border border-border p-4" aria-label="엔지니어 음성 미리 준비">
+  return <div className="mt-4 rounded-lg border border-border p-4" aria-label="엔지니어·스포터 음성 미리 준비">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <p className="text-sm font-semibold text-foreground">엔지니어 음성 미리 준비 · {STATE_TEXT[status.state] || status.state}</p>
+      <p className="text-sm font-semibold text-foreground">엔지니어·스포터 음성 미리 준비 · {STATE_TEXT[status.state] || status.state}</p>
       <Button type="button" variant={running ? 'outline' : 'default'} disabled={status.state === 'COMPLETE'} onClick={() => call(running ? '/stop' : '/prepare', 'POST')}>
         {running ? '멈추기' : status.state === 'COMPLETE' ? '준비 완료' : status.ready ? '빠진 음성 받기' : '전부 받아 두기'}
       </Button>
     </div>
     <progress className="mt-3 h-2 w-full" max={status.total} value={status.ready} aria-label="준비된 음성" />
     <p role="status" className="mt-2 text-sm text-foreground">{status.ready} / {status.total}개 준비됨{status.missing ? ` · 남은 ${status.missing}개, 약 ${status.characters_missing}자` : ''}</p>
+    {status.spotter_voice && <p className="mt-1 text-xs text-muted-foreground">엔지니어 세 명과 지금 고른 스포터 목소리({status.spotter_voice})의 음성 수입니다. 다른 스포터 목소리를 고르면 그 목소리 기준으로 다시 셉니다.</p>}
     {status.message && <p className="mt-1 text-sm text-warning">{status.message}</p>}
     {error && <p role="alert" className="mt-1 text-sm text-warning">{error}</p>}
     <p className="mt-2 text-xs leading-relaxed text-muted-foreground">모든 문구 변형과 숫자 문장(간격·순위·랩타임 등)을 한 번 받아 저장하면 주행 중에는 합성하지 않습니다. Google 음성 합성 요청이 발생하며 처음에는 수십 분 걸릴 수 있습니다. 받는 동안 다른 화면을 써도 되고, 중간에 멈춰도 받은 만큼 사용합니다. 준비 범위를 벗어난 숫자는 처음 쓰일 때 합성합니다.</p>

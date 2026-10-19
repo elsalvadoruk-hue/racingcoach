@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as radioEffect from './radioEffect';
+import { DEFAULT_RATE, RATE_MIN, RATE_MAX } from './voiceAudio';
 
 const STORAGE_KEY = 'iracing.voice.outputDevice';
 const savedOutput = () => { try { return localStorage.getItem(STORAGE_KEY) || ''; } catch { return ''; } };
 const PLAYBACK_KEY = 'iracing.voice.playback';
 const clampVolume = (value) => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 1;
+export { DEFAULT_RATE, RATE_MIN, RATE_MAX };
+const clampRate = (value) => typeof value === 'number' && Number.isFinite(value)
+  ? Math.round(Math.max(RATE_MIN, Math.min(RATE_MAX, value)) * 100) / 100 : DEFAULT_RATE;
 const savedPlayback = () => {
   try {
     const saved = JSON.parse(localStorage.getItem(PLAYBACK_KEY));
-    return { volume: clampVolume(saved?.volume), muted: saved?.muted === true };
-  } catch { return { volume: 1, muted: false }; }
+    return { volume: clampVolume(saved?.volume), muted: saved?.muted === true, rate: clampRate(saved?.rate) };
+  } catch { return { volume: 1, muted: false, rate: DEFAULT_RATE }; }
 };
 
 // The answer to a question the driver asked over the radio is what he most wants to hear:
@@ -57,12 +61,14 @@ export default function useAudioOutput() {
   const audioBusy = useCallback(() => !!player.current, []);
   const updatePlayback = useCallback((patch) => {
     const next = { ...playbackSettings.current, ...patch };
-    next.volume = clampVolume(next.volume);
+    next.volume = clampVolume(next.volume); next.rate = clampRate(next.rate);
     playbackSettings.current = next; setPlayback(next);
     if (player.current) { player.current.volume = next.volume; player.current.muted = next.muted; }
     try { localStorage.setItem(PLAYBACK_KEY, JSON.stringify(next)); } catch { /* Controls still work without storage. */ }
   }, []);
   const changeVolume = useCallback((volume) => updatePlayback({ volume, muted: false }), [updatePlayback]);
+  // From the next clip on; a call already being spoken keeps its speed.
+  const changeRate = useCallback((rate) => updatePlayback({ rate }), [updatePlayback]);
   // The radio effect applies from the next clip on. Changing it is a click, which lets the audio context start.
   const changeEffect = useCallback((patch) => {
     const next = radioEffect.cleanSettings({ ...effectSettings.current, ...patch });
@@ -103,7 +109,10 @@ export default function useAudioOutput() {
     stop('output_changed'); saveOutput(id); setMessage('');
     radioEffect.warm(effectSettings.current, id);
   }, [stop, saveOutput]);
-  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, windowSeconds, workloadValid, whilePlaying } = {}) => {
+  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, windowSeconds, workloadValid, whilePlaying, rate } = {}) => {
+    // The driver's speed is for calls of several sentences, which ran long; one sentence stays at the
+    // pace set by ear (2026-10-14). A call may still name its own speed (the formation lap briefing).
+    const speed = rate ?? (Array.isArray(encoded) && encoded.length > 1 ? playbackSettings.current.rate ?? DEFAULT_RATE : DEFAULT_RATE);
     if (!valid() || (priority < 3 && priorityGate.current)
       || (player.current && ((!interrupt) || (priority > 0 && priority <= player.current._priority) || (priority === 0 && player.current._priority > 0)))) return false;
     stop('preempted'); setMessage('');
@@ -128,7 +137,7 @@ export default function useAudioOutput() {
         if (!rest.length) { current._finish('completed'); stop(); return; }
         const next = new Audio(`data:${mime};base64,${rest.shift()}`);
         next._priority = priority; next._finish = current._finish;
-        next.playbackRate = 1.15; next.preservesPitch = true;
+        next.playbackRate = speed; next.preservesPitch = true;
         next.volume = playbackSettings.current.volume; next.muted = playbackSettings.current.muted;
         chain(next);
         player.current = next;
@@ -150,7 +159,7 @@ export default function useAudioOutput() {
       };
     };
     chain(current);
-    current.playbackRate = 1.15; current.preservesPitch = true;
+    current.playbackRate = speed; current.preservesPitch = true;
     current.volume = playbackSettings.current.volume; current.muted = playbackSettings.current.muted;
     try {
       if (supported) {
@@ -212,5 +221,5 @@ export default function useAudioOutput() {
   }, [supported, stop, saveOutput]);
   return { outputId, devices, supported, message, refresh, changeOutput, play, stop, stopNormal,
     setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, isPlaying,
-    volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, effect, changeEffect };
+    volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, rate: playback.rate, changeRate, effect, changeEffect };
 }

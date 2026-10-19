@@ -6,6 +6,8 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
+import socket
+import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,6 +31,25 @@ class ScreenHandler(SimpleHTTPRequestHandler):
             super().log_message(format, *args)
 
 
+class IPv6Server(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        super().server_bind()
+
+
+def loopback_servers(port: int, handler) -> list[ThreadingHTTPServer]:
+    """The screen on 127.0.0.1 and, where the PC has IPv6, on ::1 too. The browser opens "localhost",
+    which Windows tries as ::1 first: with 127.0.0.1 alone each new connection waited about 0.2 s."""
+    servers = [ThreadingHTTPServer(("127.0.0.1", port), handler)]
+    try:
+        servers.append(IPv6Server(("::1", port), handler))
+    except OSError:
+        pass                               # no IPv6: localhost falls back to 127.0.0.1 as before
+    return servers
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="iRacing 주행 코치 화면(빌드) 서버")
     parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "24157")))
@@ -36,14 +57,17 @@ def main() -> int:
     args = parser.parse_args()
     if not (args.directory / "index.html").is_file():
         parser.error(f"빌드된 화면이 없습니다: {args.directory}. 먼저 npm run build를 실행하세요.")
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), partial(ScreenHandler, directory=str(args.directory)))
+    servers = loopback_servers(args.port, partial(ScreenHandler, directory=str(args.directory)))
     print(f"화면 서버: http://localhost:{args.port} ({args.directory})", flush=True)
+    for extra in servers[1:]:
+        threading.Thread(target=extra.serve_forever, daemon=True).start()
     try:
-        server.serve_forever()
+        servers[0].serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        server.server_close()
+        for server in servers:
+            server.server_close()
     return 0
 
 

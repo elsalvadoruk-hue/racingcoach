@@ -148,6 +148,9 @@ class RaceEngineer:
         self.gap_history = {}
         self.spoken = {}
         self.finish_seen = None
+        # Every car's stint: the lap it last left the pit road on, and its stops. Known from the start
+        # only for cars first seen before their first lap was done; otherwise from their first stop.
+        self.stints = {}
 
     def ingest(self, race, run_id, session_time):
         if self.run_id != run_id:
@@ -217,6 +220,15 @@ class RaceEngineer:
                         self.paces.setdefault(idx, deque(maxlen=3)).append(last)
                     self.pending_laps.pop(idx, None)
             self.tainted_laps[idx] = tainted or car.get('on_pit_road') is True or car.get('track_surface') in (-1, 0)
+            stint = self.stints.get(idx)
+            if stint is None:
+                fresh = completed is not None and completed <= 0
+                self.stints[idx] = {'since': 0 if fresh else None, 'stops': 0 if fresh else None}
+            elif prev:
+                if car.get('on_pit_road') is True and prev.get('on_pit_road') is False and stint['stops'] is not None:
+                    stint['stops'] += 1
+                if car.get('on_pit_road') is False and prev.get('on_pit_road') is True and completed is not None:
+                    stint['since'] = completed
             self.previous[idx] = {**car, '_observed_at': session_time}
 
     # A stint cannot be stretched by more than this through lifting; beyond it only a stop helps.
@@ -225,6 +237,17 @@ class RaceEngineer:
     BOX_MARGIN_LAPS = .03
     # How far a pace-based finish time may drift, as a share of the time still to run (unverified first value).
     FINISH_DRIFT = .004
+    # A stop now that brings the car out within this many seconds of another car is a close call worth saying.
+    REJOIN_CLOSE_S = 3.
+
+    def stint(self, car):
+        """(laps since the car last left the pit road, stops so far): None where not known."""
+        record = self.stints.get(car['idx']) if car else None
+        completed = numeric(car.get('lap_completed')) if car else None
+        if not record:
+            return None, None
+        laps = completed - record['since'] if record['since'] is not None and completed is not None else None
+        return (max(0, int(laps)) if laps is not None else None), record['stops']
 
     def view(self, snapshot, fuel_use=None, fuel_laps=0, reserve_laps=.5, pit_loss_s=None, fuel_save_mode='finish'):
         race = self.race
@@ -250,7 +273,9 @@ class RaceEngineer:
             gap = abs(difference) * own_pace if difference is not None and abs(difference) < 1 and own_pace else None
             if gap is not None and abs(difference) < .5:
                 gap = estimated_gap_s(own, car, difference, own_pace)
+            stint_laps, stops = self.stint(car)
             return {**car, 'pace_s': car_pace, 'pace_samples': len(self.paces.get(car['idx'], [])),
+                    'stint_laps': stint_laps, 'stint_since': (self.stints.get(car['idx']) or {}).get('since'), 'stops': stops,
                     'gap_estimate_s': round(gap, 1) if gap is not None else None,
                     'pace_advantage_s': round(own_pace - car_pace, 2) if own_pace and car_pace else None,
                     'lap_difference': round(difference, 2) if difference is not None else None}
@@ -353,13 +378,21 @@ class RaceEngineer:
         # Should the race run a lap longer than counted: what the stop must then put in.
         longer = add + use if add is not None and use and finish and finish['may_extend'] else None
         fill_longer = min(longer, room) if longer is not None and room is not None else longer
-        rejoin = None
+        rejoin = rejoin_close = None
         if active and own_pace and own_progress is not None and positive(pit_loss_s) and len(rivals) > 1:
             usable = [c for c in rivals if c['idx'] != own['idx'] and progress(c) is not None
                       and pace(c) and not c.get('on_pit_road') and c.get('track_surface') not in (-1, 0)]
             # Current class order, extrapolated progress and each rival's own pace.
             if len(usable) == len(rivals) - 1:
                 rejoin = 1 + sum(progress(c) + pit_loss_s / pace(c) > own_progress for c in usable)
+                # The car the stop would bring us out closest to: seconds ahead of it (+) or behind it (-).
+                calls = [((own_progress - progress(c)) * pace(c) - pit_loss_s, c) for c in usable if -.2 < own_progress - progress(c) < 1]
+                calls = [(margin, c) for margin, c in calls if abs(margin) <= self.REJOIN_CLOSE_S]
+                if calls:
+                    margin, car = min(calls, key=lambda call: abs(call[0]))
+                    stint_laps, _ = self.stint(car)
+                    rejoin_close = {'idx': car['idx'], 'class_position': positive(car.get('class_position')),
+                                    'margin_s': round(margin, 1), 'stint_laps': stint_laps}
         traffic = []
         if own and own.get('class_id') is not None and own_pace and len(self.paces.get(own['idx'], [])) >= 3:
             for car in race.get('cars', []):
@@ -400,7 +433,8 @@ class RaceEngineer:
                 'finish_leader_margin_s': finish['leader_margin_s'] if finish else None,
                 'finish_own_margin_s': finish['own_margin_s'] if finish else None,
                 'fuel_next_stop_full': bool(add is not None and room is not None and add >= room - 1 and add > .1),
-                'pit_loss_s': pit_loss_s, 'rejoin_class_position_estimate': rejoin,
+                'pit_loss_s': pit_loss_s, 'rejoin_class_position_estimate': rejoin, 'rejoin_close': rejoin_close,
+                'own_stint_laps': self.stint(own)[0] if own else None, 'own_stops': self.stint(own)[1] if own else None,
                 'estimate_notice': '간격은 랩 진행 거리와 페이스로 환산한 추정입니다. 복귀 순위는 상대 피트·추월·교통 변화를 포함하지 않습니다.'}
 
     def candidates(self, view, snapshot, context, notes=()):

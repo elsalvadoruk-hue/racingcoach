@@ -40,6 +40,56 @@ class FileMetadataIndex:
             connection.execute("INSERT OR REPLACE INTO files VALUES (?,?,?,?,?)", (*signature, self.VERSION, json.dumps(payload, ensure_ascii=False)))
 
 
+class JsonCache:
+    """Results worked out from a file, kept on disk so that starting the app again does not redo them.
+
+    Keyed by the file's name, size and modification time, so a changed file is worked out again.
+    It holds derived values only: deleting it costs one slow first look, nothing else.
+    """
+    VERSION = 1
+
+    def __init__(self, path, limit=4000):
+        self.path = Path(path)
+        self.limit = limit
+        self.lock = threading.RLock()
+        self.entries = None
+
+    @staticmethod
+    def key(path, *extra):
+        stat = Path(path).stat()
+        return "|".join([Path(path).name, str(stat.st_size), str(stat.st_mtime_ns), *map(str, extra)])
+
+    def _load(self):
+        if self.entries is None:
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
+                valid = isinstance(data, dict) and data.get("version") == self.VERSION and isinstance(data.get("entries"), dict)
+                self.entries = data["entries"] if valid else {}
+            except (OSError, ValueError):
+                self.entries = {}
+        return self.entries
+
+    def get(self, key):
+        with self.lock:
+            value = self._load().get(key)
+            return json.loads(json.dumps(value)) if value is not None else None
+
+    def put(self, key, value):
+        with self.lock:
+            entries = self._load()
+            entries.pop(key, None)
+            entries[key] = value
+            while len(entries) > self.limit:
+                entries.pop(next(iter(entries)))
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = self.path.with_suffix(".tmp")
+                temporary.write_text(json.dumps({"version": self.VERSION, "entries": entries}, ensure_ascii=False), encoding="utf-8")
+                temporary.replace(self.path)
+            except OSError:
+                pass                                   # still kept for this run
+
+
 class CornerDefinitionStore:
     """Keeps automatic corner segments stable across restarts.
 

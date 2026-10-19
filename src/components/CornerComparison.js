@@ -119,6 +119,8 @@ export default function CornerComparison({ trace = [], corners = [], pathData = 
     const selectedCorner = orderedCorners.find((item) => item.id === id);
     setActivePct(finite(selectedCorner?.apex_pct) ? selectedCorner.apex_pct : null);
   };
+  // The whole lap again: graphs, map line and map view, from wherever the driver is looking.
+  const showFullLap = () => { setSelected(null); setActivePct(null); setMapFocusVersion(value => value + 1); };
   const handleChartMove = (state) => {
     const distance = Number(state?.activeLabel);
     if (state?.activeLabel !== undefined && state?.activeLabel !== null && Number.isFinite(distance)) setActivePct(distance / distanceScale);
@@ -130,16 +132,17 @@ export default function CornerComparison({ trace = [], corners = [], pathData = 
     <section aria-label="코너별 조작 비교" className="coach-panel coach-comparison">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div><div className="flex items-center gap-1"><h2 data-help="compare" className="text-lg font-semibold text-foreground">코너별 조작 비교</h2><HelpHint topic="compare" /></div><p className="mt-1 text-sm text-muted-foreground">코너를 고르면 지도와 그래프가 함께 이동합니다.</p></div>
-        <Button variant="outline" type="button" data-help="fullLap" onClick={() => { setSelected(null); setActivePct(null); setMapFocusVersion(value => value + 1); }} className=" border  px-3 py-2 text-sm  ">전체 랩 보기</Button>
+        <Button variant="outline" type="button" data-help="fullLap" onClick={showFullLap} className=" border  px-3 py-2 text-sm  ">전체 랩 보기</Button>
       </div>
       <div className="coach-chart-legend mb-4 flex flex-wrap gap-x-5 gap-y-1 text-sm"><span style={{ color: TARGET }}>━ 내 주행</span><span style={{ color: REFERENCE }}>┄ {referenceLabel || '기준 주행'}</span></div>
       <div ref={mapRegionRef} className="coach-map-region">
-        <CornerMap projected={projected.target} referenceProjected={projected.reference} trackMap={projected.map} courseDiagram={courseDiagram} geographic={projected.geographic} geographicMetersPerUnit={projected.metersPerUnit} mapStatus={projected.mapStatus} referenceLineSource={hasDetail ? detailLineSource || referenceLineSource : referenceLineSource} referenceLabel={referenceLabel} detailLoading={detailLoading} corners={displayedCorners} selected={corner} selectedRange={corner ? range : null} activePct={cursorRow?.distance_pct} onSelect={selectCorner} onHover={setActivePct} focusVersion={mapFocusVersion} />
+        <CornerMap projected={projected.target} referenceProjected={projected.reference} trackMap={projected.map} courseDiagram={courseDiagram} geographic={projected.geographic} geographicMetersPerUnit={projected.metersPerUnit} mapStatus={projected.mapStatus} referenceLineSource={hasDetail ? detailLineSource || referenceLineSource : referenceLineSource} referenceLabel={referenceLabel} detailLoading={detailLoading} corners={displayedCorners} selected={corner} onFullLap={showFullLap} selectedRange={corner ? range : null} activePct={cursorRow?.distance_pct} onSelect={selectCorner} onHover={setActivePct} focusVersion={mapFocusVersion} />
       </div>
       <div className="grid gap-5 lg:grid-cols-[minmax(230px,0.8fr)_minmax(0,1.8fr)]">
         <div className="min-w-0 flex flex-col gap-4">
           {orderedCorners.length > 12 && <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span>{showAllCorners ? `전체 ${orderedCorners.length}구간` : '시간 손실 우선 12구간'}</span><Button variant="outline" type="button" aria-pressed={showAllCorners} onClick={() => setShowAllCorners((value) => !value)} className=" border  px-3 py-2  ">{showAllCorners ? '손실 우선 보기' : `전체 ${orderedCorners.length}구간 보기`}</Button></div>}
           <div className="coach-corner-grid" aria-label="비교할 코너">
+            <Button variant="outline" type="button" data-help="fullLap" onClick={showFullLap} aria-pressed={!corner} className="border px-3 py-2 text-sm font-semibold">전체 랩</Button>
             {displayedCorners.map((item) => <Button variant="outline" type="button" data-help="corner" key={item.id} onClick={() => selectCorner(item.id, true)} aria-pressed={item.id === corner?.id} className={` border px-3 py-2 text-sm ${item.id === corner?.id ? '  ' : '  '}`}>{item.label || item.id}</Button>)}
           </div>
           <div className="rounded-xl border border-border bg-background p-3 text-sm text-foreground">

@@ -39,7 +39,7 @@ import session_log
 app_settings.apply_environment()
 
 from garage61_collector_manager import Garage61CollectorManager
-from analysis_support import CornerDefinitionStore, FileMetadataIndex, clean_segment_context, mask_grid_to_clean_windows, session_context, suggested_session_mode
+from analysis_support import CornerDefinitionStore, FileMetadataIndex, JsonCache, clean_segment_context, mask_grid_to_clean_windows, session_context, suggested_session_mode
 from setup_profiles import supplement_setup_summary, vehicle_setup_capabilities
 from live_telemetry import LiveTelemetry
 from live_pit import PitKnowledge
@@ -123,7 +123,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "1.0.1"   # the first version made to be shared (2026-10-12); earlier numbers were internal
+APP_VERSION = "1.0.2"   # the first version made to be shared (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -1615,6 +1615,9 @@ def resolve_external_reference_file(filename: str) -> Optional[Path]:
 
 _REFERENCE_VALIDATION_LOCK = threading.RLock()
 _REFERENCE_VALIDATION_CACHE: OrderedDict[tuple[str, int, int], dict[str, Any]] = OrderedDict()
+# Reading every Garage61 lap to check it took about 18 s each time the app started (244 laps,
+# 2026-10-14); the answers are kept in the data folder and only new or changed laps are read.
+_REFERENCE_VALIDATION_DISK = JsonCache(MEMORY_DB_PATH.parent / "garage61-validation.json")
 
 
 def external_reference_validation(path: Path) -> dict[str, Any]:
@@ -1623,11 +1626,15 @@ def external_reference_validation(path: Path) -> dict[str, Any]:
         if signature in _REFERENCE_VALIDATION_CACHE:
             _REFERENCE_VALIDATION_CACHE.move_to_end(signature)
             return dict(_REFERENCE_VALIDATION_CACHE[signature])
-    try:
-        parsed = Garage61ReferenceReader(path).parse()
-        result = {"usable": True, "validation_error": None, "timing_source": parsed.metadata.get("timing_source")}
-    except Exception as exc:
-        result = {"usable": False, "validation_error": str(exc), "timing_source": None}
+    disk_key = JsonCache.key(path)
+    result = _REFERENCE_VALIDATION_DISK.get(disk_key)
+    if result is None:
+        try:
+            parsed = Garage61ReferenceReader(path).parse()
+            result = {"usable": True, "validation_error": None, "timing_source": parsed.metadata.get("timing_source")}
+        except Exception as exc:
+            result = {"usable": False, "validation_error": str(exc), "timing_source": None}
+        _REFERENCE_VALIDATION_DISK.put(disk_key, result)
     with _REFERENCE_VALIDATION_LOCK:
         _REFERENCE_VALIDATION_CACHE[signature] = result
         while len(_REFERENCE_VALIDATION_CACHE) > EXTERNAL_REFERENCE_SCAN_LIMIT:
@@ -10843,6 +10850,17 @@ def live_corner_definitions(identity: dict[str, Any]) -> Optional[list[dict[str,
 live_telemetry.corners.lookup = live_corner_definitions
 
 
+def warm_external_references() -> None:
+    try:
+        for path in _external_reference_paths():
+            external_reference_validation(path)
+    except Exception:
+        logger.exception("Checking the Garage61 reference laps in the background failed")
+
+
+_CORNER_SUGGESTION_DISK = JsonCache(MEMORY_DB_PATH.parent / "corner-suggestions.json", limit=1000)
+
+
 def corner_names_payload(telemetry: ParsedTelemetry) -> dict[str, Any]:
     analyzer = TelemetryAnalyzer(telemetry)
     metadata = telemetry.metadata
@@ -10854,8 +10872,15 @@ def corner_names_payload(telemetry: ParsedTelemetry) -> dict[str, Any]:
     definitions = analyzer._detect_corners(grid)
     cache = vars(telemetry).setdefault("_analysis_cache", {})
     if "corner_suggestion" not in cache:
-        cache["corner_suggestion"] = (corner_names.suggest(definitions, grid["distance_pct"], grid.get("Lat", []), grid.get("Lon", []), track_id)
-                                      if track_id and "Lat" in grid and "Lon" in grid else {"status": "NO_GPS", "corners": {}})
+        # Fitting the lap onto the official map took up to 5 s on a long track; kept on disk per file.
+        disk_key = JsonCache.key(telemetry.path, track_id, CornerDefinitionStore.VERSION) if telemetry.path.is_file() else None
+        kept = _CORNER_SUGGESTION_DISK.get(disk_key) if disk_key else None
+        if kept is None:
+            kept = (corner_names.suggest(definitions, grid["distance_pct"], grid.get("Lat", []), grid.get("Lon", []), track_id)
+                    if track_id and "Lat" in grid and "Lon" in grid else {"status": "NO_GPS", "corners": {}})
+            if disk_key:
+                _CORNER_SUGGESTION_DISK.put(disk_key, kept)
+        cache["corner_suggestion"] = kept
     suggestion = cache["corner_suggestion"]
     saved = _CORNER_DEFINITION_STORE.names_for(definitions, track_id, config)
     corners = []
@@ -10875,6 +10900,9 @@ voice_coach = VoiceCoach(live_telemetry, voice_note_store, ai_client, GEMINI_VOI
 @asynccontextmanager
 async def app_lifespan(_app):
     live_telemetry.start()
+    # The Garage61 laps are checked in the background as the app starts, so the first file opened
+    # does not wait for them; after the first run this only reads the kept answers.
+    threading.Thread(target=warm_external_references, name="garage61-check", daemon=True).start()
     try:
         yield
     finally:
@@ -11720,5 +11748,33 @@ async def telemetry_events() -> StreamingResponse:
     )
 
 
+def loopback_sockets(port: int) -> list:
+    """Listening sockets on 127.0.0.1 and, where the PC has IPv6, on ::1.
+
+    The screen and the launcher ask for "localhost". Windows tries ::1 first; with the server on
+    127.0.0.1 alone, every new connection waited about 0.2 s for that to fail (measured 2026-10-14).
+    """
+    import socket
+    found = []
+    for family, address in ((socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")):
+        try:
+            sock = socket.socket(family, socket.SOCK_STREAM)
+            if family == socket.AF_INET6:
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            sock.bind((address, port))
+            sock.set_inheritable(True)
+            found.append(sock)
+        except OSError:
+            if family == socket.AF_INET:
+                raise                      # the address the app has always used must be there
+            sock.close()                   # no IPv6 on this PC: localhost falls back to 127.0.0.1 as before
+    return found
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host=os.getenv("IRACING_API_HOST", "").strip() or "127.0.0.1", port=int(os.getenv("PORT", "24158")))
+    port = int(os.getenv("PORT", "24158"))
+    host = os.getenv("IRACING_API_HOST", "").strip()
+    if host:
+        uvicorn.run(app, host=host, port=port)
+    else:
+        uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port)).run(sockets=loopback_sockets(port))

@@ -239,6 +239,7 @@ class AudioPreparation:
         self.progress = {'state': 'IDLE', 'failed': 0, 'message': ''}
         self._items = None
         self._ready = (0., None)
+        self._known, self._known_items = set(), None   # clips seen on disk for this list
 
     def items(self):
         if self._items is None:
@@ -252,14 +253,21 @@ class AudioPreparation:
         items = self.items()
         # Thousands of files: count them at most once a second.
         if time.monotonic() - self._ready[0] >= 1 or self._ready[1] is None:
-            missing = [item for item in items if not self.cache.cached(*item)]
+            # 58,000 files took about 0.9 s to look at on every call. A clip once there stays there,
+            # so after the first full look only the ones still missing are looked at again.
+            known = self._known if self._known_items is items else set()
+            missing = [item for item in items if item not in known and not self.cache.cached(*item)]
+            gone = set(missing)
+            self._known, self._known_items = {item for item in items if item not in gone}, items
             self._ready = (time.monotonic(), (len(items) - len(missing), sum(len(text) for _, text in missing)))
         ready, characters = self._ready[1]
         with self.lock:
             state = ('RUNNING' if self.running() else 'COMPLETE' if ready == len(items)
                      else self.progress['state'] if self.progress['state'] in ('FAILED', 'STOPPED') else 'IDLE')
             return {'state': state, 'total': len(items), 'ready': ready, 'missing': len(items) - ready,
-                    'characters_missing': characters, 'failed': self.progress['failed'], 'message': self.progress['message']}
+                    'characters_missing': characters, 'failed': self.progress['failed'], 'message': self.progress['message'],
+                    # The count covers the engineers and the chosen spotter voice only; the other voices are not in it.
+                    'spotter_voice': radio_phrases.spotter_voice()}
 
     def start(self):
         with self.lock:

@@ -28,6 +28,8 @@ FORMATS = {
     'turn': str, 'place': str,
     'kph': lambda v: f'{round(v)}킬로미터', 'steer': lambda v: f'{v:.1f}도',
     'count': lambda v: f'{int(v)}대', 'temp': lambda v: f'{round(v)}도',
+    # How many times: "두 번", never "2번" (read as a number, "이 번", like a corner).
+    'times': lambda v: ('', '한', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉', '열')[int(v)] + ' 번',
     'nth': lambda v: ('', '첫', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉', '열')[int(v)] + ' 번째',
 }
 
@@ -53,6 +55,10 @@ PREPARED = {
     'form_length_min': {'min': RACE_MINUTES}, 'form_length_laps': {'laps': range(3, 201)},
     'form_grid': {'pos': range(1, 61)}, 'form_field': {'count': range(2, 61)},
     'form_fuel': {'liters': range(5, 151)}, 'form_pit_speed': {'kph': range(40, 131)}, 'form_pit_loss': {'sec': range(10, 91)},
+    'rejoin_ahead_of': {'pos': range(1, 61)}, 'rejoin_behind': {'pos': range(1, 61)}, 'rejoin_margin': {'gap': tenths(.1, 3.0)},
+    'stint_that': {'laps': range(1, 61)}, 'stint_ahead': {'laps': range(1, 61)}, 'stint_behind': {'laps': range(1, 61)},
+    'stint_more': {'laps': range(3, 41)}, 'stint_less': {'laps': range(3, 41)},
+    'stops_ahead': {'times': range(1, 11)}, 'stops_behind': {'times': range(1, 11)},
     'form_hist_nth': {'nth': range(2, 11)}, 'form_hist_pos': {'pos': range(1, 61)}, 'form_hist_temp_lower': {'temp': range(2, 31)}, 'form_hist_temp_higher': {'temp': range(2, 31)},
     'form_hist_loss': {'turn': [f'{n}번 코너' for n in range(1, 31)]}, 'form_hist_loss_also': {'turn': [f'{n}번 코너' for n in range(1, 31)]},
     'form_track_temp': {'temp': range(0, 66)}, 'form_air_temp': {'temp': range(-5, 46)}, 'form_incident_limit': {'points': range(4, 41)},
@@ -147,6 +153,20 @@ PHRASES = {
     'lose_rate': ('race', ['뒤차가 랩당 {loss}씩 좁히고 있습니다.', '뒤차와 랩마다 {loss}씩 줄고 있습니다.']),
     'caught_in': ('race', ['{laps} 뒤에 닿습니다.', '이대로면 {laps} 뒤에 따라잡힙니다.']),
     'pit_rejoin': ('strategy', ['피트하면 클래스 {pos}로 나옵니다.', '지금 피트하면 클래스 {pos}로 복귀합니다.']),
+    # Where a stop now brings the car out against the one it would rejoin nearest to (2026-10-14).
+    'rejoin_ahead_of': ('strategy', ['지금 피트하면 클래스 {pos} 차 바로 앞으로 나옵니다.', '지금 들어가면 클래스 {pos} 차 앞에서 나옵니다.']),
+    'rejoin_behind': ('strategy', ['지금 피트하면 클래스 {pos} 차 바로 뒤로 나옵니다.', '지금 들어가면 클래스 {pos} 차 뒤에서 나옵니다.']),
+    'rejoin_margin': ('strategy', ['차이는 {gap}입니다.', '간격은 {gap}입니다.']),
+    # How long the cars around have been out since their last stop, against our own stint.
+    'stint_that': ('strategy', ['그 차는 이번 스틴트 {laps}째입니다.', '그 차는 피트 후 {laps}째입니다.']),
+    'stint_ahead': ('strategy', ['앞차는 이번 스틴트 {laps}째입니다.', '앞차는 피트 후 {laps}째입니다.']),
+    'stint_behind': ('strategy', ['뒤차는 이번 스틴트 {laps}째입니다.', '뒤차는 피트 후 {laps}째입니다.']),
+    'stint_more': ('strategy', ['우리보다 {laps} 더 탔습니다.', '우리보다 {laps} 깁니다.']),
+    'stint_less': ('strategy', ['우리보다 {laps} 덜 탔습니다.', '우리보다 {laps} 짧습니다.']),
+    'stops_ahead': ('strategy', ['앞차는 피트를 {times} 했습니다.', '앞차는 지금까지 {times} 피트했습니다.']),
+    'stops_behind': ('strategy', ['뒤차는 피트를 {times} 했습니다.', '뒤차는 지금까지 {times} 피트했습니다.']),
+    'stops_none_ahead': ('strategy', ['앞차는 아직 피트하지 않았습니다.', '앞차는 아직 한 번도 피트하지 않았습니다.']),
+    'stops_none_behind': ('strategy', ['뒤차는 아직 피트하지 않았습니다.', '뒤차는 아직 한 번도 피트하지 않았습니다.']),
     'damage_same': ('race', ['충돌 뒤 랩타임과 최고속은 그대로입니다.', '충돌 전과 랩타임 차이는 없습니다. 최고속도 그대로입니다.']),
     'damage_slower': ('race', ['충돌 뒤 랩타임이 {loss} 느려졌습니다.', '충돌 전보다 랩당 {loss} 느립니다.']),
     'damage_vmax': ('race', ['직선 최고속이 {kph} 떨어졌습니다.', '최고속이 충돌 전보다 {kph} 낮습니다.']),

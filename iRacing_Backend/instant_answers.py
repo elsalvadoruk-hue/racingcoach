@@ -72,6 +72,34 @@ def instant_answer(text, context, live=None):
         sides = ['ahead'] if '앞' in compact and '뒤' not in compact else ['behind'] if '뒤' in compact and '앞' not in compact else ['ahead', 'behind']
         parts = gap_sentences(view, sides)
         return ('race', parts) if parts else None
+    if racing and any(word in compact for word in ('피트하면', '들어가면', '복귀', '나오면')):
+        # Where a stop now brings us out, and the car we would come out nearest to.
+        parts = [sentence('pit_rejoin', pos=view['rejoin_class_position_estimate'])] if view.get('rejoin_class_position_estimate') else []
+        close = view.get('rejoin_close')
+        if close and close.get('class_position'):
+            parts.append(sentence('rejoin_ahead_of' if close['margin_s'] >= 0 else 'rejoin_behind', pos=close['class_position']))
+            if abs(close['margin_s']) >= .1:
+                parts.append(sentence('rejoin_margin', gap=abs(close['margin_s'])))
+            if close.get('stint_laps'):
+                parts.append(sentence('stint_that', laps=close['stint_laps']))
+        return ('strategy', parts) if parts else None
+    if racing and any(word in compact for word in ('스틴트', '몇랩탔', '몇바퀴탔', '피트몇번', '몇번피트', '피트했어', '피트했나')):
+        sides = ['ahead'] if '앞' in compact and '뒤' not in compact else ['behind'] if '뒤' in compact and '앞' not in compact else ['ahead', 'behind']
+        stops = any(word in compact for word in ('몇번', '피트했'))
+        own_stint, parts = view.get('own_stint_laps'), []
+        for side in sides:
+            car = view.get(side)
+            if not car:
+                continue
+            if stops and car.get('stops') is not None:
+                parts.append(sentence(f'stops_{side}', times=car['stops']) if 1 <= car['stops'] <= 10
+                             else sentence(f'stops_none_{side}') if car['stops'] == 0 else None)
+            elif not stops and car.get('stint_laps') and car['stint_laps'] <= 60:
+                parts.append(sentence(f'stint_{side}', laps=car['stint_laps']))
+                if own_stint is not None and 3 <= abs(car['stint_laps'] - own_stint) <= 40:
+                    parts.append(sentence('stint_more' if car['stint_laps'] > own_stint else 'stint_less', laps=abs(car['stint_laps'] - own_stint)))
+        parts = [part for part in parts if part]
+        return ('strategy', parts) if parts else None
     if any(word in compact for word in ('순위', '몇등', '몇위')) and not re.search(r'\d+위', compact):
         position = number(snapshot.get('class_position'))
         return ('spotter', [sentence('position_now', pos=position)]) if position and position > 0 else None

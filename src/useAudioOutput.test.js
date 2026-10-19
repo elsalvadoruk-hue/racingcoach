@@ -139,7 +139,7 @@ test('saved output survives remount and is not discarded before microphone permi
   expect(players[0].volume).toBe(.35); expect(players[0].muted).toBe(true);
   act(() => second.result.current.changeVolume(0));
   expect(players[0].volume).toBe(0); expect(players[0].muted).toBe(false);
-  expect(JSON.parse(localStorage.getItem('iracing.voice.playback'))).toEqual({ volume: 0, muted: false });
+  expect(JSON.parse(localStorage.getItem('iracing.voice.playback'))).toEqual({ volume: 0, muted: false, rate: 1.15 });
 });
 
 test('unplugging an available selected device stops playback and restores system default', async () => {
@@ -297,6 +297,27 @@ test('several whole sentences play back to back as one call and nothing slips in
   await act(async () => players[1].onended());
   expect(delivery).toHaveBeenCalledWith('completed', '');
   expect(result.current.audioBusy()).toBe(false);
+});
+
+test('the speed setting is for calls of several sentences; one sentence and the formation briefing stay at 1.15', async () => {
+  const { result } = renderHook(useAudioOutput);
+  act(() => result.current.changeRate(1.25));
+  expect(result.current.rate).toBe(1.25);
+  expect(JSON.parse(localStorage.getItem('iracing.voice.playback')).rate).toBe(1.25);
+  await act(async () => result.current.play('one', 'audio/mpeg', { priority: 1 }));
+  expect(players[0].playbackRate).toBe(1.15);
+  await act(async () => players[0].onended());
+  await act(async () => result.current.play(['first', 'second'], 'audio/mpeg', { priority: 1 }));
+  expect(players[1].playbackRate).toBe(1.25);
+  await act(async () => players[1].onended());
+  expect(players[2].playbackRate).toBe(1.25);              // every sentence of the call
+  await act(async () => players[2].onended());
+  await act(async () => result.current.play(['hello', 'grid'], 'audio/mpeg', { priority: 1, rate: 1.15 }));
+  expect(players[3].playbackRate).toBe(1.15);              // a call that names its own speed keeps it
+  act(() => result.current.changeRate(3));
+  expect(result.current.rate).toBe(1.4);                   // within the slider's range
+  act(() => result.current.changeRate(1));
+  expect(result.current.rate).toBe(1.15);                  // never slower than the timing assumes
 });
 
 test('a chain that is cut reports one interruption and does not start its next sentence', async () => {
