@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_fiveflags/248-fiveflags/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_fiveflags/248-fiveflags/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_fiveflags/248-fiveflags/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_fiveflags/248-fiveflags/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_fiveflags/248-fiveflags/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_fiveflags/248-fiveflags/turns.svg"
+}

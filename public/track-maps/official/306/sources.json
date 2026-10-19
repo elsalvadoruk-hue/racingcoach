@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/306-phoenix-rallycross/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/306-phoenix-rallycross/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/306-phoenix-rallycross/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/306-phoenix-rallycross/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/306-phoenix-rallycross/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/306-phoenix-rallycross/turns.svg"
+}

@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/136-pocono-oval/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/136-pocono-oval/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/136-pocono-oval/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/136-pocono-oval/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/136-pocono-oval/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/136-pocono-oval/turns.svg"
+}

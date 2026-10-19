@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_knoxville/305-knoxville/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_knoxville/305-knoxville/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_knoxville/305-knoxville/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_knoxville/305-knoxville/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_knoxville/305-knoxville/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_knoxville/305-knoxville/turns.svg"
+}

@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_southernnational/256-southernnational/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_southernnational/256-southernnational/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_southernnational/256-southernnational/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_southernnational/256-southernnational/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_southernnational/256-southernnational/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_southernnational/256-southernnational/turns.svg"
+}

@@ -1,0 +1,109 @@
+"""Second pack of wordings: more ways to say the calls that come up most often.
+
+Pure data. Each table that owns the first wordings appends these to its own:
+spotter.VARIANTS, race_radio.STATIC_CALLS, radio_audio.VARIANTS and
+radio_phrases.PHRASES. The first wording of every call is never changed (tests and
+cached audio depend on it), so removing this pack only makes the radio repeat itself
+sooner.
+
+The same rules as the first pack (decided by ear): whole sentences, no commas except
+"박스, 박스.", a number is never followed by a comma, polite speech, and nothing that
+was not measured. Side-by-side calls stay as short as the originals.
+"""
+
+# Side-by-side calls (spotter.VARIANTS).
+SPOTTER = {
+    'left': ('왼쪽입니다.', '왼쪽에 차 있습니다.', '왼쪽 붙었습니다.', '차량 왼쪽.'),
+    'right': ('오른쪽입니다.', '오른쪽에 차 있습니다.', '오른쪽 붙었습니다.', '차량 오른쪽.'),
+    'both': ('양쪽입니다. 라인 유지.', '좌우 모두 있습니다.', '양쪽에 차 있습니다. 그대로 가세요.'),
+    'two_left': ('왼쪽에 두 대입니다.', '왼쪽 두 대 있습니다.'),
+    'two_right': ('오른쪽에 두 대입니다.', '오른쪽 두 대 있습니다.'),
+    'left_only': ('이제 왼쪽만 있습니다.', '오른쪽은 비었습니다. 왼쪽 남았습니다.'),
+    'right_only': ('이제 오른쪽만 있습니다.', '왼쪽은 비었습니다. 오른쪽 남았습니다.'),
+    'left_one': ('왼쪽 한 대 남았습니다.', '왼쪽 이제 한 대입니다.'),
+    'right_one': ('오른쪽 한 대 남았습니다.', '오른쪽 이제 한 대입니다.'),
+    'clear_left': ('왼쪽 없습니다.', '왼쪽 빠졌습니다.', '왼쪽 깨끗합니다.', '클리어 왼쪽.'),
+    'clear_right': ('오른쪽 없습니다.', '오른쪽 빠졌습니다.', '오른쪽 깨끗합니다.', '클리어 오른쪽.'),
+    'clear_all': ('모두 클리어.', '양쪽 없습니다.', '좌우 비었습니다.', '클리어.'),
+    'hold': ('아직 옆에 있습니다.', '옆에 그대로 있습니다. 라인 유지.'),
+    'hold_left': ('아직 왼쪽입니다.', '왼쪽 그대로 있습니다.', '왼쪽 계속 있습니다.'),
+    'hold_right': ('아직 오른쪽입니다.', '오른쪽 그대로 있습니다.', '오른쪽 계속 있습니다.'),
+    'hold_both': ('아직 양쪽입니다.', '양쪽 그대로 있습니다.'),
+    'hold_two_left': ('왼쪽 두 대 그대로입니다.', '아직 왼쪽 두 대입니다.'),
+    'hold_two_right': ('오른쪽 두 대 그대로입니다.', '아직 오른쪽 두 대입니다.'),
+}
+
+# Flags, traffic, pit lane and car warnings (race_radio.STATIC_CALLS).
+STATIC = {
+    'traffic_faster_behind': ('뒤에서 빠른 클래스가 옵니다.', '빠른 클래스가 뒤에서 접근합니다.', '뒤쪽에 빠른 클래스 차량입니다.'),
+    'traffic_slower_ahead': ('앞에 느린 클래스 차량입니다.', '느린 클래스를 따라잡고 있습니다.', '앞쪽 느린 클래스에 붙고 있습니다.'),
+    'traffic_lapping_behind': ('뒤에서 한 랩 앞선 차량이 옵니다.', '랩을 앞선 차량이 뒤에서 접근합니다.'),
+    'traffic_lapped_ahead': ('앞에 한 랩 뒤진 차량입니다.', '랩이 뒤진 차량을 따라잡고 있습니다.'),
+    'hazard_off_ahead': ('앞쪽에 코스를 벗어난 차가 있습니다.', '전방 코스 이탈 차량입니다.', '앞에 트랙 밖 차량. 조심하세요.'),
+    'hazard_slow_ahead': ('앞쪽에 아주 느린 차가 있습니다.', '전방에 느린 차량입니다. 조심하세요.', '앞에 느린 차. 주의하세요.'),
+    'close_behind': ('뒤차가 붙었습니다.', '바로 뒤에 있습니다.', '뒤에 바짝 붙어 있습니다.'),
+    'green': ('그린입니다.', '그린 플래그 나왔습니다.'),
+    'yellow': ('옐로입니다. 전방 주의하세요.', '옐로 플래그 나왔습니다.', '옐로. 앞쪽 조심하세요.'),
+    'caution': ('풀코스 옐로입니다. 게임 지시를 확인하세요.',),
+    'blue': ('블루 플래그 나왔습니다. 뒤를 확인하세요.', '블루 플래그. 뒤에 빠른 차가 있습니다.'),
+    'debris': ('데브리입니다. 노면 조심하세요.', '노면에 파편이 있습니다. 주의하세요.', '데브리 플래그 나왔습니다.'),
+    'white': ('화이트 플래그 나왔습니다.',),
+    'finish': ('체커드 플래그 나왔습니다.',),
+    'pit_enter': ('피트로드입니다. 제한속도 지키세요.', '피트 진입했습니다. 속도 확인하세요.'),
+    'pit_exit': ('피트 나왔습니다. 합류 차량 조심하세요.', '피트 출구 지났습니다. 주변 확인하세요.'),
+    'pit_speed': ('피트 속도 초과입니다. 줄이세요.', '너무 빠릅니다. 피트 제한속도 지키세요.'),
+    'service_start': ('작업 들어갑니다.', '피트 작업 중입니다.'),
+    'service_done': ('작업 완료입니다. 나가면서 출구 확인하세요.', '다 됐습니다. 출구 차량 확인하세요.'),
+    'optional_repair': ('선택 수리 신호가 켜졌습니다.',),
+    'mandatory_repair': ('필수 수리 신호가 켜졌습니다.',),
+    'fuel_low': ('연료가 거의 없습니다.',),
+}
+# Distance to the pit stall: two more shapes for every distance.
+PIT_BOX = ('피트박스까지 {distance}미터입니다.', '{distance}미터 앞 피트박스.')
+
+# Fixed engineer calls (radio_audio.VARIANTS).
+CALLS = {
+    'approach': ('뒤차 최근 랩이 더 빠릅니다.', '같은 클래스 뒤차가 페이스가 좋습니다.'),
+    'pit_ahead': ('앞차 피트 들어갔습니다.',),
+    'pit_behind': ('뒤차 피트 들어갔습니다.',),
+    'class_traffic_ahead': ('앞쪽에 다른 클래스입니다.', '앞에 다른 클래스 차가 있습니다.'),
+    'class_traffic_behind': ('뒤쪽에 다른 클래스입니다.', '뒤에 다른 클래스 차가 있습니다.'),
+    'fuel_critical': ('연료가 바닥입니다. 이번 랩에 들어오세요.', '이번 랩 피트입니다. 연료가 한 랩분입니다.'),
+    'incident': ('인시던트가 추가됐습니다.', '인시던트 점수 늘었습니다.'),
+    'incident_coaching': ('인시던트가 이어지고 있습니다. 한 랩은 쉬어 가세요.',),
+    'coach_understeer': ('이 구간에서 앞이 밀린다고 여러 번 말씀하셨습니다. 진입 속도를 조금 낮춰 보세요.',),
+    'coach_understeer_entry': ('이 구간 진입에서 앞이 밀린다고 여러 번 말씀하셨습니다. 브레이크를 조금 더 길게 가져가 보세요.',),
+    'coach_understeer_exit': ('이 구간 탈출에서 앞이 밀린다고 여러 번 말씀하셨습니다. 가속을 조금 기다렸다 시작해 보세요.',),
+    'coach_oversteer': ('이 구간에서 뒤가 불안하다고 여러 번 말씀하셨습니다. 핸들을 조금 더 부드럽게 돌려 보세요.',),
+    'coach_oversteer_entry': ('이 구간 진입에서 뒤가 불안하다고 여러 번 말씀하셨습니다. 브레이크를 조금 더 부드럽게 풀어 보세요.',),
+    'coach_oversteer_exit': ('이 구간 탈출에서 뒤가 불안하다고 여러 번 말씀하셨습니다. 가속 페달을 조금 더 천천히 열어 보세요.',),
+    'coach_braking': ('이 구간에서 제동이 불안하다고 여러 번 말씀하셨습니다. 제동을 조금 일찍 시작해 보세요.',),
+}
+
+# Sentences with numbers (radio_phrases.PHRASES). Every wording here is prepared for the whole range of its numbers.
+PHRASES = {
+    'lap_time_read': ('방금 랩 {lap}입니다.', '{lap} 나왔습니다.', '랩타임은 {lap}입니다.'),
+    'position_up': ('클래스 {pos}까지 올라왔습니다.',),
+    'position_down': ('클래스 {pos}로 밀렸습니다.',),
+    'position_now': ('지금 클래스 {pos}입니다.', '순위는 클래스 {pos}입니다.'),
+    'gap_ahead_closing': ('앞차와 {gap} 차. 좁혀지고 있습니다.',),
+    'gap_behind_closing': ('뒤차와 {gap} 차. 좁혀지고 있습니다.',),
+    'brief_gap_ahead': ('앞차와 간격은 {gap}입니다.',),
+    'brief_gap_behind': ('뒤차와 간격은 {gap}입니다.',),
+    'pace_slower_by': ('방금 랩은 평소보다 {loss} 느렸습니다.',),
+    'pace_faster_by': ('방금 랩은 평소보다 {loss} 빨랐습니다.',),
+    'time_left': ('이제 {min} 남았습니다.',),
+    'pit_two': ('두 랩 뒤에 피트합니다.', '피트 두 랩 전입니다.'),
+    'pit_fuel_add': ('{liters} 넣습니다.',),
+    'last_lap': ('마지막 랩입니다. 집중합시다.', '이제 마지막 랩입니다.'),
+    'tyre_keep': ('타이어 교체 없이 갑니다.', '타이어는 이번에 안 바꿉니다.'),
+    'tyre_change': ('타이어도 새것으로 갑니다.', '이번에 타이어 바꿉니다.'),
+    'corner_call_brake_early': ('{turn} 다가옵니다. 지난 랩에 {loss} 잃었습니다. 제동이 일렀습니다.',),
+    'corner_call_min_speed': ('{turn} 다가옵니다. 지난 랩에 {loss} 잃었습니다. 코너 속도가 낮았습니다.',),
+    'corner_call_throttle_late': ('{turn} 다가옵니다. 지난 랩에 {loss} 잃었습니다. 가속이 늦었습니다.',),
+    'corner_call_time': ('{turn} 다가옵니다. 지난 랩에 {loss} 잃었습니다.',),
+    'corner_focus_brake_early': ('곧 다음 코너입니다. 지난 랩에 {loss} 잃었습니다. 제동이 일렀습니다.',),
+    'corner_focus_min_speed': ('곧 다음 코너입니다. 지난 랩에 {loss} 잃었습니다. 코너 속도가 낮았습니다.',),
+    'corner_focus_throttle_late': ('곧 다음 코너입니다. 지난 랩에 {loss} 잃었습니다. 가속이 늦었습니다.',),
+    'corner_focus_time': ('곧 다음 코너입니다. 지난 랩에 {loss} 잃었습니다.',),
+}

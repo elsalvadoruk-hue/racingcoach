@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_jerez/474-jerez-moto/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_jerez/474-jerez-moto/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_jerez/474-jerez-moto/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_jerez/474-jerez-moto/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_jerez/474-jerez-moto/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_jerez/474-jerez-moto/turns.svg"
+}

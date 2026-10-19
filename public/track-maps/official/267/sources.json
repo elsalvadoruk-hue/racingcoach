@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_imola/267-imola-moto/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_imola/267-imola-moto/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_imola/267-imola-moto/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_imola/267-imola-moto/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_imola/267-imola-moto/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_imola/267-imola-moto/turns.svg"
+}

@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_irwindale/19-irwindale-inner/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_irwindale/19-irwindale-inner/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_irwindale/19-irwindale-inner/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_irwindale/19-irwindale-inner/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_irwindale/19-irwindale-inner/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_irwindale/19-irwindale-inner/turns.svg"
+}

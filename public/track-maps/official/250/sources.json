@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/250-nurburgring-gp/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/250-nurburgring-gp/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/250-nurburgring-gp/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/250-nurburgring-gp/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/250-nurburgring-gp/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/250-nurburgring-gp/turns.svg"
+}

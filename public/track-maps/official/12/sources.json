@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_oxford/12-oxford-oval/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_oxford/12-oxford-oval/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_oxford/12-oxford-oval/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_oxford/12-oxford-oval/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_oxford/12-oxford-oval/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_oxford/12-oxford-oval/turns.svg"
+}

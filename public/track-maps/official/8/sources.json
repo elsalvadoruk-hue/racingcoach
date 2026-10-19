@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_summit/8-summit-jefferson/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_summit/8-summit-jefferson/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_summit/8-summit-jefferson/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_summit/8-summit-jefferson/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_summit/8-summit-jefferson/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_summit/8-summit-jefferson/turns.svg"
+}

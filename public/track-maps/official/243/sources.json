@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_monza/243-monza-oval/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_monza/243-monza-oval/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_monza/243-monza-oval/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_monza/243-monza-oval/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_monza/243-monza-oval/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_monza/243-monza-oval/turns.svg"
+}

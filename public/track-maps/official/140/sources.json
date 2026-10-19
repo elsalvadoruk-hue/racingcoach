@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/140-pocono-international/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/140-pocono-international/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/140-pocono-international/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/140-pocono-international/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/140-pocono-international/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/140-pocono-international/turns.svg"
+}

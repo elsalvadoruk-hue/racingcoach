@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_aragon/475-aragon-gp/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_aragon/475-aragon-gp/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_aragon/475-aragon-gp/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_aragon/475-aragon-gp/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_aragon/475-aragon-gp/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_aragon/475-aragon-gp/turns.svg"
+}

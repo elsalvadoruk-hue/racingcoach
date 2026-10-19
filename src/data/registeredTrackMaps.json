@@ -1,0 +1,1476 @@
+{
+  "source": "DZ replay local bundled registered maps",
+  "release": "2f6e6d404832c820516617fa",
+  "projection": {
+    "eastMetersPerLongitudeDegree": 111320,
+    "northMetersPerLatitudeDegree": 110540,
+    "direction": "SVG to ENU: east=a*x+b*y+tx; north=b*x-a*y+ty"
+  },
+  "accuracy": "Map alignment residual is not surveyed road-boundary accuracy.",
+  "maps": [
+    {
+      "trackId": 523,
+      "name": "Circuit de Spa-Francorchamps",
+      "layout": "Grand Prix Pits",
+      "displayName": "Circuit de Spa-Francorchamps — Grand Prix Pits",
+      "aliases": [
+        "Circuit de Spa-Francorchamps - Grand Prix Pits",
+        "Circuit de Spa-Francorchamps (Grand Prix Pits)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_spa/523-spa-2024-up",
+      "lengthMeters": 7000.6464,
+      "origin": {
+        "lat": 50.44313450874269,
+        "lon": 5.966057843047294
+      },
+      "transform": {
+        "a": 0.7019587990848637,
+        "b": -1.3247944043264308,
+        "tx": -11.10750584987943,
+        "ty": 915.7287452490244
+      },
+      "viewBox": [
+        -96.53137068252761,
+        -598.5834723278867,
+        2188.4003908133645,
+        1972.3113494717682
+      ],
+      "fit": {
+        "medianMeters": 4.864497977052592,
+        "p95Meters": 7.364345941753729
+      },
+      "sourceHashes": {
+        "activeSha256": "b3b56c26ec6250a5180d9f7582b456e425f378be31c2b34ce99d63d29b44a694",
+        "backgroundSha256": "bbf480b733aa19211f9c0e9d4745ac42cc43dffa0592cfc57e405a44f0bf1d5a"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "SPW",
+          "sourceUrl": "https://geoportail.wallonie.be/catalogue/0757bc5d-d918-47f4-8e70-8600c9286be5.html",
+          "attribution": "Service public de Wallonie (SPW) — Orthophotos 2026 Printemps (2026-09-04). CC BY 4.0. Geographic crop, WMS reprojection, tile assembly and JPEG encoding by DZ replay.",
+          "sourceImageSha256": "92215674b72547bb212aa1eecbead908dbc6fd64d1eb0862de3f36816d11a05c",
+          "copyrightReview": {
+            "version": 1,
+            "checkedAt": "2026-10-03T21:09:53.442339+00:00",
+            "sourceImageSha256": "92215674b72547bb212aa1eecbead908dbc6fd64d1eb0862de3f36816d11a05c",
+            "status": "cleared",
+            "reviewComplete": true,
+            "license": "CC BY 4.0",
+            "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": true,
+            "attributionText": "Service public de Wallonie (SPW) — Orthophotos 2026 Printemps (2026-09-04). CC BY 4.0. Geographic crop, WMS reprojection, tile assembly and JPEG encoding by DZ replay.",
+            "conditions": [
+              "Credit SPW and the dataset, retain CC BY 4.0 link, and identify modifications. No additional restrictions on licensed image reuse."
+            ],
+            "evidence": [
+              {
+                "title": "SPW Orthophotos 2026 Printemps dataset and reuse conditions",
+                "url": "https://geoportail.wallonie.be/catalogue/0757bc5d-d918-47f4-8e70-8600c9286be5.html"
+              },
+              {
+                "title": "Creative Commons Attribution 4.0",
+                "url": "https://creativecommons.org/licenses/by/4.0/"
+              }
+            ],
+            "notes": "License review concerns these orthophoto pixels. It does not establish rights to iRacing SVG geometry."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/523/active.svg",
+        "background": "/track-maps/dz-replay/523/background.svg"
+      }
+    },
+    {
+      "trackId": 268,
+      "name": "Circuit des 24 Heures du Mans",
+      "layout": "24 Heures du Mans",
+      "displayName": "Circuit des 24 Heures du Mans — 24 Heures du Mans",
+      "aliases": [
+        "Circuit des 24 Heures du Mans - 24 Heures du Mans",
+        "Circuit des 24 Heures du Mans (24 Heures du Mans)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_lemans/268-lemans-full",
+      "lengthMeters": 13629.534335999999,
+      "origin": {
+        "lat": 47.949773267816234,
+        "lon": 0.20764492719474684
+      },
+      "transform": {
+        "a": 0.15842858719505085,
+        "b": -3.0453177958476902,
+        "tx": 2784.1742160046397,
+        "ty": 1629.7504845120661
+      },
+      "viewBox": [
+        -136.56489761773878,
+        -175.63351503269456,
+        2167.6763315378153,
+        1358.9539779535767
+      ],
+      "fit": {
+        "medianMeters": 6.627434983233242,
+        "p95Meters": 11.19692128823191
+      },
+      "sourceHashes": {
+        "activeSha256": "019083994c5f0414249dc2044c4579d1b23bfa8907faa4323a92af93194eaa25",
+        "backgroundSha256": "01e0b23f651950c3c86ae8b30807066b632d0503268b5a7d5301e94e62d20a75"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "IGN",
+          "sourceUrl": "https://data.geopf.fr/wms-r/wms",
+          "attribution": "IGN — BD ORTHO, retrieved 2026-10-02. Crop and coordinate reprojection by DZ replay.",
+          "sourceImageSha256": "25f46fe06bc5f583ce7c00202db92c3284a4234ec3de055f2d23a7cd062cf4cd",
+          "copyrightReview": {
+            "version": 1,
+            "checkedAt": "2026-10-02T23:36:45.513Z",
+            "sourceImageSha256": "25f46fe06bc5f583ce7c00202db92c3284a4234ec3de055f2d23a7cd062cf4cd",
+            "status": "cleared",
+            "reviewComplete": true,
+            "license": "Licence Ouverte / Open Licence 2.0",
+            "licenseUrl": "https://www.etalab.gouv.fr/licence-ouverte-open-licence/",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": true,
+            "attributionText": "IGN — BD ORTHO, retrieved 2026-10-02. Crop and coordinate reprojection by DZ replay.",
+            "conditions": [
+              "Credit IGN / BD ORTHO and information retrieval date; indicate crop and reprojection."
+            ],
+            "evidence": [
+              {
+                "title": "IGN official RGE dataset — BD ORTHO and Open Licence 2.0",
+                "url": "https://www.data.gouv.fr/datasets/referentiel-a-grande-echelle-rge"
+              }
+            ],
+            "notes": "Latest public ORTHOIMAGERY.ORTHOPHOTOS layer. Capture date to be checked from IGN acquisition metadata."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/268/active.svg",
+        "background": "/track-maps/dz-replay/268/background.svg"
+      }
+    },
+    {
+      "trackId": 229,
+      "name": "Circuit of the Americas",
+      "layout": "Grand Prix",
+      "displayName": "Circuit of the Americas — Grand Prix",
+      "aliases": [
+        "Circuit of the Americas - Grand Prix",
+        "Circuit of the Americas (Grand Prix)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_cota/229-cota-gp",
+      "lengthMeters": 5515.221888,
+      "origin": {
+        "lat": 30.136876653160467,
+        "lon": -97.63250333766874
+      },
+      "transform": {
+        "a": -0.9786086216208956,
+        "b": -0.527347164059934,
+        "tx": 1172.744452569053,
+        "ty": -178.965234566327
+      },
+      "viewBox": [
+        -228.9373319684608,
+        -628.0507171507102,
+        2572.9875984086175,
+        2288.2599494442056
+      ],
+      "fit": {
+        "medianMeters": 6.450986372330798,
+        "p95Meters": 9.004639419660062
+      },
+      "sourceHashes": {
+        "activeSha256": "64434678e58ae419daa7e436040f0441a73c429d93a61985adc8657130417514",
+        "backgroundSha256": "fede7d0544ae61192195120b5a4832afae98ffaa57a2668f4d44139c9bd128c5"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "USGS / USDA NAIP",
+          "sourceUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer",
+          "attribution": "USDA NAIP / USGS · 2022-06-08 / 2022-06-11 · processed by DZ replay",
+          "sourceImageSha256": "999fb3dc693f6abbea1819f18861787e35859b56ba470ade08379b0dc4de8f8d",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-02T23:24:17.409Z",
+            "sourceImageSha256": "999fb3dc693f6abbea1819f18861787e35859b56ba470ade08379b0dc4de8f8d",
+            "license": "Public Domain — USDA NAIP",
+            "licenseUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": false,
+            "attributionText": "USDA NAIP / USGS · 2022-06-08 / 2022-06-11 · processed by DZ replay",
+            "conditions": [
+              "Retain USDA NAIP / USGS source credit as recommended by USGS. No provider logo or endorsement."
+            ],
+            "evidence": [
+              {
+                "title": "USGS NAIP service — public domain orthoimagery",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer"
+              },
+              {
+                "title": "USDA NAIP usage notice",
+                "url": "https://www.fsa.usda.gov/Internet/FSA_Notice/ap_26.pdf"
+              },
+              {
+                "title": "USGS copyrights and credits",
+                "url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits"
+              }
+            ],
+            "notes": "Exact downloaded crop. All locked primary rasters identify agency USDA and vendor USDA-FSA-APFO."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/229/active.svg",
+        "background": "/track-maps/dz-replay/229/background.svg"
+      }
+    },
+    {
+      "trackId": 515,
+      "name": "Circuito de Navarra",
+      "layout": "Speed Circuit",
+      "displayName": "Circuito de Navarra — Speed Circuit",
+      "aliases": [
+        "Circuito de Navarra - Speed Circuit",
+        "Circuito de Navarra (Speed Circuit)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_navarra/515-navarra-speedlong",
+      "lengthMeters": 3926.79936,
+      "origin": {
+        "lat": 42.55919876349072,
+        "lon": -2.168146829191982
+      },
+      "transform": {
+        "a": 0.2638174358961477,
+        "b": -0.6554651409597388,
+        "tx": 271.7854804300817,
+        "ty": 931.0061935660545
+      },
+      "viewBox": [
+        -87.85661185028584,
+        -548.2759551119744,
+        2301.439839801879,
+        2100.533142700441
+      ],
+      "fit": {
+        "medianMeters": 5.227996881217171,
+        "p95Meters": 7.266681079896701
+      },
+      "sourceHashes": {
+        "activeSha256": "145773ebe3eb8c55d2f7e5f4c7e96ffecac500ebbd2df2bfcc6a487d26b9c209",
+        "backgroundSha256": "81991f38a55713e591fda46b7fab8e8d9c89c5eb49d0524c5617ab67e13f230f"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "Gobierno de Navarra / SITNA / IDENA",
+          "sourceUrl": "https://geoportal.navarra.es/es/descargas",
+          "attribution": "Gobierno de Navarra / SITNA — Ortofoto 2023, CC BY 4.0. Crop and mosaic by DZ replay.",
+          "sourceImageSha256": "dd08490fcc3524db5d86cd4a76ac6dcce4f2811b65b0421aa81955a27709da3c",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-06T16:48:39.605Z",
+            "sourceImageSha256": "dd08490fcc3524db5d86cd4a76ac6dcce4f2811b65b0421aa81955a27709da3c",
+            "license": "CC BY 4.0",
+            "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": true,
+            "attributionText": "Gobierno de Navarra / SITNA — Ortofoto 2023, CC BY 4.0. Crop and mosaic by DZ replay.",
+            "conditions": [
+              "Credit Gobierno de Navarra / SITNA, retain the CC BY 4.0 link and identify crop/mosaic modifications."
+            ],
+            "evidence": [
+              {
+                "title": "Navarra official download portal: commercial reuse and CC BY 4.0",
+                "url": "https://geoportal.navarra.es/es/descargas"
+              },
+              {
+                "title": "Official IDENA WMS service",
+                "url": "https://www.navarra.es/es/web/geoportal/idena/servicios"
+              }
+            ],
+            "notes": "Review covers the 2023 orthophoto only, not imported track geometry or telemetry."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/515/active.svg",
+        "background": "/track-maps/dz-replay/515/background.svg"
+      }
+    },
+    {
+      "trackId": 192,
+      "name": "Daytona International Speedway",
+      "layout": "Road Course",
+      "displayName": "Daytona International Speedway — Road Course",
+      "aliases": [
+        "Daytona International Speedway - Road Course",
+        "Daytona International Speedway (Road Course)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_daytona_2011/192-daytona-2011-road",
+      "lengthMeters": 5729.26464,
+      "origin": {
+        "lat": 29.18769250982029,
+        "lon": -81.07281104706517
+      },
+      "transform": {
+        "a": -0.5280949209827773,
+        "b": -0.7285220269514371,
+        "tx": 1198.3208222888907,
+        "ty": 209.39517696698792
+      },
+      "viewBox": [
+        -745.4322716277604,
+        -1271.8702021157933,
+        3456.540438747553,
+        3437.459703628519
+      ],
+      "fit": {
+        "medianMeters": 4.059632762931168,
+        "p95Meters": 6.200001289624734
+      },
+      "sourceHashes": {
+        "activeSha256": "e46a222fc0d106c52b5a0910c72cbddfc97addf26bcb464afde4d3d9400765ce",
+        "backgroundSha256": "2b7cbe67e4a3d86812aef3762fe44f4d37f2dd3b689be220f8cab16c3f970002"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "USGS / USDA NAIP",
+          "sourceUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer",
+          "attribution": "USDA NAIP / USGS · 2023-01-17 · crop and coordinate placement by DZ replay",
+          "sourceImageSha256": "fca9ee41342f5f93e93231fa0a409a11c67ebb8bcb8e572c45933c7dc6d68cdc",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-06T17:10:48.373Z",
+            "sourceImageSha256": "fca9ee41342f5f93e93231fa0a409a11c67ebb8bcb8e572c45933c7dc6d68cdc",
+            "license": "US-PUBLIC-DOMAIN",
+            "licenseUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": false,
+            "attributionText": "USDA NAIP / USGS · 2023-01-17 · crop and coordinate placement by DZ replay",
+            "conditions": [
+              "Retain USDA NAIP and distribution-provider credit (recommended).",
+              "Do not use agency logos or imply agency endorsement.",
+              "This result applies to the identified USDA NAIP rasters, not every image available from the same server."
+            ],
+            "evidence": [
+              {
+                "title": "USGS NAIP service: public-domain NAIP orthoimagery",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson"
+              },
+              {
+                "title": "USGS copyrights and credits; third-party exceptions",
+                "url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits"
+              },
+              {
+                "title": "USDA NAIP data rights: unrestricted use and sharing",
+                "url": "https://www.fsa.usda.gov/Internet/FSA_Notice/ap_26.pdf"
+              },
+              {
+                "title": "Actual source dataset and raster catalog",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer"
+              }
+            ],
+            "notes": "Same identified USDA NAIP rasters acquired 2023-01-17, re-exported at approximately 0.30 m/pixel as nine lossless PNG tiles with locked raster IDs. Exact previous WGS84 crop retained. Full export URLs and catalog in .local/daytona-imagery-20261006/native-source.json. No new imagery date or GPS alignment implied. Stored image cropped/compressed by the local tracing tool from reviewed source 7cffe9728f502f6fed7a19e1b394df726fbee56ce141737a992c70f486f5f195."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/192/active.svg",
+        "background": "/track-maps/dz-replay/192/background.svg"
+      }
+    },
+    {
+      "trackId": 444,
+      "name": "Fuji International Speedway",
+      "layout": "Grand Prix",
+      "displayName": "Fuji International Speedway — Grand Prix",
+      "aliases": [
+        "Fuji International Speedway - Grand Prix",
+        "Fuji International Speedway (Grand Prix)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_fuji/444-fuji-gp",
+      "lengthMeters": 4560.000584832,
+      "origin": {
+        "lat": 35.37216428774844,
+        "lon": 138.92708753092813
+      },
+      "transform": {
+        "a": 0.9005463892612966,
+        "b": 0.39121999238087,
+        "tx": -988.8470175203597,
+        "ty": -76.03136391954291
+      },
+      "viewBox": [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      "fit": {
+        "medianMeters": null,
+        "p95Meters": null
+      },
+      "sourceHashes": {
+        "activeSha256": "530c0583619b73682c319f02c1128c704eb7d88bf5189d2d1c3a286888296222",
+        "backgroundSha256": "0b2573e370aada83ce1b604cd1fbbbd5d8bebdcd9db239e302c51f02dcec051d"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "GSI",
+          "sourceUrl": "https://maps.gsi.go.jp/development/ichiran.html#ort",
+          "attribution": "地理院タイル（国土地理院）を加工して DZ replay 作成",
+          "sourceImageSha256": "f011b20a7d835b63c1e4dee44ba9b0df06daaeaeb5ab079ec8f3306c1978627b",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-01T23:46:29.061Z",
+            "sourceImageSha256": "f011b20a7d835b63c1e4dee44ba9b0df06daaeaeb5ab079ec8f3306c1978627b",
+            "license": "PDL-1.0 (GSI terms)",
+            "licenseUrl": "https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": true,
+            "attributionText": "地理院タイル（国土地理院）を加工して DZ replay 作成",
+            "conditions": [
+              "Show GSI attribution and link to the source layer.",
+              "Identify cropping, grayscale, compositing or tracing and DZ replay as the processor.",
+              "Do not imply GSI authorship or endorsement of the edited map."
+            ],
+            "evidence": [
+              {
+                "title": "GSI content use terms (PDL 1.0, revised 2025-11-20)",
+                "url": "https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html"
+              },
+              {
+                "title": "GSI tile list: ort and photos in the no-application attribution category",
+                "url": "https://maps.gsi.go.jp/development/ichiran.html"
+              },
+              {
+                "title": "Public Data License 1.0: commercial copying and modification",
+                "url": "https://www.digital.go.jp/resources/open_data/public_data_license_v1.0"
+              }
+            ],
+            "notes": "The recorded ort layer is in GSI tile category 2 (attribution-only, no survey-use application required). Review covers the matched photo and its display/tracing."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/444/active.svg",
+        "background": "/track-maps/dz-replay/444/background.svg"
+      }
+    },
+    {
+      "trackId": 448,
+      "name": "Indianapolis Motor Speedway",
+      "layout": "Road Course",
+      "displayName": "Indianapolis Motor Speedway — Road Course",
+      "aliases": [
+        "Indianapolis Motor Speedway - Road Course",
+        "Indianapolis Motor Speedway (Road Course)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_indianapolis/448-indianapolis-2022-road",
+      "lengthMeters": 3925.190016,
+      "origin": {
+        "lat": 39.79316142387934,
+        "lon": -86.23892119596441
+      },
+      "transform": {
+        "a": 0.015459990898941543,
+        "b": -0.906529867329204,
+        "tx": 818.1656652691885,
+        "ty": 1080.8273251012643
+      },
+      "viewBox": [
+        50.225612841842036,
+        38.69860599175303,
+        1884.9557941541796,
+        1018.3945872396002
+      ],
+      "fit": {
+        "medianMeters": 4.93665371653635,
+        "p95Meters": 8.061762459688646
+      },
+      "sourceHashes": {
+        "activeSha256": "83833506e9d0c5b159089941c2ac048b5d2c9a6a3fe1af6bef74a326571a634e",
+        "backgroundSha256": "5001207c937a2f483e474cb86db57dcf9545a10bc50ed5eb07ad8c58950bcb13"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "USGS / USDA NAIP",
+          "sourceUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer",
+          "attribution": "USDA NAIP / USGS · processed by DZ replay",
+          "sourceImageSha256": "67603a4a8207d957fa1a5b4df47a5939fad43ed8e483cf518983d03a902bcfd8",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-02T01:37:29.316Z",
+            "sourceImageSha256": "67603a4a8207d957fa1a5b4df47a5939fad43ed8e483cf518983d03a902bcfd8",
+            "license": "US-PUBLIC-DOMAIN",
+            "licenseUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": false,
+            "attributionText": "USDA NAIP / USGS · processed by DZ replay",
+            "conditions": [
+              "Retain USDA NAIP and distribution-provider credit (recommended).",
+              "Do not use agency logos or imply agency endorsement.",
+              "This result applies to the identified USDA NAIP rasters, not every image available from the same server."
+            ],
+            "evidence": [
+              {
+                "title": "USGS NAIP service: public-domain NAIP orthoimagery",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson"
+              },
+              {
+                "title": "USGS copyrights and credits; third-party exceptions",
+                "url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits"
+              },
+              {
+                "title": "USDA NAIP data rights: unrestricted use and sharing",
+                "url": "https://www.fsa.usda.gov/Internet/FSA_Notice/ap_26.pdf"
+              },
+              {
+                "title": "Actual source dataset and raster catalog",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer"
+              },
+              {
+                "title": "Indianapolis selected primary USDA NAIP raster metadata",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer/query?f=json&where=Category%3D1&geometry=%7B%22xmin%22%3A-86.24043553137405%2C%22ymin%22%3A39.786987969501624%2C%22xmax%22%3A-86.22950962626955%2C%22ymax%22%3A39.802281594189544%2C%22spatialReference%22%3A%7B%22wkid%22%3A4326%7D%7D&geometryType=esriGeometryEnvelope&inSR=4326&spatialRel=esriSpatialRelIntersects&outFields=*&returnGeometry=true&outSR=4326"
+              }
+            ],
+            "notes": "Exact primary USDA NAIP raster #58750 (m_3908615_sw_16_060_20220621), agency USDA and vendor USDA-FSA-APFO, verified in the official catalog. This review applies only to the identified image bytes."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/448/active.svg",
+        "background": "/track-maps/dz-replay/448/background.svg"
+      }
+    },
+    {
+      "trackId": 353,
+      "name": "Lime Rock Park",
+      "layout": "Grand Prix",
+      "displayName": "Lime Rock Park — Grand Prix",
+      "aliases": [
+        "Lime Rock Park - Grand Prix",
+        "Lime Rock Park (Grand Prix)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_limerock_2019/353-limerock-2019-gp",
+      "lengthMeters": 2462.29632,
+      "origin": {
+        "lat": 41.928637432453186,
+        "lon": -73.38096669877142
+      },
+      "transform": {
+        "a": -0.5561927390322645,
+        "b": 0.24304543943718893,
+        "tx": 164.7787546894817,
+        "ty": -732.2927018095727
+      },
+      "viewBox": [
+        -410.81296541622305,
+        -725.1217583808029,
+        2717.7829104440266,
+        2570.0874453015617
+      ],
+      "fit": {
+        "medianMeters": 3.483308769149385,
+        "p95Meters": 5.401033035967045
+      },
+      "sourceHashes": {
+        "activeSha256": "c0388c9a23551211934f1b0a8473862fff690efc4398597628ea0434b2a7107e",
+        "backgroundSha256": "2e8d17da1e4c109d47adb44bc7e9e07b7e50e503fd3366e062911ab262b5cccd"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "USGS / USDA NAIP",
+          "sourceUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer",
+          "attribution": "USDA NAIP / USGS · processed by DZ replay",
+          "sourceImageSha256": "418e0193dcfeb73b1ef377a6da1990868c61ef113d8457877360c2a585d32ba0",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-01T23:46:29.061Z",
+            "sourceImageSha256": "418e0193dcfeb73b1ef377a6da1990868c61ef113d8457877360c2a585d32ba0",
+            "license": "US-PUBLIC-DOMAIN",
+            "licenseUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": false,
+            "attributionText": "USDA NAIP / USGS · processed by DZ replay",
+            "conditions": [
+              "Retain USDA NAIP and distribution-provider credit (recommended).",
+              "Do not use agency logos or imply agency endorsement.",
+              "This result applies to the identified USDA NAIP rasters, not every image available from the same server."
+            ],
+            "evidence": [
+              {
+                "title": "USGS NAIP service: public-domain NAIP orthoimagery",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson"
+              },
+              {
+                "title": "USGS copyrights and credits; third-party exceptions",
+                "url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits"
+              },
+              {
+                "title": "USDA NAIP data rights: unrestricted use and sharing",
+                "url": "https://www.fsa.usda.gov/Internet/FSA_Notice/ap_26.pdf"
+              },
+              {
+                "title": "Actual source dataset and raster catalog",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer"
+              }
+            ],
+            "notes": "The exact selected raster IDs/names were checked against the source service on 2026-10-01. USDA-FSA-APFO rasters (or IIPP NAIP2022 with public=yes) are verified; the ArcGIS software vendor is not the imagery licensor."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/353/active.svg",
+        "background": "/track-maps/dz-replay/353/background.svg"
+      }
+    },
+    {
+      "trackId": 219,
+      "name": "Mount Panorama Circuit",
+      "layout": "",
+      "displayName": "Mount Panorama Circuit",
+      "aliases": [
+        "Mount Panorama Circuit"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_bathurst/219-bathurst",
+      "lengthMeters": 6213.677184,
+      "origin": {
+        "lat": -33.43945748046633,
+        "lon": 149.55979815907267
+      },
+      "transform": {
+        "a": 0.22333140565651358,
+        "b": 1.2149709708163492,
+        "tx": -1409.5073971737497,
+        "ty": -2010.596468691823
+      },
+      "viewBox": [
+        -42.926644545207495,
+        -62.939580992973504,
+        1983.0250943994072,
+        1202.7680874924272
+      ],
+      "fit": {
+        "medianMeters": 3.960953123797651,
+        "p95Meters": 5.911103890038359
+      },
+      "sourceHashes": {
+        "activeSha256": "bbc2bb8258a5906adce71cc18ec291414dd14402c976fcadf30f9e3f450462ee",
+        "backgroundSha256": "3bd52c1a20d04e21306ffb1778885a987f83a2f147f214b1026678aa7f2c33b5"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "NSW Spatial Services / SIX Maps NSW Imagery",
+          "sourceUrl": "https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_Imagery/MapServer",
+          "attribution": "NSW Imagery — Bathurst. © State of New South Wales (Spatial Services, Department of Customer Service). Extracted 2 October 2026. CC BY 3.0 AU. Any cropping, styling or tracing adaptations are by DZ replay.",
+          "sourceImageSha256": "473e77ac615b544f7a830526a984827392e5a0f5ba34a67c6f2a0137546bea33",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-02T20:24:48.063Z",
+            "sourceImageSha256": "473e77ac615b544f7a830526a984827392e5a0f5ba34a67c6f2a0137546bea33",
+            "license": "Creative Commons Attribution 3.0 Australia (CC BY 3.0 AU)",
+            "licenseUrl": "https://creativecommons.org/licenses/by/3.0/au/",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": true,
+            "attributionText": "NSW Imagery — Bathurst. © State of New South Wales (Spatial Services, Department of Customer Service). Extracted 2 October 2026. CC BY 3.0 AU. Any cropping, styling or tracing adaptations are by DZ replay.",
+            "conditions": [
+              "Credit the supplied title, copyright owner and Spatial Services; retain source, licence and applicable disclaimer links in product credits when distributing the image or a derivative.",
+              "Clearly identify DZ replay cropping, colour changes or tracing adaptations. Do not imply NSW Government or Spatial Services endorsement.",
+              "Preserve recipients' licensed rights in the source image; do not impose additional terms or effective technical restrictions on that licensed material. The licence does not require unrelated application code to be shared.",
+              "This review applies only to the recorded Bathurst image SHA-256 and footprint. Recheck any replacement image or other imagery contributor; geometric/GPS approval remains separate."
+            ],
+            "evidence": [
+              {
+                "title": "Official NSW Imagery dataset — CC BY 3.0 AU and the exact SIX REST resource",
+                "url": "https://data.nsw.gov.au/data/en/dataset/nsw-imagery"
+              },
+              {
+                "title": "Official dataset API — license_url and exact ArcGIS REST service",
+                "url": "https://data.nsw.gov.au/data/en/api/3/action/package_show?id=88b00529-bc95-4dde-b5f0-662b3086eb45"
+              },
+              {
+                "title": "CC BY 3.0 Australia licence legal code — derivative works, distribution and attribution",
+                "url": "https://creativecommons.org/licenses/by/3.0/au/legalcode.en"
+              },
+              {
+                "title": "Spatial Services web-service terms — Creative Commons Attribution BY (4.0 link)",
+                "url": "https://www.nsw.gov.au/sandbox-and-archive/web-services-to-view-data"
+              },
+              {
+                "title": "NSW imagery date footprints — BATHURST ADS_Towns",
+                "url": "https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_Imagery_Dates/MapServer/0"
+              },
+              {
+                "title": "SIX NSW Imagery service and copyright notice",
+                "url": "https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_Imagery/MapServer"
+              },
+              {
+                "title": "Older factsheet — conflicting Attribution wording and BY-ND hyperlink retained in audit",
+                "url": "https://www.spatial.nsw.gov.au/__data/assets/pdf_file/0005/202559/NSW_Imagery_rebranded.pdf"
+              }
+            ],
+            "notes": "Reviewed against the live official dataset (metadata modified 2026-09-18), whose API explicitly grants CC BY 3.0 AU and lists the exact NSW_Imagery REST endpoint (HTTP in catalogue, HTTPS used for retrieval). This published dataset-specific licence supports commercial derivatives and redistribution; the older factsheet's BY-ND hyperlink is retained as conflicting documentation, not asserted to be an acknowledged typo. The full saved export extent intersects only BATHURST ADS_Towns, block start date 2022-02-12, source GSD 10 cm. Export pixels are about 0.58 ground metres. The composite service also includes older external imagery, so this decision is not a blanket clearance for all SIX imagery. This is a source-licence review, not approval of accuracy or traced boundaries."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/219/active.svg",
+        "background": "/track-maps/dz-replay/219/background.svg"
+      }
+    },
+    {
+      "trackId": 166,
+      "name": "Okayama International Circuit",
+      "layout": "Full Course",
+      "displayName": "Okayama International Circuit — Full Course",
+      "aliases": [
+        "Okayama International Circuit - Full Course",
+        "Okayama International Circuit (Full Course)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_okayama/166-okayama-full",
+      "lengthMeters": 3724.0220160000003,
+      "origin": {
+        "lat": 34.91430542468252,
+        "lon": 134.2188730424567
+      },
+      "transform": {
+        "a": 0.05417524074581257,
+        "b": -0.6317935791317604,
+        "tx": 535.2514980641852,
+        "ty": 785.7151678355323
+      },
+      "viewBox": [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      "fit": {
+        "medianMeters": null,
+        "p95Meters": null
+      },
+      "sourceHashes": {
+        "activeSha256": "84fc41e614c4ef2fe42aa40aae2618f325860b9d6389d045b0d3300439d607ec",
+        "backgroundSha256": "7d16af76905e0a4f3876d7bbfd0238b7f63134ffd9ce28b25370b46f4fae138f"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "GSI",
+          "sourceUrl": "https://maps.gsi.go.jp/development/ichiran.html#seamlessphoto",
+          "attribution": "地理院タイル（国土地理院）を加工して DZ replay 作成",
+          "sourceImageSha256": "541e2717f86fd7883cf1bdcfd199cb2415cac89a36023596b4ee6d786001e395",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-01T23:46:29.061Z",
+            "sourceImageSha256": "541e2717f86fd7883cf1bdcfd199cb2415cac89a36023596b4ee6d786001e395",
+            "license": "PDL-1.0 (GSI terms)",
+            "licenseUrl": "https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": true,
+            "attributionText": "地理院タイル（国土地理院）を加工して DZ replay 作成",
+            "conditions": [
+              "Show GSI attribution and link to the source layer.",
+              "Identify cropping, grayscale, compositing or tracing and DZ replay as the processor.",
+              "Do not imply GSI authorship or endorsement of the edited map."
+            ],
+            "evidence": [
+              {
+                "title": "GSI content use terms (PDL 1.0, revised 2025-11-20)",
+                "url": "https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html"
+              },
+              {
+                "title": "GSI tile list: ort and photos in the no-application attribution category",
+                "url": "https://maps.gsi.go.jp/development/ichiran.html"
+              },
+              {
+                "title": "Public Data License 1.0: commercial copying and modification",
+                "url": "https://www.digital.go.jp/resources/open_data/public_data_license_v1.0"
+              }
+            ],
+            "notes": "Okayama uses the seamlessphoto layer. Its published special GRUS credit applies to a remote island coverage area, outside this 34.9N/134.2E crop. Review covers this exact cropped photo and derived display/tracing, not arbitrary third-party GSI layers."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/166/active.svg",
+        "background": "/track-maps/dz-replay/166/background.svg"
+      }
+    },
+    {
+      "trackId": 181,
+      "name": "Oulton Park Circuit",
+      "layout": "Fosters",
+      "displayName": "Oulton Park Circuit — Fosters",
+      "aliases": [
+        "Oulton Park Circuit - Fosters",
+        "Oulton Park Circuit (Fosters)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_oulton/181-oulton-fosters",
+      "lengthMeters": 2671.51104,
+      "origin": {
+        "lat": 53.179996924844964,
+        "lon": -2.6127760340655213
+      },
+      "transform": {
+        "a": 0.08803977508473032,
+        "b": -0.7596462468914641,
+        "tx": 73.59882548791813,
+        "ty": 373.9076602124376
+      },
+      "viewBox": [
+        -318.7040222094514,
+        -249.07936473532487,
+        1854.7467951654203,
+        1528.0861448294736
+      ],
+      "fit": {
+        "medianMeters": 2.5150310331293784,
+        "p95Meters": 5.00793220848357
+      },
+      "sourceHashes": {
+        "activeSha256": "61d6fe38687f7ba79650db9bc29151d6585d2be92c67bf7c574d2e64b1408f79",
+        "backgroundSha256": "53a2b363a9600c6b6dbbecc4c6eb746ebec378a7274c1eaae744821f547020eb"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "Environment Agency, England",
+          "sourceUrl": "https://www.data.gov.uk/dataset/f0db0249-f17b-4036-9e65-309148c97ce4/national-lidar-programme",
+          "attribution": "Contains Environment Agency data: © Environment Agency copyright and/or database right 2022. All rights reserved. Licensed under the Open Government Licence v3.0. Cropped, reprojected, contrast-adjusted and palette-colored by DZ replay; not an official color orthophoto.",
+          "sourceImageSha256": "43183cded545bd3e423d992033cb9a70e2a1acc273d09372947b2c3173a3a098",
+          "copyrightReview": {
+            "version": 1,
+            "checkedAt": "2026-10-06T22:13:41.165Z",
+            "sourceImageSha256": "43183cded545bd3e423d992033cb9a70e2a1acc273d09372947b2c3173a3a098",
+            "status": "cleared",
+            "reviewComplete": true,
+            "license": "Open Government Licence v3.0",
+            "licenseUrl": "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": true,
+            "attributionText": "Contains Environment Agency data: © Environment Agency copyright and/or database right 2022. All rights reserved. Licensed under the Open Government Licence v3.0. Cropped, reprojected, contrast-adjusted and palette-colored by DZ replay; not an official color orthophoto.",
+            "conditions": [
+              "Include the Environment Agency attribution and OGL v3.0 link in the product with this asset.",
+              "Clearly identify palette coloring as DZ replay processing; do not imply Environment Agency endorsement or true-color measurement.",
+              "This clearance covers this exact background hash only, not telemetry, vendor SVG, trademarks or the entire application."
+            ],
+            "evidence": [
+              {
+                "title": "Environment Agency National LIDAR Programme: intensity product, OGL and attribution",
+                "url": "https://www.data.gov.uk/dataset/f0db0249-f17b-4036-9e65-309148c97ce4/national-lidar-programme"
+              },
+              {
+                "title": "OGL v3: commercial reuse, adaptation, attribution and non-endorsement",
+                "url": "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/"
+              }
+            ],
+            "notes": "Derived from reviewed EA intensity c1c1a658216c765703bd26578894e8ba5c4f675a4c8abe41713483dbc7af076f. Audited oulton-colorize-fixed.py: only source raster input is the EA grayscale PNG; colors are manually specified generic RGB constants; masks are hand-defined on EA coordinates. No pixels, textures, composition or masks from the oblique photograph or AI output are imported. On that factual basis, treated as an OGL derivative; the view that generic palette inspiration does not adapt the photograph is an assessment, not a judicial determination. No software/source share-alike obligation in OGL."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/181/active.svg",
+        "background": "/track-maps/dz-replay/181/background.svg"
+      }
+    },
+    {
+      "trackId": 127,
+      "name": "Road Atlanta",
+      "layout": "Full Course",
+      "displayName": "Road Atlanta — Full Course",
+      "aliases": [
+        "Road Atlanta - Full Course",
+        "Road Atlanta (Full Course)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_roadatlanta/127-roadatlanta-full",
+      "lengthMeters": 4087.73376,
+      "origin": {
+        "lat": 34.15042649467311,
+        "lon": -83.81418928434289
+      },
+      "transform": {
+        "a": 0.4816354979247554,
+        "b": 0.7686198359030021,
+        "tx": -1092.3474553299056,
+        "ty": -1190.2892536155327
+      },
+      "viewBox": [
+        -81.89310535483321,
+        -80.07754137893852,
+        1964.7881140259913,
+        1239.4028968013827
+      ],
+      "fit": {
+        "medianMeters": 4.342855105908914,
+        "p95Meters": 7.416969084712493
+      },
+      "sourceHashes": {
+        "activeSha256": "ac4c1e68321f661df61b0768c352a6f23efcecccc84459ef2d058278ef68a197",
+        "backgroundSha256": "69c3a08cf77cc07b25af3b2c404a1050f41db06182b58ec0dbcc42c871bfbeb2"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "USGS / USDA NAIP",
+          "sourceUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer",
+          "attribution": "USDA NAIP / USGS · processed by DZ replay",
+          "sourceImageSha256": "88b313b0a63cb335493399331a1b7784968944c585b9559e049000d5c48412ed",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-01T23:46:29.061Z",
+            "sourceImageSha256": "88b313b0a63cb335493399331a1b7784968944c585b9559e049000d5c48412ed",
+            "license": "US-PUBLIC-DOMAIN",
+            "licenseUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": false,
+            "attributionText": "USDA NAIP / USGS · processed by DZ replay",
+            "conditions": [
+              "Retain USDA NAIP and distribution-provider credit (recommended).",
+              "Do not use agency logos or imply agency endorsement.",
+              "This result applies to the identified USDA NAIP rasters, not every image available from the same server."
+            ],
+            "evidence": [
+              {
+                "title": "USGS NAIP service: public-domain NAIP orthoimagery",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson"
+              },
+              {
+                "title": "USGS copyrights and credits; third-party exceptions",
+                "url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits"
+              },
+              {
+                "title": "USDA NAIP data rights: unrestricted use and sharing",
+                "url": "https://www.fsa.usda.gov/Internet/FSA_Notice/ap_26.pdf"
+              },
+              {
+                "title": "Actual source dataset and raster catalog",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer"
+              }
+            ],
+            "notes": "The exact selected raster IDs/names were checked against the source service on 2026-10-01. USDA-FSA-APFO rasters (or IIPP NAIP2022 with public=yes) are verified; the ArcGIS software vendor is not the imagery licensor."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/127/active.svg",
+        "background": "/track-maps/dz-replay/127/background.svg"
+      }
+    },
+    {
+      "trackId": 95,
+      "name": "Sebring International Raceway",
+      "layout": "International",
+      "displayName": "Sebring International Raceway — International",
+      "aliases": [
+        "Sebring International Raceway - International",
+        "Sebring International Raceway (International)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/95-sebring-international",
+      "lengthMeters": 6018.94656,
+      "origin": {
+        "lat": 27.450242385246188,
+        "lon": -81.35376816842732
+      },
+      "transform": {
+        "a": 1.0437693488578095,
+        "b": 0.011611324820992317,
+        "tx": -919.5295502813408,
+        "ty": 838.3340582160585
+      },
+      "viewBox": [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      "fit": {
+        "medianMeters": null,
+        "p95Meters": null
+      },
+      "sourceHashes": {
+        "activeSha256": "2580bb19cbdb8a33e51b5dd551f0aee58aad33e613b95cf0a48990d67ae9cd62",
+        "backgroundSha256": "b7a08a67850cee9a2c63b0765f0561b4a211f2caa850c2bc6dbeee327153b42a"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "USGS / USDA NAIP",
+          "sourceUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer",
+          "attribution": "USDA NAIP / USGS · processed by DZ replay",
+          "sourceImageSha256": "3fd65033e60bcf2e4f8a4ff00ccded9e768246050d212c4de7b120fc8aeec74b",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-01T23:46:29.061Z",
+            "sourceImageSha256": "3fd65033e60bcf2e4f8a4ff00ccded9e768246050d212c4de7b120fc8aeec74b",
+            "license": "US-PUBLIC-DOMAIN",
+            "licenseUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": false,
+            "attributionText": "USDA NAIP / USGS · processed by DZ replay",
+            "conditions": [
+              "Retain USDA NAIP and distribution-provider credit (recommended).",
+              "Do not use agency logos or imply agency endorsement.",
+              "This result applies to the identified USDA NAIP rasters, not every image available from the same server."
+            ],
+            "evidence": [
+              {
+                "title": "USGS NAIP service: public-domain NAIP orthoimagery",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson"
+              },
+              {
+                "title": "USGS copyrights and credits; third-party exceptions",
+                "url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits"
+              },
+              {
+                "title": "USDA NAIP data rights: unrestricted use and sharing",
+                "url": "https://www.fsa.usda.gov/Internet/FSA_Notice/ap_26.pdf"
+              },
+              {
+                "title": "Actual source dataset and raster catalog",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPPlus/ImageServer"
+              }
+            ],
+            "notes": "The exact selected raster IDs/names were checked against the source service on 2026-10-01. USDA-FSA-APFO rasters (or IIPP NAIP2022 with public=yes) are verified; the ArcGIS software vendor is not the imagery licensor."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/95/active.svg",
+        "background": "/track-maps/dz-replay/95/background.svg"
+      }
+    },
+    {
+      "trackId": 168,
+      "name": "Suzuka International Racing Course",
+      "layout": "Grand Prix",
+      "displayName": "Suzuka International Racing Course — Grand Prix",
+      "aliases": [
+        "Suzuka International Racing Course - Grand Prix",
+        "Suzuka International Racing Course (Grand Prix)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_suzuka/168-suzuka-grandprix",
+      "lengthMeters": 5808.122496,
+      "origin": {
+        "lat": 34.845153988055216,
+        "lon": 136.53864978248728
+      },
+      "transform": {
+        "a": 1.1618042294275195,
+        "b": -0.3972641560683968,
+        "tx": -1437.6349253847113,
+        "ty": 897.4013973615162
+      },
+      "viewBox": [
+        -354.1684876303219,
+        -513.6353220891028,
+        2625.8404685295654,
+        2180.376991806503
+      ],
+      "fit": {
+        "medianMeters": 4.244412582459008,
+        "p95Meters": 6.559066535787781
+      },
+      "sourceHashes": {
+        "activeSha256": "8d963b29617f35ebbb5e0a6ea39f0b78425d5263d7d482615c09b50344ff317c",
+        "backgroundSha256": "33e55224994a3ec109c8d03727adb65acf3e7979fef2b90dc2406ffa7ebe8aa4"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "GSI",
+          "sourceUrl": "https://maps.gsi.go.jp/development/ichiran.html#ort",
+          "attribution": "地理院タイル（国土地理院）を加工して DZ replay 作成",
+          "sourceImageSha256": "eef68427f135edeb667b78d3aa89cfd1e9d709d2954ee557a11b1c521cdd1ebd",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-03T16:18:55.700Z",
+            "sourceImageSha256": "eef68427f135edeb667b78d3aa89cfd1e9d709d2954ee557a11b1c521cdd1ebd",
+            "license": "PDL-1.0 (GSI terms)",
+            "licenseUrl": "https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": true,
+            "attributionText": "地理院タイル（国土地理院）を加工して DZ replay 作成",
+            "conditions": [
+              "Show GSI attribution and link to the source layer.",
+              "Identify cropping, grayscale, compositing or tracing and DZ replay as the processor.",
+              "Do not imply GSI authorship or endorsement of the edited map."
+            ],
+            "evidence": [
+              {
+                "title": "GSI content use terms (PDL 1.0, revised 2025-11-20)",
+                "url": "https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html"
+              },
+              {
+                "title": "GSI tile list: ort and photos in the no-application attribution category",
+                "url": "https://maps.gsi.go.jp/development/ichiran.html"
+              },
+              {
+                "title": "Public Data License 1.0: commercial copying and modification",
+                "url": "https://www.digital.go.jp/resources/open_data/public_data_license_v1.0"
+              }
+            ],
+            "notes": "Exact GSI ort mosaic. Official tile list places ort in attribution-only category 2 with no third-party exception shown. Not the Mie prefectural or seamlessphoto composite layer; capture date remains unknown."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/168/active.svg",
+        "background": "/track-maps/dz-replay/168/background.svg"
+      }
+    },
+    {
+      "trackId": 324,
+      "name": "Tsukuba Circuit",
+      "layout": "2000 Full",
+      "displayName": "Tsukuba Circuit — 2000 Full",
+      "aliases": [
+        "Tsukuba Circuit - 2000 Full",
+        "Tsukuba Circuit (2000 Full)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_tsukuba/324-tsukuba-2kfull",
+      "lengthMeters": 2045.476224,
+      "origin": {
+        "lat": 36.15017920064277,
+        "lon": 139.91944345103755
+      },
+      "transform": {
+        "a": 1,
+        "b": 0,
+        "tx": -84.73264323369084,
+        "ty": 331.8978618402636
+      },
+      "viewBox": [
+        0,
+        0,
+        590.5349285872285,
+        596.6567411690837
+      ],
+      "fit": {
+        "medianMeters": 4.214744139323345,
+        "p95Meters": 6.536094196643342
+      },
+      "sourceHashes": {
+        "activeSha256": "a1dee8b23d08ee09a653cf0ec869c823b310ecf8ac88bf052d9be1de28383c32",
+        "backgroundSha256": "14f44292bcf7feb0cf3ba66a561f50946ba770b29fac3236277cbb88abb1afce"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "GSI",
+          "sourceUrl": "https://maps.gsi.go.jp/development/ichiran.html#ort",
+          "attribution": "地理院タイル（国土地理院）を加工して DZ replay 作成",
+          "sourceImageSha256": "b60221ab656b440de5dda86898c788e11408bbef129a3591f144cd86114034bf",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-01T23:46:29.061Z",
+            "sourceImageSha256": "b60221ab656b440de5dda86898c788e11408bbef129a3591f144cd86114034bf",
+            "license": "PDL-1.0 (GSI terms)",
+            "licenseUrl": "https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": true,
+            "attributionText": "地理院タイル（国土地理院）を加工して DZ replay 作成",
+            "conditions": [
+              "Show GSI attribution and link to the source layer.",
+              "Identify cropping, grayscale, compositing or tracing and DZ replay as the processor.",
+              "Do not imply GSI authorship or endorsement of the edited map."
+            ],
+            "evidence": [
+              {
+                "title": "GSI content use terms (PDL 1.0, revised 2025-11-20)",
+                "url": "https://www.gsi.go.jp/kikakuchousei/kikakuchousei40182.html"
+              },
+              {
+                "title": "GSI tile list: ort and photos in the no-application attribution category",
+                "url": "https://maps.gsi.go.jp/development/ichiran.html"
+              },
+              {
+                "title": "Public Data License 1.0: commercial copying and modification",
+                "url": "https://www.digital.go.jp/resources/open_data/public_data_license_v1.0"
+              }
+            ],
+            "notes": "The recorded ort layer is in GSI tile category 2 (attribution-only, no survey-use application required). Review covers the matched photo and its display/tracing."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/324/active.svg",
+        "background": "/track-maps/dz-replay/324/background.svg"
+      }
+    },
+    {
+      "trackId": 465,
+      "name": "Virginia International Raceway",
+      "layout": "Full Course",
+      "displayName": "Virginia International Raceway — Full Course",
+      "aliases": [
+        "Virginia International Raceway - Full Course",
+        "Virginia International Raceway (Full Course)"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_virginia/465-virginia-2022-full",
+      "lengthMeters": 5262.554880000001,
+      "origin": {
+        "lat": 36.56880723754497,
+        "lon": -79.20664735616961
+      },
+      "transform": {
+        "a": 0.06793161559466099,
+        "b": -1.0304557483414423,
+        "tx": 438.46678150117276,
+        "ty": 77.54245667857893
+      },
+      "viewBox": [
+        0,
+        0,
+        1920,
+        1080
+      ],
+      "fit": {
+        "medianMeters": 3.968864877765126,
+        "p95Meters": 7.012889970453055
+      },
+      "sourceHashes": {
+        "activeSha256": "5312c64c2769b249f1c1255139ca3aeed734dbddc7559799c7cedc10e09aaa8b",
+        "backgroundSha256": "6a121e9b89002843ca1d1f428679738afbfdf4edddbf57609d0f2e1dfb5769d1"
+      },
+      "provenance": {
+        "geometry": "iracing",
+        "background": {
+          "provider": "USGS / USDA NAIP",
+          "sourceUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer",
+          "attribution": "USDA NAIP / USGS · processed by DZ replay",
+          "sourceImageSha256": "3514dedeb0a086f988b7124ebd84c0c25602ae9cc7961345c75255719813c73b",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-01T23:46:29.061Z",
+            "sourceImageSha256": "3514dedeb0a086f988b7124ebd84c0c25602ae9cc7961345c75255719813c73b",
+            "license": "US-PUBLIC-DOMAIN",
+            "licenseUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": false,
+            "attributionText": "USDA NAIP / USGS · processed by DZ replay",
+            "conditions": [
+              "Retain USDA NAIP and distribution-provider credit (recommended).",
+              "Do not use agency logos or imply agency endorsement.",
+              "This result applies to the identified USDA NAIP rasters, not every image available from the same server."
+            ],
+            "evidence": [
+              {
+                "title": "USGS NAIP service: public-domain NAIP orthoimagery",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer?f=pjson"
+              },
+              {
+                "title": "USGS copyrights and credits; third-party exceptions",
+                "url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits"
+              },
+              {
+                "title": "USDA NAIP data rights: unrestricted use and sharing",
+                "url": "https://www.fsa.usda.gov/Internet/FSA_Notice/ap_26.pdf"
+              },
+              {
+                "title": "Actual source dataset and raster catalog",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer"
+              }
+            ],
+            "notes": "The exact selected raster IDs/names were checked against the source service on 2026-10-01. USDA-FSA-APFO rasters (or IIPP NAIP2022 with public=yes) are verified; the ArcGIS software vendor is not the imagery licensor."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/465/active.svg",
+        "background": "/track-maps/dz-replay/465/background.svg"
+      }
+    },
+    {
+      "trackId": 586,
+      "name": "WeatherTech Raceway at Laguna Seca",
+      "layout": "2026",
+      "displayName": "WeatherTech Raceway at Laguna Seca — 2026",
+      "aliases": [
+        "WeatherTech Raceway at Laguna Seca (2026)",
+        "Laguna Seca 2026"
+      ],
+      "sourceUrl": "https://members-assets.iracing.com/public/track-maps/tracks_lagunaseca/586-lagunaseca-2026",
+      "lengthMeters": 3600,
+      "origin": {
+        "lat": 36.58626733778132,
+        "lon": -121.75676378917991
+      },
+      "transform": {
+        "a": -0.5865958864326546,
+        "b": -0.794416389921817,
+        "tx": 1358.5725583336584,
+        "ty": 201.17502806249888
+      },
+      "viewBox": [
+        -33.25516680467558,
+        -389.7943759103009,
+        2035.016372610619,
+        1997.4480810479047
+      ],
+      "fit": {
+        "medianMeters": 4.832810951310367,
+        "p95Meters": 7.261403444293567
+      },
+      "sourceHashes": {
+        "activeSha256": "f69c77fcfd0d32670061c1b0ba3fe06b6d482c11144af163b9bfddab2c90e01a",
+        "backgroundSha256": "4090028595b886fa403b63da7dc1c417b8b8cd1c3f7a3df68e53c3f8b946d598"
+      },
+      "provenance": {
+        "geometry": "manual",
+        "background": {
+          "provider": "USDA FPAC-BC GEO / NAIP",
+          "sourceUrl": "https://apps.geo.fpac.usda.gov/geo-imagery/rest/services/naip/conus_naip/ImageServer",
+          "attribution": "USDA FPAC-BC GEO / NAIP · 2024-05-29 · geographic crop by DZ replay",
+          "sourceImageSha256": "7a3f54d7c8a78d0b3ebcdbdc27fe8740d3f9b712bda167bd73d2ab3da5195c71",
+          "copyrightReview": {
+            "version": 1,
+            "status": "cleared",
+            "reviewComplete": true,
+            "checkedAt": "2026-10-06T02:07:29.587Z",
+            "sourceImageSha256": "7a3f54d7c8a78d0b3ebcdbdc27fe8740d3f9b712bda167bd73d2ab3da5195c71",
+            "license": "Public Domain — USDA NAIP",
+            "licenseUrl": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer",
+            "permissions": {
+              "commercialUse": true,
+              "modification": true,
+              "redistribution": true
+            },
+            "attributionRequired": false,
+            "attributionText": "USDA FPAC-BC GEO / NAIP · 2024-05-29 · geographic crop by DZ replay",
+            "conditions": [
+              "Retain USDA NAIP / USGS source credit as recommended by USGS. No provider logo or endorsement."
+            ],
+            "evidence": [
+              {
+                "title": "USGS NAIP service — public domain orthoimagery",
+                "url": "https://imagery.nationalmap.gov/arcgis/rest/services/USGSNAIPImagery/ImageServer"
+              },
+              {
+                "title": "USDA NAIP usage notice",
+                "url": "https://www.fsa.usda.gov/Internet/FSA_Notice/ap_26.pdf"
+              },
+              {
+                "title": "USGS copyrights and credits",
+                "url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits"
+              },
+              {
+                "title": "Actual USDA 2024 source and use constraints",
+                "url": "https://www.arcgis.com/home/item.html?id=061537e1c20744cb95506c12a028bff4"
+              }
+            ],
+            "notes": "USDA NAIP primary rasters m_3612127_nw_10_060_20240529 and m_3612126_ne_10_060_20240529. 0.6m, acquisition 2024-05-29. Public-domain NAIP; retain provider credit. Not for surveying or engineering."
+          }
+        }
+      },
+      "assets": {
+        "active": "/track-maps/dz-replay/586/active.svg",
+        "background": "/track-maps/dz-replay/586/background.svg"
+      }
+    }
+  ],
+  "adaptation": "Satellite rasters encoded as WebP at original resolution; decorative blur/posterisation removed. Map coordinates, masks and registration unchanged."
+}

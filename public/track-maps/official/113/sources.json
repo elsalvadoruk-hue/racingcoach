@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/113-vegas-inflegends/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/113-vegas-inflegends/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/113-vegas-inflegends/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/113-vegas-inflegends/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/113-vegas-inflegends/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/113-vegas-inflegends/turns.svg"
+}

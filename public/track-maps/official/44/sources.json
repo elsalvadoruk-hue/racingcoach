@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_silverstone/44-silverstone-national/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_silverstone/44-silverstone-national/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_silverstone/44-silverstone-national/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_silverstone/44-silverstone-national/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_silverstone/44-silverstone-national/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_silverstone/44-silverstone-national/turns.svg"
+}

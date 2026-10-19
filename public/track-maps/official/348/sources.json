@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_barcelona/348-barcelona-moto/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_barcelona/348-barcelona-moto/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_barcelona/348-barcelona-moto/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_barcelona/348-barcelona-moto/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_barcelona/348-barcelona-moto/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_barcelona/348-barcelona-moto/turns.svg"
+}

@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_slinger/500-slinger-oval/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_slinger/500-slinger-oval/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_slinger/500-slinger-oval/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_slinger/500-slinger-oval/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_slinger/500-slinger-oval/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_slinger/500-slinger-oval/turns.svg"
+}

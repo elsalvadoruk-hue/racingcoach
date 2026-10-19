@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/213-interlagos-moto/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/213-interlagos-moto/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/213-interlagos-moto/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/213-interlagos-moto/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/213-interlagos-moto/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/213-interlagos-moto/turns.svg"
+}

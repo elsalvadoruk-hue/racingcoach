@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="East_-_Start_Finish_Line" data-name="East - Start/Finish Line" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #d82520;
+      }
+
+      .cls-2 {
+        fill: #d82520;
+      }
+    </style>
+  </defs>
+  <path class="cls-2" d="M969.2188,1049.8516c-2.7617,0-5-2.2383-5-5v-61.0723c0-2.7617,2.2383-5,5-5s5,2.2383,5,5v61.0723c0,2.7617-2.2383,5-5,5Z"/>
+  <g id="Start_Finish_Link" data-name="Start/Finish Link">
+    <path class="cls-1" d="M1021.8549,933.8924l-61.67-.132,13.5396,32.0604-87.7037-37.2191,87.8623-36.8433-13.6768,32.0021,61.67.132c2.7617.0059,4.9952,2.249,4.9893,5.0107-.0059,2.7617-2.249,4.9952-5.0107,4.9893Z"/>
+  </g>
+</svg>

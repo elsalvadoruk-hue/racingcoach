@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_rockingham/205-rockingham-infroad/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_rockingham/205-rockingham-infroad/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_rockingham/205-rockingham-infroad/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_rockingham/205-rockingham-infroad/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_rockingham/205-rockingham-infroad/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_rockingham/205-rockingham-infroad/turns.svg"
+}

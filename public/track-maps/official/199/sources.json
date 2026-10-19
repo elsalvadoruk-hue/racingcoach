@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/199-zolder-gp/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/199-zolder-gp/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/199-zolder-gp/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/199-zolder-gp/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/199-zolder-gp/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/199-zolder-gp/turns.svg"
+}

@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_cota/231-cota-west/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_cota/231-cota-west/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_cota/231-cota-west/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_cota/231-cota-west/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_cota/231-cota-west/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_cota/231-cota-west/turns.svg"
+}

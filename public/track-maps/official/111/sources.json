@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/111-vegas-roadlong/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/111-vegas-roadlong/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/111-vegas-roadlong/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/111-vegas-roadlong/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/111-vegas-roadlong/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/111-vegas-roadlong/turns.svg"
+}

@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_twinring/196-twinring-east/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_twinring/196-twinring-east/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_twinring/196-twinring-east/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_twinring/196-twinring-east/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_twinring/196-twinring-east/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_twinring/196-twinring-east/turns.svg"
+}

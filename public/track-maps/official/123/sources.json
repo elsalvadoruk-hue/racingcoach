@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_chicagoland/123-chicagoland/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_chicagoland/123-chicagoland/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_chicagoland/123-chicagoland/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_chicagoland/123-chicagoland/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_chicagoland/123-chicagoland/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_chicagoland/123-chicagoland/turns.svg"
+}

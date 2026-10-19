@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/96-sebring-modified/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/96-sebring-modified/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/96-sebring-modified/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/96-sebring-modified/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/96-sebring-modified/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/96-sebring-modified/turns.svg"
+}

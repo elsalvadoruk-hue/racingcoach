@@ -1,0 +1,310 @@
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
+import useAudioOutput from './useAudioOutput';
+import LiveCoach from './components/LiveCoach';
+
+const storageKey = 'iracing.voice.outputDevice';
+const headset = { kind: 'audiooutput', deviceId: 'headset', label: 'USB Headset' };
+const speaker = { kind: 'audiooutput', deviceId: 'speaker', label: 'Speakers' };
+const originalAudio = global.Audio;
+const originalFetch = global.fetch;
+const originalMedia = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+const originalSink = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'setSinkId');
+let media, players;
+
+test('real audio duration must fit the current learned straight before playback', async () => {
+  const { result } = renderHook(useAudioOutput);
+  global.Audio.mockImplementationOnce(() => {
+    const player = { duration: 10, pause: jest.fn(), play: jest.fn(), setSinkId: jest.fn(async () => {}) };
+    players.push(player); return player;
+  });
+  const delivery = jest.fn();
+  let started;
+  await act(async () => { started = await result.current.play('long-report', 'audio/mpeg', {
+    windowSeconds: () => 4, workloadValid: () => true, onStatus: delivery,
+  }); });
+  expect(started).toBe(false);
+  expect(players[0].play).not.toHaveBeenCalled();
+  expect(delivery).toHaveBeenCalledWith('cancelled', 'speech_window_too_short');
+});
+
+test('a report that has started is not cut off when braking begins, only when its situation is over', async () => {
+  const { result } = renderHook(useAudioOutput);
+  let quiet = true, current = true;
+  const delivery = jest.fn();
+  await act(async () => result.current.play('report', 'audio/mpeg', {
+    workloadValid: () => quiet, whilePlaying: () => current, onStatus: delivery,
+  }));
+  expect(players[0].play).toHaveBeenCalled();
+  quiet = false;
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 350)));
+  expect(players[0].pause).not.toHaveBeenCalled();
+  current = false;
+  await waitFor(() => expect(players[0].pause).toHaveBeenCalled());
+  expect(delivery).toHaveBeenCalledWith('interrupted', 'condition_changed');
+});
+
+test('metadata loading rechecks the live speech budget instead of its old value', async () => {
+  const { result } = renderHook(useAudioOutput);
+  let budget = 20, pending;
+  act(() => { pending = result.current.play('report', 'audio/mpeg', { windowSeconds: () => budget }); });
+  await waitFor(() => expect(players[0].onloadedmetadata).toEqual(expect.any(Function)));
+  budget = 2;
+  players[0].duration = 8;
+  await act(async () => { players[0].onloadedmetadata(); await pending; });
+  expect(players[0].play).not.toHaveBeenCalled();
+});
+
+test('delivery callback distinguishes completion, interruption and playback failure', async () => {
+  const { result } = renderHook(useAudioOutput);
+  const first = jest.fn(), second = jest.fn();
+  await act(async () => result.current.play('first', 'audio/mpeg', { onStatus: first }));
+  expect(first).toHaveBeenCalledWith('started', '');
+  await act(async () => result.current.play('urgent', 'audio/mpeg', { priority: 3, onStatus: second }));
+  expect(first).toHaveBeenCalledWith('interrupted', 'preempted');
+  act(() => players[1].onended());
+  expect(second).toHaveBeenCalledWith('completed', '');
+  expect(second.mock.calls.filter(([status]) => status === 'interrupted')).toHaveLength(0);
+  const failed = jest.fn();
+  await act(async () => result.current.play('broken', 'audio/mpeg', { onStatus: failed }));
+  act(() => players[2].onerror());
+  expect(failed).toHaveBeenCalledWith('failed', 'media_error');
+});
+
+beforeEach(() => {
+  localStorage.clear(); players = [];
+  media = new EventTarget();
+  media.enumerateDevices = jest.fn(async () => [headset, speaker]);
+  Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: media });
+  Object.defineProperty(HTMLMediaElement.prototype, 'setSinkId', { configurable: true, value: jest.fn() });
+  global.Audio = jest.fn((src) => {
+    const player = { src, pause: jest.fn(), play: jest.fn(async () => {}), setSinkId: jest.fn(async () => {}) };
+    players.push(player); return player;
+  });
+});
+afterEach(() => {
+  global.Audio = originalAudio;
+  global.fetch = originalFetch;
+  if (originalMedia) Object.defineProperty(navigator, 'mediaDevices', originalMedia); else delete navigator.mediaDevices;
+  if (originalSink) Object.defineProperty(HTMLMediaElement.prototype, 'setSinkId', originalSink); else delete HTMLMediaElement.prototype.setSinkId;
+  jest.restoreAllMocks();
+});
+
+test('automatic replies, replay and local test sound use the chosen device at 1.15 speed', async () => {
+  const fetchMock = global.fetch = jest.fn(async (url) => ({ ok: true, json: async () =>
+    url.endsWith('/utterances') ? { note: { id: 1, created_at: 1, text: '앞이 밀려', reply: '진입 속도를 줄여보세요.' }, audio_base64: 'answer' }
+      : url.endsWith('/captures') ? { capture_id: 'capture' } : url.endsWith('/notes') ? { notes: [] } : {} }));
+  render(<LiveCoach apiBase="http://localhost:8000" visible />);
+  await screen.findByRole('option', { name: 'USB Headset' });
+  fireEvent.change(screen.getByRole('combobox', { name: /오디오 출력장치/ }), { target: { value: 'headset' } });
+  fireEvent.change(screen.getByRole('slider'), { target: { value: '45' } });
+  fireEvent.change(screen.getByLabelText('텍스트로 질문하거나 느낌 남기기'), { target: { value: '앞이 밀려' } });
+  fireEvent.click(screen.getByRole('button', { name: '기록 보내기' }));
+  await waitFor(() => expect(players[0]?.play).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole('button', { name: '음소거', exact: true }));
+  expect(players[0].muted).toBe(true);
+  expect(players[0].pause).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: '음소거 해제', exact: true }));
+  expect(players[0].muted).toBe(false);
+  expect(players[0].volume).toBe(.45);
+  fireEvent.click(screen.getByRole('button', { name: '답변 다시 듣기' }));
+  await waitFor(() => expect(players[1]?.play).toHaveBeenCalled());
+  const requests = fetchMock.mock.calls.length;
+  fireEvent.click(screen.getByRole('button', { name: '테스트 소리' }));
+  await waitFor(() => expect(players[2]?.play).toHaveBeenCalled());
+  expect(fetchMock.mock.calls).toHaveLength(requests);
+  expect(players[2].src).toMatch(/^data:audio\/wav;base64,/);
+  players.forEach((player) => {
+    expect(player.setSinkId).toHaveBeenCalledWith('headset');
+    expect(player.playbackRate).toBe(1.15); expect(player.preservesPitch).toBe(true);
+    expect(player.volume).toBe(.45); expect(player.muted).toBe(false);
+  });
+  expect(players[0].pause).toHaveBeenCalled();
+  expect(localStorage.getItem(storageKey)).toBe('headset');
+});
+
+test('saved output survives remount and is not discarded before microphone permission reveals IDs', async () => {
+  localStorage.setItem(storageKey, 'headset');
+  localStorage.setItem('iracing.voice.playback', JSON.stringify({ volume: .35, muted: true }));
+  media.enumerateDevices.mockResolvedValue([{ kind: 'audiooutput', deviceId: '', label: '' }]);
+  const first = renderHook(useAudioOutput);
+  await act(async () => {});
+  expect(first.result.current.outputId).toBe('headset');
+  expect(localStorage.getItem(storageKey)).toBe('headset');
+  first.unmount();
+  media.enumerateDevices.mockResolvedValue([headset]);
+  const second = renderHook(useAudioOutput);
+  await waitFor(() => expect(second.result.current.devices).toEqual([headset]));
+  await act(async () => second.result.current.play('reply'));
+  expect(players[0].setSinkId).toHaveBeenCalledWith('headset');
+  expect(players[0].volume).toBe(.35); expect(players[0].muted).toBe(true);
+  act(() => second.result.current.changeVolume(0));
+  expect(players[0].volume).toBe(0); expect(players[0].muted).toBe(false);
+  expect(JSON.parse(localStorage.getItem('iracing.voice.playback'))).toEqual({ volume: 0, muted: false });
+});
+
+test('unplugging an available selected device stops playback and restores system default', async () => {
+  const { result } = renderHook(useAudioOutput);
+  await waitFor(() => expect(result.current.devices).toHaveLength(2));
+  act(() => result.current.changeOutput('headset'));
+  await act(async () => result.current.play('reply'));
+  media.enumerateDevices.mockResolvedValue([speaker]);
+  await act(async () => media.dispatchEvent(new Event('devicechange')));
+  expect(result.current.outputId).toBe('');
+  expect(localStorage.getItem(storageKey)).toBeNull();
+  expect(players[0].pause).toHaveBeenCalled();
+  expect(result.current.message).toContain('연결이 끊겨');
+  await act(async () => result.current.play('next'));
+  expect(players[1].setSinkId).toHaveBeenCalledWith('');
+});
+
+test('missing saved device falls back to default with a visible explanation', async () => {
+  localStorage.setItem(storageKey, 'missing');
+  const { result } = renderHook(useAudioOutput);
+  global.Audio.mockImplementationOnce(() => {
+    const player = { pause: jest.fn(), play: jest.fn(async () => {}), setSinkId: jest.fn()
+      .mockRejectedValueOnce(new DOMException('gone', 'NotFoundError')).mockResolvedValueOnce() };
+    players.push(player); return player;
+  });
+  await act(async () => result.current.play('reply'));
+  expect(players[0].setSinkId.mock.calls).toEqual([['missing'], ['']]);
+  expect(players[0].play).toHaveBeenCalled();
+  expect(result.current.outputId).toBe('');
+  expect(result.current.message).toContain('기본 장치로 재생');
+});
+
+test('denied device permission does not send sound to an unintended output', async () => {
+  const { result } = renderHook(useAudioOutput);
+  act(() => result.current.changeOutput('headset'));
+  global.Audio.mockImplementationOnce(() => {
+    const player = { pause: jest.fn(), play: jest.fn(), setSinkId: jest.fn(async () => { throw new DOMException('denied', 'NotAllowedError'); }) };
+    players.push(player); return player;
+  });
+  await act(async () => result.current.play('reply'));
+  expect(players[0].play).not.toHaveBeenCalled();
+  expect(result.current.outputId).toBe('headset');
+  expect(result.current.message).toContain('사용 권한');
+});
+
+test('changing output while routing is pending cancels old audio before it can play', async () => {
+  const { result } = renderHook(useAudioOutput);
+  let resolveSink;
+  global.Audio.mockImplementationOnce(() => {
+    const player = { pause: jest.fn(), play: jest.fn(), setSinkId: jest.fn(() => new Promise((resolve) => { resolveSink = resolve; })) };
+    players.push(player); return player;
+  });
+  let pending;
+  act(() => { pending = result.current.play('reply'); });
+  act(() => result.current.changeOutput('speaker'));
+  await act(async () => { resolveSink(); await pending; });
+  expect(players[0].play).not.toHaveBeenCalled();
+  expect(players[0].pause).toHaveBeenCalled();
+});
+
+test('unsupported browser still plays on system default without using setSinkId', async () => {
+  delete HTMLMediaElement.prototype.setSinkId;
+  const { result } = renderHook(useAudioOutput);
+  await act(async () => result.current.play('reply'));
+  expect(result.current.supported).toBe(false);
+  expect(players[0].setSinkId).not.toHaveBeenCalled();
+  expect(players[0].play).toHaveBeenCalled();
+});
+
+test('spotter preempts an engineer and normal replies cannot interrupt or play during overlap', async () => {
+  const { result } = renderHook(useAudioOutput);
+  await act(async () => result.current.play('engineer'));
+  act(() => result.current.setPriorityGate(true));
+  expect(players[0].pause).toHaveBeenCalled();
+  await act(async () => result.current.play('spotter', 'audio/mpeg', { priority: 3 }));
+  await act(async () => result.current.play('late-engineer'));
+  expect(players).toHaveLength(2);
+  act(() => result.current.stopNormal());
+  expect(players[1].pause).not.toHaveBeenCalled();
+  act(() => players[1].onended());
+  await act(async () => result.current.play('another-engineer'));
+  expect(players).toHaveLength(2);
+  act(() => result.current.setPriorityGate(false));
+  await act(async () => result.current.play('after-clear'));
+  expect(players).toHaveLength(3);
+});
+
+test('outdated spotter audio is discarded after asynchronous output routing', async () => {
+  const { result } = renderHook(useAudioOutput);
+  let resolveSink, valid = true;
+  global.Audio.mockImplementationOnce(() => {
+    const player = { pause: jest.fn(), play: jest.fn(), setSinkId: jest.fn(() => new Promise((done) => { resolveSink = done; })) };
+    players.push(player); return player;
+  });
+  let pending;
+  act(() => { pending = result.current.play('left', 'audio/mpeg', { priority: 1, valid: () => valid }); });
+  valid = false;
+  await act(async () => { resolveSink(); await pending; });
+  expect(players[0].play).not.toHaveBeenCalled();
+  expect(result.current.isPlaying).toBe(false);
+});
+
+test('four-role arbitration waits for routine speech, preempts it for warning and preserves overlap priority', async () => {
+  const { result } = renderHook(useAudioOutput);
+  await act(async () => result.current.play('coach'));
+  await act(async () => result.current.play('lap', 'audio/mpeg', { priority: 1, interrupt: false }));
+  expect(players).toHaveLength(1);
+  await act(async () => result.current.play('yellow', 'audio/mpeg', { priority: 2 }));
+  expect(players[0].pause).toHaveBeenCalled();
+  await act(async () => result.current.play('another-warning', 'audio/mpeg', { priority: 2 }));
+  expect(players).toHaveLength(2);
+  act(() => result.current.setPriorityGate(true));
+  await act(async () => result.current.play('left', 'audio/mpeg', { priority: 3 }));
+  expect(players[1].pause).toHaveBeenCalled();
+  await act(async () => result.current.play('warning-while-overlap', 'audio/mpeg', { priority: 2 }));
+  expect(players).toHaveLength(3);
+  expect(result.current.audioBusy()).toBe(true);
+});
+
+test('the answer to the driver is interrupted by nothing but the driver himself', async () => {
+  const { result } = renderHook(useAudioOutput);
+  const delivery = jest.fn();
+  await act(async () => result.current.play('lap', 'audio/mpeg', { priority: 1 }));
+  await act(async () => result.current.play('answer', 'audio/mpeg', { priority: 4, onStatus: delivery }));
+  expect(players[0].pause).toHaveBeenCalled();   // the answer goes first, over routine speech
+  let started;
+  for (const priority of [0, 1, 2, 3]) {
+    await act(async () => { started = await result.current.play('other', 'audio/mpeg', { priority }); });
+    expect(started).toBe(false);                 // warnings and side-by-side calls wait for it
+  }
+  act(() => result.current.setPriorityGate(true));   // a car alongside
+  act(() => result.current.cancelPriority(3));       // the overlap state changed
+  act(() => result.current.cancelPriority());        // the data connection dropped
+  expect(players[1].pause).not.toHaveBeenCalled();
+  expect(delivery).not.toHaveBeenCalledWith('interrupted', expect.anything());
+  act(() => result.current.stopNormal());            // the driver keys the radio again
+  expect(players[1].pause).toHaveBeenCalled();
+  expect(delivery).toHaveBeenCalledWith('interrupted', 'driver_or_radio_pause');
+});
+
+test('several whole sentences play back to back as one call and nothing slips in between', async () => {
+  const { result } = renderHook(useAudioOutput);
+  const delivery = jest.fn();
+  await act(async () => result.current.play(['first', 'second'], 'audio/mpeg', { priority: 1, onStatus: delivery }));
+  expect(players).toHaveLength(1);
+  expect(players[0].play).toHaveBeenCalled();
+  await act(async () => players[0].onended());
+  expect(players).toHaveLength(2);                       // the second sentence follows at once
+  expect(players[1].playbackRate).toBe(1.15);
+  await waitFor(() => expect(players[1].play).toHaveBeenCalled());
+  expect(delivery).not.toHaveBeenCalledWith('completed', expect.anything());
+  let started;
+  await act(async () => { started = await result.current.play('other', 'audio/mpeg', { priority: 1 }); });
+  expect(started).toBe(false);                           // still the same call
+  await act(async () => players[1].onended());
+  expect(delivery).toHaveBeenCalledWith('completed', '');
+  expect(result.current.audioBusy()).toBe(false);
+});
+
+test('a chain that is cut reports one interruption and does not start its next sentence', async () => {
+  const { result } = renderHook(useAudioOutput);
+  const delivery = jest.fn();
+  await act(async () => result.current.play(['first', 'second'], 'audio/mpeg', { priority: 1, onStatus: delivery }));
+  await act(async () => result.current.play('left', 'audio/mpeg', { priority: 3 }));
+  expect(delivery).toHaveBeenCalledWith('interrupted', 'preempted');
+  await act(async () => players[0].onended?.());
+  expect(players).toHaveLength(2);                       // only the urgent call was added
+});

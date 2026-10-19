@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/512-algarve-motochicane/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/512-algarve-motochicane/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/512-algarve-motochicane/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/512-algarve-motochicane/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/512-algarve-motochicane/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/512-algarve-motochicane/turns.svg"
+}

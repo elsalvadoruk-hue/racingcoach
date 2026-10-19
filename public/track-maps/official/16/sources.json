@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_lakeland/16-lakeland/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_lakeland/16-lakeland/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_lakeland/16-lakeland/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_lakeland/16-lakeland/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_lakeland/16-lakeland/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_lakeland/16-lakeland/turns.svg"
+}

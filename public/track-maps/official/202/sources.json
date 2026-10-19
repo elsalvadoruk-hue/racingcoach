@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_oran/202-oran-gp/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_oran/202-oran-gp/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_oran/202-oran-gp/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_oran/202-oran-gp/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_oran/202-oran-gp/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_oran/202-oran-gp/turns.svg"
+}

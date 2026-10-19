@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_indianapolis/133-indianapolis-oval/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_indianapolis/133-indianapolis-oval/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_indianapolis/133-indianapolis-oval/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_indianapolis/133-indianapolis-oval/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_indianapolis/133-indianapolis-oval/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_indianapolis/133-indianapolis-oval/turns.svg"
+}

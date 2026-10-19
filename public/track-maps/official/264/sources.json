@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_combined/264-nurburgring-combinedlong/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_combined/264-nurburgring-combinedlong/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_combined/264-nurburgring-combinedlong/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_combined/264-nurburgring-combinedlong/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_combined/264-nurburgring-combinedlong/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_combined/264-nurburgring-combinedlong/turns.svg"
+}

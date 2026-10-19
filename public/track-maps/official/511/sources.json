@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/511-algarve-moto/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/511-algarve-moto/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/511-algarve-moto/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/511-algarve-moto/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/511-algarve-moto/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_algarve/511-algarve-moto/turns.svg"
+}

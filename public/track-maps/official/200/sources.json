@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/200-zolder-alt/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/200-zolder-alt/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/200-zolder-alt/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/200-zolder-alt/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/200-zolder-alt/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_zolder/200-zolder-alt/turns.svg"
+}

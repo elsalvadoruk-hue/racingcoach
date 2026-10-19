@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_daytona_2011/192-daytona-2011-road/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_daytona_2011/192-daytona-2011-road/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_daytona_2011/192-daytona-2011-road/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_daytona_2011/192-daytona-2011-road/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_daytona_2011/192-daytona-2011-road/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_daytona_2011/192-daytona-2011-road/turns.svg"
+}

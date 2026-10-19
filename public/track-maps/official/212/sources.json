@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/212-interlagos-gp/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/212-interlagos-gp/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/212-interlagos-gp/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/212-interlagos-gp/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/212-interlagos-gp/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_interlagos/212-interlagos-gp/turns.svg"
+}

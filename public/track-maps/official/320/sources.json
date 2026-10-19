@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_kokomo/320-kokomo/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_kokomo/320-kokomo/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_kokomo/320-kokomo/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_kokomo/320-kokomo/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_kokomo/320-kokomo/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_kokomo/320-kokomo/turns.svg"
+}

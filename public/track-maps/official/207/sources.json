@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_oran/207-oran-north/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_oran/207-oran-north/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_oran/207-oran-north/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_oran/207-oran-north/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_oran/207-oran-north/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_oran/207-oran-north/turns.svg"
+}

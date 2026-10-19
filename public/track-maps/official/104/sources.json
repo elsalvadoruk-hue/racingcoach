@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/104-phoenix-oval/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/104-phoenix-oval/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/104-phoenix-oval/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/104-phoenix-oval/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/104-phoenix-oval/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_phoenix/104-phoenix-oval/turns.svg"
+}

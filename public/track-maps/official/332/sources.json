@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_wildwest/332-wildwest-full/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_wildwest/332-wildwest-full/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_wildwest/332-wildwest-full/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_wildwest/332-wildwest-full/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_wildwest/332-wildwest-full/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_wildwest/332-wildwest-full/turns.svg"
+}

@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_misano/504-misano-club/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_misano/504-misano-club/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_misano/504-misano-club/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_misano/504-misano-club/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_misano/504-misano-club/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_misano/504-misano-club/turns.svg"
+}

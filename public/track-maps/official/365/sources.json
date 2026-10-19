@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_bristol/365-bristol-fullpit/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_bristol/365-bristol-fullpit/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_bristol/365-bristol-fullpit/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_bristol/365-bristol-fullpit/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_bristol/365-bristol-fullpit/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_bristol/365-bristol-fullpit/turns.svg"
+}

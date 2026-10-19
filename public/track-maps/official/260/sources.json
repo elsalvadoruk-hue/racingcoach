@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/260-nurburgring-sprintshort/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/260-nurburgring-sprintshort/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/260-nurburgring-sprintshort/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/260-nurburgring-sprintshort/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/260-nurburgring-sprintshort/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_nurburgring_gp/260-nurburgring-sprintshort/turns.svg"
+}

@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_lemans/268-lemans-full/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_lemans/268-lemans-full/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_lemans/268-lemans-full/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_lemans/268-lemans-full/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_lemans/268-lemans-full/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_lemans/268-lemans-full/turns.svg"
+}

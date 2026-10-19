@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_monza/241-monza-junior/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_monza/241-monza-junior/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_monza/241-monza-junior/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_monza/241-monza-junior/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_monza/241-monza-junior/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_monza/241-monza-junior/turns.svg"
+}

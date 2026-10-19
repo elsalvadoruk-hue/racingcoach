@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/95-sebring-international/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/95-sebring-international/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/95-sebring-international/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/95-sebring-international/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/95-sebring-international/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_sebring/95-sebring-international/turns.svg"
+}

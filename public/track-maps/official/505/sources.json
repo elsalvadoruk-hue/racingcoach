@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_misano/505-misano-truck/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_misano/505-misano-truck/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_misano/505-misano-truck/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_misano/505-misano-truck/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_misano/505-misano-truck/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_misano/505-misano-truck/turns.svg"
+}

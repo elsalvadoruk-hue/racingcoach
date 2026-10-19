@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_midohio/153-midohio-full/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_midohio/153-midohio-full/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_midohio/153-midohio-full/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_midohio/153-midohio-full/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_midohio/153-midohio-full/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_midohio/153-midohio-full/turns.svg"
+}

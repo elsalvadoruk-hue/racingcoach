@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Milwaukee_Road_Start_Finish_Line" data-name="Milwaukee Road_Start/Finish Line" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080">
+  <defs>
+    <style>
+      .cls-1 {
+        fill: #d82520;
+      }
+
+      .cls-2 {
+        fill: #d82520;
+      }
+    </style>
+  </defs>
+  <path class="cls-2" d="M1047.8516,795.1143c-2.7617,0-5-2.2383-5-5v-52.0381c0-2.7617,2.2383-5,5-5s5,2.2383,5,5v52.0381c0,2.7617-2.2383,5-5,5Z"/>
+  <g id="Start_Finish_Link" data-name="Start/Finish Link">
+    <path class="cls-1" d="M1112.9781,833.1111h-61.6701s13.6082-32.0313,13.6082-32.0313l-87.7832,37.0313,87.7832,37.0314-13.6082-32.0313h61.6701c2.7617,0,5-2.2382,5-5,0-2.7617-2.2383-5-5-5Z"/>
+  </g>
+</svg>

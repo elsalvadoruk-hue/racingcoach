@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/103-vegas-oval/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/103-vegas-oval/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/103-vegas-oval/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/103-vegas-oval/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/103-vegas-oval/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_vegas/103-vegas-oval/turns.svg"
+}

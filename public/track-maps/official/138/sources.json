@@ -1,0 +1,8 @@
+{
+  "active": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/138-pocono-south/active.svg",
+  "background": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/138-pocono-south/background.svg",
+  "inactive": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/138-pocono-south/inactive.svg",
+  "pitroad": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/138-pocono-south/pitroad.svg",
+  "start-finish": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/138-pocono-south/start-finish.svg",
+  "turns": "https://members-assets.iracing.com/public/track-maps/tracks_pocono/138-pocono-south/turns.svg"
+}
