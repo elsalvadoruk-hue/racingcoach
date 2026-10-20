@@ -6,6 +6,15 @@ import { voiceCapability } from './labVoiceCapability';
 
 const RuntimeContext = createContext(null);
 
+export function RuntimeContextProvider({ value, children }) {
+  return <RuntimeContext.Provider value={value}>{children}</RuntimeContext.Provider>;
+}
+
+// LMU analysis does not mount the iRacing LiveCoach, polling or audio host.
+export function OfflineRuntimeProvider({ children }) {
+  return <RuntimeContext.Provider value={{ supported: false }}>{children}</RuntimeContext.Provider>;
+}
+
 export function useLabControls() {
   const runtime = useContext(RuntimeContext);
   if (!runtime) throw new Error('DesktopRuntimeProvider is required.');

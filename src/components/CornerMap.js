@@ -23,6 +23,7 @@ const clock = (seconds) => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed
 // A car that has finished (or not yet started) its observed stretch stays at its first or last point.
 const EMPTY_PATH = [];
 const finite = Number.isFinite;
+const gearLabel = value => !finite(value) ? '--' : value === 0 ? 'N' : value === -1 ? 'R' : value;
 const nearest = (points, pct) => points.reduce((best, point) => (
   !best || Math.abs(point.distance_pct - pct) < Math.abs(best.distance_pct - pct) ? point : best
 ), null);
@@ -104,7 +105,7 @@ function GhostPanel({ target, reference, gap, lineLabel, aggregate }) {
   const cells = (name, colour, speed, gear, throttle, brake) => <>
     <span className="truncate font-semibold" style={{ color: colour }}>● {name}</span>
     <span className="text-right text-foreground">{finite(speed) ? Math.round(speed) : '--'}<span className="ml-0.5 text-[10px] text-muted-foreground">km/h</span></span>
-    <span className="text-right text-foreground">{finite(gear) ? gear : '--'}<span className="ml-0.5 text-[10px] text-muted-foreground">단</span></span>
+    <span className="text-right text-foreground">{gearLabel(gear)}<span className="ml-0.5 text-[10px] text-muted-foreground">단</span></span>
     <Pedal value={throttle} colour="rgb(34,197,94)" />
     <Pedal value={brake} colour="rgb(239,68,68)" />
   </>;
@@ -137,7 +138,7 @@ function segments(points) {
   }, []);
 }
 
-export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, trackMap, courseDiagram, geographic = false, geographicMetersPerUnit, geographicOrigin, mapStatus = 'unavailable', referenceLineSource, onFullLap, onSatellite, onRoadMap, referenceLabel = '기준 주행', detailLoading = false, corners, selected, selectedRange, activePct, onSelect, onHover, focusVersion, loss = null, traceRows = EMPTY_PATH, compactControls = false }) {
+export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, trackMap, courseDiagram, geographic = false, schematic = false, geographicMetersPerUnit, geographicOrigin, mapStatus = 'unavailable', referenceLineSource, onFullLap, onSatellite, onRoadMap, referenceLabel = '기준 주행', detailLoading = false, corners, selected, selectedRange, activePct, onSelect, onHover, focusVersion, loss = null, traceRows = EMPTY_PATH, compactControls = false }) {
   const svgRef = useRef(null);
   const drag = useRef(null);
   const manual = useRef(false);
@@ -388,7 +389,7 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
         y: current.y + (event.key === 'ArrowUp' ? -.15 : event.key === 'ArrowDown' ? .15 : 0) * current.height }));
     }
   };
-  if (!projected.length && !courseDiagram) return <div className="flex min-h-36 items-center justify-center rounded-xl bg-background p-4 text-sm text-muted-foreground">GPS 좌표가 없어 지도는 표시할 수 없습니다. 아래 코너 버튼으로 비교하세요.</div>;
+  if (!projected.length && !courseDiagram) return <div className="flex min-h-36 items-center justify-center rounded-xl bg-background p-4 text-sm text-muted-foreground">{schematic ? '기록 좌표가 없어 개략도를 표시할 수 없습니다.' : 'GPS 좌표가 없어 지도는 표시할 수 없습니다. 아래 코너 버튼으로 비교하세요.'}</div>;
   const unit = Math.min(view.width / viewport.width, view.height / viewport.height);
   const cursor = finite(activePct) ? nearest(projected, activePct) : null;
   const referenceCursor = finite(activePct) ? nearest(referenceProjected, activePct) : null;
@@ -447,7 +448,7 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
   );
   const backgroundSource = (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3" data-testid="map-background-source">
-      <Badge variant="secondary">{diagramMode ? 'iRacing 코스 안내' : geographicVisible ? 'GPS 위성 지도' : roadAvailable ? (trackMap.provenance?.geometry === 'traced' ? '항공사진으로 그린 도로 지도' : trackMap.provenance?.geometry === 'laps' ? '주행 랩으로 그린 도로 지도' : trackMap.provenance?.geometry === 'fitted' ? 'iRacing 공식 트랙맵' : 'DZ replay 도로 지도') : 'GPS 라인 비교'}</Badge>
+      <Badge variant="secondary">{schematic ? '기록 좌표 개략도' : diagramMode ? 'iRacing 코스 안내' : geographicVisible ? 'GPS 위성 지도' : roadAvailable ? (trackMap.provenance?.geometry === 'traced' ? '항공사진으로 그린 도로 지도' : trackMap.provenance?.geometry === 'laps' ? '주행 랩으로 그린 도로 지도' : trackMap.provenance?.geometry === 'fitted' ? 'iRacing 공식 트랙맵' : 'DZ replay 도로 지도') : 'GPS 라인 비교'}</Badge>
       {diagramMode ? <>
         <Badge variant="outline">GPS 미정렬</Badge><span className="text-xs text-muted-foreground">전체 코스용 지도 · 주행선은 주행 비교에서 확인하세요.</span>
       </> : geographicVisible ? <>
@@ -458,7 +459,7 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
         <span className="text-xs text-muted-foreground">{trackMap.displayName}</span>
         <Badge variant="outline" title="지도와 기준 주행선 사이의 정렬 잔차입니다. 실제 도로 경계의 측량 정확도를 의미하지 않습니다.">{finite(trackMap.fit?.p95Meters) ? `정렬 오차 P95 ${trackMap.fit.p95Meters.toFixed(1)} m` : '정렬 오차 미제공'}</Badge>
         {satelliteVisible && backgroundCredit && <span className="text-xs text-muted-foreground" title={backgroundCredit.attribution}>위성: <a href={backgroundCredit.sourceUrl} target="_blank" rel="noreferrer" className="underline underline-offset-4">{creditProvider}</a> · <a href={backgroundLicense?.licenseUrl || backgroundCredit.sourceUrl} target="_blank" rel="noreferrer" className="underline underline-offset-4">{creditLicense}</a>{trackMap.provenance?.geometry !== 'traced' && ' · DZ replay'}</span>}
-      </> : <span className="text-xs text-muted-foreground">{trackMap ? '도로 지도 파일을 불러오지 못했습니다.' : mapStatus === 'gps-mismatch' ? 'GPS 위치가 지도 범위와 맞지 않아 주행선만 표시합니다.' : '이 레이아웃에는 등록된 도로 지도가 없습니다.'}</span>}
+      </> : <span className="text-xs text-muted-foreground">{schematic ? '게임 기록 좌표이며 실제 지리 위치·도로 경계는 확인하지 않았습니다.' : trackMap ? '도로 지도 파일을 불러오지 못했습니다.' : mapStatus === 'gps-mismatch' ? 'GPS 위치가 지도 범위와 맞지 않아 주행선만 표시합니다.' : '이 레이아웃에는 등록된 도로 지도가 없습니다.'}</span>}
       {!diagramMode && satelliteFailed && <span role="status" className="text-xs text-muted-foreground">위성 배경을 불러오지 못해 도로 지도를 표시합니다.</span>}
     </div>
   );
@@ -504,7 +505,7 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
     </div>}
 
     {diagramMode && failedDiagram === courseDiagram.assets.active && <Alert className="mb-3"><AlertDescription>공식 코스 지도를 불러오지 못했습니다. 주행 비교에서 GPS 라인을 확인하세요.</AlertDescription></Alert>}
-    {!diagramMode && !hasReference && !detailLoading && <Alert className="mb-3" data-testid="map-reference-unavailable"><AlertDescription>이 구간에 비교 가능한 기준 GPS 좌표가 없습니다. 기준 라인을 표시할 수 없습니다.</AlertDescription></Alert>}
+    {!diagramMode && !hasReference && !detailLoading && <Alert className="mb-3" data-testid="map-reference-unavailable"><AlertDescription>{schematic ? '이 구간에 비교 가능한 기준 기록 좌표가 없습니다.' : '이 구간에 비교 가능한 기준 GPS 좌표가 없습니다. 기준 라인을 표시할 수 없습니다.'}</AlertDescription></Alert>}
     <div className="relative">
     <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} className="coach-interactive-map" data-dragging={dragging} data-testid="comparison-map" data-map-mode={diagramMode ? 'course' : 'comparison'} role="img" tabIndex={0} aria-label={diagramMode ? '공식 코스 안내 지도' : '코너 선택 지도'} aria-describedby={hintId}
       onPointerDown={handleDown} onPointerMove={handleMove} onPointerUp={handleUp} onPointerCancel={handleUp} onLostPointerCapture={handleUp} onKeyDown={handleKey}
@@ -540,6 +541,6 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
       <svg width={scaleMeters / metersPerUnit / unit + 2} height="6" className="block" aria-hidden="true"><path d={`M1 1 V5 H${scaleMeters / metersPerUnit / unit + 1} V1`} fill="none" stroke={COMPARISON_COLORS.cursor} strokeWidth="2" /></svg>
     </div>}
     </div>
-    {compactControls && <div className="compact-map-footer">{backgroundSource}<details className="compact-map-info"><summary>지도 설명·색상 안내</summary>{lineSource}<p>실세계 항공사진은 촬영 시점에 따라 iRacing 코스 모델과 다를 수 있습니다. GPS는 관측된 주행선이며 공식 도로 경계가 아닙니다. 휠로 확대하고 좌클릭 드래그로 이동하세요.</p></details></div>}
+    {compactControls && <div className="compact-map-footer">{backgroundSource}<details className="compact-map-info"><summary>지도 설명·색상 안내</summary>{lineSource}<p>{schematic ? '게임 기록 좌표 개략도입니다. 실제 지리 위치와 공식 도로 경계는 확인하지 않았습니다. 휠로 확대하고 좌클릭 드래그로 이동하세요.' : '실세계 항공사진은 촬영 시점에 따라 iRacing 코스 모델과 다를 수 있습니다. GPS는 관측된 주행선이며 공식 도로 경계가 아닙니다. 휠로 확대하고 좌클릭 드래그로 이동하세요.'}</p></details></div>}
   </div>;
 }

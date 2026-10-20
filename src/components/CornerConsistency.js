@@ -42,7 +42,7 @@ function Box({ stats, scale }) {
   );
 }
 
-export default function CornerConsistency({ consistency, allowedLaps }) {
+export default function CornerConsistency({ consistency, allowedLaps, targetLabel, onCorner }) {
   const [order, setOrder] = useState('spread');
   const rows = useMemo(() => (consistency?.corners || [])
     .map((corner) => ({ corner, stats: summarize(corner.passes, allowedLaps, consistency.target_lap) }))
@@ -54,7 +54,7 @@ export default function CornerConsistency({ consistency, allowedLaps }) {
   return (
     <div className="flex flex-col gap-3" data-testid="corner-consistency">
       <p className="text-sm text-muted-foreground">
-        코너마다 고른 랩들의 통과 시간 분포입니다. 상자는 가운데 절반의 랩(사분위), 세로선은 중앙값, 회색 점은 크게 벗어난 랩, 주황 점은 대상 랩 {consistency.target_lap ?? '--'}입니다.
+        코너마다 고른 랩들의 통과 시간 분포입니다. 상자는 가운데 절반의 랩(사분위), 세로선은 중앙값, 회색 점은 크게 벗어난 랩, 주황 점은 대상 랩 {targetLabel ?? consistency.target_lap ?? '--'}입니다.
         가로축은 그 코너의 가장 빠른 통과에서 늦은 정도(최대 {scale.toFixed(2)}초)입니다. "흔들림"이 크면 매번 다르게 달리는 코너, 작은데 "빠른 3번 대비"가 크면 이번 랩만 느렸던 코너입니다.
       </p>
       <div className="flex gap-2">
@@ -68,7 +68,7 @@ export default function CornerConsistency({ consistency, allowedLaps }) {
         <span className="text-right text-xs text-muted-foreground">대상 랩 · 빠른 3번 대비</span>
         {sorted.map(({ corner, stats }) => (
           <React.Fragment key={corner.id}>
-            <span className="truncate text-foreground" data-testid={`consistency-${corner.id}`}>{corner.label || corner.id}</span>
+            {onCorner ? <Button variant="ghost" className="truncate" data-testid={`consistency-${corner.id}`} onClick={() => onCorner(corner.id)}>{corner.label || corner.id}</Button> : <span className="truncate text-foreground" data-testid={`consistency-${corner.id}`}>{corner.label || corner.id}</span>}
             <Box stats={stats} scale={scale} />
             <span className="text-right font-mono text-foreground">{stats.iqr.toFixed(3)} s</span>
             <span className={`text-right font-mono ${stats.targetVsBest3 > 0.05 ? 'text-destructive' : 'text-muted-foreground'}`}>{signed(stats.targetVsBest3)}</span>

@@ -83,6 +83,7 @@ CHANNELS = {
 }
 
 
+GAME_NAMES = {'iracing': 'iRacing', 'lmu': 'LMU'}
 TREAD_CHANNELS = tuple(f'{corner}wear{part}' for corner in ('LF', 'RF', 'LR', 'RR') for part in ('L', 'M', 'R'))
 
 
@@ -97,6 +98,8 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.thread = None
         self.samples = deque(maxlen=self.SAMPLE_RATE_HZ * self.BUFFER_SECONDS)
         self.identity = {}
+        self.game = 'iracing'
+        self._race_read_at, self._race_session = -math.inf, None
         self.run_id = None
         self.overlay_preparation = None
         self.state = 'STOPPED'
@@ -237,7 +240,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self.overlay_laps.ingest(sample, self.run_id, self.radio.metadata.get('session_type') or sample.get('session_type'))
             self.samples.append({**sample, 'session_time': session_time, 'wall_time': now, 'run_id': self.run_id})
             self.state = 'CONNECTED'
-            self.message = 'iRacing 실시간 텔레메트리를 읽고 있습니다.'
+            self.message = f'{GAME_NAMES.get(self.game, "iRacing")} 실시간 텔레메트리를 읽고 있습니다.'
 
 
     # A straight this long is quiet enough for one status line; lines are this far apart at least.
@@ -320,7 +323,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         with self.lock:
             return {**{k: v for k, v in context.items() if k != 'recent'},
                     'state': self.state if context['connected'] else ('STALE' if self.state == 'CONNECTED' else self.state),
-                    'message': self.message if context['connected'] else 'iRacing 실시간 데이터 대기 · 저장된 IBT 분석은 계속 사용할 수 있습니다.' if self.state == 'CONNECTED' else self.message,
+                    'message': self.message if context['connected'] else f'{GAME_NAMES.get(self.game, "iRacing")} 실시간 데이터 대기 · 저장된 주행 분석은 계속 사용할 수 있습니다.' if self.state == 'CONNECTED' else self.message,
                     'hotkey': 'F8', 'hotkey_supported': os.name == 'nt', 'hotkey_down': self.hotkey_down,
                     'hotkey_serial': self.hotkey_serial, 'hotkey_events': [e for e in self.hotkey_events if e['serial'] > after],
                     'buffer_seconds': self.BUFFER_SECONDS, 'sample_rate_target_hz': self.SAMPLE_RATE_HZ}
@@ -342,10 +345,63 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.hotkey_events.append({'serial': self.hotkey_serial, 'down': pressed,
                                            'at': self.clock(), 'context': self.context() if pressed else None})
 
+    def _reset_live(self, reason):
+        with self.lock:
+            self.overlay_preparation = None
+            self.spotter.reset()
+            self.radio.reset()
+            self.drill.stop(reason)
+            self.practice.reset(reason)
+            self.overlay_laps.reset()
+
+    def _tick(self, sdk):
+        """One read of whichever game is connected (iRacing SDK or the LMU adapter)."""
+        if not sdk.is_initialized:
+            self.state = 'WAITING'
+            self.message = getattr(sdk, 'waiting_message', None) or 'iRacing을 실행하고 차량에 탑승하면 연결됩니다.'
+            if not sdk.startup():
+                return False
+        if not sdk.is_connected:
+            self._reset_live('DISCONNECTED')
+            sdk.shutdown()
+            self.state = 'WAITING'
+            return None
+        sdk.freeze_var_buffer_latest()
+        try:
+            names = set(sdk.var_headers_names)
+            sample = {key: sdk[name] if name in names else None for key, name in CHANNELS.items()}
+            # Least tread left on any part of any tyre; the sim only refreshes it in the pit stall.
+            sample['tyre_tread_min'] = min(sdk[name] for name in TREAD_CHANNELS) if names.issuperset(TREAD_CHANNELS) else None
+            self.game = getattr(sdk, 'game', 'iracing')
+            # Replay/spectator data must never masquerade as the driver's current car.
+            if sample.get('is_replay') or not sample.get('on_track'):
+                weekend = sdk['WeekendInfo'] or {}
+                self.prepare_overlay(session_identity(weekend, sdk['DriverInfo'] or {}), sample,
+                                     parse_measure(weekend.get('TrackLength'), 'distance'))
+                with self.lock:
+                    self.spotter.reset()
+                    self.radio.reset()
+                    self.drill.current = self.drill.prev = None
+                    self.practice.pause()
+                    self.overlay_laps.reset()
+                self.state = 'WAITING'
+                self.message = '실제 차량 탑승 대기 · 리플레이는 실시간 코칭에 사용하지 않습니다.'
+            else:
+                identity = session_identity(sdk['WeekendInfo'] or {}, sdk['DriverInfo'] or {})
+                identity['game'] = self.game
+                race = None
+                race_key = (identity.get('subsession_id'), sample.get('session_num'))
+                if self.clock() - self._race_read_at >= 1 or race_key != self._race_session:
+                    race = read_race(sdk, names, sample.get('session_num'))
+                    self._race_read_at, self._race_session = self.clock(), race_key
+                self.ingest(identity, sample, race)
+        finally:
+            sdk.unfreeze_var_buffer_latest()
+        return True
+
     def _loop(self):
         sdk = None
-        race_read_at = -math.inf
-        race_session = None
+        self._race_read_at, self._race_session = -math.inf, None
         try:
             if self.sdk_factory is None:
                 if os.name != 'nt':
@@ -355,73 +411,27 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             sdk = self.sdk_factory()
         except (ImportError, RuntimeError) as exc:
             self.state = 'UNAVAILABLE'
-            self.message = str(exc) if isinstance(exc, RuntimeError) else '실시간 패키지 설치 필요 · 음성코치_설치.bat를 실행하세요.'
+            self.message = str(exc) if isinstance(exc, RuntimeError) else '실시간 패키지 설치 필요 · 설치.bat를 실행하세요.'
         while not self.stop_event.is_set():
             self._poll_hotkey()
             if sdk is None:
                 self.stop_event.wait(.05)
                 continue
             try:
-                if not sdk.is_initialized:
-                    self.state = 'WAITING'
-                    self.message = 'iRacing을 실행하고 차량에 탑승하면 연결됩니다.'
-                    if not sdk.startup():
-                        self.stop_event.wait(1)
-                        continue
-                if not sdk.is_connected:
-                    with self.lock:
-                        self.overlay_preparation = None
-                        self.spotter.reset()
-                        self.radio.reset()
-                        self.drill.stop('DISCONNECTED')
-                        self.practice.reset('DISCONNECTED')
-                        self.overlay_laps.reset()
-                    sdk.shutdown()
-                    self.state = 'WAITING'
+                ticked = self._tick(sdk)
+                if ticked is False:
+                    self.stop_event.wait(1)
+                    continue
+                if ticked is None:
                     self.stop_event.wait(.5)
                     continue
-                sdk.freeze_var_buffer_latest()
-                try:
-                    names = set(sdk.var_headers_names)
-                    sample = {key: sdk[name] if name in names else None for key, name in CHANNELS.items()}
-                    # Least tread left on any part of any tyre; the sim only refreshes it in the pit stall.
-                    sample['tyre_tread_min'] = min(sdk[name] for name in TREAD_CHANNELS) if names.issuperset(TREAD_CHANNELS) else None
-                    # Replay/spectator data must never masquerade as the driver's current car.
-                    if sample.get('is_replay') or not sample.get('on_track'):
-                        weekend = sdk['WeekendInfo'] or {}
-                        self.prepare_overlay(session_identity(weekend, sdk['DriverInfo'] or {}), sample,
-                                             parse_measure(weekend.get('TrackLength'), 'distance'))
-                        with self.lock:
-                            self.spotter.reset()
-                            self.radio.reset()
-                            self.drill.current = self.drill.prev = None
-                            self.practice.pause()
-                            self.overlay_laps.reset()
-                        self.state = 'WAITING'
-                        self.message = '실제 차량 탑승 대기 · 리플레이는 실시간 코칭에 사용하지 않습니다.'
-                    else:
-                        identity = session_identity(sdk['WeekendInfo'] or {}, sdk['DriverInfo'] or {})
-                        race = None
-                        race_key = (identity.get('subsession_id'), sample.get('session_num'))
-                        if self.clock() - race_read_at >= 1 or race_key != race_session:
-                            race = read_race(sdk, names, sample.get('session_num'))
-                            race_read_at, race_session = self.clock(), race_key
-                        self.ingest(identity, sample, race)
-                finally:
-                    sdk.unfreeze_var_buffer_latest()
             except Exception:
                 # A logic error here looks like a reconnect to the driver; keep the cause.
                 failure = time.monotonic()
                 if failure - self._logged_failure >= 10:
                     self._logged_failure = failure
                     logger.exception('Live telemetry tick failed; resetting the SDK connection')
-                with self.lock:
-                    self.overlay_preparation = None
-                    self.spotter.reset()
-                    self.radio.reset()
-                    self.drill.stop('DISCONNECTED')
-                    self.practice.reset('DISCONNECTED')
-                    self.overlay_laps.reset()
+                self._reset_live('DISCONNECTED')
                 self.state = 'WAITING'
                 self.message = '실시간 데이터 연결을 다시 확인하고 있습니다.'
                 try:

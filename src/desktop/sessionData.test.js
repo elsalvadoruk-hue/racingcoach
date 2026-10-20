@@ -1,4 +1,4 @@
-import { analysisOptions, currentSessionResult } from './sessionData';
+import { analysisOptions, currentSessionResult, labRequest, selectGame, rememberSession, LMU_SESSION_KEY, LAST_SESSION_KEY, normalizeComparison } from './sessionData';
 import { workspaceFromHash } from './labControlState';
 
 test('a new comparison updates the summary, practice and corner context together', () => {
@@ -20,6 +20,17 @@ test('initial traces without duplicated analysis retain the root production resu
   expect(next.external).toEqual(['a.csv', 'b.csv']);
 });
 
+test('Garage61 fallback clears the external identity and later successful selection clears fallback', () => {
+  const fallback = currentSessionResult({ filename: 'a.ibt' },
+    { referenceFallback: 'GARAGE61_UNAVAILABLE', reference_filename: 'b.ibt' }, ['old.csv']);
+  expect(fallback.external).toEqual([]);
+  expect(fallback.reference_selection).toBe('AUTO');
+  expect(fallback.reference_filename).toBe('b.ibt');
+  const external = currentSessionResult(fallback, { referenceFallback: null }, ['ready.csv']);
+  expect(external.external).toEqual(['ready.csv']);
+  expect(external.referenceFallback).toBeNull();
+});
+
 test('the app keeps its summary start page and explicit desktop navigation', () => {
   expect(workspaceFromHash('')).toBe('summary');
   expect(workspaceFromHash('#corners')).toBe('corners');
@@ -35,4 +46,29 @@ test('comparison requests retain evidence mode and structured driver feedback', 
     setup_mode: 'EVIDENCE', feedback_phase: 'EXIT', feedback_symptom: 'OVERSTEER', user_feedback: 'exit note' });
   expect(analysisOptions(workspace, 'B.ibt')).toMatchObject({ setup_mode: 'EXPLORE', feedback_phase: 'ENTRY' });
   expect(analysisOptions(workspace, 'B.ibt').session_mode).toBeUndefined();
+});
+
+test('a response from the previous game cannot activate a new game session', async () => {
+  selectGame('lmu');
+  let complete;
+  global.fetch = jest.fn(() => new Promise(resolve => { complete = resolve; }));
+  const pending = labRequest('session', { filename: 'lmu-id' });
+  selectGame('iracing');
+  complete({ ok: true, json: async () => ({ filename: 'old-lmu-response' }) });
+  await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  expect(global.fetch.mock.calls[0][0]).toContain('/api/lmu/workspace/session');
+  delete global.fetch;
+});
+
+test('LMU remembers selection separately and retains schematic coordinate gaps', () => {
+  localStorage.setItem(LAST_SESSION_KEY, 'existing-iracing-selection');
+  rememberSession({ filename: 'lmu-id', provider: 'LMU' }, 5, 4, []);
+  expect(localStorage.getItem(LAST_SESSION_KEY)).toBe('existing-iracing-selection');
+  expect(JSON.parse(localStorage.getItem(LMU_SESSION_KEY)).target_lap).toBe(5);
+  const result = normalizeComparison({ provider: 'LMU', track_path: [
+    { x_m: 1, y_m: 2, distance_pct: .1, segment: 0 },
+    { x_m: 2, y_m: 3, distance_pct: .2, segment: 1 },
+  ] });
+  expect(result.paths.target[1]).toMatchObject({ x: 2, y: -3, breakBefore: true });
+  expect(result.paths.geographic).toBe(false);
 });

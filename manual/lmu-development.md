@@ -2,11 +2,80 @@
 
 개발 브랜치: `feature/lmu-telemetry-isolation`
 
-현재는 **기존 iRacing과 분리된 LMU 파일 분석·파일 간 비교·다중 랩 고스트·코너 후보 비교·입력 반복성·연습 과제 이력·차량 상태 24채널 관측/두 랩 비교와 실시간 진단 수집을 구현한 단계**입니다. 실제 Monza / GT3 연결과 정상 인정 기록 `2:05.798`의 사용자 대조를 확인했으며, 컷 시도 사례의 게임 문구와 새 수신 지연 진단의 실주행 검증은 남아 있습니다. 게임의 랩 유효성 자동 판정이나 실시간 음성 코칭이 완성된 버전은 아닙니다. 현재 개발 PC의 최신 화면은 **http://127.0.0.1:24176/**이며 집 PC에서는 아래 실행 명령의 포트로 새 서버를 시작합니다. `main` 병합·태그·릴리즈는 하지 않습니다. 실주행 순서는 [실시간 검증 안내](lmu-live-validation.md)를 참조하세요. 아래 날짜별 항목은 당시의 개발 기록입니다.
+**2026-10-21부터 LMU는 iRacing과 같은 기능을 그대로 씁니다.** 별도로 다시 만든 LMU 실시간 스포터·피트월·질문·오버레이와 측정 전용 분석 경로는 걷어냈습니다. 아래 "구조 재정리" 절이 현재 구조이고, 그 아래 날짜별 항목은 Codex 작업 당시의 기록입니다(대부분 대체됨). `main` 병합·태그·릴리즈는 하지 않았습니다.
+
+## 2026-10-21 구조 재정리 (Claude)
+
+사용자 요청: "LMU 쪽 코드·음성 연결·웹페이지가 iRacing과 따로 놀고 엉성하다. iRacing 기능을 LMU에서도 쓸 수 있게." 변경 전 상태 전체는 `backups/lmu-rework-20261021/`(추적 파일 패치, 미추적 파일 tar)에 있습니다.
+
+### 실시간: LMU를 iRacing SDK 모양으로 번역
+
+| 파일 | 역할 |
+| --- | --- |
+| `lmu_irsdk.py` | `LmuIrsdk`: LMU 공유 메모리 브리지 프레임을 pyirsdk `IRSDK`와 같은 이름(`Speed`, `LapDistPct`, `CarIdx*`, `SessionFlags`, `WeekendInfo`…)으로 돌려줌. `shared()`가 앱의 단일 인스턴스 |
+| `game_sdk.py` | `AutoGameSdk`: iRacing → LMU 순으로 시도해 응답하는 게임을 씀. `backend_api.live_telemetry`의 `sdk_factory` |
+| `lmu_frame.py` | 브리지 프레임 정규화(옛 `lmu_live._normalise`와 주변 차 검증) |
+| `lmu_journal.py` | 진단 기록: 어댑터가 실제로 읽은 프레임을 `logs/lmu-live/<id>.jsonl`에 저장(설정의 시작/중지 API, 15분·10만 프레임·128MiB) |
+| `lmu_steering.py` | 실시간에서 잰 차량별 핸들 회전 범위(`data/lmu-steering.json`) |
+| `scripts/replay_lmu_live.py` | 진단 기록을 iRacing 실시간 스택에 그대로 재생해 나왔을 안내를 출력 |
+
+- `LiveTelemetry._loop`의 한 주기를 `_tick(sdk)`으로 분리했습니다. 실주행과 기록 재생이 같은 코드를 탑니다.
+- 그래서 스포터·레이스 라디오·피트월·포메이션 브리핑·실시간 코너 코치·구간 반복 연습·F8 질문·오버레이가 **iRacing 코드 그대로** LMU에서 동작합니다. 화면도 iRacing 음성 코치 화면(`DesktopRuntimeProvider`/`VoicePreview`)을 씁니다.
+- 대응 규칙(검증 전 초기값 포함):
+  - 깃발: `mFlag` 0+단계 5 → 그린 0x4, 6 → 블루 0x20, 구간 옐로(`sector_flags`=1)·`under_yellow` → 0x8, FCY 단계 6/`yellow_flag_state` 1~6 → 코션 0x4000(1이면 0x8000), 단계 7 → 레드, 단계 8 → 체커, 랩 제한 마지막 랩 → 화이트, 단계 3 → startHidden, 4 → startReady/Set, 미처리 페널티 → 블랙, 실격 → 0x20000.
+  - 세션 단계 → `SessionState`: 0→1, 1·2→2, 3·4→3, 5·6·7→4, 8→5(내 차 완주 후 6), 일시정지는 이전 값 유지. 세션 종류 코드 0/1~4/5~8/9/10~13 → Offline Testing/Practice/Open Qualify/Warmup/Race.
+  - 좌우 겹침 → `CarLeftRight`(1 클리어, 2 왼쪽, 3 오른쪽, 4 양쪽, 5/6 두 대). Codex의 CrewChief식 기하를 그대로 쓰되, 60m 밖 차의 지연은 무시하고(전에는 트랙 어디든 한 대만 늦어도 전체 무효), 5m/s 미만(그리드 정지)에서는 0(꺼짐).
+  - 점수판(약 5Hz)은 실제 포메이션에서 2.2초까지 멈춥니다. 4초까지는 직전 점수판 값을 유지하고(세션 키 포함), 그 사이 랩 거리는 측정 속도로 외삽(결승선은 점수판이 확인할 때까지 넘지 않음).
+  - 경기 길이: 레이스는 그린 전(단계 0·3·4) 남은 시간, 그 밖은 `session_end_et`.
+  - 조향: LMU는 오른쪽 +, iRacing은 왼쪽 + → 부호 반전. 노면 젖음 비율 → `TrackWetness` 1~7 단계, 젖음·비 0.1 이상이면 `WeatherDeclaredWet`.
+  - 없는 값(`PitSvFuel`, `PitSvFlags`, 수리 시간, 인시던트, 타이어 트레드, `CarIdxEstTime`)은 내보내지 않아 그 안내는 조용합니다.
+- 실제 진단 기록 재생 결과: 포메이션 2개에서 레이스 브리핑 1회(“10분 경기”), 포메이션 주제 안내, 연습 기록 1개에서 좌우·클리어·계속 왼쪽·그린·순위 안내가 iRacing 스택에서 나왔습니다.
+- 매초 LMU 연결 시도 비용은 약 3.7ms(게임 꺼짐)입니다. iRacing만 쓰는 PC에서는 LMU SDK가 없어 조용히 넘어갑니다.
+
+### 분석: LMU 기록을 iRacing `ParsedTelemetry`로
+
+| 파일 | 역할 |
+| --- | --- |
+| `lmu_ibt.py` | `LmuIbtReader(path).parse()`: DuckDB 기록을 60Hz 균일 시간축·iRacing 채널 이름·세션 정보·랩 세그먼트로 변환 |
+| `lmu_recordings.py` | LMU 기록 목록과 이름 해석(파일 이름, 옛 24자리 ID 모두) |
+| `lmu_install.py` | Steam `libraryfolders.vdf`의 모든 라이브러리에서 LMU 설치 폴더(SDK·기록) 찾기 |
+| `lmu_corner_registry.py` | 옛 측정 전용 경로가 등록한 구간(대체 경로, 거의 안 씀) |
+
+- `backend_api`의 저장소가 `.duckdb`를 `LmuIbtReader`로 읽고, `resolve_telemetry_file`이 LMU 이름을 해석합니다. `/api/lmu/workspace/*`는 `app.state.workspace_request`(iRacing 워크스페이스)로 넘깁니다. 그래서 연습 과제·코너 원인·코너 번호·일관성·전문가 겹침·과제 시작·다음 주행 평가가 iRacing과 같습니다.
+- LMU의 G 채널은 실제 기록에서 속도 변화와 상관이 없어(0.04) 쓰지 않고, 속도 미분과 GPS 궤적 곡률로 `LongAccel`·`LatAccel`·`YawRate`를 만듭니다.
+- 랩은 Codex 리더의 랩 이벤트 진단을 쓰되 경계를 실제 거리 리셋 지점(이벤트 ±2초)에 맞춥니다. 기록 시간이 맞고 측정 트랙 가장자리(+1.5m) 밖이 0.5% 미만인 랩을 유효로 봅니다(게임의 컷 판정은 파일에 없음).
+- 차량·트랙 ID는 `lmu-car-<차량명>`, `lmu-track-<트랙명>`으로 실시간 어댑터와 같습니다. 그래서 분석이 저장한 코너 정의·코너 번호·연습 과제가 LMU 주행 중에도 그대로 연결됩니다.
+- 공식 지도: LMU 기본 레이아웃 10곳을 iRacing 공식 지도 ID에 대응(`lmu_ibt.OFFICIAL_MAPS`)해 코너 번호 자동 제안과 번호 화면의 지도를 씁니다. Codex 화면에서 확정한 몬차 번호(`logs/lmu-corner-names.json`)는 앱 시작 때 공용 코너 저장소로 옮깁니다.
+- 조향: 실시간에서 잰 회전 범위가 있으면 그 값, 없으면 450°(±225°)로 각도화합니다. 화면은 원래 기록값(%)으로 되돌려 보여 줍니다(`session.steering_half_range_deg`).
+- LMU 전용으로 남긴 것: 셋업 조회·A/B 항목 비교, 차량 상태(타이어·서스펜션) 채널, 기록 저장·검색(`lmu_history`), 측정 랩 기준 반복 연습(`LmuPracticePanel`).
+
+### 함께 고친 공용 문제
+
+- 개인 베스트 자동 기준 선택이 후보마다 폴더 전체를 다시 훑어 5~10초 걸리던 것을 한 번만 훑도록 고침(약 1초, 재요청 0.5초).
+- 워크스페이스 비교 결과에 확정 코너 번호가 붙지 않던 것(`TelemetryAnalyzer._name_corners`).
+- 과제 문구의 "새 IBT"를 "새 주행 기록"으로.
+
+### 지운 것 (모두 백업에 있음)
+
+Codex가 iRacing을 복제해 따로 만든 실시간 체인: `lmu_live`(구 서비스), `lmu_live_connection`, `lmu_live_engineer`, `lmu_live_corners`, `lmu_measured_briefing`, `lmu_radio_adapter`, `lmu_radio_catalog`, `lmu_formation_history`, `lmu_fuel_feedback`, `lmu_driver_notes`, `lmu_pitwall`, `lmu_voice`, `lmu_questions`, `lmu_overlay`, `lmu_spotter`, `lmu_rest_pit`, `lmu_validity`, `lmu_websocket`, `lmu_live_diagnostics`, 독립 앱 `lmu_api`·`lmu_ui`, 화면 `LmuVoicePanel`·`LmuDesktopRuntime`·`LmuLivePanel`·`LmuSpotterPanel`·`LmuQuestions`·`LmuRadioCatalog`·`useLmuSpotter`·`useLmuQuestions`·`useLmuLiveConnection`·`lmuStream`과 그 테스트. 이 화면들은 iRacing 화면과 구성이 달랐고(진단 기록 패널이 맨 위, 상단에 항상 뜨는 "GAME_NOT_RUNNING" 배너, "질문 지원 안 함"과 F8 버튼이 같이 있는 모순 문구 등), 공유 메모리를 두 군데서 읽고 HUD도 두 곳에서 그렸습니다.
+
+### 안 되는 것과 이유
+
+- Garage61 기준 랩·오버레이 기준 그래프: Garage61은 iRacing 랩만 제공.
+- 급유 설정량 확인, 수리 시간, 인시던트 한도, 정확한 피트 제한속도 안내: LMU 공유 메모리에 해당 값이 없음(Codex가 조사한 REST 피트 메뉴는 타이어 선택만 확인됨).
+- 위성 지도: LMU 기록의 GPS가 실제 위치와 맞지 않음(가짜 좌표계, 예: 위도 60°·경도 0° 근처).
+- 셋업 추천·효과 학습: iRacing 셋업 분석은 iRacing 셋업 항목 이름·범위를 전제로 함. LMU 셋업은 조회·비교까지만.
+- 구간 반복 연습의 되감기 비교: LMU에는 iRacing Active Reset 같은 저장 지점 복귀가 없음. 매 통과의 입력 목표는 측정하지만 같은 출발점 시간 비교는 안 됨.
+- 실시간 연결은 이 PC에서 C++ 브리지를 한 번 빌드해야 함(Visual Studio 빌드 도구). 공유본 배포 전에는 순수 Python 리더나 미리 빌드한 DLL 배포를 정해야 합니다.
+- 실제 게임 위 검증: 실시간 경로는 진단 기록 재생과 합성 프레임으로만 확인했습니다. 실주행에서 스포터 차량 크기 근사, 깃발 대응, 점수판 유지 4초가 맞는지 확인이 필요합니다.
+
+### 검증
+
+백엔드 전체(LMU 포함), 화면 전체 테스트와 `npm run build`. 새 테스트: `test_lmu_irsdk.py`(번역·깃발·단계·좌우·점수판 유지·게임 자동 선택·iRacing 스택 연동·진단 기록 재생), `test_lmu_ibt.py`(랩 경계·트랙 밖 무효·채널 단위·부호·조향 범위·공용 분석·앱 API 통합), `test_lmu_install.py`. 실제 몬차 기록 13개를 앱 API로 열어 과제·코너·번호·기록 저장/열기·연습 시작을 확인했습니다.
 
 ## 2026-10-20 집 PC 인계
 
-- 중단 지점: 차량 상태 두 랩 비교와 휠 순서 조사까지 완료. 다음 개발은 **셋업 정보 요약과 두 기록의 설정 차이 표시**입니다. 연습 과제의 실주행 전후 검증은 사용자가 집에서 진행할 때 이어갑니다. 당장 새 주행을 요구하지 않습니다.
+- 인계 당시 중단 지점: 차량 상태 두 랩 비교와 휠 순서 조사까지 완료. 이후 집 PC에서 **셋업 정보 요약과 두 기록의 설정 차이 표시**를 구현했습니다. 최신 검증과 사용법은 맨 아래 집 PC 셋업 개발 기록을 확인하세요. 연습 과제의 실주행 전후 검증은 사용자가 진행할 때 이어갑니다.
 - 최종 검사: LMU Python **200/200**, UI **25/25** 통과. 실제 5개 랩·3쌍·24채널·72응답의 통계 **13,041개**와 그래프 값 **73,062개**가 원본 계산과 일치했습니다. 이 숫자는 이번 인계 시점 결과이며 집 PC 설치 환경은 별도 확인합니다.
 - 유지할 한계: `valid=None`, `VALIDITY_UNVERIFIED` / `GAME_SCREEN_UNVERIFIED`, 조건 `NOT_COMPARED`. SDK의 휠 순서는 확인했지만 DuckDB `value1..4`의 휠 위치 매핑은 `UNVERIFIED`입니다. [조사 근거](lmu-wheel-order-research-20261020.md)를 참조하세요.
 - Git에 포함: 소스·합성 회귀 검사·개발/조사 문서. **원본 `.duckdb`, `.wal`, 실주행 JSONL, 빌드 DLL, 로컬 검증 로그와 가상환경은 포함하지 않습니다.** 개발 기록의 `logs/...` 근거 경로는 개발 PC 로컬 파일입니다.
@@ -29,17 +98,17 @@ git pull --ff-only origin feature/lmu-telemetry-isolation
 
 | 항목 | iRacing | LMU |
 | --- | --- | --- |
-| 진입점 | 기존 `backend_api.py` / `실행.bat` | `lmu_api.py` |
-| 로컬 포트 | `24157` | `24158` |
+| 진입점 | 기존 `backend_api.py` / `실행.bat` | 일반 백엔드의 LMU 전용 라우트 및 독립 `lmu_api.py` |
+| 로컬 포트 | 화면 `24157`, 백엔드 `24158` | 일반 백엔드 API `24158`; 독립 앱은 별도 빈 포트(현재 `24177`) |
 | Python 환경 | 기존 설치 환경 | 별도 `.venv-lmu` 권장 |
 | 설치 목록 | 기존 `requirements*.txt` | `requirements_lmu.txt` |
 | 파일 읽기 | 기존 IBT reader | `lmu_telemetry.py`, `.duckdb` 전용 |
 | 파일 경로 | 기존 iRacing 설정 | `LMU_TELEMETRY_DIRS` |
 | 실시간 수집 | 기존 `live_telemetry.py`, iRacing SDK | `lmu_live.py` + `lmu_shared_memory.py` + 설치 SDK용 native bridge, 명시적 시작/중지 |
-| 상태·조회 API | 기존 API | `/api/lmu/...`, 별도 앱에만 등록 |
+| 상태·조회 API | 기존 API | `/api/lmu/...`, 일반 백엔드와 독립 앱에 각각 등록 |
 | 설정·캐시·개인 DB | 기존 저장소 | iRacing 저장소 접근 없음. 실시간 진단만 `logs/lmu-live/<recording_id>.jsonl`에 별도 기록 |
 
-LMU 모듈은 iRacing 설정·DB·SDK·음성 서비스에 접근하지 않습니다. LMU 실행에는 Node.js·Garage61·Google Cloud 키·음성팩이 필요하지 않습니다. 이 로컬 서버는 사용 중인 PC에서만 실행하며 외부 서버 운영은 필요하지 않습니다.
+LMU 모듈은 iRacing 설정·DB·SDK·음성 서비스에 접근하지 않습니다. LMU 독립 실행에는 Node.js·Garage61·Google Cloud 키·음성팩이 필요하지 않습니다. 일반 앱과 독립 앱을 함께 실행할 때는 백엔드 포트를 다르게 지정합니다. 이 로컬 서버는 사용 중인 PC에서만 실행하며 외부 서버 운영은 필요하지 않습니다.
 
 ## 가져오기와 실행
 
@@ -52,7 +121,7 @@ git config core.hooksPath .githooks
 py -3.12 -m venv .venv-lmu
 .\.venv-lmu\Scripts\python.exe -m pip install -r iRacing_Backend/requirements_lmu.txt
 $env:LMU_TELEMETRY_DIRS='D:\SteamLibrary\steamapps\common\Le Mans Ultimate\UserData\Telemetry'
-.\.venv-lmu\Scripts\python.exe -m uvicorn lmu_api:app --app-dir iRacing_Backend --host 127.0.0.1 --port 24158
+.\.venv-lmu\Scripts\python.exe -m uvicorn lmu_api:app --app-dir iRacing_Backend --host 127.0.0.1 --port 24168
 ```
 
 Python 3.12가 없다면 설치된 Python 3.11 이상으로 가상환경을 만드세요. 경로는 집 PC의 실제 Steam 라이브러리 위치로 바꾸세요. `LMU_TELEMETRY_DIRS`는 **이 PowerShell 창의 프로세스에만** 적용되며 새 창에서는 다시 지정합니다. 지정하지 않으면 `ProgramFiles(x86)`와 `ProgramFiles` 아래 기본 Steam 경로만 찾습니다. 다른 드라이브의 라이브러리는 자동 탐색하지 않습니다.
@@ -85,9 +154,9 @@ git switch feature/lmu-telemetry-isolation
 $env:LMU_TELEMETRY_DIRS='D:\SteamLibrary\steamapps\common\Le Mans Ultimate\UserData\Telemetry;D:\LMU-References'
 ```
 
-브라우저에서 **http://127.0.0.1:24158** 을 엽니다. 연결 상태 → 파일 선택 → 파일 검사 순서로 확인합니다. 종료는 실행 창의 `Ctrl+C`입니다. 기존 iRacing은 기존 `실행.bat`으로 별도 실행할 수 있습니다.
+위 명령으로 새 독립 앱을 띄웠다면 브라우저에서 **http://127.0.0.1:24168**을 엽니다. 연결 상태 → 파일 선택 → 파일 검사 순서로 확인합니다. 종료는 실행 창의 `Ctrl+C`입니다. 기존 iRacing은 기존 `실행.bat`으로 별도 실행할 수 있습니다. 일반 앱의 화면 주소는 계속 **http://localhost:24157**입니다.
 
-`[Errno 10048]`이 나오면 다른 프로그램이 해당 포트를 사용 중입니다. 기존 프로그램을 종료하지 말고 명령의 `--port 24158`을 `--port 24168`처럼 빈 포트로 바꾼 뒤 브라우저 주소도 맞추세요.
+`[Errno 10048]`이 나오면 다른 프로그램이 해당 포트를 사용 중입니다. 기존 프로그램을 종료하지 말고 명령의 `--port 24168`을 `--port 24178`처럼 빈 포트로 바꾼 뒤 브라우저 주소도 맞추세요.
 
 ## 이번 단계에서 가능한 것
 
@@ -95,7 +164,7 @@ $env:LMU_TELEMETRY_DIRS='D:\SteamLibrary\steamapps\common\Le Mans Ultimate\UserD
 - 선택한 파일만 읽기 전용으로 열어 메타데이터·채널 이름·단위·주파수·이벤트·샘플 수 확인.
 - 게임의 연속된 `Lap` 이벤트 시각으로 양쪽 경계가 있는 랩을 표시. 파일 앞뒤의 미완성 구간은 완주로 만들지 않습니다.
 - `Lap Time`을 해당 종료 시각으로 연결. 기록 누락·시간 불일치·피트 포함·샘플 부족·큰 거리 역행을 진단.
-- 동명 파일도 폴더별 식별자로 구분. SteamID와 CarSetup은 API에 전달하지 않습니다.
+- 동명 파일도 폴더별 식별자로 구분. SteamID와 CarSetup 원문은 API에 전달하지 않습니다. 셋업 전용 API는 허용한 설정 항목의 현재 표시값·인덱스·범위만 반환합니다.
 - 시간·거리 진단을 통과한 두 기록 랩을 직접 선택해 같은 거리에서 비교. 누적 시간 차이·속도·스로틀·브레이크·조향 그래프를 표시합니다. 게임의 유효성 판정은 미확인으로 유지합니다.
 - 거리 구간별 소요 시간·시간 차이와 최대 단축/지연 구간 표시. 구간을 선택하면 채널 통계와 그래프의 동일 거리 범위를 확인합니다.
 
@@ -117,7 +186,7 @@ $env:LMU_TELEMETRY_DIRS='D:\SteamLibrary\steamapps\common\Le Mans Ultimate\UserD
 ## 다음 작업 순서
 
 1. 브랜치를 가져와 별도 Python 환경으로 LMU 앱을 실행하고, 종료된 기존 파일로 분석 화면과 차량 비교를 확인합니다. 파일 ID는 집 PC 경로 기준으로 다시 생성됩니다.
-2. 원본 셋업 항목의 구조·단위를 조사해 안전한 요약과 두 기록 간 설정 차이를 구현합니다. 개인정보·원문 전체 공개나 관측 차이의 인과 효과 추정은 하지 않습니다.
+2. 셋업 요약과 파일 간 차이 표시는 구현했습니다. 다음은 실제 게임 셋업 화면과 표시값 대조 및 설정 변경 사례 검증입니다. 현재 파일에는 표시가 같은 컴파운드 인덱스 차이가 있어 실제 변경 여부는 미확인으로 유지합니다. A/B 실험·인과 효과 추정·추천은 후속 범위입니다.
 3. 연습 과제 실주행 전후 비교는 사용자가 집에서 진행할 때 이어갑니다. 새 주행을 하기 전에는 기존 데이터·합성 검사로 가능한 개발을 우선합니다.
 4. 게임의 랩 유효성 표시·수신 지연·피트·재연결·세션 전환은 향후 필요한 사례별로 대조합니다. SDK 순서와 DuckDB 휠 열 순서의 직접 대응은 별도 검증 전까지 미확인으로 유지합니다.
 5. 실시간 수집기는 이미 설치 SDK 기반으로 구현했습니다. 집 PC에서 사용할 경우 아래 로컬 브리지를 빌드하고 명시적으로 수집을 시작합니다. 음성/코칭·상대 차량 통합과 게임 업데이트별 ABI 확인은 후속 범위입니다.
@@ -617,3 +686,344 @@ API: `GET /api/lmu/telemetry/vehicle-comparison?reference_file_id=<ID>&reference
 최신 서버는 **http://127.0.0.1:24176/**, PID `41108`입니다. 이전에 차단된 서버 종료를 재시도하지 않았습니다. 보호 원본 DuckDB 4개·JSONL 2개·오디오/버전 파일 4개 해시는 유지됐습니다. 추가 수집·게임 설정 변경·실제 연습 과제 생성·커밋·push는 하지 않았습니다. 현재 기능에는 추가 주행이 필요하지 않습니다. 다음 개발 후보는 원본에 포함된 셋업 항목의 안전한 요약과 두 기록 간 설정 차이 표시입니다.
 
 근거: `logs/lmu-vehicle-comparison-verification-20261020.py`/`.json`, `logs/lmu-vehicle-comparison-preservation-before-20261020.json`, `logs/lmu-vehicle-comparison-browser-20261020.json`, `logs/lmu-vehicle-comparison-closeout-20261020.json`, `logs/lmu-wheel-order-research-20261020.md`.
+
+## 2026-10-20 집 PC: 새 주행 확인과 기록 셋업 요약·비교
+
+종료된 Monza / GT3 기록 두 개(`08_50_05Z`, `08_59_41Z`)와 짧은 초기 기록(`08_47_44Z`)을 읽기 전용으로 확인했습니다. 첫 주행의 기록 랩타임은 `2:00.515`, 다음 주행은 `2:00.687 / 2:04.055`입니다. 첫 주행의 다른 한 랩은 경계 간 시간이 있지만 `Lap Time` 값이 없어 `UNTIMED`로 남깁니다. 피트 출발 랩과 미완성 꼬리는 비교 대상으로 만들지 않으며, 기록 시간이 있는 랩도 `valid=null`입니다.
+
+`lmu_setup.py`는 원본 `CarSetup`의 172개 최상위 항목 중 확인한 설정 이름 170개만 처리합니다. `VM_*`와 명시적으로 이름이 붙은 `WM_*-W_FL/FR/RL/RR` 설정을 닫힌 허용 목록으로 읽습니다. `gearGraph`, `symmetric`, 임의의 키, 주석·경로·과거 저장값·원문 전체는 반환하지 않습니다. 중복 JSON/메타데이터·과대 입력·비유한수·잘못된 범위를 처리하고, `available=true`라도 표시값이 `N/A`이면 확인 불가입니다.
+
+각 파일에서 116개 항목은 표시값을 읽을 수 있고 54개는 사용 불가입니다. 숫자 `value`는 **설정 인덱스**이며 압력·연료량·각도 등으로 바꾸지 않습니다. `stringValue`만 기록된 표시 그대로 보여줍니다. 휠 설정 키에 있는 위치 이름은 그 키의 이름이며, 주행 채널 `value1..4`의 휠 순서 검증과 별개입니다. 셋업은 기록 파일 단위 정보로, 랩별 실제 적용 상태·조건 동등성·셋업 효과를 확정하지 않습니다.
+
+새 API:
+
+- `GET /api/lmu/telemetry/setup?file_id=<ID>`: 선택한 파일의 허용 설정 요약.
+- `GET /api/lmu/telemetry/setup-comparison?reference_file_id=<ID>&target_file_id=<ID>`: 서로 다른 두 기록의 설정 비교. 랩 번호는 필요하지 않습니다.
+
+파일 목록의 ID만 허용하며 읽기 전후 본체·WAL fingerprint가 달라지면 응답을 버립니다. 같은 파일·하드링크 비교를 거부하고 worker에서 읽습니다. 차량·클래스·트랙·레이아웃 문자열이 다르면 비교하지 않으며, 누락이면 동등성을 미확인으로 유지합니다. 설정 범위 변경·한쪽 값 누락·인덱스/표시 중 하나만 달라지는 경우도 `UNKNOWN`입니다.
+
+실제 두 기록은 **동일 관측 112개, 변경 관측 0개, 확인 불가 58개**입니다. 확인 불가 58개 중 54개는 사용 불가 항목이고, 나머지 4개는 `WM_COMPOUND-W_*`의 인덱스만 `0→1`로 바뀐 경우입니다. 네 표시 문자열은 모두 `Medium`이므로 **타이어 종류가 바뀌었다고 판정하지 않습니다.** 이 비교는 단일 변경 A/B 실험이나 셋업 추천으로 연결하지 않습니다.
+
+화면 사용:
+
+1. **http://127.0.0.1:24176/**에서 종료된 파일을 선택하고 **파일 검사**를 누릅니다.
+2. **기록 파일의 셋업 정보 → 검사한 파일의 셋업 읽기**로 표시값을 확인합니다.
+3. 같은 셋업 영역의 **셋업을 비교할 파일**에서 다른 종료된 기록을 고른 뒤 **선택한 두 파일의 셋업 비교**를 누릅니다. 랩 선택은 필요하지 않습니다.
+4. **셋업 항목 검색**으로 항목 이름·원본 설정키를 찾고 **변경 관측 / 확인 필요**로 표를 좁힙니다. 검색과 필터는 이미 읽은 결과에 적용됩니다.
+
+관측된 차이와 표시/인덱스 불일치를 먼저 보여주고, 확인 불가 값을 0이나 동일로 바꾸지 않습니다. 파일 선택 변경·오류·늦은 응답은 이전 셋업 표를 지웁니다. 화면은 `lmu_ui.py`의 독립 HTML이며 iRacing React 화면이나 음성 실행기를 사용하지 않습니다.
+
+검증: 전용 환경 LMU Python **219/219**, LMU 화면 **29/29** 통과. 실제 3개 파일의 설정 510개와 API 값을 원본 SQL로 대조했고, 두 주행의 비교 방향 반전도 확인했습니다. 실제 Chromium에서 랩 선택 없는 읽기·파일 간 비교·표 170행·컴파운드 미확인 4행·선택 변경 초기화와 JavaScript 오류 0개를 확인했습니다. 세 원본의 SHA-256과 WAL 부재를 유지했습니다. 검증 중 새로 기록 중인 파일은 열거나 checkpoint하지 않았습니다. 이전 집 PC에서 실패했던 native SDK fixture도 현재 설치 환경에서는 통과했습니다.
+
+근거는 로컬 `logs/lmu-setup-tests-20261020.log`, `logs/lmu-setup-real-verification-20261020.json`, `logs/lmu-setup-browser-20261020.json`, `artifacts/lmu-setup-comparison-20261020.png`입니다. 이 원본·로그·이미지와 백업·가상환경은 Git에 포함하지 않습니다. 백업은 `backups/lmu-setup-implementation-20261020/`입니다. 앱 버전·오디오·iRacing 설치 의존성은 변경하지 않았으며 `main` 병합·커밋·push·배포는 하지 않았습니다. 다음은 게임 셋업 화면과 표시 대조, 실제 설정 변경 사례와 연습 과제 전후 검증입니다.
+
+## 2026-10-20: 기존 LMU 연동 프로그램을 기준으로 수집 규칙 정리
+
+사용자가 지정한 irDashies와 CrewChief 설치본 및 공개 소스를 확인했습니다. 앞으로 공유 메모리의 필드·단위·결측 규칙은 이들 소스와 설치된 공식 SDK를 함께 기준으로 삼습니다. SDK에 명시된 계약은 재사용하고, 저장 파일의 exporter 순서나 게임 버전별 동작처럼 계약이 다른 부분만 별도로 검증합니다.
+
+irDashies 설치 패키지는 **2.0.0**이며 공개 `v2.0.0` 태그의 커밋은 `9972f8f8d4b6af8fb73d5c3e8dc43849e4c7705e`입니다. [native 수집·필드 변환](https://github.com/tariknz/irdashies/blob/9972f8f8d4b6af8fb73d5c3e8dc43849e4c7705e/src/app/lmu/native/lmu_node.cc), [공유 메모리 경로](https://github.com/tariknz/irdashies/blob/9972f8f8d4b6af8fb73d5c3e8dc43849e4c7705e/src/app/lmu/native/lmu_source_shm.cpp), [랩타임 결측 처리](https://github.com/tariknz/irdashies/blob/9972f8f8d4b6af8fb73d5c3e8dc43849e4c7705e/src/app/lmu/sentinels.ts)를 확인했습니다. 현재 앱과 같은 `LMU_Data`를 읽습니다. 해당 프로젝트의 별도 구조체 레이아웃을 복사하지 않고 설치 SDK 헤더로 컴파일합니다.
+
+CrewChief 공식 소스는 `38bd434fb543ed5ccf4f681e12ff29a55e8f6c17`을 기준으로 조사했습니다([수집기](https://gitlab.com/mr_belowski/CrewChiefV4/-/blob/38bd434fb543ed5ccf4f681e12ff29a55e8f6c17/CrewChiefV4/RF2/RF2SharedMemoryReader.cs), [LMU 매핑 이름](https://gitlab.com/mr_belowski/CrewChiefV4/-/blob/38bd434fb543ed5ccf4f681e12ff29a55e8f6c17/CrewChiefV4/LMU/LMUData.cs), [상태·단위 해석](https://gitlab.com/mr_belowski/CrewChiefV4/-/blob/38bd434fb543ed5ccf4f681e12ff29a55e8f6c17/CrewChiefV4/RF2/RF2GameStateMapper.cs)). LMU용 rFactor2 플러그인 버퍼를 읽는 방식이므로 native `LMU_Data`와 구조체·매핑 이름을 섞지 않습니다. 설치 플러그인의 파일 버전은 `3.7.15.1`이고 최신 소스의 `3.8`과 동일 버전으로 취급하지 않습니다. EXE의 `1.0.0.0` 버전 리소스만으로 실제 CrewChief 제품 버전을 판단하지 않습니다. 구현 코드를 가져오지 않고 데이터 계약과 변환 동작을 대조했습니다.
+
+| 데이터 | 수집·변환 규칙 | 현재 적용 |
+| --- | --- | --- |
+| 속도 | `mLocalVel`의 3차원 크기, m/s | 기존 native 수집 유지, 화면만 km/h 변환 |
+| 기어·RPM | `mGear`: -1 후진 / 0 중립 / 양수 전진, `mEngineRPM` | native·로컬 진단 기록·화면에 추가 |
+| 타이어 압력 | `mWheel[4].mPressure`, kPa | 위치를 명시한 FL/FR/RL/RR 4개 측정값 |
+| 타이어 표면 온도 | `mTemperature[3]`, Kelvin에서 273.15 차감 | 각 휠의 왼쪽/중앙/오른쪽 3개 °C. 안쪽/바깥쪽으로 재명명하지 않음 |
+| 랩타임 | 0 이하 값은 기록 시간 부재, 완료 랩 수 0은 정상 관측값 | 기존 결측·0 구분 유지 |
+| 랩 집계 신호 | scoring이 명시한 랩 시작 시각에 연결 | 늦게 도착한 이전 랩의 flag 0/1 근거를 해당 완료 대기 랩에 보존 |
+| 연료·가상 에너지 | SDK의 리터 값과 가상 에너지·scoring fraction을 구분 | 이번에는 연료량·주행 가능 거리 추정 추가 안 함 |
+
+타이어 압력 0, 0°C, 중립 기어, 정지 엔진 RPM 0은 그대로 보존합니다. 비유한수·잘못된 타입·휠 배열 형태·음수 압력·절대영도 이하 온도는 `null`입니다. Kelvin 원본 0은 미확인으로 둡니다. 수집이 끊기거나 상태 요청이 실패하면 타이어 표시도 즉시 숨깁니다. DuckDB의 `Tyres*` 채널은 파일에 명시된 단위를 따르므로 Kelvin 변환을 다시 적용하지 않으며, `value1..4`의 위치 미확인 상태도 유지합니다.
+
+irDashies와 CrewChief의 보조 REST 경로는 로컬 `6397` 포트입니다. 이번 변경은 REST 요청을 추가하지 않습니다. 특히 CrewChief의 피트메뉴 제어 등 쓰기 동작은 현재 읽기 전용 수집기의 범위에 포함하지 않습니다.
+
+SDK 경로는 생성자 지정값 → `LMU_SDK_DIR` 환경 변수 → 기존 Steam 기본 위치 순서로 선택합니다. 환경 변수에는 `Support/SharedMemoryInterface` 폴더를 지정합니다. 상태 응답은 경로 대신 선택 출처와 필요한 헤더의 유무만 제공합니다. 환경 변수를 바꾸더라도 이미 생성한 연결의 SDK는 바뀌지 않습니다. ABI 확인·브리지 빌드는 게임에 연결하지 않습니다.
+
+최신 `09_09_52Z` 기록의 **1:57.435 / 1:57.036**은 사용자가 게임에서 인정된 랩이라고 확인했습니다. 이 확인은 실제 검증 근거로 남기며 자동 `valid=null` 판정을 일괄 변경하지 않습니다. 앞선 3개와 합쳐 기록 시간이 있는 랩은 5개입니다. 서로 겹치지 않는 기준 3랩/새 3랩 검증에는 부족하므로 기존 최소 표본 수를 유지합니다. 실제 5랩의 채널·입력·분포를 원본 SQL과 대조했고, 임시 DB에서 기준 과제 저장·복원 및 부족/중복 표본 거부를 확인했습니다.
+
+파일 목록은 WAL 유무를 별도 표시하고 WAL이 없어도 `snapshot_status=UNVERIFIED`를 유지합니다. 파일 검사도 본체/WAL fingerprint를 읽기 전후 비교합니다. 원본은 읽기 전용이며 개인 과제 DB·설치 프로그램·게임 설정은 변경하지 않습니다. 외부 소스는 Git에서 제외한 `logs/reference-sources-20261020/`에 보존했습니다.
+
+통합 검증: LMU Python **234/234**, 화면 **32/32**, native C++ 합성 **17사례**, 설치 SDK 브리지 재빌드·ABI probe 통과. 실제 Chromium에서 별도 셋업 파일 선택, 170행 표시, 확인 필요 58행, 컴파운드 검색 4행, 선택 변경 초기화와 JavaScript 오류 0개를 확인했습니다. 새 실시간 필드의 브라우저 표시는 합성 입력으로 검증했으며 실제 게임 표시와 대조하지 않았습니다. 수집은 시작하지 않았습니다. 원본 DuckDB 4개 해시·크기·WAL 상태와 설치 프로그램의 해시는 유지했습니다.
+
+현재 화면은 **http://127.0.0.1:24176/**입니다. 근거는 `logs/lmu-reference-full-tests-20261020.log`, `logs/lmu-reference-browser-20261020.py`/`.json`, `logs/lmu-parallel-sdk-20261020.json`, `logs/lmu-live-measured-default-build-20261020.json`, `logs/lmu-native-contract-validity-fixed-20261020.json`입니다. 서버는 이 작업 폴더의 최신 소스로 재시작했습니다. React 소스는 이번 변경에 포함되지 않아 React 빌드 대상이 아닙니다.
+
+## 2026-10-20: 실시간 엔진·주행 보조·휠 상태
+
+앞 절의 고정 irDashies/CrewChief 소스와 설치된 공식 `InternalsPlugin.hpp`의 계약을 재사용해 차량 상태를 확장했습니다. 모든 항목은 현재 플레이어의 telemetry에서 읽습니다. 차량이 없으면 값을 만들지 않으며, 새 telemetry가 오지 않은 scoring 갱신만으로 최신 표시를 연장하지 않습니다.
+
+| 새 응답 항목 | SDK 원본 | 단위·표시 |
+| --- | --- | --- |
+| `engine_water_temp_c`, `engine_oil_temp_c` | `mEngineWaterTemp`, `mEngineOilTemp` | 원본부터 섭씨. Kelvin 변환 없음 |
+| `clutch_ratio` | `mUnfilteredClutch` | 0~1 입력 비율. 화면은 % |
+| `abs_active`, `tc_active` | `mABSActive`, `mTCActive` | 개입 감지 신호. 기능 지원 여부·설정값으로 해석하지 않음 |
+| `speed_limiter_active` | `mSpeedLimiterActive` | 속도 제한기 작동 신호 |
+| `wheels[].brake_temp_c` | `mWheel[].mBrakeTemp` | 원본부터 섭씨. 타이어 Kelvin 채널과 구분 |
+| `wheels[].suspension_deflection_m`, `ride_height_m` | `mSuspensionDeflection`, `mRideHeight` | API·기록은 미터, 화면은 mm. 부호 보존 |
+| `wheels[].wear_fraction` | `mWear` | 원본 0~1. 그립 감소율·잔여 수명으로 변환하지 않음 |
+| `wheels[].flat`, `detached` | `mFlat`, `mDetached` | 펑크·휠 분리 감지 신호 |
+
+실제 0, 음수 서스펜션 변위·차고, `false` 신호는 그대로 보존합니다. 비유한수·숫자처럼 보이는 문자열·잘못된 타입은 `null`이며 클러치·마모 지수의 범위 밖 값도 사용하지 않습니다. 섭씨 온도는 절대영도 이하를 거부합니다. 이전 기록에 새 필드가 없으면 미확인입니다. 펑크 미감지나 값 부재로 차량이 정상이라고 확정하지 않으며 수리·셋업·주행 개선 지시를 만들지 않습니다.
+
+화면의 **실시간 진단 수집 → 엔진·주행 보조 신호**에서 수온·유온·클러치·개입 신호를 봅니다. **실시간 타이어·휠 측정값**에는 기존 압력·표면 온도와 새 휠 상태 표가 있습니다. 차량별 관측 순서는 FL/FR/RL/RR이며, mm 변환은 표시 단계에서만 수행합니다. 마모 지수는 소수 셋째 자리까지 표시합니다. 수집 정체·종료·상태 조회 실패 시 엔진·휠의 과거 값을 숨깁니다. 자동 수집 시작 동작은 추가하지 않습니다.
+
+독립 소스 검토에서 CrewChief의 rF2 mapper는 브레이크 온도에서 273.15를 빼지만, 공식 SDK 헤더는 해당 필드를 섭씨로 정의한다는 차이를 확인했습니다. 직접 SDK를 읽는 이 구현은 온도를 그대로 보존합니다. CrewChief의 펑크 시 압력을 0으로 덮는 처리와 마모 지수를 뒤집어 %로 만드는 표시 정책도 가져오지 않았습니다. 실제 타이어 압력과 펑크·분리 감지 신호를 각각 보존합니다.
+
+검증: LMU Python **235/235**, 화면 **33/33**, native 합성 **17사례** 및 기본 SDK 브리지 재빌드·probe `READY / attached=false` 통과. 독립 경계·결측 검토 **399개 확인**도 통과했습니다. 실제 Chromium에 native 합성 fixture의 출력을 정규화해서 전달해 단위 변환·0/음수·신호·결측 표시 및 정체·조회 오류 시 초기화를 확인했습니다. 게임 데이터 수집은 시작하지 않았으므로 새 실시간 항목의 게임 화면 대조는 미완료입니다. 실제 DuckDB 4개, 설치 SDK 헤더 3개, package·기존 버전 표시 파일의 해시·stat와 WAL 부재를 유지했습니다. React 소스를 변경하지 않아 별도 React 빌드는 필요하지 않습니다.
+
+최신 화면은 **http://127.0.0.1:24177/**입니다. 기존 `24176` 서버 종료 요청이 자동 승인 검토에서 정책상 차단되어, 해당 프로세스를 재시도해 종료하지 않고 새 포트를 사용했습니다. 근거: `logs/lmu-vehicle-state-full-tests-20261020.log`, `logs/lmu-live-state-contract-review-20261020.py`/`.json`/`.md`, `logs/lmu-vehicle-state-native-build-20261020.json`, `logs/lmu-vehicle-state-browser-20261020.py`/`.json`, `artifacts/lmu-vehicle-state-20261020.png`. 백업은 `backups/lmu-vehicle-state-20261020/` 및 `backups/lmu-live-vehicle-inputs-20261020/`입니다.
+
+
+## 2026-10-20: 일반 백엔드의 LMU API 등록
+
+일반 앱의 `application_runtime.create_application()`에서 `/api/lmu/*`를 등록합니다. 일반 화면 주소 `http://localhost:24157`과 백엔드 `24158`은 유지합니다. 독립 `lmu_api.py`도 계속 사용할 수 있으며 같은 PC에서 함께 실행할 때는 위의 별도 포트를 사용합니다. 기존 실행 중 서버에는 자동 반영되지 않으므로 변경한 백엔드를 다음에 시작할 때 적용됩니다.
+
+DuckDB는 LMU 파일을 읽는 요청에서만 불러옵니다. 설치되지 않은 기존 iRacing 환경에서도 일반 앱 생성과 기존 API, LMU 상태·파일 목록·빈 연습 이력 조회가 동작합니다. LMU 상태의 `dependency=MISSING`과 안내를 표시하고 파일 분석은 HTTP 503으로 답합니다. LMU 파일 분석을 사용하려면 일반 앱을 실행하는 Python 환경에 `iRacing_Backend/requirements_lmu.txt`를 설치해야 합니다. 기존 iRacing 의존성 목록은 유지합니다. 이후 공통 화면 실파일 검증을 위해 이 PC의 일반 Python에 선택 의존성 DuckDB 1.5.6을 설치했습니다.
+
+라우트 등록·앱 시작·상태 조회는 공유 메모리에 연결하거나 기록 수집을 시작하지 않습니다. LMU live service는 앱마다 별도로 생성하며 명시적 시작 요청으로만 수집합니다. 해당 앱 종료 시 자신이 생성한 LMU 수집기만 정리하고 기존 iRacing lifespan도 유지합니다. LMU 연습 DB와 JSONL 경로는 기존 LMU 전용 경로이며 iRacing 설정·DB·SDK·음성과 공유하지 않습니다.
+
+검증: 기존 iRacing Python 환경에서 `test_lmu_main_integration.py` **3/3 PASS**. DuckDB import 강제 차단, 기존 API·오버레이·CORS 유지, LMU 목록·분석 503, 디스크 저장소 미생성, 자동 연결/시작 없음, 앱 두 개의 수집기 분리와 종료 순서를 확인했습니다. 독립 `.venv-lmu`에는 기존 iRacing용 PyYAML이 없으므로 이 main 앱 전용 검사 3개는 명시적으로 제외되며, 실제 실행 검증은 기존 iRacing 환경에서 완료했습니다. 근거: `logs/lmu-main-integration-tests-20261020.log`, `logs/lmu-main-integration-lmu-environment-20261020.log`. 백업: `backups/lmu-main-api-integration-20261020/`.
+
+같은 날 페달 시간 분포는 종료된 실제 3개 DuckDB의 기록 랩 **5개**를 독립 SQL 계산과 대조했습니다. 원본 주파수의 시간축과 5% 교차점을 합쳐 구간 중점으로 네 배타 상태를 적분했고 제품 계산 helper는 사용하지 않았습니다. 분류별 시간·관측 퍼센트·관측/미관측 시간이 1e-8 이내로 일치했으며 표시 지점 31/501에서도 같습니다. 모든 랩의 미관측 시간 약 0.02초를 숨기지 않고 `PARTIAL`로 유지합니다. 게임 유효성 `null`과 `VALIDITY_UNVERIFIED`를 유지했고 원본 SHA-256·크기·mtime·WAL 부재도 동일합니다. 근거: `logs/lmu-pedal-usage-independent-20261020.py`/`.json`/`.log`.
+
+
+## 2026-10-20: 기존 iRacing 화면에 게임 선택과 LMU 페달 시간 분포 연결
+
+`실행.bat`로 실행한 **http://localhost:24157** 상단에서 `iRacing` 또는 `LMU`를 선택합니다. iRacing은 기존 분석·IBT·Garage61·음성 기능을 유지합니다. LMU는 같은 파일/랩 선택, 랩 분석, 코너 비교 그래프, 지도·고스트, 전문가 다중 랩 겹쳐 보기를 사용합니다. 셋업 탭은 LMU 기록에 포함된 설정을 조회하고 설정/실시간 탭은 LMU 전용 상태와 명시적 수집 시작/중지를 제공합니다. 음성 스포터·AI 코칭·Garage61·공식 코너 이름·셋업 효과 판정은 LMU에 아직 연결하지 않았습니다. 독립 진단 HTML을 iframe으로 넣지 않습니다.
+
+일반 앱을 실행하는 Python에 DuckDB가 없으면 `python -m pip install "duckdb>=1.3,<2.0"`를 실행합니다. DuckDB는 선택 의존성이며 미설치 상태에서도 iRacing 앱과 LMU 파일 목록 안내는 유지됩니다. 이 PC에는 DuckDB 1.5.6을 설치했습니다. `LMU_TELEMETRY_DIRS`는 LMU 파일 폴더에만 적용하고 기존 iRacing 폴더·DB·키 설정과 섞지 않습니다.
+
+LMU 파일은 게임 유효성 미확인 상태를 유지하면서 시간·거리 진단을 통과한 랩을 `measurement_eligible`로 선택할 수 있게 합니다. 자동 베스트 표시는 붙이지 않습니다. 사용자가 게임에서 인정됐다고 확인한 기록은 **1:57.435 / 1:57.036**이며 이를 모든 기록의 자동 유효성 규칙으로 확대하지 않습니다. 선택한 두 랩의 기록상 차이는 -0.399초입니다. WAL이 있거나 분석 중 파일/WAL 서명이 바뀌면 분석을 거부합니다. 파일은 읽기 전용이며 강제 checkpoint를 하지 않습니다.
+
+**랩별 시간 쓰임새**의 LMU 분포는 양쪽 페달 모두 5% 이상을 입력으로 셉니다. `제동만 / 가속만 / 동시입력 / 두 페달 5% 미만`의 네 범주는 서로 겹치지 않습니다. 원본 시간축과 선형 임계값 교차점을 사용해 초 단위 시간을 적분하며 관측 시간에 대한 비율·관측률·미관측 시간·입력 처리 단계를 함께 표시합니다. 결측·시간 간격·지원 범위 밖은 연결하거나 0으로 채우지 않고 동일하지 않은 입력 처리 단계도 비교하지 않습니다. iRacing의 기존 8% 제동/95% 풀스로틀 기준은 유지합니다.
+
+게임을 전환하면 이전 게임의 공통 분석 요청을 취소하고 늦은 응답을 폐기합니다. iRacing hook·실시간 오디오 host는 LMU에서 마운트하지 않으며 초기화/SSE/수집 상태 응답이 전환 뒤에 도착해 새 iRacing 요청을 이어가지 않도록 정리합니다. iRacing의 기존 선택 저장 키와 LMU의 `lmu.desktop.last-session.v1`를 분리합니다. LMU 주행 좌표는 실제 지도와의 동일성을 확인하지 않은 개략도이며 북쪽 나침반이나 GPS 실측이라고 표시하지 않습니다.
+
+주요 참고 소스는 사용자가 지정한 [LMU-Telemetry-Lab](https://github.com/rabbit20031225/LMU-Telemetry-Lab/tree/8dd3302e49d63350e5346a4129591b3d93d727d8)(MIT)입니다. [공통 커서·범위/결측 표시](https://github.com/rabbit20031225/LMU-Telemetry-Lab/blob/8dd3302e49d63350e5346a4129591b3d93d727d8/frontend/src/components/TelemetryChart.tsx)를 검토해 기존 그래프를 재사용하고 관측 범위 밖 커서 숫자를 미확인으로 표시하며 같은 거리 비교와 같은 경과 시간 재생을 화면에 구분했습니다. 랩타임 일치만으로 유효 판정하거나 결측값을 채우는 구현은 사용하지 않았습니다. 5% 시간 분포 계산은 독립 구현이며 추가 참고는 [LMU-Stintrix](https://github.com/MarkYang44/LMU-Stintrix/tree/43024c5da2cc9fd34f880870e11672dae0600c4d)의 시간 간격 기반 분류입니다. 소스 조사 영수증과 상세 비교는 로컬 `logs/research-analysis-20261020/`에 있습니다.
+
+실제 종료된 DuckDB 3개의 5랩을 공통 API의 session/comparison/overlay로 확인했고 원본 해시·크기·mtime·WAL 부재를 유지했습니다. Chromium에서 localhost:24157의 실제 빌드를 사용해 1:57 두 랩 선택, 시간 분포, 코너 그래프, 전문가 겹침, 셋업 조회, 게임 왕복/복원을 검증했습니다. 브라우저 검증용 백엔드는 임시 iRacing·LMU 저장소와 비활성 SDK lifespan을 사용합니다. 근거: `logs/lmu-shared-workspace-validation-20261020.json`, `logs/lmu-pedal-usage-independent-20261020.json`, `logs/shared-game-browser-20261020.json`, `logs/shared-game-frontend-verified-tests-20261020.log`, `logs/lmu-shared-ui-backend-tests-20261020.log`, `logs/shared-game-build-final-20261020.log`. 최종 LMU 백엔드 **271개**, 화면 **55개 suite / 358개 테스트**, `npm run build`가 통과했습니다. 테스트 fixture에서 실제 로컬 업데이트 API로 나가던 요청은 mock으로 격리했습니다. 변경 전 파일은 `backups/shared-game-ui-20261020/`에 보존했습니다. 커밋·push·main 병합·릴리즈는 하지 않았습니다.
+
+## 2026-10-20: LMU 선택 시 최근 분석 가능한 주행 자동 열기
+
+첫 LMU 선택에서 기존 저장 키만 찾던 초기화를 수정했습니다. 이제 최근 수정된 파일부터 `analyzable=true`인 종료 기록을 자동으로 엽니다. 기록 중인 WAL 파일, 측정 가능한 랩이 없는 파일, 목록 조회 뒤 사용할 수 없게 된 기록은 건너뜁니다. 이전 저장 파일보다 새 주행이 우선하며 같은 파일이면 선택했던 랩을 복원합니다. 저장된 랩 번호가 더 이상 사용 가능하지 않으면 해당 파일의 기본 랩으로 재시도합니다. 연결/서버 장애에서는 파일별 재시도를 중단해 오류를 표시합니다. 수동 선택·게임 전환·화면 종료 후 도착한 자동 응답은 적용하지 않습니다. iRacing 선택 저장 키는 유지합니다.
+
+실제 최근 파일 `Autodromo Nazionale Monza_P_2026-10-20T09_09_52Z.duckdb`가 파일 선택창 조작 없이 열리고 내 랩 3(1:57.036), 기준 랩 2(1:57.435)가 설정되는 것을 Chromium의 새 브라우저에서 확인했습니다. 이전 파일의 저장 키가 있어도 최신 기록을 선택하며 같은 최신 파일에서 수동으로 바꾼 랩은 새로고침 후 복원됩니다. 5% 시간 분포와 공통 비교 UI를 그대로 사용합니다.
+
+유효성 확인에서는 실제 종료 파일 4개의 101개 테이블·56개 채널·42개 이벤트를 읽기 전용으로 조사했습니다. 별도의 유효/무효 판정 필드는 없지만 **1:57.435 / 1:57.036은 Lap Time·Current LapTime·Best LapTime 세 이벤트에 모두 같은 값으로 기록**돼 있습니다. 이는 사용자의 게임 인정 확인과 부합하는 근거입니다. 따라서 파일에 아무런 판정 근거가 없다고 설명하면 부정확하며, 직접 판정 필드 부재와 기록/베스트 갱신 근거를 구분합니다. `Lap Time` 유무만으로 모든 파일의 공식 유효성을 자동 확정하는 규칙은 아직 적용하지 않습니다. 기록 없는 이전 lap1을 코스아웃 무효라고 단정할 근거도 없습니다. 두 1:57 랩은 `measurement_eligible`로 자동 열기·비교에 포함되고 `valid=null` 때문에 제외되지 않습니다. 공통 화면 설명도 분석 가능 여부와 게임 유효성 미확인을 구분하도록 보완했습니다.
+
+관련 화면 테스트 **14개 PASS**, 최종 `npm run build` PASS, 실제 빌드 브라우저 검증 PASS. 원본 파일의 SHA-256·크기·mtime·WAL 상태는 동일합니다. 근거: `logs/lmu-latest-session-tests-20261020.log`, `logs/lmu-latest-session-build-20261020.log`, `logs/lmu-latest-session-browser-20261020.json`, `logs/lmu-file-validity-schema-20261020.json`, `logs/lmu-file-validity-explanation-20261020.md`. 백업: `backups/lmu-latest-session-20261020/`.
+
+
+## 2026-10-20: 공통 화면의 LMU 기능 확장과 누락 감사
+
+기존 9개 작업 화면에서 게임 선택으로 전환하는 구성을 유지하며 LMU 분석·셋업·반복 연습·실시간 조회를 연결했다. [기능별 감사표](lmu-feature-parity-audit-20261020.json)에 23개 기능군과 보충 화면 6개의 근거·구현 파일·남은 조건을 기록했다. 사용 가이드에도 같은 23개 항목과 화면 이동 버튼을 제공한다. 일부 지원/준비 중 항목까지 iRacing과 동등하게 구현됐다는 뜻은 아니다.
+
+- **주행 요약·코너 비교:** 원본 제동·풀스로틀 구간 분석, 채널 관측 상태, 같은 거리 코너 수치와 기록 좌표 개략도. 페달 처리 단계가 다르면 차이값뿐 아니라 공유 UI가 차이를 다시 계산하는 역할별 지표도 차단한다. 속도·시간은 자체 지원 범위를 유지한다. 거리 축 누락/미확인 단위/정지 데이터는 분석 가능 목록에서 제외한다.
+- **랩 분석:** 기존 양쪽 5% 페달 분포, 다중 파일 3~6랩 코너 일관성, 기록 최저·중앙값·편차·표준편차, 공통 관측 거리의 500m 구간별 최소 통과 조합을 제공한다. 표시용 표본으로 계산하지 않으며 공식 섹터·유효 베스트·전체 완주 예상 기록으로 부르지 않는다. 일관성과 전체 기록 탭에서는 적용되지 않는 공통 랩 필터를 숨긴다.
+- **전문가 보기:** 다중 랩/파일 오버레이와 원본 차량·타이어·연료·서스펜션 채널 통계를 전환한다. 다른 파일 기준을 선택하면 같은 랩 번호의 현재 파일 랩으로 바꾸지 않고 실제 외부 기준을 오버레이의 기준으로 유지한다. 파일명과 측정 가능/유효성 미확인 상태를 표시한다.
+- **셋업 실험:** 셋업 조회와 다른 파일의 A/B 변경·동일·미확인 항목 비교. 연료·타이어·노면 등 조건 미검증 상태에서 변경 효과나 추천을 확정하지 않는다.
+- **기록:** 실제 3~6랩 기준 저장, 과제 열기, 기준에 쓰지 않은 새 3~6랩 비교와 이력을 LMU 전용 저장소로 연결했다. 스로틀 지표는 백엔드와 같은 20% 최초 관측 위치 편차를 표시한다. 코너 연습 버튼도 이 기록 화면으로 이동한다.
+- **음성 코치 탭의 LMU 실시간 패널:** 읽기 전용 수집의 명시적 시작/중지, 입력·엔진·타이어, 연료 리터·용량, 거리, 세션 종류/진행, 순위, 깃발, 날씨와 랩 진단 신호를 표시한다. HTTP 오류·지연·정지·리플레이에는 현재 값을 숨긴다. 연료 소비는 랩 경계 보간과 독립 랩 집계 신호를 확인한 관측만 사용하며 두 관측 미만에서 남은 랩을 계산하지 않는다. 공식 유효성이나 완주를 보장하지 않는다.
+- **설정·가이드:** LMU 폴더·의존성·연결 상태와 기능별 범위를 같은 메뉴에 제공한다. 주변 차량 스포터/접근/위험, 자동 음성 엔지니어/피트/손상/전략, 실시간 코너 코칭, F8/마이크/음성 메모/오디오/오버레이, 인과적 셋업 학습·개인화, G-G·댐퍼 의미 검증은 후속 항목이다. Garage61은 iRacing 전용이다.
+
+공식 LMU SDK 헤더와 브리지 소스 해시로 빌드 폴더를 분리해 로드된 DLL을 덮어쓰지 않는다. 기존 서비스/게임을 중지하지 않았다. 실제 퀄리파잉에서 연료·용량·거리·세션5·phase5·순위를 읽기 전용으로 확인했다. 근거: `logs/lmu-native-default-engineer-validation-20261020.json`. 사용자 지정 LMU-Telemetry-Lab과 설치 SDK/프로그램 소스의 필드 의미를 참조하고 결측→0 또는 기록 시간→공식 유효 판정을 가정하지 않았다.
+
+전체 백엔드 **1,024개**, 화면 **61 suites / 400개**, 런처·패치 **34개** PASS. 마지막 지도 설명 수정 뒤 관련 화면 **19개**를 다시 확인했다. `npm run build` PASS. 로그: `logs/lmu-parity-all-backend-tests-20261020.log`, `logs/lmu-parity-final-frontend-tests-20261020.log`, `logs/lmu-parity-launch-tests-20261020.log`, `logs/lmu-parity-final-map-tests-20261020.log`, `logs/lmu-parity-final-build-20261020.log`. 테스트는 임시 저장소와 비활성 AI/외부 수집으로 실행했다. 백업: `backups/lmu-feature-parity-20261020/` 및 기능별 백업. 커밋·push·병합·릴리즈는 하지 않았다.
+
+
+최종 실제 빌드 브라우저 검증 PASS: `Autodromo Nazionale Monza_Q_2026-10-20T10_22_00Z.duckdb`의 측정 가능 6랩을 자동으로 열고 최근 7랩 1:55.665와 기준 6랩 1:56.598을 표시했다. 다른 파일 기준 선택→전문가 기준 키 유지, 차량 통계 탭 전환, A/B 셋업 조회, 실제 3랩 기준 저장→나머지 새 3랩 비교→새로고침 후 이력 복원, 설정·실시간 상태 조회·23항목 가이드를 확인했다. LMU 화면은 LMU API만 호출했으며 자동 수집 시작이나 게임 명령은 없었다. 개인 저장소 대신 임시 검증 저장소를 사용했고 기존 원본의 SHA-256·크기·mtime·WAL 상태가 유지됐다. `launch_app.build_is_current()` True. 근거: `logs/lmu-parity-browser-20261020.json`, `logs/lmu-parity-summary-20261020.png`, `logs/lmu-parity-practice-20261020.png`. 검증용 임시 서버는 종료했다.
+
+## 2026-10-20: iRacing 공통 주행요약 복원과 레이스 첫 랩
+
+앞 절에서 LMU 주행요약에 배치했던 제동 표·풀스로틀 구간·채널 진단은 **전문가 보기 → 차량 상태·제동·일관성**으로 이동했다. 두 게임 모두 기존 `DrivingSummary`와 네 카드(오늘의 연습 과제 / 다음 주행에서 할 일 / 연습 위치 / 측정 근거), CSS와 코너 이동을 공유한다. 페달 시간 분포는 랩 분석에 유지한다. LMU 연습 버튼은 LMU 기록 화면으로 이동하며 iRacing 연습 API·대화상자를 호출하지 않는다.
+
+LMU 요약은 실제 구간 차이 0.1초 이상인 최대 세 구간을 재확인 과제로 표시한다. 원인·예상 개선량·셋업 효과를 생성하지 않는다. 같은 입력 처리 단계일 때만 입력 위치 비교를 안내한다. 측정 랩 목표는 최소 3개·권장 6개이며 게임 공식 유효 랩 목표라고 부르지 않는다. 자기 랩 비교에서는 과제를 만들지 않고 비교 기준 선택과 반복 측정을 안내한다. 공통 화면 구간 표시는 `C1` 등으로 맞추며 원래 `geometry-*` 식별자는 `source_id`에 보존한다. 공식 코너 번호라는 의미는 없다.
+
+실제 파일 `Autodromo Nazionale Monza_R_2026-10-20T10_45_29Z.duckdb`에 기록된 첫 레이스 랩 **122.159729초(2:02.160)**가 포메이션과 합쳐져 거리 불연속으로 제외되던 문제를 수정했다. 첫 Race 카운터 0 구간에서 종료 Lap 이벤트와 유일한 양수 Lap Time이 맞고, 계산한 시작 시각이 내부에 있으며, 50ms 이내 섹터 0→1 전환과 가까운 거리 리셋이 함께 관측될 때만 timed start를 복원한다. 시작은 211.580271초이며 포메이션 211.502771초를 분리한다. 근거는 `timing_provenance`와 정규화 support의 timing에 남긴다. 화면 랩 번호는 1부터 이후 카운터까지 일관되게 보정한다. Practice·일반 시간 불일치·모호한 이벤트·후속 랩 시간 불일치는 이 복원을 적용하지 않는다. `valid=null`은 유지한다.
+
+거리 값이 랩 시작 후 약 **2.697229초** 동안 고정돼 있으므로 이를 추정 위치로 채우지 않는다. 거리 지원은 `PARTIAL`·`full_lap_coverage=false`이며 해당 시작 구간은 거리 비교에서 제외한다. 원본 페달 시간은 계속 사용해 관측 122.140초·미관측 0.019729초를 분리한다. 이 제한은 공통 요약의 측정 근거에도 표시한다. 실제 레이스의 코너 6개와 퀄리파잉 7랩 기준 비교를 확인했다. 원본 SHA-256·크기·mtime는 동일하고 WAL은 없다.
+
+전체 백엔드 **1,035개**, 화면 **62 suites / 407개** PASS 후 마지막 구간 표시·시작 관측 안내 보완을 포함한 관련 백엔드 **36개**를 다시 확인했다. `npm run build`, `build_is_current()`와 실제 빌드 Playwright 검증 PASS. 임시 저장소·SDK 비활성 검증 서버를 사용했고 LMU 화면에서 LMU API만 호출했으며 자동 수집 시작은 없다. 근거: `logs/lmu-summary-race-backend-tests-20261020.log`, `logs/lmu-summary-race-frontend-tests-20261020.log`, `logs/lmu-summary-race-final-contract-tests-20261020.log`, `logs/lmu-summary-race-build-20261020.log`, `logs/lmu-shared-summary-race-browser-20261020.json`, `logs/lmu-race-first-lap-recovery-20261020.json`. 화면: `logs/lmu-shared-summary-race-20261020.png`, `logs/lmu-shared-summary-comparison-20261020.png`.
+
+일반 앱의 이전 Python 모듈 갱신을 위해 프로젝트 런처·백엔드·화면 프로세스 신원을 확인한 뒤 재시작을 시도했으나 실행 전 자동 승인 검토에서 `blocked by policy`로 차단됐다. 에이전트가 일반 앱 프로세스를 종료하지는 않았다. 이후 앱이 별도로 새 프로세스로 실행된 것을 관측했으며 **실제 사용 포트 24158**에서 레이스 1랩 122.159729초·공통 요약·C1 표기를 확인했다. 프록시 없는 localhost:24157의 새 브라우저에서도 네 카드와 2:02.160 자동 불러오기를 확인했다. 현재 실행 앱에 수정이 반영됐다. 근거: `logs/lmu-summary-current-app-20261020.json`, `logs/lmu-summary-current-app-20261020.png`. 게임 프로세스·설정·개인 저장소는 변경하지 않았다. 검증용 서버는 종료했다. 커밋·push·병합·릴리즈는 하지 않았다.
+
+## 2026-10-20: 몬차 GP 위성 배경·코너 번호와 공통 화면 누락 보완
+
+위성 배경이 없었던 원인은 LMU 경로가 개략도로 강제되고, 기록의 GPS 채널 자체도 실제 몬차가 아닌 위도 60도 부근의 게임 좌표이기 때문이다. 사용자가 몬차 일반 GP임을 확인했다. `lmu_geographic.py`는 기존 iRacing 몬차 주행의 GPS 형상을 비개인 지리 참조 자료로 두고 **선택한 기준 랩 하나의 회전·크기·이동 변환**을 구해 두 주행선에 함께 적용한다. 각 랩을 별도로 맞추지 않으므로 상대 주행선 차이를 지우지 않는다. 반전·비연속·부분 기준·큰 점프·다른 형태와 과도한 크기/잔차는 거절하며 실패하면 기존 개략도를 유지한다. 다른 트랙은 아직 지리 참조가 없다. 제품용 JSON은 개인 파일명·차량·드라이버 없이 위치 형상과 출처 해시만 포함하며 Git 허용 목록과 공유본 복사 목록에도 추가했다.
+
+화면은 기존 `CornerMap`을 재사용해 **추정 위치 · 위성 지도**, 실측 GPS가 아니라는 설명과 기준 형상 맞춤 잔차를 표시한다. 이 잔차는 실제 위치의 측량 정확도를 뜻하지 않는다. Race 자체 기준은 중앙값 2.435m/P95 4.922m, Race 1랩 대 Q 7랩 기준은 중앙값 **3.380m/P95 8.133m**다. 위성 위치로 투영할 때도 원본 경과시간을 전달해 고스트 재생을 유지한다. 누락 좌표·segment 경계를 건너 직선을 잇지 않는다. 실제 타일 공급은 기존 Esri World Imagery와 출처 표시를 그대로 사용한다.
+
+LMU에서 비활성화됐던 코너 번호 확인 버튼을 열고 같은 `CornerNamesPage`를 사용한다. LMU 전용 GET/PUT `/api/lmu/corner-names`는 현재 파일·대상 랩·기준 파일·기준 랩의 구간 정의를 그대로 사용한다. 몬차 iRacing 공식 지도는 **참조 지도**라고 표시하고, 제안은 자동 확정하지 않는다. **공식 지도 제안 적용 → 번호/이름 확인 → 수정 내용 확정**으로 트랙·레이아웃에 저장하며 다른 차량·파일의 같은 위치에 다시 연결한다. 모호한 병합 위치는 임의 배정하지 않는다. 기본 저장은 `logs/lmu-corner-names.json`이며 `LMU_CORNER_NAMES_PATH`로 바꿀 수 있다. iRacing 이름 저장소와 별개다. LMU 실시간 음성 연결은 아직 제공하지 않는다.
+
+iRacing 화면과 비교해 다음 누락도 보완했다. 조향은 각도 대신 **입력 %**로 공통 그래프에 표시한다. Gear 변경 이벤트는 관측 이후에만 STEP으로 유지하며 최초 관측 이전은 결측이다. 여러 랩 겹침에도 조향·기어와 중립/후진 표시를 연결했다. 코너별 일관성은 공통 `CornerConsistency`를 재사용해 사분위·IQR·이상치·정렬·이번 랩과 빠른 3회 비교를 제공한다. 동일 랩 번호의 다른 파일은 선택 인덱스로 구분하고, 기준 구간 정의가 일치할 때만 코너 비교로 이동한다. LMU 설정에도 공통 마우스 도움말과 업데이트 화면을 연결했다. 업데이트 조회는 게임 공통 `/api/update`를 사용하며 LMU 화면이 iRacing SDK·오디오·기록 요청을 시작하지 않는다.
+
+최종 검증: 전체 백엔드 **1,077개**, 화면 **65 suites / 423개**, 런처·패치 **35개**, `npm run build`, `build_is_current()` 통과. 추가 통합 **47개**와 배포 자료 테스트 **12개**도 통과했다. 실제 Race 1랩과 Q 7랩을 localhost:24157의 production build에서 임시 저장소 API로 열어 위성 타일 14개, 고스트·조향·기어, 공통 번호 편집 및 저장 후 새로고침, 전문가 보기, 설정 화면을 확인했다. JavaScript 오류가 없고 두 원본 파일의 SHA-256·크기·mtime·WAL 상태는 그대로다. 코너 확정 검증은 개인 설정 대신 임시 저장소에만 저장했다. 근거: `logs/lmu-map-parity-backend-final-20261020.log`, `logs/lmu-map-parity-frontend-final-20261020.log`, `logs/lmu-map-parity-build-final-20261020.log`, `logs/lmu-map-parity-browser-20261020.json`. 화면: `logs/lmu-monza-estimated-satellite-20261020.png`, `logs/lmu-monza-corner-confirmation-20261020.png`.
+
+스포터·F8/음성·실시간 코너 코치·G-G/댐퍼·셋업 효과 학습 등 미연결/미검증 범위는 `LmuFeatureGuide`와 두 기능 감사 JSON에 남겨 완료로 표시하지 않았다. 이번 검증 중 일반 앱의 24157/24158 연결이 별도로 종료된 것을 관측했고 일반 앱 종료 명령은 실행하지 않았다. 마지막 검증에 띄운 임시 화면/API 프로세스만 신원을 확인해 종료했다. 다음 `실행.bat` 시작에서 이번 백엔드와 새 build를 읽는다. 커밋·push·병합·릴리즈는 하지 않았다.
+
+## 2026-10-20: 위성 위치 맞지 않음에 따른 제거와 오버레이·음성·기록·설정 연결
+
+앞서 기록한 몬차 위성 위치 맞춤 실험은 LMU 기록 좌표와 실제 트랙 위치가 일치하지 않는 문제가 확인되어 제품에서 제거했다. LMU는 기록 좌표 개략도·주행선·고스트·사용자 확인 코너 번호를 유지하고 위성 배경과 지리 맞춤을 사용하지 않는다. 최신 패치 노트의 제거 안내가 이전 실험 기록을 대체한다.
+
+LMU는 iRacing과 같은 주행요약·랩·코너·전문가·기록·설정 흐름을 사용한다. 기록 화면은 파일·내 랩·기준 랩·메모·측정 요약을 LMU 전용 저장소에 저장하고 검색·필터·원본 재분석으로 다시 연다. 설정은 LMU 기록 폴더만 별도로 저장하며 환경 변수 지정은 저장값보다 우선한다.
+
+오버레이는 기존 native HUD를 재사용하되 LMU 전용 설정·자동 표시·15초 브라우저 유효기간을 둔다. 최신 LMU 운전자 표본에서 확인된 페달·기어만 표시하고 지연·피트·일시정지·리플레이·세션/차량 변경에는 숨긴다. LMU 선택 또는 화면 초기화가 수집기를 시작하지 않는다.
+
+CrewChief 공개 소스의 LMU 플래그·피트 상태·재생 직전 만료 검사를 참고했지만 코드는 복사하지 않았다. LMU 음성은 클래스 순위·측정 완료 랩·관측 연료 부족·깃발·피트·랩 제한 신호만 고정 문구로 안내한다. iRating/Safety Rating, 상대 차량 추정, 확인되지 않은 피트 제한속도·페널티·전략은 제외한다. 합성한 26개 문구는 `logs/lmu-radio-preview-20261020/index.html`에서 확인할 수 있다. F8·마이크·AI 질문은 아직 연결하지 않았다.
+
+이번 통합 검증은 백엔드 1,108개, 화면 450개, 런처·패치 34개와 `npm run build`를 통과했다. 실제 브라우저에서 위성 요청 0건, 고스트·기록 저장/검색/재열기·폴더 설정·음성 설정·오버레이 설정을 확인했고 LMU Race/Q 원본 파일의 SHA-256·크기·mtime·WAL 상태가 유지됐다. 커밋·push·병합·릴리즈는 하지 않았다.
+
+## 2026-10-20: 음성 검토 반영과 조건이 비슷한 개인 베스트 자동 기준
+
+청취 후 사용자 결정에 따라 LMU 전용 26문구 실험을 대체했다. 순위·연료·블루/그린/풀코스 옐로·피트 진입/탈출·리미터 꺼짐은 기존 공통 문구와 같은 목소리로 재사용한다. 새 문구는 "랩 무효 신호입니다. 게임 표시를 확인하세요." 하나만 유지하며 옐로 안내 발음은 "옐로우 플래그. 전방 주의."로 수정했다. 대응하는 기존 문구가 없는 포메이션 단계·리미터 켜짐·트랙 리밋 증가는 관측 보고를 화면에 남기고 음성은 재생하지 않는다. 예전 캐시가 있어도 재생 API가 이를 차단한다. 현재 듣기 페이지에는 10문구만 표시한다. 기존 스포터 클립 6개와 기존 무전 캐시를 재사용해 유료 합성은 옐로우 문장 1개만 필요했다.
+
+`personal_reference.py`의 `personal_reference_laps` 테이블을 기존 분석 SQLite에 추가해 게임·원본 위치/크기/수정시각·차량/트랙/레이아웃·랩타임·조건을 저장한다. 원본 텔레메트리는 복사하지 않는다. iRacing 분석 시 랩 인덱스를 자동 저장하며 기존 저장 분석과 설정된 폴더의 같은 조합 파일도 찾는다. LMU 자동 선택에서도 같은 조합의 측정 가능 랩을 인덱싱한다. 게임별로 자료를 분리한다. DB를 별도로 격리하려면 `IRACING_PERSONAL_REFERENCE_DB_PATH`를 사용한다.
+
+공통 주행 선택은 기본 자동 개인 베스트와 파일·랩 수동 선택을 지원한다. Garage61 기준이 사라지거나 사용할 수 없으면 조건이 맞는 개인 베스트로 전환하고 화면의 외부 기준 표시도 지운다. 차량·트랙·레이아웃이 다르거나 원본이 바뀌면 후보에서 제외한다. 드라이/웨트가 다르거나 노면 온도 12도·기온 10도·강수율 15%p·노면 젖음 20%p 등의 차이가 기준보다 크면 제외한다. 이는 보수적인 초기 비교 제한이며 셋업 효과의 근거가 아니다. 가장 빠른 랩이 선택한 내 랩 자체라면 다른 랩을 몰래 고르지 않고 명시적인 차이 0의 기준으로 사용한다.
+
+LMU 원본의 `Minimum Path Wetness (%)=0`은 전체 노면이 말랐다는 근거가 아니다. 현재 Monza Race/Q 기록은 이 값만으로 다른 파일의 조건 일치를 판단할 수 없어 자동 비교에서는 같은 파일의 관측 최단 랩을 사용하고 노면 미확인 안내를 표시한다. 최대 노면 젖음 등 확인 가능한 관측이 있으면 비슷한 다른 파일까지 선택한다. `valid`는 계속 null이며 게임의 유효 랩으로 승격하지 않는다.
+
+검증: 전체 백엔드 1,128개, 화면 70 suites/455개, 런처·패치·음성 준비 37개와 production build 통과. 마지막 보완 후 개인 기준 18개와 음성 19개/합성 준비 3개도 통과했다. 실제 localhost:24157의 새 build를 임시 저장소 API에 연결해 LMU 자동 복원·자동/수동 선택·음성 10개 디코딩을 확인했다. Race/Q 두 원본의 SHA-256·크기·mtime·WAL 상태는 그대로였다. 근거: `logs/personal-reference-*-final-20261020.log`, `logs/personal-reference-browser-20261020.json`. 일반 앱 서버를 종료하거나 재시작하지 않았다. 현재 실행 중인 백엔드의 Python 모듈은 앱 재실행 시 새 코드를 읽는다. 커밋·push·병합·릴리즈는 하지 않았다.
+
+## 2026-10-20: CrewChief 좌표 알고리즘 참조와 LMU 좌우 스포터
+
+연습 기록 4개를 읽기 전용으로 조사했다. 08:59:41Z 기록의 `Time Behind Next`에는 0.5초 이내 표본 37개와 음수→양수 전환이 있으나, 상대 차량 ID·좌표·내 차 방향·좌우 겹침 채널이 없다. 이 자료로 접근이나 통과 가능성은 살펴볼 수 있어도 어느 쪽으로 스쳐 갔는지는 복원할 수 없다. 원본 SHA-256·크기·mtime·WAL 상태는 유지했다. 근거: `logs/lmu-spotter-practice-recording-audit-20261020.json`.
+
+CrewChief 커밋 `38bd434fb543ed5ccf4f681e12ff29a55e8f6c17`의 `RF2Spotter.cs`·`NoisyCartesianCoordinateSpotter.cs`와 설정·차급별 경계 변경을 검토했다. 차량 ID로 scoring/telemetry를 연결하고 내 차 방향에 맞춰 상대 위치를 회전한 뒤 겹침을 판정하며, 진입보다 더 멀리 벗어난 뒤 클리어하는 원리를 참고했다. 이 코드의 plugin ABI는 복사하지 않았다. 공식 설치 LMU SDK의 `mPos`·`mOri`·차량별 시각·제어/피트 상태를 사용한다. 출처와 기본값의 한계는 `logs/reference-sources-20261020/lmu-spotter-source-review.md`에 남겼다.
+
+네이티브 브리지는 최대 104대의 제한된 숫자형 `traffic`을 수집하고 정규화 경로가 이를 실시간 JSONL에 남긴다. 이름은 수집하지 않는다. scoring/telemetry ID 중복·상대 누락·오래된 위치·잘못된 방향 행렬은 겹침 없는 상태로 바꾸지 않고 미확인으로 처리한다. 새 DLL은 소스/SDK 해시별 폴더에 빌드했고 probe는 `READY`, `attached=false`다. 공유 메모리 테스트 14개와 컴파일 fixture의 17가지 traffic 사례·최대 104대 경계를 확인했다.
+
+`lmu_spotter.py`는 SDK 행렬의 전치로 월드 위치 차이를 로컬 +X 왼쪽/+Y 위/+Z 뒤로 변환한다. 기존 `Spotter`의 50ms 진입·150ms 클리어·3초 반복 상태 기계와 기존 음성 캐시를 재사용한다. 차종별 정확한 치수가 없으므로 길이 5.3m·측면 경고 6m·탈출 여유 1m·높이 차이 2m의 공통 근사임을 측정 상태에 표시한다. 앞뒤로 줄지은 차를 두 대 옆에 있다는 안내로 읽지 않도록 횡방향 간격도 검사한다. 플레이어/상대 위치의 시각 차이와 수신 지연은 같은 최대 0.25초 예산을 사용한다. 피트·일시정지·리플레이·세션/차량 변경·불완전 자료는 초기화하며 클리어를 만들어내지 않는다. 수집 단계의 `traffic_coverage_epoch`와 가용 상태로 UI 폴링 사이의 짧은 불완전·안전 상태 변화도 보존한다.
+
+GET `/api/lmu/spotter/status?after=N`과 POST `/api/lmu/spotter/play/{serial}`를 연결했다. 캐시를 읽기 전후에 이벤트·현재 차량 상태·선택한 목소리를 재검증하며 합성을 요청하지 않는다. 화면은 기존 LMU 단일 오디오 호스트·스포터 속도·출력장치와 공통 빠른 조작 스위치를 사용한다. 좌우 경고는 우선순위 3으로 일반 피트월을 중단할 수 있고 운전자 질문 우선순위 4는 보호한다. 브라우저에서도 요청 시작 기준 만료 시각·스트림·진행 중 상황을 확인하고 끊김에는 클리어 없이 중단한다. 기본은 꺼짐이며 게임 선택이나 스포터 활성화가 수집기를 시작하지 않는다. 접근·전방 위험 안내는 아직 연결하지 않았다.
+
+실제 선택 음성의 기존 캐시는 104개 표현 중 72개가 있었다. 모든 안내 종류에 준비된 표현이 있으므로 특정 변형이 없으면 같은 이벤트 키의 기존 표현만 재사용한다. 다른 좌우 경고로 대체하거나 새로 합성하지 않는다. 재생 응답에는 실제 읽는 문구·변형 번호를 반환한다. 같은 안내 재사용과 반대 방향 캐시의 대체 금지를 포함한 최종 관련 백엔드 118개를 확인했다. 근거: `logs/lmu-spotter-existing-cache-20261020.json`, `logs/lmu-spotter-backend-targeted-final-20261020.log`.
+
+화면 전체 71 suites/464개·production build·`build_is_current()`가 통과했다. 실제 localhost:24157의 새 build에서 합성 API fixture로 스위치 동기화·1.15배 재생 2회·음높이 유지·끊김 후 안내 중단을 확인했다. JavaScript 오류와 수집 시작 요청은 0건이다. 브라우저 검증은 실제 상대 차량 주행 검증을 의미하지 않는다. 근거: `logs/lmu-spotter-frontend-tests-20261020.log`, `logs/lmu-spotter-build-20261020.log`, `logs/lmu-spotter-browser-20261020.json`.
+
+최종 전체 백엔드 1,159개와 런처·패치·음성 준비 37개도 통과했다. 검증 실행기는 프로젝트 import 경로와 테스트별 임시 음성 폴더를 유지하도록 격리했다. 근거: `logs/lmu-spotter-backend-final-tests-20261020.log`, `logs/lmu-spotter-launcher-tests-20261020.log`. 실제 선택 음성 캐시를 읽는 합성 좌표 재생에서도 없는 왼쪽 변형 대신 같은 왼쪽 기본 문구를 반환하는 것을 확인했다(`logs/lmu-spotter-real-cache-replay-20261020.json`). 개인 원본·DB·음성 캐시는 수정하지 않았다.
+
+실제 게임 접속·수집·유료 합성을 시작하지 않았고 일반 앱 서버도 종료/재시작하지 않았다. 백엔드는 앱 재실행 시 새 모듈을 읽는다. 다음 명시적 실시간 수집에서 주변 차량 좌표의 실제 공급·주기와 좌우 안내를 대조해야 한다. 기존 연습 파일로 이 검증을 대체하지 않는다. 백업: `backups/lmu-native-proximity-20261020/`, `backups/lmu-geometry-spotter-20261020/` 및 백엔드 담당 백업.
+
+## 2026-10-20: 스포터 무음·HUD 미표시 원인과 공통 피트월
+
+사용자의 무음·미표시 보고를 조사한 시점에는 API가 `STOPPED / NOT_STARTED / 0 frames`였고 `logs/lmu-live`도 없었다. 오버레이는 `auto_show=true`, LMU 선택 lease도 살아 있었으나 실시간 원본을 시작하지 않아 두 기능이 데이터를 받지 못했다. 이전 절의 별도 수집 시작 방식은 이번에 수정했다. 근거: `logs/lmu-runtime-failure-audit-20261020.json`.
+
+켜진 스포터·피트월·오버레이는 하나의 읽기 전용 연결을 공유한다. 기능이 모두 꺼져 있으면 LMU 선택만으로 연결하지 않는다. 자동 연결은 메모리 관측으로 유지하며 진단 파일을 무한히 저장하지 않는다. 별도의 수동 진단 기록은 기존 15분·프레임·용량 제한을 유지한다. 게임 미실행 시 재시도하고, 브라우저가 LMU를 떠나면 소유한 자동 연결만 해제한다. 수동 기록은 기능 해제로 종료하지 않는다. 수동 중지 뒤에는 명시적 시작 또는 켜진 기능을 모두 끈 뒤 다시 켜야 재개한다. client ID·revision으로 늦은 켜기 요청이나 이전 소켓 종료가 최신 연결을 뒤집지 못하게 했다.
+
+게임 창에 가려진 브라우저의 타이머가 느려지면 0.25초 신선도 기한과 겹침 debounce가 깨지는 문제도 재현했다. 같은 좌측 fixture를 0.1초 간격으로 관측하면 안내가 생겼고 1초 간격에서는 계속 초기화됐다. 스포터를 서버 50ms WebSocket, 피트월을 250ms WebSocket으로 바꿨으며 공통 연결 lease도 소켓을 통해 서버에서 유지한다. 브라우저 대기열에 쌓인 메시지는 서버 전송 시각의 경과 시간을 빼고 평가한다. 끊긴 뒤 과거 클리어를 추측하지 않는다. HTTP 조회는 기능이 꺼진 상태의 표시와 재생 직전 인가에 남아 있다. 백엔드 이벤트 번호가 재시작으로 작아져도 새 유효 이벤트를 받을 수 있게 했다.
+
+네이티브 수집기에는 피트 차량의 telemetry slot 누락이 트랙 위 전체 차량 측정을 무효화하는 별도 버그가 있었다. 피트 제외를 조인보다 먼저 적용하되 트랙 위 차량의 누락은 계속 미확인으로 둔다. 자신의 `best_lap_time`, `outstanding_penalties`, `session_end_et`도 설치 SDK와 대조해 추가했다. 합본 DLL probe는 `READY / attached=false`이며 경로는 `logs/lmu-native/bridge-9834ce77ef6c449f465c6d21`이다.
+
+피트월은 iRacing 공통 `PitWall`을 사용한다. 보고 범위·역할 선택·기존 목소리 미리듣기·측정 지표·보고 목록과 LMU 전용 설정 저장을 연결했다. 240개 문구 키와 실제 안내 호출 62곳의 조건·만료·미연결 신호는 `manual/lmu-pitwall-parity-20261020.json`에 기록하며 `python scripts/audit_lmu_pitwall.py`로 재생성한다. 순위 5초 유지, 독립 랩 경계, 실제 세션 베스트, 3랩 페이스/일정성, 남은 시간, 측정 연료, 노면·온도, 포메이션 실측 정보, 자신의 종료·실격 전이를 기존 음성으로 안내한다. 페널티 수·피트 요청/정차·펑크/휠 분리는 기존 문구로 뜻을 과장할 수 있어 화면으로만 알린다. 완주 거리·급유 계획·복귀 순위·경쟁차 전략·실시간 코너 코칭 등은 필요한 신호와 이유를 개별 표시하며 전체 동등 구현으로 부르지 않는다. 일반 보고는 조작 부담을 기다리고 긴급 보고는 우선순위 2로 일반 음성을 중단할 수 있으며 좌우 스포터 3과 질문 4를 보호한다. 완료된 보고만 ACK하며 중단된 보고는 여전히 유효할 때 재시도한다.
+
+사용자가 다시 주행을 시작한다고 알려 실제 SDK를 읽기 전용으로 약 175초 관측했다. 10,519개 표본, 최대 주변 19대, 좌우·클리어·유지 이벤트 24건을 기록했다. JSONL은 `logs/lmu-live/88d06e03bec841d99662c00859b4d7b7.jsonl`, 요약은 `logs/lmu-user-test-drive-20261020.json`이다. 잠깐의 불완전한 교통 자료에서는 안내를 초기화했으며 이를 깨끗한 빈 도로로 바꾸지 않았다. 별도 API 조회에서도 HUD `running/ready/visible/driving=true`, 오류 없음과 좌측 겹침 상태를 확인했다(`logs/lmu-user-driving-api-status-20261020.json`). 이 관측은 실제 귀로 음성을 들었다는 검증이나 게임 화면 좌우 대조를 대신하지 않는다.
+
+관측 중 실행된 앱 서버는 최종 WebSocket 경로를 읽기 전이어서 실제 `/spotter/ws` 연결은 403이었다. 일반 앱 서버는 종료·재시작하지 않았다. 최종 변경을 쓰려면 주행 후 앱을 다시 실행해야 한다. production 브라우저의 별도 HTTP/WS fixture에서 100/500/5000ms 폴링 타이머를 끄고도 새 좌우·긴급 피트월 안내가 각각 1.15배·음높이 유지로 처리됐고, 오래된 메시지는 폐기됐다. 공통 피트월·비활성 전략 설정·역할별 저장과 JavaScript 오류 0건을 확인했다. 이는 실제 게임 중 최종 음성 청취 검증과 구분한다. 근거: `logs/lmu-pitwall-browser-20261020.json`.
+
+전체 백엔드 1,207개, 화면 72 suites/486개, 런처·패치·음성 준비 37개와 production build가 통과했다. 백엔드·화면 검증은 임시 저장소 및 합성 fixture로 실행했고 개인 DB·키·음성 캐시는 수정하지 않았다. 실제 수집은 사용자가 시작한 테스트 주행을 읽기 전용으로 기록한 것이다. 새 과금 호출·게임 명령·커밋·push·릴리즈는 없다. 백업은 `backups/lmu-runtime-connect-20261020/`와 각 담당 기능 백업에 있다.
+
+### 2026-10-20 LMU 스포터 설정과 클리어 재생
+
+- 설정·음성 코치 화면이 공통 `SpotterSettings`를 사용한다. LMU는 반복 켜기/끄기, 2/3/5/8/10초 반복(기본 5초), 150/300/500ms 클리어 확인(기본 150ms)을 제공한다. 사용자 선택으로 5초 반복을 유지했다. 미지원 iRacing 설정은 노출하지 않는다.
+- 브라우저 저장소 `lmu.spotter.settings.v1`에 별도 저장하고, 활성화 전에 `PUT /api/lmu/spotter/settings`로 적용한다. 설정 실패 시 재시도하며 이전 백엔드에는 앱 재실행 안내를 표시한다. `GET`으로 적용값을 확인할 수 있다.
+- `POST /api/lmu/spotter/test`는 기존 고정 캐시만 읽으며 게임 관측 시작이나 새 음성 합성을 하지 않는다. 마지막 안내·재생 상태와 누락 캐시 오류를 표시한다.
+- 취소 시 이전 요청의 진행 상태를 즉시 해제해 늦은 요청·출력장치 라우팅이 다음 클리어를 막지 않는다. 이전 요청이 뒤늦게 완료돼도 현재 안내를 변경할 수 없다.
+- 짧은 데이터 공백 이후 같은 방향의 같은 차량들을 재관측할 때 정한 반복 간격 안의 중복 경고를 줄인다. 겹침 판정기는 계속 초기화하므로 공백을 건너뛰어 클리어를 추측하지 않는다. 다른 차량·방향·추가 차량·실제로 확인한 클리어 뒤의 새 접근은 유지한다.
+- 오프라인 실제 기록 10,519프레임 재생에서 안내 24→18회, 클리어 8→8회를 확인했다. `logs/lmu-spotter-controls-replay-20261020.json` 참조. 브라우저 fixture 검증과 실제 게임의 헤드셋 출력 확인은 구분한다.
+- 관련 백엔드 85개, 화면 97개 테스트와 화면 빌드를 통과했다. 새 백엔드 라우트를 사용하려면 주행 종료 후 정상 앱을 완전히 종료하고 다시 실행한다.
+- 최종 production 브라우저의 API/WS fixture에서 설정·음성 코치 공통 설정과 저장 복원을 확인했다. 기존 MP3의 HTMLAudio 재생으로 좌측 안내 중단 후 `왼쪽 클리어.`가 재생 완료되는 것을 확인했다(50ms 프레임, 1.15배, 음높이 유지, JavaScript 오류 0). 실제 게임·헤드셋 청취 검증은 아니며 근거는 `logs/lmu-spotter-settings-browser-20261020.json`과 같은 이름의 PNG다.
+
+### 2026-10-20 비교 조건 완화와 전체 무전 경로 대조
+
+이 절은 위의 개발 중 제한 설명을 갱신한다. LMU 자동 개인 기준은 같은 차량·트랙·레이아웃에서 강수 유무를 우선 비교한다. 강수 정보가 없으면 건조·젖음 구분을 사용하고 날씨 미확인도 PARTIAL 상태로 후보에 허용한다. 기온·노면 온도·타이어·강수 강도 차이는 제외 사유가 아니다. 실제 기록 10개를 읽기 전용으로 조사하여 연습 2:00.515 대비 다른 퀄리파잉 파일의 1:55.665가 선택되는 것을 임시 SQLite에서 확인했다. 공식 유효 랩 확인 상태는 UNVERIFIED다. 근거: `logs/lmu-reference-weather-verification-20261020.json`.
+
+기존 공통 음성 260종과 발동 코드 전체를 대조했다. `manual/lmu-pitwall-parity-20261020.json` V2에는 자동 조건부 111종(공통 무전 93 + 겹침 스포터 18), 질문용 22종, 동등 문구로 대체하는 4종, 미리 듣기 4종, iRacing 전용 제외 9종과 미연결 110종을 구분해 원래 조건·현재 경로·빠진 신호를 기록한다. 모든 문구가 자동 안내라고 표시하지 않는다. 확인되지 않은 피트 작업·수리·견인·공식 제한속도나 주행 메모의 감정 코칭 등은 실제 조건 없이 발화하지 않는다.
+
+스포터만 켜도 기본 무전 WebSocket이 열리고 일반 엔지니어 보고는 피트월 설정을 따른다. 좌우 안내 표현은 실제 재생 완료 ACK 때만 바뀐다. 취소·음소거·누락 캐시는 진행시키지 않는다. 포메이션은 공통 주제별 통문장 묶음을 사용하며 개수 설정·1.15배·음높이를 유지한다. 출발 연료는 처음 관측한 실제 잔량을 고정하고 출발 연료 문구만 사용해 소모 때문에 계속 취소되거나 현재 연료라고 잘못 말하지 않는다. 여러 문장의 두 번째 이후 문장도 현재 유효 조건을 계속 확인하며 만료되면 중단한다.
+
+네이티브 SDK에서 최대 104대의 스코어링 ID·클래스·랩·거리·페이스와 실제 피트박스 위치·충돌·과열·조작 설정을 정규화했다. 개인 운전자 이름은 수집하지 않으며 차량/트랙/모델명만 제한된 문자열로 전달한다. 측정 자료는 공통 RaceEngineer·TrafficApproach·HazardWatch·PitBoxGuide·ControlAdvisor·DamageWatch·LapSectors·LiveCornerCoach에 연결한다. 거리 기반 계산은 scoring 시각에만 갱신하고 중복 프레임은 세지 않는다. 피트·급유 뒤 손상 비교 이력은 초기화한다. 조향 비율을 실제 라디안으로 바꾸지 않으며 현재 차량의 물리 조향 범위가 없으면 반대 조향 근거는 미확인이다. 코너 코칭은 실제 차량·트랙과 일치하는 검증된 분석 구간 등록이 필요하다.
+
+LMU 음성 코치에 마이크 준비·입력장치 선택·F8/화면 녹음·텍스트 측정 질문을 붙였다. 단일 실시간 연결과 오디오 출력을 공유한다. 녹음 시작 문맥은 메모리에 120초/64개 한도로 보관하고 원음·개인 질문·답변 음성을 디스크에 저장하지 않는다. 질문 답변 priority 4는 스포터가 중단할 수 없다. 텍스트만 질문해도 연결 준비를 기다리며 마이크 준비 전 장치 목록 조회·권한 요청은 없다. Google 음성 인식/합성은 사용자의 실제 요청 때만 호출하고 수치 답변은 공통 측정 함수가 만든다.
+
+실제 SDK 읽기 전용 짧은 관측에서 OBSERVING·90프레임·35대·radio available을 확인했다. 기존 주행 파일에는 상대 좌표가 없어 과거 스침을 복원할 수 없다는 제한은 유지한다. 브라우저 최종 fixture는 포메이션 두 문장 완료/두 번째 중 만료 중단, right 표현 0→1, 클리어, F8 시작 문맥/해제 전송, 질문 중 스포터 차단과 연결 단절 녹음 취소를 확인했다. 실제 게임·헤드셋 청취 검증과는 구분한다. 근거: `logs/lmu-full-radio-browser-20261020.json`, `logs/lmu-questions-browser-20261020.json`.
+
+연결된 숫자 범위와 고정 안내의 통문장 46,534개가 준비됐으며 청취 예시 952개 중 867개에 기존 음성이 있다. 새 LMU 전용 문구는 승인된 랩 무효 안내 한 종류이고 나머지는 공통 문구를 사용한다. 미연결·제외 문구를 자동 안내용으로 새 합성하지 않는다. `logs/lmu-radio-preview-20261020/index.html`과 음성 코치의 전체 목록에서 연결 사유와 기존 표현을 확인한다. 개인 데이터 테스트는 임시 저장소로 격리하고 전체 백엔드 1,281개, 화면 75 suites/520개, 런처·패치·음성 준비 38개와 production build가 통과했다. 최종 로그는 `logs/lmu-radio-backend-final-tests-20261020.log`, `logs/lmu-radio-final-frontend-tests-20261020.log`, `logs/lmu-radio-launcher-final-tests-20261020.log`, `logs/lmu-radio-final-build-20261020.log`다.
+
+일반 서버가 없는 것을 확인한 뒤 기존 서버 종료 없이 정상 런처를 새로 실행했다. `http://localhost:24157`은 최종 `main.a1bfe656.js` 빌드를 제공하며 백엔드의 질문·음성 목록·스포터 ACK 경로를 확인했다. 브라우저에 남은 이전 화면은 새로고침해야 새 런타임을 읽는다. 서버만 시작한 시점의 LMU 관측은 STOPPED이며 스포터·피트월 등 화면에서 활성화한 기능이 연결을 시작한다. 커밋·push·릴리즈는 하지 않았다.
+
+### 2026-10-20 LMU 무전 확장과 실주행 확인
+
+이 절은 위의 111종 연결 시점 이후의 상태를 갱신한다. 전체 공통 문구 260종 중 조건부 자동 안내 161종, 질문 전용 10종, 동등 문구 대체 4종, 미리 듣기 4종, iRacing 전용 제외 9종, 미연결 72종이다. 문구가 연결됐다는 것은 발동·재생·취소 경로가 있다는 뜻이며 모든 차종·게임 상황을 실주행에서 검증했다는 뜻은 아니다. `scripts/audit_lmu_pitwall.py`로 키별 원래 조건과 현재 지원 사유를 다시 생성했다.
+
+- `lmu_measured_briefing.py`: 기존 문구 30종으로 코너 손실·개선, 델타, 이론상 베스트, 종료한 스틴트 평균, 선두·앞차 랩, 상대 구간, 추격·방어와 스틴트 차이를 안내한다. 동일 차량·트랙의 분석 구간, 실제 깨끗한 관측과 8초 이상 직선 여유가 필요하다. 기본 간격 40초 및 주제별 쿨다운을 적용하고 상대 교체·간격 변화·제동·겹침·랩 변경·만료를 재확인한다. 퀄리파잉은 코너·델타·이론상 베스트만 사용한다. 스포터 단독 활성화로 일반 코칭이 켜지지는 않는다.
+- `lmu_formation_history.py`: 개인 기준 SQLite를 읽기 전용으로 조회한다. 원본 변경 여부와 실제 기록 시각, 정확한 차량·트랙·레이아웃 및 강수 구분을 확인한 뒤 마지막 호환 파일의 가장 빠른 적합 랩을 기존 "지난번" 문구로 말한다. 현재 조회에서 1:56.615가 확인됐다. 전체 최고 기록을 지난 방문 기록으로 바꾸지 않는다. 일반 첫 코너·브레이크 예열·F8 질문·무전 안내도 연결했고 제한된 안내 개수에서 주제가 영구 누락되지 않도록 세션별 순서를 순환한다.
+- `lmu_fuel_feedback.py`: 실제 랩 시작에서 목표를 고정하고 동일 SDK `lap_start_et`의 확인된 완전한 깨끗한 소비량과 비교한다. 기존 `fuel_lap` 및 3랩 연속 `fuel_save_held`를 사용한다. 중도 접속·피트·급유·공백·무효 신호·설정·세션 변경 시 근거를 폐기한다.
+- `lmu_driver_notes.py`: F8·텍스트 입력의 명시적인 현재 느낌을 표준 분류·진입/탈출·캡처 위치·랩·관측 ID로만 RAM에 유지한다. 12초 이내 입력과 동일 세션·차량이어야 한다. 같은 위치 1% 이내의 서로 다른 두 랩에서 반복됐을 때 기존 느낌 코칭 7종을 사용한다. 부정·가정·인용·과거·일반 질문은 느낌 근거로 쓰지 않고 원문·원음·개인 답변은 저장하지 않는다. 셋업 학습 근거로도 쓰지 않는다.
+- `lmu_rest_pit.py`: CrewChief의 경로를 참고해 고정 로컬 주소의 `GET /rest/garage/UIScreen/RepairAndRefuel`만 읽는다. SDK의 차량명·연료와 맞고 최신일 때 타이어 교체 선택을 기존 `tyre_setting_on/off`로 안내한다. 피트 이탈·미확인·응답 만료 시 취소한다. 메뉴 생성·조회·종료 실패를 격리해 네이티브 수집을 계속한다. 실제 조회에서 VE 100%, Fuel Ratio 0.89, No Change를 확인했으나 두 숫자는 급유 리터가 아니다. 수리 설정 비용도 현재 수리 필요나 작업 완료 신호가 아니다.
+- `start_set`: SDK가 명시한 레이스 phase 1/2/3 → 4 출발 카운트다운에서 기존 대기 안내를 사용한다. 그린 또는 5초 경과 시 폐기하며 신호등 프레임 숫자를 출발 단계로 임의 해석하지 않는다.
+
+연결된 고정·숫자 통문장 57,268개가 준비됐고 청취 예시 952개 중 877개에 음성이 있다. 기존 스포터 음성 2개를 재사용하고 빠진 기존 문구 8개만 승인된 TTS로 보충했다. 새 LMU 전용 문구는 랩 무효 안내 한 종류를 유지한다. 청취 페이지는 `logs/lmu-radio-preview-20261020/index.html`이다.
+
+최종 재생 검토에서 묶음 보고를 일률적으로 4초에 만료시키는 문제를 수정했다. 문장 수와 최초 직선 여유에 따라 8~20초로 제한하고 재생 경과만큼 필요한 남은 직선 예산을 줄인다. 제동·겹침·상대 교체·랩·간격·데이터 신선도 검사는 유지한다. 2문장 안내가 8초, 3문장 안내가 10초 후에도 실제 이동한 같은 직선에서 유효하고 만료/상황 변경에서는 사라지는 것을 검증했다.
+
+전체 백엔드 1,337개, 화면 75 suites/528개, 런처·패치·음성 준비 38개가 통과했다. 이후 위 만료 수정까지 포함해 관련 백엔드 180개를 다시 통과했고 안내 화면의 오래된 준비 중 문구를 실제 연결 상태로 고친 뒤 production build를 다시 완료했다. 오디오 화면 테스트 한 건은 비동기 전달 ACK를 새 음성 요청으로 잘못 세던 검사를 수정해 전체 재검증했다. 개인 저장소와 과금 호출을 격리한 테스트다. 로그는 `logs/lmu-radio-connected-backend-tests-20261020.log`, `logs/lmu-radio-connected-final-focus-20261020.log`, `logs/lmu-radio-connected-frontend-recheck-20261020.log`, `logs/lmu-radio-connected-launcher-tests-20261020.log`, `logs/lmu-radio-connected-build-20261020.log`다. 실제 헤드셋 청취·게임 화면 대조는 아래 순서로 남아 있다.
+
+#### 실제 주행을 기록하는 방법
+
+2026-10-20 후속 수정: 진단 파일이 약 112초·5,329프레임에서 128MiB 한도에 닿고 `DIAGNOSTIC_LIMIT_REACHED`로 자동 연결까지 막힌 상태를 확인했다. 한도 뒤 켜진 기능의 메모리 관측을 자동 재개하도록 수정했으며 실제 수집기와 임시 파일을 사용해 시간·프레임·용량 한도 3종과 파일 추가 쓰기 방지를 검증했다.
+
+포메이션 반복은 수치 변경·45초 만료 때 같은 주제를 새 ID로 만들던 경로, 최신 상태가 잠시 유효하지 않을 때 전체 브리핑을 초기화하던 경로, 프런트가 중단된 문장 묶음을 처음부터 재생하던 경로를 수정했다. iRacing의 `FormationBrief.step`처럼 주제 발행 시 진행하고 문장 수에 따른 발화 간격과 휴식을 둔다. 현재 측정값·대기 음성은 계속 폐기하되 확인된 같은 세션의 발행 주제 이름만 RAM에 보존한다. 실제 청취를 시작한 포메이션은 반복하지 않고 완료된 재생만 전달 확인한다. 그린·레이스 시작의 동일 전이 중복도 제거했다. 원래 iRacing은 일률적인 3문장 제한이 아니라 주제별 묶음이며 경기 소개는 최대 4문장이다.
+
+후속 검증: iRacing 포메이션 회귀를 포함한 관련 백엔드 143개, 화면 80개 통과. 빌드된 화면을 실제 HTMLAudioElement와 기존 캐시로 실행해 두 문장 완료·1.15배·상황 변경 중단·중단된 보고 재수신 후 재생 방지를 확인했다. HTTP·WebSocket은 모두 합성 입력으로 가로챘으므로 실제 게임·헤드셋 청취 검증을 대신하지 않는다. 로그는 `logs/lmu-formation-backend-focus-20261020.log`, `logs/lmu-formation-frontend-focus-20261020.log`, `logs/lmu-formation-dedup-browser-20261020.json`, `logs/lmu-formation-dedup-build-20261020.log`다.
+
+일반 스포터·피트월 자동 연결은 RAM 관측 모드이며 파일을 남기지 않는다. 텔레메트리 파일만으로는 주변 차량 좌표와 신호 전이를 모두 복원할 수 없으므로 아래 진단 기록을 함께 사용한다.
+
+1. 주행이 끝난 뒤 앱을 완전히 종료하고 `실행.bat`으로 다시 실행한다. 이번 소스 변경은 이미 실행 중인 Python 백엔드에 자동 반영되지 않는다. 이 작업에서는 사용 중인 정상 서버를 강제로 재시작하지 않았다.
+2. `http://localhost:24157`에서 LMU → 음성 코치 → 왼쪽 열 맨 위 **실시간 연결·진단 기록**으로 이동해 **진단 기록 시작**을 누른다. 기존 자동 연결 중에도 시작할 수 있으며 잠시 관측기를 전환한 뒤 파일 기록을 시작한다. **진단 파일 기록 중**, 저장 파일 경로와 증가하는 저장 프레임 수를 확인한다. 스포터·피트월은 같은 관측기를 공유한다.
+3. 스포터와 피트월을 켜고 일반 보고까지 확인하려면 피트월 보고 범위를 전체로 둔다. 코너 관련 확인 전에는 같은 차량·트랙의 파일을 분석해 구간을 등록하고 필요한 코너 번호를 확정한다.
+4. 진단 파일은 `logs/lmu-live/<recording_id>.jsonl`에 저장된다. 최대 15분·100,000프레임·128MiB 중 먼저 닿는 한도에서 파일 기록을 끝낸다. 켜진 기능이 있으면 같은 SDK 연결과 작업 스레드에서 파일 저장 없는 LIVE 관측을 계속하며 이전 기록의 경로·프레임 수·미저장 여부를 보존한다. 진단 종료로 세션 식별자·브리핑·연료 추적을 초기화하지 않는다. 새 진단 파일을 자동 생성하거나 한도를 늘리지 않는다. 시나리오별로 기록을 시작하고 남은 파일과 게임 화면 시각을 함께 알려주면 된다. 사용자가 누른 중지는 자동 연결도 중지하며 단순히 차를 주행했다는 사실만으로 진단 파일 생성이 보장되지는 않는다.
+5. 다음 PowerShell 조회로 `observation_mode=DIAGNOSTIC`, `journal_state=ACTIVE`, 증가하는 `frames_recorded`를 확인할 수 있다. 게임 화면의 사건 시각은 녹화나 별도 메모로 남긴다. 개인 마이크 원음을 녹음할 필요는 없다.
+
+```powershell
+$lmuCheck = Invoke-RestMethod 'http://localhost:24158/api/lmu/status'
+$lmuCheck.live | Select-Object state, observation_mode, journal_state, recording_id, frames_recorded
+```
+
+#### 실주행 확인 목록
+
+| 확인할 기능 | 주행·조작 순서 | 얻을 데이터와 다음 판단 |
+| --- | --- | --- |
+| 좌우·양쪽·클리어·5초 유지 | 연습에서 다른 차량과 좌우 각각 나란히 달린 뒤 앞뒤로 떨어진다. 여건이 되면 양쪽 차량과 두 대 겹침도 관측한다. | 주변 차량 좌표·동일 차량 ID·겹침·재생 ACK와 화면 좌우를 대조한다. 이미 연결됐으며 실제 판정·헤드셋 출력 검증이 남았다. |
+| 포메이션·출발·마지막 랩 | 짧은 AI 레이스를 포메이션 시작 전부터 기록하고 카운트다운 → 그린 → 마지막 랩 표시 → 체커까지 진행한다. 15분을 넘기면 출발과 종료를 별도 기록한다. | `session_phase`, `start_light`, `start_red_lights`, 남은 시간·랩·선두 완주를 게임 화면과 대조한다. 출발 대기는 연결됐지만 마지막 랩·개별 신호등 의미는 추가 확인이 필요하다. |
+| 피트 선택·작업 | 안전하게 피트에서 No Change → 새 타이어 → No Change를 선택하고, 실제 타이어 교체 정차와 교체 없는 정차를 각각 수행한다. VE·Fuel Ratio·예상 정차 시간·작업 완료 화면의 시각도 남긴다. | 최신 REST 선택과 SDK `pit_state`·연료·휠 값을 대조한다. 선택 안내는 연결됐으며 실제 서비스 시작/완료·정차 시간 의미와 리터 급유 선택은 확인 전이다. 앱은 게임 메뉴를 조작하지 않는다. |
+| 코너·델타·상대 구간 | 같은 차량·트랙 파일을 분석한 뒤 깨끗한 연속 3~4랩을 주행한다. 상대도 같은 구간을 최소 2회 통과하도록 한다. 앞차 교체·긴 직선·피트 진입도 포함한다. | 분석 구간·깨끗한 통과·20구간 델타·양쪽 8구간 중앙값·발화 여유를 얻는다. 짧은 직선만 있는 트랙에서는 긴 묶음 안내가 생략될 수 있다. |
+| 연료 절약 피드백 | 경기 길이가 확인되는 레이스에서 최소 2개의 완전한 깨끗한 소비 랩을 쌓고, 절약 모드를 유지한 채 추가 3랩을 주행한다. 이 동안 급유·설정 변경을 피한다. | 랩 시작 목표와 같은 랩의 실제 소비, 3랩 연속 유지 여부를 검증한다. 경기 종료 거리나 소비량이 불명확하면 목표를 만들지 않는다. |
+| 운전자 느낌 코칭 | 같은 레이스·차량에서 서로 다른 두 랩의 같은 코너 위치에 F8로 현재 느낌을 말한다. 예: "지금 진입에서 앞이 밀려요." 주행을 이어간다. | 캡처 위치가 1% 이내로 일치하고 두 번째 발언 위치를 지난 구간에서 기존 안내가 발생하는지 확인한다. 원문·음성은 저장하지 않으며 RAM 분류 사실만 사용한다. |
+| 비·타이어·온도·손상 | 같은 차량으로 건조와 우천 세션, 드라이와 웨트 타이어 주행을 각각 기록하고 게임의 과열·수리 표시가 자연스럽게 발생하면 그 시각을 남긴다. | 실제 휠·브레이크·수온·유온·노면·장착 컴파운드와 경고를 대조한다. 고의 충돌이나 엔진 손상을 만들 필요는 없다. 한 번의 관측만으로 모든 차종의 온도·우천 기준을 확정하지 않는다. |
+
+#### 주행 데이터만으로 해결되지 않는 나머지
+
+- **공식 피트 제한속도·수리/견인·피트박스 좌우/앞뒤 지시:** 현재 검증된 공개 SDK/읽기 전용 REST 계약에 필요한 공식 상태가 없다. 게임 화면과 대응 필드 또는 새 읽기 전용 데이터 제공 경로를 먼저 확인해야 한다. 연료 압력·오일 압력 경고도 단순 온도로 대체할 수 없다. 현재 `overheating`은 일반 경고에만 연결했다.
+- **차종별 반대 조향·냉간 타이어·폭우 타이어 지시:** 현재 차량에서 실제 물리 조향각이 없으며, 단순 조향 비율로 라디안을 만들지 않는다. 물리 각도 채널과 차종·컴파운드별 정상 범위를 확보해야 한다. 온도·마모 채널 자체는 이미 읽고 있다.
+- **실시간 구간 연습 5종:** LMU의 기존 연습 과제는 사후 반복성 비교다. 일반 랩 반복용 과제 선택·시작/종료 API와 화면, 실시간 목표 측정·완료 판단을 만들어야 한다. iRacing Active Reset용 "저장하세요" 안내를 그대로 붙이지 않는다.
+- **과거 방문 횟수·이전 순위·과거 코너 손실:** 현재 기준랩 SQLite만으로는 방문 단위·분류 결과·확정 코너의 당시 비교 근거를 복원할 수 없다. 해당 세션/결과/분석 이력을 추가로 저장하는 기능이 필요하다. 파일 개수나 슬롯 ID로 대신하지 않는다.
+- **공식 마지막 랩과 일부 고정 문구:** 랩/시간 예측을 공식 플래그로 바꾸지 않는다. 몇몇 고정 문구는 이미 숫자가 포함된 다른 공통 표현으로 같은 기능을 제공한다. 모든 미연결 키의 세부 분류는 JSON 감사표에 남긴다. iRating·SOF·인시던트 점수 9종은 LMU 대상이 아니다.
+
+### 2026-10-20 실주행 후 스포터·깃발·오버레이 연속성 수정
+
+실제 기록과 설치된 SDK, CrewChief RF2 매퍼를 다시 대조했다. 이전 합성 검증만으로 실주행 완료라고 판단할 수 없었다.
+
+- `88d06e03bec841d99662c00859b4d7b7.jsonl`: 스포터 불가 53구간·459프레임의 경기 메타데이터 지연은 0.5025~1.3825초였다. 실제 경기 정보는 약 0.6초마다 갱신됐으며 차량 좌표는 신선했다. native `traffic_json`의 0.5초 제한을 본체와 같은 -0.25~2초로 맞췄다. 상대 좌표 0.25초 제한은 유지한다. 이미 불가로 저장된 기록에는 버린 좌표가 없으므로 복구 재생으로 53건 모두의 제거를 증명할 수는 없다. 네이티브 fixture에서 해당 주기와 경계를 검증했다.
+- `062c970ebcf846ce9af92a328f3c375d.jsonl`: 5,238표본 중 약 0.19초의 경기 정보 누락이 오버레이 이력을 초기화했다. 같은 기록 재생에서 그래프 시작 횟수 2→1, 복구 시 유지 점 수 1→400을 확인했다. 현재 값은 숨기되 동일 세션의 짧은 누락은 그래프를 보존한다. 증거는 `logs/lmu-overlay-continuity-replay-20261020.json`이다.
+- 같은 포메이션 기록을 현재 `LmuVoiceService`에 재생해 경기 소개·연료·멀티클래스 주제가 각 1회 발행되는 것을 확인했다. 과거 기록 조회는 빈 임시 환경으로 격리했고 음성 재생은 하지 않았다. 증거는 `logs/lmu-formation-actual-replay-20261020.json`이다.
+- 진단 기록 한도에서는 SDK·스레드·기록 식별자·랩·연료·무전 객체를 유지한 채 파일만 닫는다. 한도 후 별도 파일 쓰기는 없으며 기능 리스가 없으면 메모리 관측도 정리한다. 실제 수집기와 임시 소스로 시간·프레임·바이트 한도, 연료 완전 랩 누적 연속성을 검증했다.
+- SDK `mFlag`는 그린/블루다. 로컬 옐로우는 별도 `mSectorFlag[3]`를 읽어 Pending=1을 안내한다. 배열의 코너/구간 순서는 확정하지 않아 위치를 단정하지 않는다. 새로운 옐로우를 버리던 25초 제한을 제거했다.
+- 내 차 `finish_status=0`이 확인되면 세션 단계 7·8에서도 스포터·무전·오버레이·공통 경기 입력을 유지한다. 내 차 완주/리타이어/실격 및 미확인 상태는 구분한다. 단계 5→7→8 이후 내 차 완주 전이를 통합 검증했다.
+- 오디오 소유자별 취소를 추가했다. LMU 무전 상태 만료가 다른 소스의 스포터나 운전자 질문 답변을 중단하지 않는다. 여러 문장 중간에도 같은 소유자 조건을 유지한다. 운전자 명시적 정지 동작은 유지한다.
+- 랩 수 제한 경기 마지막 랩에 기존 화이트 음성을 연결했다. 시간제 경기의 게임 내 “one lap to go” 직접 신호는 현재 공개 SDK에서 확인되지 않았다. CrewChief의 페이스 기반 시간제 추정은 공식 깃발로 쓰지 않는다. `yellow_flag_state=5`는 마지막 주의 주행 랩이므로 화이트로 읽지 않는다.
+
+마지막 실제 진단은 약 102초의 포메이션 뒤 128MiB 한도에서 끝나 레이스 중 옐로우·화이트·완주 전이를 포함하지 않는다. 위 실제 재생과 자동 검증은 수정 근거이며 게임 내 실시간 청취 결과를 대신하지 않는다. 적용하려면 실행 중인 Python 백엔드를 앱 종료 후 다시 실행해야 한다. 이 작업에서는 정상 앱이나 게임을 강제로 재시작하지 않았다.
+
+최종 검증: 임시 데이터 경로·AI/수집 비활성화 환경에서 LMU 백엔드 630개 통과(`logs/lmu-race-continuity-backend-final-20261020.log`). 공유 오디오·LMU 피트월·스포터·런타임 화면 117개 통과. production build는 `main.e937a65b.js`이며 기존 다른 파일의 연산자 괄호 관련 lint 경고 6개가 남아 있다. 설치된 SDK의 네이티브 컴파일 및 게임 비연결 probe도 통과했다.

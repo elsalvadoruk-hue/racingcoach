@@ -1,0 +1,93 @@
+{
+  "date": "2026-10-20",
+  "scope": "기존 iRacing 화면과 LMU 화면의 코드 경로 비교. 실제 데이터로 의미가 확인되는 조작 채널과 화면 누락을 우선 보완한다.",
+  "gaps": [
+    {
+      "feature": "코너 비교의 조향 입력 채널",
+      "evidence": [
+        "CornerLab.jsx에서 LMU steering을 강제 제외",
+        "lmu_analysis.py는 Steering Pos Unfiltered를 steering_ratio로 이미 정규화"
+      ],
+      "impact": "기록에 있는 좌우 조향 입력을 비교할 수 없었다",
+      "resolution": "signed steering_ratio를 퍼센트로 표시하는 공통 그래프 연결 완료. 휠 각도 deg로 변환하지 않음."
+    },
+    {
+      "feature": "기어 상태와 변속 지점",
+      "evidence": [
+        "Gear는 channelslist의 일반 채널이 아닌 ts/value 변경 이벤트",
+        "analysis_lap은 Gear 이벤트를 읽지 않았고 workspace target_gear/reference_gear는 항상 null",
+        "실제 Monza Q 7랩에서 기록값 0,1,2,3,4,5,6 확인"
+      ],
+      "impact": "같은 위치에서 기어와 변속 시점을 비교할 수 없었다",
+      "resolution": "lmu_control_channels.with_gear_events와 control_values를 제공. 처음 관측 이전은 결측, 0 중립과 -1 후진을 보존하고 변속은 STEP으로 연결"
+    },
+    {
+      "feature": "전문가 보기의 조향·기어",
+      "evidence": [
+        "lmu_workspace._overlay가 speed/throttle/brake만 출력",
+        "공통 LapOverlay는 서버가 준 채널을 표시하는 구조"
+      ],
+      "impact": "여러 랩·파일에서 동일한 조작 채널 비교가 불가능했다",
+      "resolution": "통합 담당이 steering ratio와 gear를 overlay 계약에 추가. LapOverlay는 기어를 계단식으로 그리고 LMU 채널 부재 이유를 표시"
+    },
+    {
+      "feature": "일관성의 분포·사분위·이상치",
+      "evidence": [
+        "iRacing은 CornerConsistency 상자 분포를 사용",
+        "LMU LmuConsistencyTable은 중앙값·전체 편차 표만 표시",
+        "LMU corner_consistency는 selection_index와 duration_s를 이미 반환"
+      ],
+      "impact": "흔들림과 이상치를 iRacing과 같은 방식으로 읽을 수 없었다",
+      "resolution": "기존 CornerConsistency를 재사용하여 분포와 IQR, 이상치, 흔들림 큰 순/트랙 순서 정렬을 제공"
+    },
+    {
+      "feature": "현재 랩과 빠른 3회 비교",
+      "evidence": [
+        "공통 CornerConsistency.summarize는 targetVsBest3를 계산",
+        "LMU는 해당 패널을 사용하지 않았음",
+        "파일이 달라도 lap_number가 같을 수 있음"
+      ],
+      "impact": "이번 랩만 느린지 반복적으로 흔들리는지 같은 화면에서 비교할 수 없었다",
+      "resolution": "LMU 선택 항목의 selection_index를 고유키로 사용. 현재 파일과 랩이 모두 맞는 관측만 대상 점과 빠른 3회 비교로 표시"
+    },
+    {
+      "feature": "일관성 결과에서 코너 비교로 이동",
+      "evidence": [
+        "iRacing LapAnalysis의 일관성 행은 onCorner를 호출",
+        "LMU LmuConsistencyPanel은 callback 없이 표만 표시"
+      ],
+      "impact": "흔들리는 구간을 찾은 뒤 같은 화면 흐름으로 비교할 수 없었다",
+      "resolution": "현재 기준 파일·기준 랩이 일관성의 첫 기준 선택과 일치할 때만 같은 코너 ID로 이동. 기준이 다르면 잘못된 구간으로 연결하지 않는다"
+    },
+    {
+      "feature": "공통 앱 설정·업데이트·마우스 도움말",
+      "evidence": [
+        "UtilityWorkspace의 iRacing 설정에는 공통 기능이 있음",
+        "LmuWorkspacePanel은 LMU 연결 상태만 표시"
+      ],
+      "impact": "게임과 관계없는 앱 기능이 LMU 선택에서 빠져 있었다",
+      "resolution": "LMU에도 공통 HelpLayer·마우스 도움말 설정과 UpdateSettings 재사용. 업데이트는 게임 공통 /api/update만 사용하며 iRacing SDK·기록·음성 서비스는 연결하지 않음."
+    },
+    {
+      "feature": "G-G·댐퍼·차량 원인 분류",
+      "evidence": [
+        "iRacing 전용 분석 계약은 있음",
+        "LMU 가속도 축·중력 포함 여부·휠 성분 순서는 미검증"
+      ],
+      "impact": "동등한 분석 화면은 아직 제공하지 않음",
+      "resolution": "검증 전까지 기능 완료로 표시하지 않는다. 의미가 다른 원본 수치를 기존 지표로 이름만 바꾸지 않는다"
+    }
+  ],
+  "validation": {
+    "backend": "test_lmu_control_channels, test_lmu_analysis, test_lmu_workspace_corner_contract: 19 tests passed",
+    "frontend": "LapOverlayLmu, CornerConsistency, LmuAnalysisPanels, LmuPracticeNavigation: 21 tests passed; ESLint passed",
+    "actual_file": "Monza qualifying 2026-10-20T10_22_00Z lap 7; read-only Gear events + GPS Time + normalized lap",
+    "build": "npm run build 통과; 최종 실제 브라우저 검증 기록은 lmu-development.md 참조"
+  },
+  "limitations": [
+    "Gear 변경 이벤트는 처음 기록되기 이전 상태를 추정하지 않는다",
+    "조향 입력 비율을 휠 각도나 조향비로 환산하지 않는다",
+    "게임 공식 유효성은 이 기능의 채널 관측과 별개로 미확인이다",
+    "개인 DB, 게임 설정, 실행 서버는 이 감사 작업에서 변경하지 않았다"
+  ]
+}

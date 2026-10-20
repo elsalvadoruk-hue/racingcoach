@@ -22,6 +22,11 @@ class GitAuditTests(unittest.TestCase):
         self.assertEqual(audit_git.findings('manual/image.png', b'\x00ExamplePrivateUser\x00',
                          [b'ExamplePrivateUser']), ['local private identifier'])
 
+    def test_the_public_repository_slug_is_not_a_private_identifier(self):
+        # A Windows user name can be part of the public GitHub owner name.
+        self.assertEqual(audit_git.findings('README.md', b'https://github.com/elsalvadoruk-hue/racingcoach', [b'Salvador']), [])
+        self.assertEqual(audit_git.findings('README.md', b'C:/Temp/Salvador/notes', [b'Salvador']), ['local private identifier'])
+
     def test_secret_signatures_are_rejected_without_returning_their_value(self):
         value = ('AIza' + 'A' * 35).encode()
         result = audit_git.findings('src/example.js', b'const key="'+value+b'";')

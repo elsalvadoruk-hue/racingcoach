@@ -14,7 +14,7 @@ const FIELDS = [['width', '가로 크기 (%)', 75, 200], ['height', '세로 크�
   ['x', '가로 위치 (px)', -100000, 100000], ['y', '세로 위치 (px)', -100000, 100000],
   ['content_opacity', '표시 불투명도', 0, 100], ['background_opacity', '배경 불투명도', 0, 100]];
 
-export default function OverlaySettings({ apiBase, visible = true, fetcher = fetch }) {
+export default function OverlaySettings({ apiBase, apiPath = '/api/overlay', visible = true, fetcher = fetch }) {
   const [view, setView] = useState(null);
   const [draft, setDraft] = useState({});
   const [busy, setBusy] = useState(false);
@@ -25,7 +25,7 @@ export default function OverlaySettings({ apiBase, visible = true, fetcher = fet
   const generation = useRef(0);
   const opacity = useRef({ pending: {}, timer: null, flight: null });
   const request = useCallback(async (path = '', method = 'GET', body) => {
-    const response = await fetcher(`${apiBase}/api/overlay${path}`, body === undefined ? { method }
+    const response = await fetcher(`${apiBase}${apiPath}${path}`, body === undefined ? { method }
       : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await response.json();
     if (response.status === 404 && path === '/visibility') {
@@ -33,7 +33,7 @@ export default function OverlaySettings({ apiBase, visible = true, fetcher = fet
     }
     if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '오버레이 설정을 적용하지 못했습니다.');
     return data;
-  }, [apiBase, fetcher]);
+  }, [apiBase, apiPath, fetcher]);
   useEffect(() => {
     const stream = opacity.current;
     mounted.current = true;
@@ -136,6 +136,7 @@ export default function OverlaySettings({ apiBase, visible = true, fetcher = fet
   const previewing = view.preview ?? view.running;
   const autoAvailable = typeof view.auto_show === 'boolean';
   const editable = previewing && view.ready && !view.settings.fixed && !busy;
+  const lmu = view.source_game === 'lmu' || apiPath === '/api/lmu/overlay';
   return <section aria-label="오버레이 설정" className="flex flex-col gap-5">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex flex-col gap-2">
@@ -159,13 +160,15 @@ export default function OverlaySettings({ apiBase, visible = true, fetcher = fet
             enabled ? '주행 중 자동 표시를 켰습니다.' : '주행 중 자동 표시를 껐습니다.')} />
       </Field>
       <FieldDescription id="overlay-auto-show-help">{autoAvailable
-        ? '차량에 탑승해 트랙에 있을 때 표시합니다. 차량 밖·리플레이·세션 종료·연결 끊김에는 숨깁니다. 잠깐 정차해도 유지합니다.'
+        ? lmu ? 'LMU의 최신 운전자 입력이 있고 트랙에 있을 때 표시합니다. 피트·차량 밖·일시정지·리플레이·세션 종료·연결 끊김에는 숨깁니다.' : '차량에 탑승해 트랙에 있을 때 표시합니다. 차량 밖·리플레이·세션 종료·연결 끊김에는 숨깁니다. 잠깐 정차해도 유지합니다.'
         : '실행 중인 앱 서버에 자동 표시 기능이 없습니다. 앱을 완전히 종료한 뒤 다시 실행해 주세요.'}</FieldDescription>
     </FieldGroup>
+    {lmu ? <p className="text-sm text-muted-foreground">LMU의 실제 가속·제동 입력과 현재 기어를 표시합니다. 주행 중 자동 표시는 기본으로 꺼져 있습니다. 켜 두면 LMU 선택 중 게임 연결을 기다렸다가 최신 주행 입력으로 표시합니다. 지연·일시정지·리플레이·피트·차량 밖에서는 숨깁니다. 위치·크기·불투명도는 LMU 전용으로 저장합니다. 미리보기와 샘플 장면은 가상 데이터입니다.</p> : <>
     <p className="text-sm text-muted-foreground">미리보기는 가상 데이터입니다. 연습 주행에서는 실제 ‘오늘의 한 가지’ 목표·통과 결과·최근 5회와 달성 축하를 표시합니다. 과제에서 선택한 내 랩 또는 Garage61 종합 기준을 그대로 비교하며, 과제가 없으면 현재 조건과 비슷한 Garage61 랩을 찾습니다. 내 입력은 형광 실선, 기준은 옅은 면이며 기준의 다음 2초를 미리 보여줍니다. 맞는 기준이 없으면 내 입력만 표시합니다.</p>
     <p className="text-sm text-muted-foreground">연습·퀄리·레이스의 기본 화면은 Garage61 비교 그래프입니다. 상단 글자 없이 그래프를 넓게 표시하며, 하단에는 같은 기준 대비 직전 코너 시간 차이·제동 시작 위치 차이를 표시합니다. 깨끗한 통과와 저장된 코너 구간 정의가 없거나 측정이 부족하면 —로 표시합니다. 연습 입력 달성과 실제 페이스 개선 확인은 구분합니다.</p>
     <p className="text-sm text-muted-foreground">자동 표시를 켜 두면 세션 연결 후 차량·트랙·노면 조건이 확인되는 대로 기준을 미리 준비합니다. 로컬 Garage61 CSV 캐시를 먼저 확인하고, 맞는 자료가 없으면 다운로드합니다. 차량 밖에서도 기준만 준비하며 오버레이는 숨깁니다.</p>
     <p className="text-sm text-muted-foreground">기본 화면 오른쪽의 큰 숫자는 현재 기어입니다. 같은 트랙 위치의 Garage61 기어보다 낮으면 빨강·같으면 흰색·높으면 초록이며, 비교 자료가 없거나 중립·후진이면 회색으로 표시합니다.</p>
+    </>}
     {view.practice && <p className="text-sm text-muted-foreground" data-testid="overlay-active-practice">
       현재 과제: {view.practice.title} · {view.practice.corner} · {view.practice.recent_ok}/5
       {view.practice.phase === 'WARMUP' ? ' · 워밍업 중' : ''}

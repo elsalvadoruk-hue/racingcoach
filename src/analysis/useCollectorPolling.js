@@ -40,6 +40,7 @@ export function useCollectorPolling({
         }
 
         const payload = await loadGarage61CollectorStatus(filename);
+        if (cancelled) return;
         const job = payload?.job;
         if (!job?.job_id) {
           nextDelayMs = 5000;

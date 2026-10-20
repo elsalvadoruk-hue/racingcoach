@@ -16,6 +16,7 @@ export function useTelemetryEvents({
     let eventGeneration = 0;
 
     const handleStatus = async (payload) => {
+      if (cancelled) return;
       const telemetry = payload?.telemetry;
       if (!telemetry) return;
       setStatus(payload);
@@ -94,6 +95,7 @@ export function useTelemetryEvents({
         }
       };
       eventSource.onerror = () => {
+        if (cancelled) return;
         eventSource?.close();
         if (!polling) {
           polling = window.setInterval(async () => {

@@ -9,6 +9,7 @@ jest.mock('../components/OverlaySettings', () => ({ __esModule: true, default: p
 jest.mock('../components/SessionLogExport', () => ({ __esModule: true, default: () => <div>real-session-log</div> }));
 jest.mock('../components/RadioAudioPrepare', () => ({ __esModule: true, default: () => <div>real-radio-prepare</div> }));
 jest.mock('../components/RadioDiagnostics', () => ({ __esModule: true, default: () => <div>real-diagnostics</div> }));
+jest.mock('../components/UpdateCenter', () => ({ UpdateSettings: () => <div>update-settings</div> }));
 jest.mock('../components/LiveCoach', () => ({ NoteText: ({ note }) => <p>{note.text}</p>, CornerCoach: () => <div>real-corner-coach</div>,
   VoiceReview: props => { mockVoiceReviewProps = props; return <div>real-voice-review</div>; } }));
 jest.mock('./RuntimePreview', () => ({ AudioPreferences: () => <div>real-audio-settings</div>, VoicePreview: () => <div>real-voice-workspace</div> }));

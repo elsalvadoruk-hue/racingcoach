@@ -36,7 +36,7 @@ def _unavailable(code):
         "NOT_OPEN": "실시간 연결을 먼저 시작해야 합니다.",
         "ABI_MISMATCH": "설치된 LMU SDK와 실시간 브리지의 ABI가 일치하지 않습니다. 브리지를 다시 빌드해야 합니다.",
         "NATIVE_NOT_BUILT": "설치된 LMU SDK에 맞춘 실시간 브리지를 먼저 빌드해야 합니다.",
-        "SDK_UNAVAILABLE": "설치된 LMU 공식 SDK 헤더를 찾을 수 없습니다.",
+        "SDK_UNAVAILABLE": "설치된 LMU 공식 SDK 헤더를 찾을 수 없습니다. LMU_SDK_DIR의 Support/SharedMemoryInterface 경로를 확인해 주세요.",
         "UNSUPPORTED_PLATFORM": "LMU 실시간 연결은 64비트 Windows Python에서 지원합니다.",
         "COMPILER_UNAVAILABLE": "Visual Studio C++ 빌드 도구를 찾을 수 없습니다.",
         "BUILD_FAILED": "LMU 실시간 브리지 빌드에 실패했습니다. 빌드 로그를 확인해 주세요.",
@@ -46,8 +46,26 @@ def _unavailable(code):
     return LmuLiveUnavailable(code, messages.get(code, "LMU 실시간 공유 메모리를 안전하게 연결할 수 없습니다."))
 
 
-def header_fingerprint(sdk_dir=SDK_DIR):
-    sdk_dir = Path(sdk_dir)
+def resolve_sdk_dir(sdk_dir=None):
+    """Resolve explicit > LMU_SDK_DIR > the installed game (any Steam library)."""
+    configured = os.environ.get("LMU_SDK_DIR", "").strip()
+    if sdk_dir is None and not configured:
+        from lmu_install import default_game_folder
+        return (default_game_folder() / "Support" / "SharedMemoryInterface").resolve()
+    return Path(sdk_dir if sdk_dir is not None else configured).expanduser().resolve()
+
+
+def sdk_configuration(sdk_dir=None, *, source=None):
+    """Non-identifying diagnostics; never load a DLL or attach to the game."""
+    folder = resolve_sdk_dir(sdk_dir)
+    missing = [name for name in HEADERS if not (folder / name).is_file()]
+    return {"source": source or ("EXPLICIT" if sdk_dir is not None else
+                                "ENVIRONMENT" if os.environ.get("LMU_SDK_DIR", "").strip() else "DEFAULT"),
+            "headers_available": not missing, "missing_headers": missing}
+
+
+def header_fingerprint(sdk_dir=None):
+    sdk_dir = resolve_sdk_dir(sdk_dir)
     digest = hashlib.sha256()
     try:
         for name in HEADERS:
@@ -63,11 +81,23 @@ def _platform_check():
         raise _unavailable("UNSUPPORTED_PLATFORM")
 
 
-def build_native_bridge(sdk_dir=SDK_DIR, build_dir=BUILD_DIR):
+def build_artifact_dir(sdk_dir=None):
+    """Content-addressed native output; never overwrite a previous loaded DLL."""
+    fingerprint = header_fingerprint(sdk_dir)
+    identity = hashlib.sha256(BRIDGE_SOURCE.read_bytes() + fingerprint.encode('ascii')).hexdigest()[:24]
+    return BUILD_DIR / ('bridge-' + identity)
+
+
+def build_native_bridge(sdk_dir=None, build_dir=None):
     """Explicit local build; does not open mappings, events or a game process."""
     _platform_check()
-    sdk_dir, build_dir = Path(sdk_dir).resolve(), Path(build_dir).resolve()
+    source = SharedMemorySource(sdk_dir=sdk_dir, build_dir=build_dir)
+    sdk_dir, build_dir = source.sdk_dir, source.build_dir
     fingerprint = header_fingerprint(sdk_dir)
+    if source._build_dir_override is None and (build_dir / 'manifest.json').is_file():
+        # A verified immutable artifact can already be mapped by another app.
+        # Reuse it without invoking the linker or touching any existing file.
+        return source.probe()
     vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Microsoft Visual Studio/Installer/vswhere.exe"
     try:
         installations = subprocess.run(
@@ -109,17 +139,35 @@ def build_native_bridge(sdk_dir=SDK_DIR, build_dir=BUILD_DIR):
         "dll_sha256": hashlib.sha256(dll_path.read_bytes()).hexdigest(),
     }
     (build_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    return SharedMemorySource(sdk_dir=sdk_dir, build_dir=build_dir).probe()
+    return source.probe()
 
 
 class SharedMemorySource:
-    def __init__(self, *, sdk_dir=SDK_DIR, build_dir=BUILD_DIR):
-        self.sdk_dir, self.build_dir = Path(sdk_dir), Path(build_dir)
+    supports_readonly_pit_rest = True
+    def __init__(self, *, sdk_dir=None, build_dir=None):
+        self._sdk_source = ("EXPLICIT" if sdk_dir is not None else
+                            "ENVIRONMENT" if os.environ.get("LMU_SDK_DIR", "").strip() else "DEFAULT")
+        self.sdk_dir = resolve_sdk_dir(sdk_dir)
+        self._build_dir_override = Path(build_dir).resolve() if build_dir is not None else None
+        self._artifact_dir = None
         self._dll = None
         self._handle = None
         self._guard = threading.RLock()
         self._connection_id = None
         self._fingerprint = None
+
+    @property
+    def build_dir(self):
+        # Resolve lazily: constructing a source or inspecting its configuration
+        # must still succeed on a machine without installed SDK headers.
+        if self._build_dir_override is not None:
+            return self._build_dir_override
+        if self._artifact_dir is None:
+            self._artifact_dir = build_artifact_dir(self.sdk_dir)
+        return self._artifact_dir
+
+    def configuration(self):
+        return sdk_configuration(self.sdk_dir, source=self._sdk_source)
 
     def _load(self):
         _platform_check()
@@ -162,6 +210,7 @@ class SharedMemorySource:
         """Verify native build and SDK ABI without attaching to the game."""
         with self._guard:
             return {"provider": "LMU_SHARED_MEMORY", "state": "READY", "attached": bool(self._handle),
+                    "sdk_dir": str(self.sdk_dir), "sdk_configuration": self.configuration(),
                     "game_version_support": "UNVERIFIED_INSTALLED_SDK_ONLY",
                     "abi": self._load()}
 
@@ -187,7 +236,8 @@ class SharedMemorySource:
             except LmuLiveUnavailable:
                 self.close()
                 raise
-            buffer = ctypes.create_string_buffer(16384)
+            # Bounded 104-car proximity transport, with no identifying strings.
+            buffer = ctypes.create_string_buffer(262144)
             result = self._dll.lmu_read(self._handle, timeout_ms, buffer, len(buffer))
             if result < 0:
                 code = self._dll.lmu_error().decode("ascii", "replace")

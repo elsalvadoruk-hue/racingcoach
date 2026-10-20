@@ -1090,9 +1090,17 @@ def _list_raw_ibt_files(limit: Optional[int] = None) -> list[Path]:
     return ordered[:limit] if limit is not None else ordered
 
 
+def recording_reader(path: Path):
+    """IBT files, or LMU recordings presented as parsed IBT files (lmu_ibt)."""
+    if Path(path).suffix.casefold() == ".duckdb":
+        from lmu_ibt import LmuIbtReader
+        return LmuIbtReader(path)
+    return IBTReader(path)
+
+
 class TelemetryRepository(_TelemetryRepository):
     def __init__(self, max_files: int = MAX_CACHE_FILES):
-        super().__init__(max_files, reader_factory=lambda path: IBTReader(path))
+        super().__init__(max_files, reader_factory=recording_reader)
 
 
 repository = TelemetryRepository()
@@ -1185,8 +1193,10 @@ def telemetry_file_visibility(path: Path, telemetry: Optional[ParsedTelemetry] =
             "minimum_required_valid_laps": MIN_DISPLAY_VALID_LAPS,
             "car_name": metadata.get("car_name") or "Unknown Car",
             "car_path": metadata.get("car_path") or "",
+            "car_platform_id": metadata.get("car_platform_id"),
             "track_name": metadata.get("track_name") or "Unknown Track",
             "track_path": metadata.get("track_path") or "",
+            "track_platform_id": metadata.get("track_platform_id"),
             "track_config": metadata.get("track_config") or "",
             "session_type": metadata.get("session_type"),
             "session_duration_s": metadata.get("session_duration_s"),
@@ -1237,6 +1247,12 @@ def list_ibt_files(limit: int = 50) -> list[Path]:
 
 
 def resolve_telemetry_file(filename: Optional[str] = None) -> Optional[Path]:
+    import lmu_recordings
+    if lmu_recordings.is_lmu_name(filename):
+        path = lmu_recordings.resolve(filename)
+        if path is not None and lmu_recordings.recording_busy(path):
+            raise TelemetryFileBusy(path)
+        return path
     files = _list_raw_ibt_files(None if filename else FILE_SCAN_LIMIT)
     if filename:
         wanted = Path(filename).name
@@ -1306,6 +1322,17 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
         self._metric_cache: dict[tuple[Any, ...], dict[str, Any]] = cache["metrics"]
         self._grid_ids: dict[int, tuple[Any, tuple[Any, ...]]] = cache["ids"]
 
+
+    def _name_corners(self, corners: list[dict[str, Any]], definitions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Confirmed numbers/names replace "자동 구간 N", as in analyze()."""
+        metadata = self.telemetry.metadata
+        names = _CORNER_DEFINITION_STORE.names_for(definitions, metadata.get("track_platform_id"), metadata.get("track_config"))
+        for corner in corners:
+            named = names.get(corner.get("id"))
+            call = corner_names.spoken_call(named.get("number"), named.get("name"), named.get("spoken")) if named else None
+            if call:
+                corner.update(official_turn_number=named.get("number"), turn_name=named.get("name"), label=call)
+        return corners
 
     def analyze(self, request: AnalyzeRequest) -> dict[str, Any]:
         request = request_with_structured_feedback(request)
@@ -2222,7 +2249,7 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
 # ---------------------------------------------------------------------------
 
 
-def comparison_detail_payload(telemetry: ParsedTelemetry, payload: ComparisonDetailRequest) -> dict[str, Any]:
+def comparison_detail_payload(telemetry: ParsedTelemetry, payload: ComparisonDetailRequest, *, reference_telemetry=None, suppress_local_reference=False) -> dict[str, Any]:
     if payload.end_pct <= payload.start_pct:
         raise HTTPException(status_code=422, detail="end_pct는 start_pct보다 커야 합니다.")
     if payload.reference_mode == "SINGLE" and len(payload.external_reference_files) != 1:
@@ -2233,11 +2260,24 @@ def comparison_detail_payload(telemetry: ParsedTelemetry, payload: ComparisonDet
         raise HTTPException(status_code=422, detail="비교할 유효 대상 랩이 없습니다.")
     target_grid = analyzer._coaching_grid(target) if not target.valid else analyzer._lap_grid(target)
     reference_grid = analyzer._lap_grid(local_reference) if local_reference and payload.reference_mode == "LOCAL" else None
+    if payload.reference_mode == 'LOCAL' and reference_telemetry is not None:
+        from workspace_personal_reference import validate_personal_reference
+        reference_analyzer = TelemetryAnalyzer(reference_telemetry)
+        local_reference = next((lap for lap in reference_telemetry.laps if lap.lap_number == payload.reference_lap), None)
+        validate_personal_reference(telemetry, target, reference_telemetry, local_reference)
+        reference_grid = _on_distance_axis(reference_analyzer._lap_grid(local_reference), target_grid['distance_pct'])
+    elif payload.reference_mode == 'LOCAL' and payload.reference_lap == target.lap_number and target.valid:
+        local_reference, reference_grid = target, target_grid
+    if suppress_local_reference and payload.reference_mode == 'LOCAL':
+        local_reference, reference_grid = None, None
     distributions = {}
     support = {}
     reference_label = f"내 기준 랩 {local_reference.lap_number}" if reference_grid is not None else "비교 기준 없음"
     line_grid = reference_grid
     line_source = {"type": "LOCAL_ACTUAL_LAP", "label": reference_label, "chart_basis": "ACTUAL_LAP"} if reference_grid is not None else None
+    if reference_telemetry is not None and reference_grid is not None:
+        reference_label = f'내 기준 랩 {local_reference.lap_number} · {reference_telemetry.path.name}'
+        line_source.update(label=reference_label, reference_file=reference_telemetry.path.name)
     if payload.reference_mode in {"AGGREGATE", "SINGLE"}:
         external = analyzer._external_reference_analysis(target, payload.external_reference_files)
         if external.get("status") != "READY":
@@ -3620,7 +3660,9 @@ def compare_experiments(
 # ---------------------------------------------------------------------------
 
 
-live_telemetry = LiveTelemetry()
+# One live connection for whichever sim runs: iRacing, or LMU through its SDK adapter.
+from game_sdk import default_game_sdk
+live_telemetry = LiveTelemetry(sdk_factory=default_game_sdk if os.name == 'nt' else None)
 # Pit facts learned from driven stops live beside the database (seeded by scripts/learn_pit_history.py).
 live_telemetry.pit_knowledge = PitKnowledge(os.getenv("IRACING_PIT_KNOWLEDGE_PATH") or MEMORY_DB_PATH.parent / "pit-knowledge.json")
 live_telemetry.race_history = RaceHistory(os.getenv("IRACING_RACE_HISTORY_PATH") or MEMORY_DB_PATH.parent / "race-history.json")
@@ -3680,6 +3722,9 @@ def last_analysed_session(identity: dict[str, Any]) -> Optional[dict[str, Any]]:
 live_telemetry.history_lookup = last_analysed_session
 def live_corner_definitions(identity: dict[str, Any]) -> Optional[list[dict[str, Any]]]:
     definitions = _CORNER_DEFINITION_STORE.find(identity.get("car_id"), identity.get("track_id"), identity.get("track_config"))
+    if not definitions and identity.get("game") == "lmu":
+        import lmu_corner_registry
+        return lmu_corner_registry.lookup(identity)
     if not definitions:
         return definitions
     names = _CORNER_DEFINITION_STORE.names_for(definitions, identity.get("track_id"), identity.get("track_config"))
@@ -3716,7 +3761,9 @@ def corner_names_payload(telemetry: ParsedTelemetry) -> dict[str, Any]:
         disk_key = JsonCache.key(telemetry.path, track_id, CornerDefinitionStore.VERSION) if telemetry.path.is_file() else None
         kept = _CORNER_SUGGESTION_DISK.get(disk_key) if disk_key else None
         if kept is None:
-            kept = (corner_names.suggest(definitions, grid["distance_pct"], grid.get("Lat", []), grid.get("Lon", []), track_id)
+            # LMU recordings fit their path to the matching iRacing map (lmu_ibt.official_track_id).
+            map_id = str(metadata.get("official_track_id") or track_id or "")
+            kept = (corner_names.suggest(definitions, grid["distance_pct"], grid.get("Lat", []), grid.get("Lon", []), map_id)
                     if track_id and "Lat" in grid and "Lon" in grid else {"status": "NO_GPS", "corners": {}})
             if disk_key:
                 _CORNER_SUGGESTION_DISK.put(disk_key, kept)
@@ -3731,6 +3778,7 @@ def corner_names_payload(telemetry: ParsedTelemetry) -> dict[str, Any]:
                         "call": corner_names.spoken_call(kept.get("number"), kept.get("name"), kept.get("spoken")) if kept else None,
                         "suggested_number": proposed.get("number"), "suggested_name": proposed.get("name"), "labels": proposed.get("labels", [])})
     confirmed = bool((_CORNER_DEFINITION_STORE.track_names(track_id, config) or {}).get("confirmed"))
+    base["official_track_id"] = metadata.get("official_track_id")
     return {**base, "status": "CONFIRMED" if confirmed else suggestion["status"], "suggestion_status": suggestion["status"],
             "kind": suggestion.get("kind"), "fit_median_m": suggestion.get("fit_median_m"), "confirmed": confirmed, "corners": corners}
 voice_note_store = VoiceNoteStore(os.getenv("IRACING_VOICE_DB_PATH", str(MEMORY_DB_PATH)))
@@ -3770,7 +3818,7 @@ overlay_controller = OverlayController(reference=OverlayReference(
 
 @asynccontextmanager
 async def app_lifespan(_app):
-    async with managed_lifespan(live_telemetry, overlay_controller, warm_external_references):
+    async with managed_lifespan(live_telemetry, overlay_controller, lambda: warm_background()):
         yield
 
 
@@ -3798,6 +3846,13 @@ async def load_analysis(request: AnalyzeRequest, *, update_current_analysis: boo
             return local_result, analyzer.build_memory_snapshot(local_result, request)
 
         result, snapshot = await asyncio.to_thread(analyze_and_snapshot)
+        # The automatic lap library is independent of manually assigned analysis
+        # session types. It stores compact observed conditions, never raw samples.
+        try:
+            from workspace_personal_reference import index_telemetry
+            await asyncio.to_thread(index_telemetry, telemetry)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            logger.warning('Personal reference indexing failed: %s', exc)
         snapshot_session = snapshot.get("session", {})
         file_hash = str(snapshot_session.get("file_hash") or "")
         target_mode = str(snapshot_session.get("session_mode") or request.session_mode.value)
@@ -4221,8 +4276,46 @@ _handlers = register_workspace_routes(app, WorkspaceRoutesServices(
     extract_setup_summary=lambda *args, **kwargs: extract_setup_summary(*args, **kwargs),
     setup_exploration_candidate=lambda *args, **kwargs: setup_exploration_candidate(*args, **kwargs),
     json_safe=lambda *args, **kwargs: json_safe(*args, **kwargs),
+    align_reference_grid=lambda *args, **kwargs: _on_distance_axis(*args, **kwargs),
 ))
 workspace_request = _handlers.workspace_request
+# LMU recordings run through the same analysis workspace (lmu_routes).
+app.state.workspace_request = workspace_request
+
+
+def import_lmu_corner_names() -> int:
+    """Carry corner numbers confirmed on the earlier LMU screen into the shared store."""
+    from lmu_irsdk import stable_id
+    legacy = Path(__file__).resolve().parent.parent / "logs" / "lmu-corner-names.json"
+    try:
+        tracks = json.loads(legacy.read_text(encoding="utf-8")).get("tracks") or {}
+    except (OSError, ValueError):
+        return 0
+    imported = 0
+    for entry in tracks.values():
+        name, layout = entry.get("track_name"), entry.get("track_layout")
+        if not entry.get("confirmed") or not name or (layout and layout != name):
+            continue
+        track_id = stable_id("track", name)
+        if _CORNER_DEFINITION_STORE.track_names(track_id, ""):
+            continue
+        points = [{"pct": point["apex_pct"], "number": point.get("number"), "name": point.get("name"),
+                   "spoken": point.get("spoken")} for point in entry.get("points") or []
+                  if isinstance(point.get("apex_pct"), (int, float))]
+        if points:
+            _CORNER_DEFINITION_STORE.set_track_names(track_id, "", points)
+            imported += 1
+    return imported
+
+
+
+def warm_background() -> None:
+    try:
+        import_lmu_corner_names()
+    except (OSError, ValueError):
+        logger.warning("Importing LMU corner numbers failed", exc_info=True)
+    warm_external_references()
+app.state.telemetry_file_visibility = telemetry_file_visibility
 
 
 def loopback_sockets(port: int) -> list:

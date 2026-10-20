@@ -25,13 +25,14 @@ const formatValue = (value, unit) => {
   if (!finite(value)) return '--';
   if (unit === 's') return `${value > 0 ? '+' : ''}${value.toFixed(3)}`;
   if (unit === 'g') return value.toFixed(2);
+  if (unit === 'gear') return value === 0 ? 'N' : value === -1 ? 'R' : String(Math.round(value));
   if (unit === '' || unit === 'rpm') return String(Math.round(value));
   return value.toFixed(1);
 };
 
 export function defaultLaps(laps, preferred = []) {
   const complete = laps.filter((lap) => finite(lap.lap_time_s));
-  const valid = complete.filter((lap) => lap.status === 'VALID').sort((a, b) => a.lap_time_s - b.lap_time_s);
+  const valid = complete.filter((lap) => lap.status === 'VALID' || lap.measurement_eligible === true).sort((a, b) => a.lap_time_s - b.lap_time_s);
   const picked = [];
   [...preferred, ...valid.map((lap) => lap.lap_number)].forEach((number) => {
     if (number != null && !picked.includes(number) && complete.some((lap) => lap.lap_number === number) && picked.length < 4) picked.push(number);
@@ -62,11 +63,11 @@ function AddLaps({ otherFiles, references, loadLaps, onAdd, full }) {
         <div className="flex flex-wrap items-center gap-2 text-sm">
           <select value={file} onChange={(event) => setFile(event.target.value)} aria-label="다른 주행 파일" className="max-w-full rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
             <option value="">다른 주행 파일 고르기</option>
-            {otherFiles.map((item) => <option key={item.name} value={item.name}>{item.label || item.name}</option>)}
+            {otherFiles.map((item) => <option key={item.name} value={item.name} disabled={item.analyzable === false}>{item.label || item.display_name || item.file_name || item.name}</option>)}
           </select>
           <select value={lap} onChange={(event) => setLap(event.target.value)} aria-label="그 파일의 랩" disabled={!fileLaps.length} className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm">
             <option value="">랩</option>
-            {fileLaps.map((item) => <option key={item.lap_number} value={item.lap_number}>랩 {item.lap_number} · {lapTime(item.lap_time_s)}{item.valid ? '' : ' (무효)'}</option>)}
+            {fileLaps.map((item) => <option key={item.lap_number} value={item.lap_number} disabled={item.measurement_eligible === false}>랩 {item.lap_number} · {lapTime(item.lap_time_s)}{item.measurement_eligible === true ? ' (유효성 확인 필요)' : item.measurement_eligible === false ? ' (측정 자료 부족)' : item.valid ? '' : ' (무효)'}</option>)}
           </select>
           <button type="button" disabled={!file || !lap || full} onClick={() => { onAdd({ source: 'IBT', filename: file, lap: Number(lap) }); setLap(''); }}
             className="rounded-lg border border-border px-2.5 py-1.5 text-sm disabled:opacity-40">이 랩 더하기</button>
@@ -159,11 +160,11 @@ export function PanBar({ range, onChange }) {
 
 const extraKey = (extra) => (extra.source === 'IBT' ? `ibt:${extra.filename}#${extra.lap}` : `g61:${extra.filename}`);
 
-export default function LapOverlay({ laps = [], corners = [], preferredLaps = [], load, otherFiles = [], references = [], loadLaps, fillHeight = false, readoutGroupSize = 0 }) {
+export default function LapOverlay({ laps = [], corners = [], preferredLaps = [], preferredExtras = [], preferredBaseKey = null, load, otherFiles = [], references = [], loadLaps, fillHeight = false, readoutGroupSize = 0 }) {
   const complete = useMemo(() => laps.filter((lap) => finite(lap.lap_time_s)), [laps]);
   const [chosen, setChosen] = useState(() => defaultLaps(laps, preferredLaps));
-  const [extras, setExtras] = useState([]);
-  const [baseKey, setBaseKey] = useState(null);
+  const [extras, setExtras] = useState(() => preferredExtras.slice(0, MAX_EXTRA));
+  const [baseKey, setBaseKey] = useState(preferredBaseKey);
   const [channels, setChannels] = useState(DEFAULT_CHANNELS);
   const [range, setRange] = useState([0, 1]);
   // The stretch asked from the server: the window shown plus one window on each side, so panning (wheel over
@@ -182,7 +183,7 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
   const [chartSize, setChartSize] = useState(null);
   const lapKey = laps.map((lap) => lap.lap_number).join(',');
 
-  useEffect(() => { setChosen(defaultLaps(laps, preferredLaps)); setExtras([]); setBaseKey(null); setRange([0, 1]); setFetchRange([0, 1]); setHistory([]); setCorner(''); }, [lapKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setChosen(defaultLaps(laps, preferredLaps)); setExtras(preferredExtras.slice(0, MAX_EXTRA)); setBaseKey(preferredBaseKey); setRange([0, 1]); setFetchRange([0, 1]); setHistory([]); setCorner(''); }, [lapKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     let live = true;
@@ -292,7 +293,11 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
       const value = values[i];
       if (!finite(value)) { open = false; continue; }
       const y = lane.top + lane.height - ((value - lane.lo) / (lane.hi - lane.lo)) * lane.height;
-      d += `${open ? 'L' : 'M'}${x(distances[i]).toFixed(1)} ${y.toFixed(1)}`; open = true;
+      const px = x(distances[i]).toFixed(1), py = y.toFixed(1);
+      // Gear is a discrete state. A diagonal ramp would invent intermediate
+      // gears that neither game reported.
+      d += open && lane.channel.key === 'gear' ? `H${px}V${py}` : `${open ? 'L' : 'M'}${px} ${py}`;
+      open = true;
     }
     return d;
   };
@@ -370,7 +375,7 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
                   <span className="h-2.5 w-2.5 rounded-full" style={{ background: on ? colourOf(lap.lap_number) : 'transparent', border: '1px solid currentColor' }} />
                   <span className="font-mono">랩 {lap.lap_number}</span>
                   <span className="font-mono text-xs text-muted-foreground">{lapTime(lap.lap_time_s)}</span>
-                  {lap.status !== 'VALID' && <span className="text-xs text-warning">무효</span>}
+                  {lap.status !== 'VALID' && <span className="text-xs text-warning">{lap.measurement_eligible ? '유효성 확인 필요' : '무효'}</span>}
                 </button>
                 {on && (
                   <button type="button" aria-label={`랩 ${lap.lap_number}을 기준으로`} title="시간 차이의 기준 랩" onClick={() => setBaseKey(String(lap.lap_number))}
@@ -426,6 +431,7 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
       </div>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}
+      {data?.provider === 'LMU' && Object.entries(data.channel_support || {}).filter(([, info]) => info.status !== 'AVAILABLE').map(([key, info]) => <p className="text-sm text-muted-foreground" key={key}>{({ throttle_ratio: '스로틀', brake_ratio: '브레이크', steering_ratio: '조향 입력', gear: '기어' })[key] || key}: {info.reason || '일부 구간의 관측값을 확인할 수 없습니다.'}</p>)}
       {!chosen.length && !extras.length && <p className="text-sm text-muted-foreground">겹쳐 볼 랩을 하나 이상 고르세요.</p>}
       {data && lanes.length > 0 && (
         <div className="grid gap-3 2xl:grid-cols-[minmax(0,1fr)_260px]">
@@ -453,7 +459,7 @@ export default function LapOverlay({ laps = [], corners = [], preferredLaps = []
                 {lapNumbers.map((key) => {
                   const values = data.series[key]?.[lane.channel.key];
                   if (!values) return null;
-                  return <path key={key} d={lineFor(values, lane)} fill="none" stroke={colourOf(key)} strokeWidth={key === baseOf ? 2.2 : 1.4} clipPath="url(#lap-overlay-plot)"
+                  return <path key={key} data-overlay-channel={lane.channel.key} data-testid={`overlay-trace-${lane.channel.key}-${key}`} d={lineFor(values, lane)} fill="none" stroke={colourOf(key)} strokeWidth={key === baseOf ? 2.2 : 1.4} clipPath="url(#lap-overlay-plot)"
                     strokeDasharray={key.includes(':') ? '6 3' : undefined} />;
                 })}
               </g>

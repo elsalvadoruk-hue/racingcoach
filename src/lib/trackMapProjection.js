@@ -37,7 +37,8 @@ export function gpsToRegisteredMap(point, map) {
 const projectPath = (path, project) => {
   const valid = validPoints(path);
   return valid.map((point, index) => ({ ...point, ...project(point),
-    breakBefore: index > 0 && point.sourceIndex > valid[index - 1].sourceIndex + 1,
+    breakBefore: Boolean(point.breakBefore || (index > 0 && (point.sourceIndex > valid[index - 1].sourceIndex + 1
+      || (point.segment != null && valid[index - 1].segment != null && point.segment !== valid[index - 1].segment)))),
   }));
 };
 

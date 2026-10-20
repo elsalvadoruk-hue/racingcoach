@@ -13,6 +13,7 @@ export function useWorkspaceInitialization({
       setInitialLoading(true);
       try {
         const [filePayload, statusPayload] = await Promise.all([loadFiles(), loadStatus()]);
+        if (cancelled) return;
         void loadMemory();
         void loadGarage61ApiStatus();
         if (cancelled) return;

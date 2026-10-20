@@ -9,6 +9,8 @@ import { useTelemetryEvents } from './useTelemetryEvents';
 import { useCollectorPolling } from './useCollectorPolling';
 
 export function useAnalysisWorkspace() {
+  const workspaceMounted = useRef(true);
+  useEffect(() => { workspaceMounted.current = true; return () => { workspaceMounted.current = false; }; }, []);
 
   const [hoverHelpEnabled, toggleHoverHelp] = useHoverHelpSetting();
   const workflow = useTrialWorkflow();
@@ -269,6 +271,7 @@ export function useAnalysisWorkspace() {
   }, []);
 
   const startGarage61Collection = useCallback(async (filename = null, force = false) => {
+    if (!workspaceMounted.current) return null;
     const effectiveFilename = filename || selectedFileRef.current || '';
     if (!effectiveFilename) return null;
     setGarage61CollectorLoading(true);
@@ -314,8 +317,9 @@ export function useAnalysisWorkspace() {
   }, []);
 
   const maybeStartGarage61Collection = useCallback(async (filename, referencePayload = null) => {
-    if (!filename) return null;
+    if (!filename || !workspaceMounted.current) return null;
     const health = referencePayload?.collector_health || (await loadGarage61CollectorStatus(filename))?.health;
+    if (!workspaceMounted.current) return null;
     if (!health?.enabled || !health?.needs_collection) return null;
     const contextKey = health?.context?.context_key || `${filename}:unknown`;
     if (collectorAutoContextRef.current === contextKey) return null;
@@ -342,6 +346,8 @@ export function useAnalysisWorkspace() {
       forceAutoLaps = false,
       targetLapOverride = undefined,
       referenceLapOverride = undefined,
+      referenceFilenameOverride = undefined,
+      referenceSelectionOverride = undefined,
       onFailure = null,
     } = {}) => {
       const effectiveFilename = filename || selectedFileRef.current || null;
@@ -387,8 +393,12 @@ export function useAnalysisWorkspace() {
         const requestedReferenceLap = referenceLapOverride !== undefined ? referenceLapOverride : forceAutoLaps
           ? null
           : (referenceLapManual && referenceLap ? Number(referenceLap) : null);
+        const referenceFilename = referenceFilenameOverride ?? (!forceAutoLaps && analysisSnapshot?.filename === effectiveFilename ? analysisSnapshot.referenceFilename : undefined);
+        const referenceSelection = referenceSelectionOverride ?? (!forceAutoLaps && analysisSnapshot?.filename === effectiveFilename ? analysisSnapshot.referenceSelection : undefined);
         const snapshot = { filename: effectiveFilename, ...effectiveFeedback,
-          referenceMode: effectiveMode, references: effectiveExternalReferences, targetLap: requestedTargetLap, referenceLap: requestedReferenceLap };
+          referenceMode: effectiveMode, references: effectiveExternalReferences, targetLap: requestedTargetLap, referenceLap: requestedReferenceLap,
+          ...(referenceFilename ? { referenceFilename } : {}),
+          ...(referenceSelection ? { referenceSelection } : {}) };
 
         const payload = await requestJson('/api/analyze', {
           signal: controller.signal,
@@ -403,7 +413,7 @@ export function useAnalysisWorkspace() {
             feedback_symptom: effectiveFeedback.feedbackSymptom || null,
             setup_mode: effectiveFeedback.setupMode,
             target_lap: requestedTargetLap,
-            reference_lap: requestedReferenceLap,
+            reference_lap: referenceFilename && referenceFilename !== effectiveFilename ? null : requestedReferenceLap,
             filename: effectiveFilename,
             persist_memory: shouldPersist,
             replace_existing_mode: Boolean(replaceMemoryMode),
@@ -445,7 +455,7 @@ export function useAnalysisWorkspace() {
         if (isCurrent()) setLoading(false);
       }
     },
-    [feedbackPhase, feedbackSpeed, feedbackSymptom, setupMode, loadFiles, loadMemory, pitRule, readDraft, referenceLap, referenceLapManual, selectedExternalReferences, sessionMode, targetLap, targetLapManual, userFeedback]
+    [analysisSnapshot, feedbackPhase, feedbackSpeed, feedbackSymptom, setupMode, loadFiles, loadMemory, pitRule, readDraft, referenceLap, referenceLapManual, selectedExternalReferences, sessionMode, targetLap, targetLapManual, userFeedback]
   );
 
   const handleExperimentStored = useCallback(async () => {
@@ -757,11 +767,12 @@ export function useAnalysisWorkspace() {
     setSelectedExternalReferences(refs); setReferenceMode(mode);
     setTargetLap(String(sessionData.defaultTarget));
     setReferenceLap(sessionData.defaultReference == null ? '' : String(sessionData.defaultReference));
-    setTargetLapManual(true); setReferenceLapManual(true);
+    setTargetLapManual(true); setReferenceLapManual(sessionData.reference_selection !== 'AUTO');
     setSessionMode(payload.session_policy?.session_mode || initialModeForFile(sessionData.session));
     setAnalysis(payload); setDetail(null); setLoading(false); setError(''); setNewFileNotice('');
     setAnalysisSnapshot({ filename, ...nextFeedback,
-      referenceMode: mode, references: refs, targetLap: sessionData.defaultTarget, referenceLap: sessionData.defaultReference });
+      referenceMode: mode, references: refs, targetLap: sessionData.defaultTarget, referenceLap: sessionData.defaultReference,
+      referenceFilename: sessionData.reference_filename, referenceSelection: sessionData.reference_selection });
     void loadExternalReferences(filename, false);
   };
 

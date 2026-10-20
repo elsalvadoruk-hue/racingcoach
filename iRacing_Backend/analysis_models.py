@@ -81,6 +81,7 @@ class AnalyzeRequest(BaseModel):
 
 class ComparisonDetailRequest(BaseModel):
     filename: Optional[str] = None
+    reference_filename: Optional[str] = None
     target_lap: Optional[int] = None
     reference_lap: Optional[int] = None
     external_reference_files: list[str] = Field(default_factory=list, max_length=24)

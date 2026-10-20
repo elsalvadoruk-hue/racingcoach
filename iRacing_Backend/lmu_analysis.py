@@ -5,6 +5,7 @@ import math
 import numpy as np
 from telemetry_core import AnalysisLap, ChannelTrace, input_zones
 from analysis_bridge import braking_measurement
+from lmu_pedal_usage import pedal_usage
 
 
 # Explicit units only. Steering remains a ratio, never a wheel angle.
@@ -25,6 +26,14 @@ def normalize_lap(metadata, lap, specs, values, gps_start, distance_times, dista
     support = {"distance_m": {"status": "AVAILABLE", "source_name": "Lap Dist", "source_unit": "m",
                                "unit": "m", "frequency_hz": specs["lap dist"].frequency_hz,
                                "invalid_samples": 0, "sample_count": len(distance_times)}}
+    distance_period = 1/specs["lap dist"].frequency_hz
+    leading_unmapped = max(0., float(distance_times[0]-lap.start_time_s))
+    complete_distance = bool(leading_unmapped <= distance_period+1e-6 and
+                            distance_times[-1] >= lap.end_time_s-distance_period-1e-6)
+    support['distance_m'].update(status='AVAILABLE' if complete_distance else 'PARTIAL',
+        full_lap_coverage=complete_distance, leading_unmapped_s=leading_unmapped)
+    if lap.timing_provenance is not None:
+        support['timing'] = dict(lap.timing_provenance)
     for key, (names, scales, unit, limits) in CHANNELS.items():
         spec = next((specs[name.casefold()] for name in names if name.casefold() in specs), None)
         if spec is None:
@@ -141,6 +150,7 @@ def lap_report(lap: AnalysisLap, points: int = 301):
             "lap_number": lap.lap_number, "recorded_lap_time_s": lap.recorded_lap_time_s,
             "valid": lap.valid, "reference_status": "VALIDITY_UNVERIFIED",
             "status": "MEASUREMENT_ONLY", "channels": lap.support, "track_path": _map(lap, points),
+            "pedal_usage": pedal_usage(lap),
             "braking": {"status": status("brake_ratio", braking),
                         "start_threshold_ratio": .08, "release_threshold_ratio": .05,
                         "minimum_duration_s": .15, "zones": braking},

@@ -10,13 +10,14 @@ const format = (seconds) => {
 };
 
 export function lapsInRange(laps = [], range) {
-  const valid = laps.filter((lap) => lap.status === 'VALID' && Number.isFinite(lap.lap_time_s));
+  const valid = laps.filter((lap) => (lap.status === 'VALID' || lap.measurement_eligible === true) && Number.isFinite(lap.lap_time_s));
   if (!range) return new Set(valid.map((lap) => lap.lap_number));
   return new Set(valid.filter((lap) => lap.lap_time_s >= range[0] - 1e-6 && lap.lap_time_s <= range[1] + 1e-6).map((lap) => lap.lap_number));
 }
 
 export default function LapRangeFilter({ laps = [], value, onChange }) {
-  const times = laps.filter((lap) => lap.status === 'VALID' && Number.isFinite(lap.lap_time_s)).map((lap) => lap.lap_time_s);
+  const measurement = laps.some(lap => lap.measurement_eligible === true && lap.status !== 'VALID');
+  const times = laps.filter((lap) => (lap.status === 'VALID' || lap.measurement_eligible === true) && Number.isFinite(lap.lap_time_s)).map((lap) => lap.lap_time_s);
   if (times.length < 3) return null;
   const low = Math.min(...times);
   const high = Math.max(...times);
@@ -27,7 +28,7 @@ export default function LapRangeFilter({ laps = [], value, onChange }) {
     <div className="flex flex-col gap-2 rounded-xl border border-border bg-background p-3" data-testid="lap-range-filter">
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <span className="font-semibold text-foreground">랩 고르기</span>
-        <span className="font-mono text-muted-foreground">{format(from)} ~ {format(to)} · 유효 랩 {times.length}개 중 {count}개</span>
+        <span className="font-mono text-muted-foreground">{format(from)} ~ {format(to)} · {measurement ? '측정 랩' : '유효 랩'} {times.length}개 중 {count}개</span>
         {value && <Button variant="outline" type="button" onClick={() => onChange(null)} className="border px-2 py-1 text-xs">전체 랩</Button>}
       </div>
       <label className="flex items-center gap-2 text-xs text-muted-foreground">가장 빠른

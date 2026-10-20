@@ -770,4 +770,7 @@ body { min-width: 1100px; }
 .desktop-connection-controls > div { margin-top:12px; }
 .lab-main.empty-main { display:flex; flex-direction:column; overflow:auto; padding:24px; }
 .desktop-empty { flex:1; min-height:min-content; }
+.corner-lab[data-game=lmu] .lab-main.utility-main { overflow:auto; }
+.corner-lab[data-game=lmu] .lab-main > .wide-workspace:not(.lap-analysis):not(.expert-workspace) { overflow:auto; gap:18px; }
+.corner-lab[data-game=lmu] .lab-main > .wide-workspace:not(.lap-analysis):not(.expert-workspace) > * { flex-shrink:0; }
 .session-subtitle { color:hsl(var(--muted-foreground)); font-size:12px; display:flex; align-items:center; gap:8px; }

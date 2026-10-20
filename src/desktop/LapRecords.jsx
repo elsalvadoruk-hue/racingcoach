@@ -1,12 +1,14 @@
 import React, { useRef } from 'react';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead } from '../components/ui/table';
 import { Button } from '../components/ui/button';
-import { data, lapTime, number, signed } from './sessionData';
+import { data, lapTime, number, signed, legacyLmu } from './sessionData';
 import { isBestLap, lapStatus } from './labPreferences';
 import { lapReproducibilityLabel } from '../analysis/analysisShared';
+import LmuLapRecords from './LmuLapRecords';
 
 export default function LapRecords() {
   const bestRow = useRef(null);
+  if (legacyLmu()) return <LmuLapRecords />;
   const best = data.laps.find(lap => isBestLap(lap, data.laps));
   const summary = data.comparisonSummary || data.comparisons?.[data.defaultTarget]?.comparison || {};
   const metrics = [['파일 베스트', summary.file_best_time_s ?? best?.lap_time_s], ['세션 베스트', summary.session_best_time_s], ['이론상 최적', summary.theoretical_optimal_time_s], ['재현 가능 최적', summary.reproducible_optimal_time_s], ['롤링 베스트', summary.rolling_best_time_s]];

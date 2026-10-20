@@ -174,7 +174,8 @@ test('a Bluetooth disconnect preserves the saved choice and reconnect restores t
   await waitFor(() => expect(players[0].pause).toHaveBeenCalled(), { timeout: OUTPUT_GRACE_MS + 1000 });
   expect(result.current.outputId).toBe('headset');
   expect(localStorage.getItem(storageKey)).toBe('headset');
-  expect(result.current.message).toContain('연결이 끊');
+  // The notice is set right after the pause; under a loaded full run it lands a render later.
+  await waitFor(() => expect(result.current.message).toContain('연결이 끊'));
   expect(players).toHaveLength(1);
   media.enumerateDevices.mockResolvedValue([headset, speaker]);
   await act(async () => media.dispatchEvent(new Event('devicechange')));

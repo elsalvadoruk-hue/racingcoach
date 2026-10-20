@@ -25,6 +25,7 @@
 /iRacing_Backend/*
 !/iRacing_Backend/*.py
 !/iRacing_Backend/test_lmu_replay_ui.js
+!/iRacing_Backend/test_lmu_setup_ui.js
 !/iRacing_Backend/lmu_native_bridge.cpp
 !/iRacing_Backend/requirements*.txt
 /scripts/*
@@ -35,6 +36,9 @@
 !/scripts/test_make_voice_pack.py
 !/scripts/serve_ui.py
 !/scripts/prepare_radio_audio.py
+!/scripts/prepare_lmu_radio.py
+!/scripts/test_prepare_lmu_radio.py
+!/scripts/audit_lmu_pitwall.py
 !/scripts/test_launch_app.py
 !/scripts/make_share_copy.py
 !/scripts/make_patch.py

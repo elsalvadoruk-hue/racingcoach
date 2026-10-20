@@ -42,6 +42,7 @@ class LmuLapSegment:
     recorded_lap_time_s: Optional[float]
     valid: Optional[bool]
     status: str
+    timing_provenance: Optional[dict[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -227,13 +228,17 @@ class LmuTelemetryReader:
             return self._events(connection, self._tables(connection), name)
 
     @staticmethod
-    def _laps(lap_events, lap_times, pits, distance, axis) -> tuple[LmuLapSegment, ...]:
+    def _laps(lap_events, lap_times, pits, distance, axis, *,
+              session_type=None, sectors=None) -> tuple[LmuLapSegment, ...]:
         if lap_events is None:
             return ()
         timestamps, numbers = lap_events
         segments = []
-        # Only game Lap events delimit laps. Never infer boundaries from distance
-        # resets or assign Lap Time values by array position.
+        race_offset = 0
+        # Lap events delimit ordinary laps. The initial Race counter can include
+        # formation: only the game's recorded time plus two independent native
+        # observations may recover its timed start. Distance resets alone never
+        # create a lap or establish game validity.
         for index in range(len(timestamps) - 1):
             start, end = float(timestamps[index]), float(timestamps[index + 1])
             number, next_number = numbers[index:index + 2]
@@ -248,8 +253,33 @@ class LmuTelemetryReader:
                 if len(matches) == 1 and math.isfinite(matches[0]) and matches[0] > 0:
                     recorded = float(matches[0])
             status = "VALIDITY_UNKNOWN" if recorded is not None else "UNTIMED"
+            provenance = None
             if recorded is not None and abs(recorded - duration) > 0.05:
                 status = "TIMING_MISMATCH"
+                if (index == 0 and number == 0 and
+                        str(session_type or '').strip().casefold() == 'race' and
+                        recorded < duration and sectors is not None and axis is not None):
+                    inferred = end-recorded
+                    sector_times, sector_values = sectors
+                    starts = sector_times[1:][(sector_values[:-1] == 0) &
+                        (sector_values[1:] == 1) & (np.abs(sector_times[1:]-inferred) <= .05)]
+                    reset_indices = np.flatnonzero((np.diff(distance) < -50) &
+                        np.isfinite(distance[:-1]) & np.isfinite(distance[1:]) &
+                        (distance[1:] >= 0) & (distance[1:] <= 50) &
+                        (axis[:-1] <= inferred+.05) & (axis[1:] >= inferred-.05))
+                    if start < inferred < end and len(starts) == 1 and len(reset_indices) == 1:
+                        reset = int(reset_indices[0])
+                        provenance = {'method': 'RACE_INITIAL_RECORDED_TIME_CORROBORATED_V1',
+                            'source_lap_counter': int(number), 'original_start_time_s': start,
+                            'excluded_leading_s': inferred-start, 'inferred_start_time_s': inferred,
+                            'sector_start_time_s': float(starts[0]),
+                            'distance_reset_before_time_s': float(axis[reset]),
+                            'distance_reset_after_time_s': float(axis[reset+1])}
+                        start, duration, status = inferred, recorded, 'VALIDITY_UNKNOWN'
+                        race_offset = 1
+            if race_offset and provenance is None:
+                provenance = {'method': 'RACE_LAP_COUNTER_OFFSET_V1',
+                              'source_lap_counter': int(number)}
             if pits is not None:
                 ts, values = pits
                 previous = np.flatnonzero(ts <= start)
@@ -269,8 +299,8 @@ class LmuTelemetryReader:
                     # Allow a boundary reset within the first sample interval.
                     if np.any(np.diff(sample[1:]) < -50):
                         status = "DISTANCE_DISCONTINUITY"
-            segments.append(LmuLapSegment(int(number), start, end, first, last,
-                                          travelled, duration, recorded, None, status))
+            segments.append(LmuLapSegment(int(number)+race_offset, start, end, first, last,
+                                          travelled, duration, recorded, None, status, provenance))
         return tuple(segments)
 
     def summary(self) -> LmuTelemetrySummary:
@@ -295,7 +325,11 @@ class LmuTelemetryReader:
                 axis = gps[0] + np.arange(len(distance)) / dist_spec.frequency_hz
         laps = self._laps(self._events(connection, tables, "Lap"),
                           self._events(connection, tables, "Lap Time"),
-                          self._events(connection, tables, "In Pits"), distance, axis)
+                          self._events(connection, tables, "In Pits"), distance, axis,
+                          session_type=metadata.get('session_type'),
+                          sectors=(self._events(connection, tables, "Current Sector")
+                                   if metadata.get('session_type', '').strip().casefold() == 'race'
+                                   else None))
         return LmuTelemetrySummary(self.path, metadata, specs, events, counts, laps)
 
     @staticmethod
@@ -354,7 +388,9 @@ class LmuTelemetryReader:
             required = {name.casefold() for name in SOURCE_CHANNELS}
             values = {spec.name: self._channel(connection, tables, spec.name)
                       for spec in summary.channels if spec.name.casefold() in required}
-            return normalize_lap(summary.metadata, lap, specs, values, gps[0], times, distance)
+            from lmu_control_channels import with_gear_events
+            normalized = normalize_lap(summary.metadata, lap, specs, values, gps[0], times, distance)
+            return with_gear_events(normalized, self._events(connection, tables, 'Gear'), gps)
 
     def compare_laps(self, reference_lap: int, target_lap: int,
                      points: int = 101, sector_length_m: int = 500) -> LmuLapComparison:
@@ -472,8 +508,11 @@ def discover_lmu_telemetry_dirs() -> tuple[Path, ...]:
     if configured:
         candidates = [Path(item.strip()).expanduser() for item in configured.split(os.pathsep) if item.strip()]
     else:
-        candidates = [Path(root) / "Steam/steamapps/common/Le Mans Ultimate/UserData/Telemetry"
-                      for root in (os.getenv("ProgramFiles(x86)"), os.getenv("ProgramFiles")) if root]
+        from lmu_install import game_folders, steam_libraries, GAME_FOLDER
+        installed = game_folders() or [library / GAME_FOLDER for library in steam_libraries()[:2]]
+        candidates = [folder / "UserData" / "Telemetry" for folder in installed]
+        from lmu_settings import saved_folders
+        candidates.extend(Path(path) for path in saved_folders())
     unique = {str(path.resolve()).casefold(): path.resolve() for path in candidates}
     return tuple(unique.values())
 

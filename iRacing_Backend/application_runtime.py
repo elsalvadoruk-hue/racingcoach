@@ -55,4 +55,8 @@ def create_application(version, lifespan, overlay):
         allow_origins=[origin.strip() for origin in os.getenv("CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",") if origin.strip()],
         allow_credentials=False, allow_methods=["*"], allow_headers=["*"],
         expose_headers=["X-Log-File-Name"])
+    # LMU file analysis and bridge setup. Live LMU coaching shares the iRacing
+    # live coach (game_sdk.AutoGameSdk); DuckDB stays a request-time dependency.
+    from lmu_routes import register_routes as register_lmu_routes
+    register_lmu_routes(app)
     return app

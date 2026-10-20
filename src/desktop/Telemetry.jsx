@@ -43,7 +43,9 @@ export function TelemetryChart({ channel, rows, position, onPosition, ghost, gho
   const ownAbs = controlWindow(controls.abs?.target, range[0] / length, range[1] / length);
   const referenceAbs = controlWindow(controls.abs?.reference, range[0] / length, range[1] / length);
   const plotLeft = 40, plotRight = size.width - 12, plotBottom = Math.max(20, size.height - 20);
-  const nearestRow = distance => finite(distance) && distance >= range[0] && distance <= range[1] ? rows.reduce((nearest, row) => !nearest || Math.abs(row.distance - distance) < Math.abs(nearest.distance - distance) ? row : nearest, null) : null;
+  const nearestRow = distance => finite(distance) && distance >= range[0] && distance <= range[1]
+    && distance >= rows[0]?.distance && distance <= rows[rows.length - 1]?.distance
+    ? rows.reduce((nearest, row) => !nearest || Math.abs(row.distance - distance) < Math.abs(nearest.distance - distance) ? row : nearest, null) : null;
   const current = nearestRow(ghost ? ghost.target : position);
   const reference = ghost ? nearestRow(ghost.reference) : current;
   const pedals = channel.key === 'pedals';
@@ -153,7 +155,7 @@ export function TelemetryChart({ channel, rows, position, onPosition, ghost, gho
   </div>;
 }
 
-export function TrackMap({ points, loss, corners, selected, onSelect, position, large = false, names = {}, segmentMode = false, rotatable = false }) {
+export function TrackMap({ points, loss, corners, selected, onSelect, position, large = false, names = {}, segmentMode = false, rotatable = false, schematic = false }) {
   const host = useRef(null), svg = useRef(null), drag = useRef(null);
   const [size, setSize] = useState({ width: 320, height: 220 });
   const [view, setView] = useState(null);
@@ -236,8 +238,8 @@ export function TrackMap({ points, loss, corners, selected, onSelect, position, 
         </g>;
       })}
       {cursor && <circle cx={cursor.x} cy={cursor.y} r={6 * frame[2] / size.width} fill="none" stroke="var(--lab-target)" strokeWidth="2" vectorEffect="non-scaling-stroke" pointerEvents="none" />}
-    </svg><span className="gps-compass" title="GPS 북쪽 방향"><i style={{ transform: `rotate(${geometry.degrees + rotation}deg)` }}>↑</i>N</span></> : <p>GPS 좌표가 없어 표시할 수 없습니다.</p>}</div>
-    <div className="map-caption"><span>{(length / 1000).toFixed(3)} km · GPS 실측</span><span>자동 구간 {corners.length}개</span></div>
+    </svg>{!schematic && <span className="gps-compass" title="GPS 북쪽 방향"><i style={{ transform: `rotate(${geometry.degrees + rotation}deg)` }}>↑</i>N</span>}</> : <p>좌표가 없어 표시할 수 없습니다.</p>}</div>
+    <div className="map-caption"><span>{(length / 1000).toFixed(3)} km · {schematic ? '기록 좌표 개략도' : 'GPS 실측'}</span><span>자동 구간 {corners.length}개</span></div>
     {loss && <div className="loss-legend"><span className="gain">● 시간 이득</span><span className="loss">● 시간 손실</span><small>진한 색 ≥ {loss.scale.toFixed(2)} s / 100m · 회색: 측정 없음</small></div>}
   </div>;
 }

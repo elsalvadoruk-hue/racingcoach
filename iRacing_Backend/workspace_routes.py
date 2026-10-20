@@ -18,6 +18,8 @@ from analysis_models import AnalyzeRequest, ComparisonDetailRequest, ExperimentR
 from workspace_controls import comparison_controls
 from workspace_setup import setup_plan
 from workspace_summary import practice_summary
+from workspace_personal_reference import select_personal_reference, validate_personal_reference
+from analysis_numeric import format_lap_time
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,7 @@ class WorkspaceRoutesServices:
     extract_setup_summary: Callable[..., Any]
     setup_exploration_candidate: Callable[..., Any]
     json_safe: Callable[..., Any]
+    align_reference_grid: Callable[..., Any]
 
 
 def _filename(name):
@@ -87,24 +90,52 @@ def workspace_comparison(services, telemetry, body):
     # silently selecting a different lap as the legacy default selector does.
     if target.valid and request.reference_lap == target.lap_number:
         reference = target
+    if (body.get('personalReference') or {}).get('status') == 'UNAVAILABLE':
+        reference = None
+    reference_telemetry = telemetry
+    if request.reference_filename and request.reference_filename != telemetry.path.name:
+        reference_telemetry = _recording(services, request.reference_filename)
+        reference = next((lap for lap in reference_telemetry.laps if lap.lap_number == request.reference_lap), None)
+        if reference is None:
+            raise ValueError('선택한 파일에 기준 랩이 없습니다.')
+    reference_match = (validate_personal_reference(telemetry, target, reference_telemetry, reference)
+                       if reference is not None else None)
     grid = analyzer._lap_grid(target) if target.valid else analyzer._coaching_grid(target)
-    base = analyzer._lap_grid(reference) if reference else None
+    if reference_telemetry is not telemetry:
+        # Use the same observed-only distance resampling as the detailed chart.
+        base = services.align_reference_grid(services.get_telemetry_analyzer()(reference_telemetry)._lap_grid(reference), grid['distance_pct'])
+    else:
+        base = analyzer._lap_grid(reference) if reference else None
     definitions = analyzer._detect_corners(base if base is not None else grid)
     # A clean section can expose its observed inputs without a timed reference.
     # Dropping those corners would discard coaching-only recordings entirely.
     corners = analyzer._corner_analysis(grid, base, definitions)
+    if hasattr(analyzer, '_name_corners'):
+        analyzer._name_corners(corners, definitions)
     visual = analyzer._visualizations(grid, base, corners)
-    detail = services.comparison_detail_payload(telemetry, request)
-    if reference == target:
+    detail = services.comparison_detail_payload(telemetry, request, reference_telemetry=reference_telemetry if reference is not None else None,
+                                               suppress_local_reference=reference is None)
+    if reference is target and reference_telemetry is telemetry:
         detail = {**detail, **visual, 'reference_track_path': visual.get('track_path', []),
                   'reference_label': f'내 기준 랩 {target.lap_number}', 'reference_lap': target.lap_number,
                   'reference_line_source': {'type': 'LOCAL_ACTUAL_LAP', 'label': f'내 기준 랩 {target.lap_number}', 'chart_basis': 'ACTUAL_LAP'},
                   'quality': {**detail['quality'], 'reference_coverage_ratio': detail['quality']['target_coverage_ratio'], 'trace_points': len(visual.get('trace', []))}}
     own_time = target.lap_time_s if target.valid else None
     base_time = reference.lap_time_s if reference and reference.valid else None
+    signals = comparison_controls(controls_api, telemetry, target, reference if reference_telemetry is telemetry else None, grid)
+    if reference_telemetry is not telemetry:
+        from workspace_controls import lap_controls
+        reference_controls = lap_controls(controls_api, reference_telemetry, reference)
+        for kind in signals:
+            signals[kind]['reference'] = reference_controls[kind]
     return {**detail, 'corners': corners, 'targetTime': own_time, 'referenceTime': base_time,
             'delta': own_time - base_time if own_time is not None and base_time is not None else None,
-            'controlEvents': comparison_controls(controls_api, telemetry, target, reference, grid)}
+            'reference_filename': reference_telemetry.path.name if reference else None,
+            'personalReference': ({'status': 'READY', 'filename': reference_telemetry.path.name, 'lap': reference.lap_number,
+                'lap_time_s': base_time, 'conditions': reference_match,
+                'same_lap': reference_telemetry is telemetry and reference.lap_number == target.lap_number} if reference else body.get('personalReference')),
+            'comparisonMetrics': analyzer._comparison(target, reference, grid, base) if target.valid else {},
+            'controlEvents': signals}
 
 
 def _attach_practice(services, full, comparison, body):
@@ -113,14 +144,20 @@ def _attach_practice(services, full, comparison, body):
         full['performance']['corners'] = comparison['corners']
         full['performance']['top_losses'] = sorted([corner for corner in comparison['corners'] if (corner.get('delta_s') or 0) > 0],
                                                   key=lambda corner: corner['delta_s'], reverse=True)
+        full['performance']['top_gains'] = sorted([corner for corner in comparison['corners'] if (corner.get('delta_s') or 0) < 0],
+                                                  key=lambda corner: corner['delta_s'])[:3]
         selected = full.get('comparison') or {}
-        full['comparison'] = {**selected, 'target_lap': comparison.get('target_lap'), 'reference_lap': comparison.get('reference_lap'),
+        full['comparison'] = {**selected, **comparison.pop('comparisonMetrics', {}), 'target_lap': comparison.get('target_lap'), 'reference_lap': comparison.get('reference_lap'),
             'target_time_s': comparison.get('targetTime'), 'reference_time_s': comparison.get('referenceTime'),
+            'target_time': format_lap_time(comparison.get('targetTime')), 'reference_time': format_lap_time(comparison.get('referenceTime')),
             'delta_s': comparison.get('delta'), 'total_delta_s': comparison.get('delta')}
+        full['comparison'].update(reference_filename=comparison.get('reference_filename'), personal_reference=comparison.get('personalReference'))
+        full['visualizations'] = {**full.get('visualizations', {}), **{key: comparison[key] for key in
+            ('trace', 'track_path', 'reference_track_path', 'reference_line_source') if key in comparison}}
         if not comparison.get('quality', {}).get('pace_eligible', True):
             full['comparison'].update(status='COACHING_ONLY', scope='CLEAN_SEGMENTS_ONLY',
                                       target_time_s=None, reference_time_s=None, delta_s=None, total_delta_s=None)
-        if body.get('target_lap') == body.get('reference_lap'):
+        if body.get('target_lap') == body.get('reference_lap') or comparison.get('reference_filename') != body.get('filename'):
             full['setup_recommendation'] = {}
     summary = practice_summary(services.build_closed_loop_coach, full, comparison['corners'], external)
     # The summary's displayed focus is addressable through the existing practice
@@ -163,10 +200,14 @@ def register_routes(app, services: WorkspaceRoutesServices):
                 if route == 'file-laps':
                     result = services.file_laps_payload(telemetry)
                 elif route == 'references':
-                    catalog = await asyncio.to_thread(services.list_external_reference_metadata, telemetry)
+                    try:
+                        catalog = await asyncio.to_thread(services.list_external_reference_metadata, telemetry)
+                    except (OSError, ValueError):
+                        catalog = {'files': []}
                     fields = ('name', 'driver_name', 'car_name', 'track_name', 'track_config', 'track_platform_id',
                               'lap_time_s', 'usable', 'compatible', 'condition_similarity', 'validation_error')
-                    result = {'files': [{key: row.get(key) for key in fields} for row in catalog['files']]}
+                    personal = await asyncio.to_thread(select_personal_reference, services, telemetry, body.get('target_lap'))
+                    result = {'files': [{key: row.get(key) for key in fields} for row in catalog['files']], 'personalReference': personal}
                 elif route == 'overlay':
                     result = await asyncio.to_thread(services.lap_overlay_payload, telemetry, LapOverlayRequest(**body))
                 elif route == 'setup-plan':
@@ -174,12 +215,33 @@ def register_routes(app, services: WorkspaceRoutesServices):
                         extract_setup_summary=services.extract_setup_summary, setup_exploration_candidate=services.setup_exploration_candidate)
                     result = await asyncio.to_thread(setup_plan, api, telemetry, body)
                 else:
+                    body = dict(body)
+                    if body.get('reference_mode') == 'SINGLE' and len(body.get('external_reference_files', [])) != 1:
+                        raise ValueError('단일 비교에는 Garage61 랩 한 개를 선택하세요.')
+                    if body.get('reference_mode', 'LOCAL') != 'LOCAL':
+                        try:
+                            catalog = await asyncio.to_thread(services.list_external_reference_metadata, telemetry)
+                            usable = {row.get('name') for row in catalog.get('files', []) if row.get('usable') and row.get('compatible')}
+                        except (OSError, ValueError):
+                            usable = set()
+                        selected_files = set(body.get('external_reference_files') or [])
+                        if not usable or not selected_files.intersection(usable):
+                            body.update(reference_mode='LOCAL', reference_selection='AUTO', reference_lap=None,
+                                        reference_filename=None, external_reference_files=[], referenceFallback='GARAGE61_UNAVAILABLE')
+                    automatic = body.get('reference_mode', 'LOCAL') == 'LOCAL' and (
+                        body.get('reference_selection') == 'AUTO' or ('reference_selection' not in body and body.get('reference_lap') is None))
+                    personal = None
+                    if automatic:
+                        personal = await asyncio.to_thread(select_personal_reference, services, telemetry, body.get('target_lap'))
+                        body['personalReference'] = personal
+                        body['reference_filename'] = personal.get('filename')
+                        body['reference_lap'] = personal.get('lap')
                     selection_request = ComparisonDetailRequest(**body)
                     if selection_request.reference_mode == 'SINGLE' and len(selection_request.external_reference_files) != 1:
                         raise ValueError('단일 비교에는 Garage61 랩 한 개를 선택하세요.')
                     request = AnalyzeRequest(
                         filename=body['filename'], session_mode=body.get('session_mode') or telemetry.metadata.get('suggested_session_mode') or 'BASELINE_3LAP',
-                        target_lap=body.get('target_lap'), reference_lap=body.get('reference_lap'),
+                        target_lap=body.get('target_lap'), reference_lap=body.get('reference_lap') if not body.get('reference_filename') or body['reference_filename'] == body['filename'] else None,
                         external_reference_files=body.get('external_reference_files', []) if body.get('reference_mode', 'LOCAL') != 'LOCAL' else [],
                         include_ai=False, persist_memory=body.get('persist_memory', False),
                         replace_existing_mode=body.get('replace_existing_mode', False),
@@ -203,6 +265,8 @@ def register_routes(app, services: WorkspaceRoutesServices):
                         raise ValueError('비교할 랩을 찾지 못했습니다.')
                     selection = {**body, 'target_lap': target, 'reference_lap': reference}
                     result = await asyncio.to_thread(workspace_comparison, services, telemetry, selection)
+                    result.update(referenceFallback=body.get('referenceFallback'),
+                                  reference_selection='AUTO' if automatic else 'MANUAL')
                     target = result.get('target_lap', target)
                     if body.get('reference_mode', 'LOCAL') == 'LOCAL':
                         reference = result.get('reference_lap')
@@ -214,9 +278,15 @@ def register_routes(app, services: WorkspaceRoutesServices):
                         initial = {key: value for key, value in result.items() if key not in ('analysisResult', 'practice', 'practiceFocuses')}
                         result = {'kind': 'LIVE_LOCAL', 'filename': body['filename'],
                             'defaultTarget': target, 'defaultReference': reference,
+                            'defaultReferenceFile': result.get('reference_filename'), 'personalReference': result.get('personalReference'),
+                            'reference_selection': 'AUTO' if automatic else 'MANUAL',
+                            'referenceFallback': body.get('referenceFallback'),
+                            'reference_laps': (services.file_laps_payload(_recording(services, result['reference_filename'])).get('laps', [])
+                                if result.get('reference_filename') and result['reference_filename'] != body['filename'] else full['laps']),
                             'session': {key: full['session'].get(key, telemetry.metadata.get(key)) for key in (
                                 'car_name', 'car_path', 'track_name', 'track_path', 'track_config', 'track_length_m', 'track_platform_id',
-                                'session_type', 'session_duration_s', 'session_laps_limit', 'suggested_session_mode')},
+                                'session_type', 'session_duration_s', 'session_laps_limit', 'suggested_session_mode',
+                                'game', 'official_track_id', 'steering_half_range_deg', 'steering_scale', 'car_class')},
                             'laps': full['laps'], 'corners': result['corners'], 'initialComparison': initial,
                             'consistency': full['performance'].get('corner_consistency', {}),
                             'comparisonSummary': full['comparison'], 'lapSelection': full.get('lap_selection'),

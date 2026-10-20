@@ -127,9 +127,165 @@ void number(std::ostringstream& o, double value) {
     if (std::isfinite(value)) o << std::setprecision(17) << value;
     else o << "null";
 }
+void text_json(std::ostringstream& o,const char* value,size_t size) {
+    o<<'"';
+    for(size_t i=0;i<size && value[i];++i) {
+        unsigned char c=static_cast<unsigned char>(value[i]);
+        if(c=='"' || c=='\\')o<<'\\'<<char(c);
+        else if(c<32)o<<"\\u00"<<"0123456789abcdef"[c>>4]<<"0123456789abcdef"[c&15];
+        else o<<char(c);
+    }
+    o<<'"';
+}
 bool put(const std::string& value, char* output, size_t size) {
     if (!output || value.size() + 1 > size) { error = "BUFFER_TOO_SMALL"; return false; }
     memcpy(output, value.c_str(), value.size() + 1); return true;
+}
+bool finite_position(const TelemVect3& p) {
+    return std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z);
+}
+bool valid_orientation(const TelemVect3 (&rows)[3]) {
+    for(unsigned i=0;i<3;++i) {
+        if(!finite_position(rows[i]))return false;
+        for(unsigned j=0;j<3;++j) {
+            const double dot=rows[i].x*rows[j].x+rows[i].y*rows[j].y+rows[i].z*rows[j].z;
+            if(std::abs(dot-(i==j?1.0:0.0))>.02)return false;
+        }
+    }
+    const double determinant=rows[0].x*(rows[1].y*rows[2].z-rows[1].z*rows[2].y)
+        -rows[0].y*(rows[1].x*rows[2].z-rows[1].z*rows[2].x)
+        +rows[0].z*(rows[1].x*rows[2].y-rows[1].y*rows[2].x);
+    return std::abs(determinant-1.0)<=.03;
+}
+void vector_json(std::ostringstream& o,const TelemVect3& p) {
+    o<<'[';number(o,p.x);o<<',';number(o,p.y);o<<',';number(o,p.z);o<<']';
+}
+// Preserve native coordinates, not inferred sides. SDK local axes are +x left,
+// +y up, +z rear; mOri rows convert local vectors into world coordinates.
+// Empty / partially observed arrays must never become an inferred clear.
+void traffic_json(std::ostringstream& o,Source* s,const TelemInfoV01* player) {
+    auto& c=s->copy;
+    const auto unavailable=[&]() {
+        o<<"{\"status\":\"UNAVAILABLE\",\"player\":null,\"vehicles\":[],\"source\":\"TELEMETRY\",\"complete\":false}";
+    };
+    const auto nt=c.telemetry.activeVehicles;
+    const auto ns=c.scoring.scoringInfo.mNumVehicles;
+    const double age=player?player->mElapsedTime-c.scoring.scoringInfo.mCurrentET:0;
+    if(!player || !s->telemetry || !s->scoring || nt<1 || nt>104 || ns<1 || ns>104 ||
+       !std::isfinite(player->mElapsedTime) || !finite_position(player->mPos) ||
+       !valid_orientation(player->mOri) || !std::isfinite(age) || age<-.25 || age>2.0) {
+        unavailable();return;
+    }
+    for(unsigned i=0;i<nt;++i) {
+        if(c.telemetry.telemInfo[i].mID<0) { unavailable();return; }
+        for(unsigned j=0;j<i;++j)if(c.telemetry.telemInfo[i].mID==c.telemetry.telemInfo[j].mID) {
+            unavailable();return;
+        }
+    }
+    const VehicleScoringInfoV01* scoredPlayer=nullptr;
+    for(long i=0;i<ns;++i) {
+        const auto& v=c.scoring.vehScoringInfo[i];
+        if(v.mID<0) { unavailable();return; }
+        for(long j=0;j<i;++j)if(v.mID==c.scoring.vehScoringInfo[j].mID) { unavailable();return; }
+        if(v.mIsPlayer) {
+            if(scoredPlayer || v.mID!=player->mID) { unavailable();return; }
+            scoredPlayer=&v;
+        }
+    }
+    if(!scoredPlayer) { unavailable();return; }
+    bool complete=true,first=true;
+    std::ostringstream vehicles;
+    // Join by ID, never by array position: multiplayer may reuse slots.
+    for(long i=0;i<ns;++i) {
+        const auto& v=c.scoring.vehScoringInfo[i];
+        // Pit/garage vehicles are excluded by this spotter's existing policy.
+        // They need not have a telemetry slot (LMU may omit inactive cars).
+        // Requiring that slot first would silence every on-track opponent.
+        // Missing telemetry for an on-track car still withdraws coverage.
+        if(v.mID!=player->mID && v.mInPits)continue;
+        const TelemInfoV01* t=nullptr;
+        for(unsigned j=0;j<nt;++j)if(c.telemetry.telemInfo[j].mID==v.mID)t=&c.telemetry.telemInfo[j];
+        if(!t || !std::isfinite(t->mElapsedTime) || std::abs(player->mElapsedTime-t->mElapsedTime)>.25 ||
+           !finite_position(t->mPos)) { complete=false;continue; }
+        if(v.mID==player->mID)continue;
+        if(v.mControl!=1 && v.mControl!=2) { complete=false;continue; }
+        if(v.mInPits)continue;
+        if(!first)vehicles<<',';first=false;
+        vehicles<<"{\"vehicle_id\":"<<t->mID<<",\"telemetry_et\":";number(vehicles,t->mElapsedTime);
+        vehicles<<",\"position_m\":";vector_json(vehicles,t->mPos);
+        vehicles<<",\"in_pits\":false,\"control_code\":"<<static_cast<int>(v.mControl)<<'}';
+    }
+    // Unmatched telemetry can be a newly joined car not yet in scoring.
+    for(unsigned i=0;i<nt;++i) {
+        bool found=false;
+        for(long j=0;j<ns;++j)if(c.telemetry.telemInfo[i].mID==c.scoring.vehScoringInfo[j].mID)found=true;
+        if(!found)complete=false;
+    }
+    o<<"{\"status\":\"AVAILABLE\",\"player\":{\"vehicle_id\":"<<player->mID<<",\"telemetry_et\":";
+    number(o,player->mElapsedTime);o<<",\"position_m\":";vector_json(o,player->mPos);
+    o<<",\"orientation\":[";
+    for(unsigned i=0;i<3;++i) { if(i)o<<',';vector_json(o,player->mOri[i]); }
+    o<<"]},\"vehicles\":["<<vehicles.str()<<"],\"source\":\"TELEMETRY\",\"complete\":"<<(complete?"true":"false")<<'}';
+}
+unsigned class_key(const char* value, size_t size) {
+    if(!value[0])return 0;
+    unsigned hash=2166136261u;
+    for(size_t i=0;i<size && value[i];++i) { hash^=static_cast<unsigned char>(value[i]);hash*=16777619u; }
+    return (hash&0x7fffffffu)+1u;
+}
+void tyre_wet_json(std::ostringstream& o,const char* value,size_t size) {
+    std::string text;
+    for(size_t i=0;i<size && value[i];++i) {
+        char c=value[i];text+=c>='A'&&c<='Z'?char(c-'A'+'a'):c;
+    }
+    if(text.find("wet")!=std::string::npos || text.find("rain")!=std::string::npos)o<<"true";
+    else if(text.find("slick")!=std::string::npos || text=="soft" || text=="medium" || text=="hard")o<<"false";
+    else o<<"null";
+}
+void scoring_json(std::ostringstream& o,Source* s,bool aligned) {
+    auto& c=s->copy;auto& si=c.scoring.scoringInfo;
+    if(!aligned || si.mNumVehicles<0 || si.mNumVehicles>104) { o<<"null";return; }
+    for(long i=0;i<si.mNumVehicles;++i) {
+        if(c.scoring.vehScoringInfo[i].mID<0) { o<<"null";return; }
+        for(long j=0;j<i;++j)if(c.scoring.vehScoringInfo[i].mID==c.scoring.vehScoringInfo[j].mID) { o<<"null";return; }
+    }
+    o<<'[';
+    for(long i=0;i<si.mNumVehicles;++i) {
+        if(i)o<<',';
+        auto& row=c.scoring.vehScoringInfo[i];
+#define SCORE(KEY, VALID, VALUE) o<<",\"" KEY "\":";if(VALID)number(o,VALUE);else o<<"null"
+        o<<"{\"vehicle_id\":"<<row.mID;
+        unsigned cls=class_key(row.mVehicleClass,sizeof(row.mVehicleClass));
+        SCORE("class_id",cls,cls);
+        int place=1;bool valid=cls && row.mPlace>0;
+        for(long j=0;j<si.mNumVehicles;++j) {
+            auto& other=c.scoring.vehScoringInfo[j];
+            if(class_key(other.mVehicleClass,sizeof(other.mVehicleClass))!=cls)continue;
+            if(!other.mPlace || (j!=i && other.mPlace==row.mPlace))valid=false;
+            if(other.mPlace<row.mPlace)++place;
+        }
+        SCORE("class_position",valid,place);
+        SCORE("overall_position",row.mPlace>0,static_cast<unsigned>(row.mPlace));
+        SCORE("total_laps",row.mTotalLaps>=0,row.mTotalLaps);
+        SCORE("lap_distance_m",true,row.mLapDist);
+        SCORE("last_lap_time",row.mLastLapTime>0,row.mLastLapTime);
+        SCORE("best_lap_time",row.mBestLapTime>0,row.mBestLapTime);
+        SCORE("lap_start_et",row.mLapStartET>=0,row.mLapStartET);
+        SCORE("speed_mps",true,std::hypot(row.mLocalVel.x,row.mLocalVel.y,row.mLocalVel.z));
+        SCORE("path_lateral_m",true,row.mPathLateral);
+        SCORE("track_edge_m",true,row.mTrackEdge);
+        SCORE("time_behind_next_s",row.mTimeBehindNext>=0,row.mTimeBehindNext);
+        SCORE("laps_behind_next",row.mLapsBehindNext>=0,row.mLapsBehindNext);
+        SCORE("time_behind_leader_s",row.mTimeBehindLeader>=0,row.mTimeBehindLeader);
+        SCORE("laps_behind_leader",row.mLapsBehindLeader>=0,row.mLapsBehindLeader);
+        SCORE("pit_stops",row.mNumPitstops>=0,row.mNumPitstops);
+        SCORE("finish_status",true,static_cast<int>(row.mFinishStatus));
+        SCORE("control_code",true,static_cast<int>(row.mControl));
+        SCORE("sector",row.mSector>=0 && row.mSector<=2,static_cast<int>(row.mSector));
+        o<<",\"in_pits\":"<<(row.mInPits?"true":"false")<<'}';
+#undef SCORE
+    }
+    o<<']';
 }
 std::string snapshot(Source* s, bool tu, bool su) {
     auto& c = s->copy;
@@ -160,11 +316,66 @@ std::string snapshot(Source* s, bool tu, bool su) {
 #define NUM(KEY, VALID, VALUE) o << ",\"" KEY "\":"; if (VALID) number(o, VALUE); else o<<"null"
 #define BOOL(KEY, VALID, VALUE) o << ",\"" KEY "\":"; if (VALID) o<<((VALUE)?"true":"false"); else o<<"null"
     NUM("telemetry_et",t,t->mElapsedTime);
+    // Vehicle/track labels only. Never expose driver names, Steam IDs or setup.
+    o<<",\"car_name\":";if(t)text_json(o,t->mVehicleName,sizeof(t->mVehicleName));else o<<"null";
+    o<<",\"vehicle_model\":";if(t)text_json(o,t->mVehicleModel,sizeof(t->mVehicleModel));else o<<"null";
+    o<<",\"track_name\":";if(t)text_json(o,t->mTrackName,sizeof(t->mTrackName));else o<<"null";
     NUM("scoring_et",s->scoring,si.mCurrentET);
     NUM("lap_start_et",t,t->mLapStartET);
     NUM("scoring_lap_start_et",v,v->mLapStartET);
     NUM("total_laps",v,v->mTotalLaps);
     NUM("last_lap_time",v,v->mLastLapTime);
+    NUM("best_lap_time",v && v->mBestLapTime>0,v->mBestLapTime);
+    NUM("outstanding_penalties",v && v->mNumPenalties>=0,static_cast<int>(v->mNumPenalties));
+    NUM("fuel_l",t && t->mFuel>=0,t->mFuel);
+    NUM("fuel_capacity_l",t && t->mFuelCapacity>0,t->mFuelCapacity);
+    NUM("lap_distance_m",v,v->mLapDist);
+    NUM("track_length_m",aligned && si.mLapDist>0,si.mLapDist);
+    NUM("session_type_code",aligned,si.mSession);
+    NUM("session_phase",aligned,static_cast<unsigned>(si.mGamePhase));
+    NUM("session_remaining_s",aligned && si.mSessionTimeRemaining>=0,si.mSessionTimeRemaining);
+    NUM("session_end_et",aligned && si.mEndET>=0,si.mEndET);
+    NUM("session_max_laps",aligned && si.mMaxLaps>0 && si.mMaxLaps<2147483647,si.mMaxLaps);
+    NUM("overall_position",v && v->mPlace>0,static_cast<unsigned>(v->mPlace));
+    // Class order is derived from the SDK's scored overall order, never from
+    // timing estimates. Missing/duplicate places make the result unavailable.
+    int classPosition=0,classCars=0;bool classOrderValid=v && v->mPlace>0 && v->mVehicleClass[0];
+    bool occupied[256]={};
+    if(classOrderValid) for(long i=0;i<si.mNumVehicles;++i) {
+        const auto& other=c.scoring.vehScoringInfo[i];
+        if(std::strncmp(other.mVehicleClass,v->mVehicleClass,sizeof(v->mVehicleClass))!=0)continue;
+        ++classCars;
+        if(!other.mPlace || occupied[other.mPlace])classOrderValid=false;
+        occupied[other.mPlace]=true;
+        if(other.mPlace<=v->mPlace)++classPosition;
+    }
+    NUM("class_position",classOrderValid,classPosition);
+    NUM("class_vehicle_count",classOrderValid,classCars);
+    NUM("vehicle_count",aligned,si.mNumVehicles);
+    NUM("control_code",v,static_cast<int>(v->mControl));
+    NUM("primary_flag",v,static_cast<unsigned>(v->mFlag));
+    NUM("yellow_flag_state",aligned,static_cast<int>(si.mYellowFlagState));
+    // mFlag only reports green/blue. Local yellows are the independent SDK
+    // sector array; keep its source order instead of inventing a track mapping.
+    o<<",\"sector_flags\":";
+    if(aligned) {
+        o<<'[';
+        for(unsigned i=0;i<3;++i) {
+            if(i)o<<',';
+            const int flag=static_cast<int>(si.mSectorFlag[i]);
+            if(flag>=-1 && flag<=7)o<<flag;else o<<"null";
+        }
+        o<<']';
+    } else o<<"null";
+    NUM("sector",v && v->mSector>=0 && v->mSector<=2,static_cast<int>(v->mSector));
+    NUM("pit_state",v,static_cast<unsigned>(v->mPitState));
+    NUM("finish_status",v,static_cast<int>(v->mFinishStatus));
+    BOOL("under_yellow",v,v->mUnderYellow);
+    BOOL("in_garage_stall",v,v->mInGarageStall);
+    NUM("rain_ratio",aligned && si.mRaining>=0 && si.mRaining<=1,si.mRaining);
+    NUM("track_wetness_ratio",aligned && si.mAvgPathWetness>=0 && si.mAvgPathWetness<=1,si.mAvgPathWetness);
+    NUM("ambient_temp_c",aligned && si.mAmbientTemp>-273.15,si.mAmbientTemp);
+    NUM("track_temp_c",aligned && si.mTrackTemp>-273.15,si.mTrackTemp);
     BOOL("lap_invalidated",t,t->mLapInvalidated);
     NUM("count_lap_flag",v,static_cast<unsigned>(v->mCountLapFlag));
     NUM("track_limits_steps",t,static_cast<unsigned>(t->mTrackLimitsSteps));
@@ -175,6 +386,63 @@ std::string snapshot(Source* s, bool tu, bool su) {
     NUM("throttle_ratio",t,t->mUnfilteredThrottle);
     NUM("brake_ratio",t,t->mUnfilteredBrake);
     NUM("steering_ratio",t,t->mUnfilteredSteering);
+    NUM("gear",t && t->mGear>=-1,t->mGear);
+    NUM("engine_rpm",t && t->mEngineRPM>=0,t->mEngineRPM);
+    NUM("engine_water_temp_c",t && t->mEngineWaterTemp>-273.15,t->mEngineWaterTemp);
+    NUM("engine_oil_temp_c",t && t->mEngineOilTemp>-273.15,t->mEngineOilTemp);
+    BOOL("overheating",t,t->mOverheating);
+    BOOL("parts_detached",t,t->mDetached);
+    NUM("last_impact_et",t && t->mLastImpactET>0,t->mLastImpactET);
+    NUM("last_impact_magnitude",t && t->mLastImpactMagnitude>=0,t->mLastImpactMagnitude);
+    NUM("yaw_rate",t,t->mLocalRot.y);
+    NUM("steering_rad",t && t->mPhysicalSteeringWheelRange>0,
+        t->mUnfilteredSteering*t->mPhysicalSteeringWheelRange*0.008726646259971648);
+    NUM("brake_bias",t && t->mRearBrakeBias>=0 && t->mRearBrakeBias<=1,100.*(1.-t->mRearBrakeBias));
+    NUM("tc_setting",t && t->mTCMax>0 && t->mTC<=t->mTCMax,static_cast<unsigned>(t->mTC));
+    NUM("abs_setting",t && t->mABSMax>0 && t->mABS<=t->mABSMax,static_cast<unsigned>(t->mABS));
+    NUM("front_tyre_compound",t,static_cast<unsigned>(t->mFrontTireCompoundIndex));
+    NUM("rear_tyre_compound",t,static_cast<unsigned>(t->mRearTireCompoundIndex));
+    o<<",\"front_tyre_wet\":";if(t)tyre_wet_json(o,t->mFrontTireCompoundName,sizeof(t->mFrontTireCompoundName));else o<<"null";
+    o<<",\"rear_tyre_wet\":";if(t)tyre_wet_json(o,t->mRearTireCompoundName,sizeof(t->mRearTireCompoundName));else o<<"null";
+    NUM("class_id",v && v->mVehicleClass[0],class_key(v->mVehicleClass,sizeof(v->mVehicleClass)));
+    NUM("pit_box_lap_distance_m",v && v->mPitLapDist>0 && si.mLapDist>v->mPitLapDist,v->mPitLapDist);
+    NUM("time_gap_ahead_s",t && t->mTimeGapCarAhead>0,t->mTimeGapCarAhead);
+    NUM("time_gap_behind_s",t && t->mTimeGapCarBehind>0,t->mTimeGapCarBehind);
+    NUM("place_gap_ahead_s",t && t->mTimeGapPlaceAhead>0,t->mTimeGapPlaceAhead);
+    NUM("place_gap_behind_s",t && t->mTimeGapPlaceBehind>0,t->mTimeGapPlaceBehind);
+    NUM("start_light",aligned,static_cast<unsigned>(si.mStartLight));
+    NUM("start_red_lights",aligned,static_cast<unsigned>(si.mNumRedLights));
+    NUM("track_limits_steps_per_penalty",aligned && si.mTrackLimitsStepsPerPenalty>0,static_cast<unsigned>(si.mTrackLimitsStepsPerPenalty));
+    NUM("clutch_ratio",t && t->mUnfilteredClutch>=0 && t->mUnfilteredClutch<=1,t->mUnfilteredClutch);
+    BOOL("abs_active",t,t->mABSActive);
+    BOOL("tc_active",t,t->mTCActive);
+    BOOL("speed_limiter_active",t,t->mSpeedLimiterActive);
+    // The SDK orders wheels FL/FR/RL/RR. Temperatures are left/center/right
+    // across each tyre, not inner/center/outer. Keep unobserved values null.
+    const char* wheelPositions[]={"FL","FR","RL","RR"};
+    o << ",\"wheels\":[";
+    for(unsigned wheel=0;wheel<4;++wheel) {
+        if(wheel)o<<',';
+        o<<"{\"position\":\""<<wheelPositions[wheel]<<'"';
+        NUM("pressure_kpa",t && t->mWheel[wheel].mPressure>=0,t->mWheel[wheel].mPressure);
+        NUM("brake_temp_c",t && t->mWheel[wheel].mBrakeTemp>-273.15,t->mWheel[wheel].mBrakeTemp);
+        NUM("suspension_deflection_m",t,t->mWheel[wheel].mSuspensionDeflection);
+        NUM("ride_height_m",t,t->mWheel[wheel].mRideHeight);
+        NUM("wear_fraction",t && t->mWheel[wheel].mWear>=0 && t->mWheel[wheel].mWear<=1,t->mWheel[wheel].mWear);
+        BOOL("flat",t,t->mWheel[wheel].mFlat);
+        BOOL("detached",t,t->mWheel[wheel].mDetached);
+        o<<",\"temperature_c\":[";
+        for(unsigned point=0;point<3;++point) {
+            if(point)o<<',';
+            if(t && t->mWheel[wheel].mTemperature[point]>0)
+                number(o,t->mWheel[wheel].mTemperature[point]-273.15);
+            else o<<"null";
+        }
+        o<<"]}";
+    }
+    o<<']';
+    o<<",\"traffic\":";traffic_json(o,s,t);
+    o<<",\"scoring_cars\":";scoring_json(o,s,aligned);
 #undef NUM
 #undef BOOL
     o << '}'; return o.str();

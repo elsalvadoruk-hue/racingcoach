@@ -5,6 +5,31 @@ import { activateSession, labRequest } from './sessionData';
 
 jest.mock('./sessionData', () => ({ ...jest.requireActual('./sessionData'), labRequest: jest.fn() }));
 
+test('LMU automatic baseline permits another file with unknown weather and explains the relaxed policy', async () => {
+  const laps = [{ lap_number: 2, status: 'UNVERIFIED', measurement_eligible: true, lap_time_s: 120 }];
+  const personalReference = { filename: 'fast.duckdb', file_name: 'fast.duckdb', lap: 4, lap_time_s: 117,
+    conditions: { warnings: ['SURFACE_CONDITION_UNKNOWN'], status: 'PARTIAL' } };
+  const session = { kind: 'LIVE_LOCAL', filename: 'current.duckdb', defaultTarget: 2, defaultReference: 4,
+    reference_filename: 'fast.duckdb', reference_selection: 'AUTO', personalReference,
+    session: { track_length_m: 1000 }, corners: [], laps };
+  activateSession(session);
+  labRequest.mockImplementation(async route => {
+    if (route === 'files') return { files: [{ name: 'current.duckdb' }, { name: 'fast.duckdb' }] };
+    if (route === 'session') return session;
+    if (route === 'references') return { files: [], personalReference };
+    if (route === 'file-laps') return { laps: [{ ...laps[0], lap_number: 4, lap_time_s: 117 }] };
+    throw new Error(route);
+  });
+  render(<SourcePicker target="2" reference="4" external={[]} onApply={jest.fn()}
+    analysisWorkspace={{ game: 'lmu' }} />);
+  await waitFor(() => expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled());
+  expect(screen.getByLabelText('기준 주행 파일 · LMU')).toHaveValue('fast.duckdb');
+  expect(screen.getByText(/비 여부만 크게 구분하고 온도·타이어 차이는 제한하지 않습니다/)).toBeInTheDocument();
+  expect(screen.getByText(/날씨 정보가 없는 기록도 다른 파일까지 찾아 비교 기준으로 사용합니다/)).toBeInTheDocument();
+  expect(screen.queryByText('노면 상태를 확인할 수 없어 같은 파일에서만 자동 기준을 선택했습니다.')).not.toBeInTheDocument();
+  activateSession({ ...session, filename: '', laps: [], corners: [], initialComparison: {} });
+});
+
 test('switching IBT files during a trial preserves the frozen Garage61 references', async () => {
   const session = { kind: 'LIVE_LOCAL', filename: 'A.ibt', defaultTarget: 2, defaultReference: 3,
     session: { track_length_m: 1000 }, corners: [], laps: [

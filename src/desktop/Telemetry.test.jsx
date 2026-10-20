@@ -17,6 +17,13 @@ const rows = [.1, .2, .3, .35, .4, .5].map((pct, index) => ({
 }));
 const signal = { available: true, coverage: [[0, 1]], events: [[.2, .3, .15]] };
 const controls = { abs: { target: signal, reference: signal } };
+
+test('the cursor readout stays unknown beyond observed samples within the visible axis', () => {
+  const { container, rerender } = render(<TelemetryChart channel={{ key: 'brake', reference: 'referenceBrake', label: '브레이크', unit: '%' }} rows={rows} range={[0, 1000]} position={900} />);
+  expect(container.querySelector('.channel-value').textContent).toBe('——');
+  rerender(<TelemetryChart channel={{ key: 'brake', reference: 'referenceBrake', label: '브레이크', unit: '%' }} rows={rows} range={[0, 1000]} position={200} />);
+  expect(container.querySelector('.channel-value').textContent).toBe('3025');
+});
 const rangeNote = { id: 1, key: 'full_throttle', channel: 'throttle', label: '풀스로틀', value: '50m 늦게',
   text: '실제 두 위치 비교', at: .35, refAt: .3, range: { from: .35, to: .3, type: 'comparison' } };
 

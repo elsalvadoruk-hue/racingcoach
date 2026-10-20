@@ -452,6 +452,7 @@ class RaceEngineer:
                 sentences = [radio_phrases.build(name, seed, **values)['text'] for name, values in (phrase, *also)]
                 spoken = ' '.join(sentences)
                 speech = {'speech_key': None, 'spoken_text': spoken, 'speech_text': spoken}
+                speech['speech_specs'] = [('phrase', name, dict(values)) for name, values in (phrase, *also)]
                 if len(sentences) > 1:
                     speech['speech_parts'] = sentences
                 text = text or spoken

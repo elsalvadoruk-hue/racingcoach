@@ -4,21 +4,26 @@ import { LiveHeader } from './LivePrimitives';
 import { ArrowLeft, ArrowRight, CarFront, Headphones } from 'lucide-react';
 import { Button } from './ui/button';
 import { NativeSelect } from './ui/native-select';
+import { Switch } from './ui/switch';
 import React from 'react';
 import { SPOTTER_VOICES } from '../useSpotter';
 
-export function SpotterSettings({ settings, onChange: changeSettings, disabled = false }) {
+export function SpotterSettings({ settings, onChange: changeSettings, disabled = false, capabilities = {}, idPrefix = 'spotter' }) {
+  const supported = key => capabilities[key] !== false;
+  const id = key => `${idPrefix}-${key}`;
   return <FieldSet disabled={disabled} className="spotter-settings mt-6 border-t pt-5"><FieldLegend>스포터 안내 설정</FieldLegend>
     <FieldGroup className="grid gap-4 sm:grid-cols-2">
-      <Field><FieldLabel htmlFor="spotter-voice">스포터 목소리</FieldLabel><NativeSelect id="spotter-voice" aria-label="스포터 목소리" value={settings.voice || 'Fenrir'} onChange={e => changeSettings({ voice: e.target.value })}>{SPOTTER_VOICES.map(([name, label]) => <option key={name} value={name}>{name} · {label}</option>)}</NativeSelect></Field>
-      <Field><FieldLabel htmlFor="spotter-formation">포메이션 랩 안내 개수</FieldLabel><NativeSelect id="spotter-formation" aria-label="포메이션 랩 안내 개수" value={settings.formation_calls ?? 5} onChange={e => changeSettings({ formation_calls: Number(e.target.value) })}>{[0, 1, 2, 3, 4, 5, 6, 7, 8].map(n => <option key={n} value={n}>{n === 0 ? '끔' : `${n}개`}</option>)}</NativeSelect></Field>
-      <Field><FieldLabel htmlFor="spotter-repeat">옆 차량 반복 간격</FieldLabel><NativeSelect id="spotter-repeat" aria-label="옆 차량 반복 간격" value={settings.repeat_seconds} onChange={e => changeSettings({ repeat_seconds: Number(e.target.value) })}>{[2, 3, 5].map(n => <option key={n} value={n}>{n}초</option>)}</NativeSelect></Field>
-      <Field><FieldLabel htmlFor="spotter-clear">클리어 확인 시간</FieldLabel><NativeSelect id="spotter-clear" aria-label="클리어 확인 시간" value={settings.clear_delay} onChange={e => changeSettings({ clear_delay: Number(e.target.value) })}>{[.15, .3, .5].map(n => <option key={n} value={n}>{n * 1000}ms</option>)}</NativeSelect></Field>
-      <Field orientation="horizontal"><input id="spotter-traffic" type="checkbox" checked={settings.traffic_enabled} onChange={e => changeSettings({ traffic_enabled: e.target.checked })} /><FieldLabel htmlFor="spotter-traffic">다중 클래스·랩핑 접근, 바로 뒤 차량 안내</FieldLabel></Field>
-      <Field orientation="horizontal"><input id="spotter-pit-box" type="checkbox" checked={settings.pit_box_enabled} onChange={e => changeSettings({ pit_box_enabled: e.target.checked })} /><FieldLabel htmlFor="spotter-pit-box">피트박스 카운트다운 (추정)</FieldLabel></Field>
+      {supported('voice') && <Field><FieldLabel htmlFor={id('voice')}>스포터 목소리</FieldLabel><NativeSelect id={id('voice')} aria-label="스포터 목소리" value={settings.voice || 'Fenrir'} onChange={e => changeSettings({ voice: e.target.value })}>{SPOTTER_VOICES.map(([name, label]) => <option key={name} value={name}>{name} · {label}</option>)}</NativeSelect></Field>}
+      {supported('formation') && <Field><FieldLabel htmlFor={id('formation')}>포메이션 랩 안내 개수</FieldLabel><NativeSelect id={id('formation')} aria-label="포메이션 랩 안내 개수" value={settings.formation_calls ?? 5} onChange={e => changeSettings({ formation_calls: Number(e.target.value) })}>{[0, 1, 2, 3, 4, 5, 6, 7, 8].map(n => <option key={n} value={n}>{n === 0 ? '끔' : `${n}개`}</option>)}</NativeSelect></Field>}
+      {capabilities.repeat_toggle && <Field orientation="horizontal"><FieldLabel htmlFor={id('repeat-enabled')}>옆 차량 반복 안내</FieldLabel><Switch id={id('repeat-enabled')} disabled={disabled} checked={settings.repeat_enabled !== false} onCheckedChange={value => changeSettings({ repeat_enabled: value })} /></Field>}
+      <Field data-disabled={disabled || (capabilities.repeat_toggle && settings.repeat_enabled === false) || undefined}><FieldLabel htmlFor={id('repeat')}>옆 차량 반복 간격</FieldLabel><NativeSelect id={id('repeat')} aria-label="옆 차량 반복 간격" disabled={disabled || (capabilities.repeat_toggle && settings.repeat_enabled === false)} value={settings.repeat_seconds} onChange={e => changeSettings({ repeat_seconds: Number(e.target.value) })}>{(capabilities.repeat_toggle ? [2, 3, 5, 8, 10] : [2, 3, 5]).map(n => <option key={n} value={n}>{n}초</option>)}</NativeSelect></Field>
+      <Field><FieldLabel htmlFor={id('clear')}>클리어 확인 시간</FieldLabel><NativeSelect id={id('clear')} aria-label="클리어 확인 시간" disabled={disabled} value={settings.clear_delay} onChange={e => changeSettings({ clear_delay: Number(e.target.value) })}>{[.15, .3, .5].map(n => <option key={n} value={n}>{n * 1000}ms</option>)}</NativeSelect></Field>
+      {supported('traffic') && <Field orientation="horizontal"><input id={id('traffic')} type="checkbox" checked={settings.traffic_enabled} onChange={e => changeSettings({ traffic_enabled: e.target.checked })} /><FieldLabel htmlFor={id('traffic')}>다중 클래스·랩핑 접근, 바로 뒤 차량 안내</FieldLabel></Field>}
+      {supported('pit_box') && <Field orientation="horizontal"><input id={id('pit-box')} type="checkbox" checked={settings.pit_box_enabled} onChange={e => changeSettings({ pit_box_enabled: e.target.checked })} /><FieldLabel htmlFor={id('pit-box')}>피트박스 카운트다운 (추정)</FieldLabel></Field>}
     </FieldGroup>
-    <p className="text-xs leading-relaxed text-muted-foreground">포메이션 랩 안내는 레이스의 포메이션 랩을 도는 동안 경기 길이, 연료, 출발 요령 등을 정한 개수만큼 고르게 나눠 말하고, 마지막 인사는 랩의 80% 지점쯤에 합니다. 포메이션 랩이 없는 경기에서는 나오지 않습니다.</p>
-    <p className="text-xs leading-relaxed text-muted-foreground">피트박스 음성은 기본으로 꺼져 있습니다. 연습에서 추정 위치를 확인한 뒤 켜세요. 접근 차량의 초 단위 간격은 트랙 진행률로 환산한 추정이며 순위 간격과 다릅니다.</p>
+    {capabilities.repeat_toggle && <p className="text-xs leading-relaxed text-muted-foreground">반복 안내를 끄면 옆에 계속 있는 차량의 반복 음성만 멈춥니다. 새 좌우 겹침과 클리어 안내는 유지합니다. 클리어는 겹침이 없는 상태를 설정한 시간 동안 확인한 뒤 안내합니다.</p>}
+    {supported('formation') && <p className="text-xs leading-relaxed text-muted-foreground">포메이션 랩 안내는 레이스의 포메이션 랩을 도는 동안 경기 길이, 연료, 출발 요령 등을 정한 개수만큼 고르게 나눠 말하고, 마지막 인사는 랩의 80% 지점쯤에 합니다. 포메이션 랩이 없는 경기에서는 나오지 않습니다.</p>}
+    {supported('pit_box') && <p className="text-xs leading-relaxed text-muted-foreground">피트박스 음성은 기본으로 꺼져 있습니다. 연습에서 추정 위치를 확인한 뒤 켜세요. 접근 차량의 초 단위 간격은 트랙 진행률로 환산한 추정이며 순위 간격과 다릅니다.</p>}
   </FieldSet>;
 }
 

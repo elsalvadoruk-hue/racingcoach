@@ -24,10 +24,14 @@ export function isBestLap(lap, laps) {
   return lap?.status === 'VALID' && Number.isFinite(lap.lap_time_s) && Math.abs(lap.lap_time_s - best) < .0001;
 }
 export function lapCounts(laps = []) {
+  if (laps.some(l => l.measurement_eligible === true)) return { detected_laps: laps.length,
+    measurement_laps: laps.filter(l => l.measurement_eligible === true).length,
+    complete_laps: laps.filter(l => l.measurement_eligible === true).length };
   return { detected_laps: laps.length, valid_laps: laps.filter(l => l.status === 'VALID').length,
     complete_laps: laps.filter(l => ['VALID', 'INVALID'].includes(l.status)).length };
 }
 export function fileLapLabel(file) {
+  if (Number.isFinite(file.measurement_laps)) return `기록 ${file.detected_laps}랩 · 측정 가능 ${file.measurement_laps} · 유효성 확인 필요`;
   return Number.isFinite(file.detected_laps) && Number.isFinite(file.valid_laps)
     ? `기록 ${file.detected_laps}랩 · 유효 ${file.valid_laps} · 비유효 ${file.detected_laps - file.valid_laps}` : '랩 수 확인 전';
 }
@@ -50,5 +54,5 @@ export function sessionTypeTone(value) {
 }
 
 export function lapIsComplete(lap) {
-  return lap?.status === 'VALID' || (Number.isFinite(lap?.start_pct) && Number.isFinite(lap?.end_pct) && lap.end_pct - lap.start_pct >= .98);
+  return lap?.status === 'VALID' || (lap?.measurement_eligible === true && lap.complete === true) || (Number.isFinite(lap?.start_pct) && Number.isFinite(lap?.end_pct) && lap.end_pct - lap.start_pct >= .98);
 }

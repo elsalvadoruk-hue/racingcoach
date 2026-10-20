@@ -505,7 +505,7 @@ def build_closed_loop_coach(
             "effect_confirmation_recommended_laps": ab_recommended_laps,
             "lock": ["다른 셋업·연료 조건 유지", "라인과 브레이킹 스타일을 동시에 바꾸지 않기"],
             "success_criteria": ["같은 문제 코너에서 체감과 조향 수정이 더 편해지는지 확인", "더 불안하거나 다루기 어려워지면 원복", "체감 개선과 속도 효과 확정은 별도로 기록"],
-            "after_run": f"새 IBT에서 코너 입력을 확인하세요. A/B 효과 판정은 각 셋업 유효랩 {ab_required_laps}개부터이며 자연 편차도 함께 계산합니다. 표본 부족은 실패가 아니라 미확정입니다.",
+            "after_run": f"새 주행 기록에서 코너 입력을 확인하세요. A/B 효과 판정은 각 셋업 유효랩 {ab_required_laps}개부터이며 자연 편차도 함께 계산합니다. 표본 부족은 실패가 아니라 미확정입니다.",
         }
     elif choose_setup:
         target = setup_focus.get("value")
@@ -523,7 +523,7 @@ def build_closed_loop_coach(
             "recommended_valid_laps": ab_recommended_laps,
             "lock": ["다른 셋업 항목 변경 금지", "의도적으로 새로운 라인/브레이킹 스타일을 동시에 실험하지 않기"],
             "success_criteria": [str(setup_focus.get("validation") or "자연 편차보다 큰 PACE/CONSISTENCY/DRIVEABILITY 변화를 확인")],
-            "after_run": "새 IBT를 같은 세션 유형으로 저장한 뒤 로컬 A/B에서 A=현재 IBT, B=새 IBT를 선택합니다. 평균 페이스뿐 아니라 일관성과 운전 용이성도 함께 판정합니다.",
+            "after_run": "새 주행 기록을 같은 세션 유형으로 저장한 뒤 로컬 A/B에서 A=현재 기록, B=새 기록을 선택합니다. 평균 페이스뿐 아니라 일관성과 운전 용이성도 함께 판정합니다.",
         }
     elif driving_focus and not generic_variance_focus:
         next_run = {
@@ -535,7 +535,7 @@ def build_closed_loop_coach(
             "focus_corners": driving_focus.get("affected_corners") or [driving_focus.get("corner")],
             "lock": ["셋업 변경 금지", "한 번에 이 입력 패턴만 의도적으로 수정"],
             "success_criteria": driving_focus.get("success_criteria") or [],
-            "after_run": "새 IBT를 다시 분석해 같은 방향의 손실이 줄었는지 확인합니다. 완벽히 동일한 랩은 요구하지 않습니다.",
+            "after_run": "새 주행 기록을 다시 분석해 같은 방향의 손실이 줄었는지 확인합니다. 완벽히 동일한 랩은 요구하지 않습니다.",
         }
     elif generic_variance_focus:
         next_run = {
@@ -548,7 +548,7 @@ def build_closed_loop_coach(
             "focus_corners": driving_focus.get("affected_corners") or [driving_focus.get("corner")],
             "lock": ["셋업은 일단 유지", "랩타임을 억지로 맞추지 않기"],
             "success_criteria": ["동일 코너에서 같은 방향의 손실/개선 패턴 2랩 이상 확인", "자연 편차 범위를 프로그램이 갱신"],
-            "after_run": "새 IBT를 분석하면 현재 자연 편차와 반복 손실을 다시 계산합니다. 재현성 부족 자체는 실패로 처리하지 않습니다.",
+            "after_run": "새 주행 기록을 분석하면 현재 자연 편차와 반복 손실을 다시 계산합니다. 재현성 부족 자체는 실패로 처리하지 않습니다.",
         }
     else:
         next_run = {
@@ -559,7 +559,7 @@ def build_closed_loop_coach(
             "recommended_valid_laps": driving_recommended_laps,
             "lock": ["큰 셋업 변경 금지"],
             "success_criteria": [f"유효랩 {driving_required_laps}개 이상", "반복되는 코너 손실 방향 확인"],
-            "after_run": "새 IBT를 분석해 다음 원인/셋업 후보를 계산합니다.",
+            "after_run": "새 주행 기록을 분석해 다음 원인/셋업 후보를 계산합니다.",
         }
 
     sensitivity_count = int(sensitivity_profile.get("decisive_event_count") or 0)

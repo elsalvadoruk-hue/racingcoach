@@ -27,8 +27,8 @@ export function RuntimeControls({ runtime }) {
     <Tooltip><TooltipTrigger asChild><Badge variant="outline" tabIndex={0}>{runtime.host?.status?.connected ? '주행 연결됨' : '차량 연결 대기'}</Badge></TooltipTrigger><TooltipContent>실제 앱의 오버레이 자동 표시·스포터·피트월을 제어합니다.</TooltipContent></Tooltip>
     <FieldGroup className="runtime-switches">
       {[[Layers3, 'overlay', '오버레이'], [Headphones, 'spotter', '스포터'], [Radio, 'pitwall', '피트월']].map(([Icon, key, label]) => <Field key={key} orientation="horizontal" className="runtime-switch">
-        <FieldLabel htmlFor={`quick-${key}`}><Icon aria-hidden="true" />{label}<span>{controls[key] ? '켜짐' : '꺼짐'}</span></FieldLabel>
-        <Switch id={`quick-${key}`} aria-label={label} checked={controls[key]} disabled={key === 'overlay' ? runtime.overlayBusy || !runtime.overlay?.supported : key === 'spotter' ? runtime.host?.spotter.preparing : false} onCheckedChange={value => change(key, value)} />
+        <FieldLabel htmlFor={`quick-${key}`}><Icon aria-hidden="true" />{label}<span>{runtime.capability?.[key] === false ? '미지원' : controls[key] ? '켜짐' : '꺼짐'}</span></FieldLabel>
+        <Switch id={`quick-${key}`} aria-label={label} checked={controls[key]} disabled={runtime.capability?.[key] === false || (key === 'overlay' ? runtime.overlayBusy || !runtime.overlay?.supported : key === 'spotter' ? runtime.host?.spotter?.preparing : false)} onCheckedChange={value => change(key, value)} />
       </Field>)}
     </FieldGroup>
     <Field orientation="horizontal" className="runtime-input"><FieldLabel htmlFor="output-device-trigger"><Volume2 aria-hidden="true" /><span>출력장치</span></FieldLabel><Button id="output-device-trigger" variant="outline" aria-label="출력장치 선택" aria-haspopup="dialog" aria-expanded={deviceDialog} title={outputLabel} onClick={() => { setDeviceDialog(true); audio.refresh({ ask: true }); }}><span className="truncate">{outputLabel}</span><ChevronDown data-icon="inline-end" /></Button></Field>

@@ -42,6 +42,8 @@ class OverlayController:
         self.auto_show = None
         self.monitor_stop = threading.Event()
         self.monitor = None
+        self.suspended = False
+        self.log_directory = None
 
     def visibility_store(self):
         return VisibilityStore(self.store().path.with_name('overlay-visibility.json'))
@@ -65,7 +67,7 @@ class OverlayController:
                     "ready": running and self.current is not None,
                     **(self.current if running and self.current else {"settings": saved, "goal": "abs", "scene": "during"}),
                     "auto_show": self.enabled(), "preview": self.preview and running,
-                    "driving": driving(self.latest),
+                    "driving": not self.suspended and driving(self.latest), "suspended": self.suspended,
                     "visible": bool(running and self.current and self.current.get('visible')),
                     "reference": self.reference.status() if self.reference else None,
                     "practice": self.latest.get('practice'), "session": self.latest.get('session'),
@@ -107,8 +109,8 @@ class OverlayController:
                 command = [str(executable if executable.exists() else sys.executable),
                            str(ROOT / "scripts/overlay_sample.py"), "--managed", "--paused", "--hidden",
                            "--settings", str(self.store().path)]
-                log_dir = ROOT / "logs"
-                log_dir.mkdir(exist_ok=True)
+                log_dir = self.log_directory or ROOT / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
                 with (log_dir/"overlay-web.stderr.log").open("w", encoding="utf-8") as error_log:
                     self.process = subprocess.Popen(command, cwd=ROOT, stdin=subprocess.PIPE,
                                                     stdout=subprocess.PIPE, stderr=error_log, text=True,
@@ -127,6 +129,8 @@ class OverlayController:
 
     def start(self):
         with self.operation_lock:
+            if self.suspended:
+                raise RuntimeError('현재 선택한 게임에서 오버레이를 여세요.')
             self._start_child()
             self.command('display', {'mode': 'preview', 'visible': True})
             self.preview = True
@@ -148,6 +152,10 @@ class OverlayController:
 
     def sync(self, view):
         with self.operation_lock:
+            if self.suspended:
+                self.latest = {'connected': False, 'snapshot': None, 'points': []}
+                self.cards.reset()
+                return self.status()
             self.latest = view
             running = self.process is not None and self.process.poll() is None
             if self.preview and not running:
@@ -176,6 +184,16 @@ class OverlayController:
                 self.cards.reset()
                 if running and self.current and self.current.get('visible'):
                     self.command('display', {'mode': 'live', 'visible': False})
+            return self.status()
+
+    def set_suspended(self, enabled):
+        """Pause this controller and close only its owned HUD, preserving preferences."""
+        with self.operation_lock:
+            self.suspended = bool(enabled)
+            if self.suspended:
+                self.latest = {'connected': False, 'snapshot': None, 'points': []}
+                self.cards.reset()
+                return self.stop()
             return self.status()
 
     def start_monitor(self, provider):
@@ -280,8 +298,8 @@ class DemoBody(BaseModel):
     celebrate: bool = False
 
 
-def routes(controller):
-    router = APIRouter(prefix="/api/overlay")
+def routes(controller, prefix="/api/overlay"):
+    router = APIRouter(prefix=prefix)
 
     def call(operation, *args):
         try:

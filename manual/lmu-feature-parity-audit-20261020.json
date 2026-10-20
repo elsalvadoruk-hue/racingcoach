@@ -1,0 +1,631 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-10-20",
+  "scope": "현재 브랜치의 공통 React 화면과 LMU 읽기 전용 백엔드. iRacing 전체와 동등하다는 의미가 아니며 아래 기능별 제한을 적용한다.",
+  "reviewed_interfaces": [
+    "src/desktop/desktopNavigation.js",
+    "src/desktop/AnalysisDetails.jsx",
+    "src/desktop/UtilityWorkspace.jsx",
+    "src/desktop/LmuFeatureGuide.jsx"
+  ],
+  "status_definitions": {
+    "AVAILABLE": "명시된 측정 범위의 API와 화면 연결이 있다",
+    "PARTIAL": "화면과 일부 근거는 있으나 iRacing 기능의 일부는 제공하지 않는다",
+    "NOT_IMPLEMENTED": "LMU 화면 또는 동작 연결이 없다",
+    "NOT_SUPPORTED": "현재 외부 서비스/기록 계약이 LMU를 지원하지 않는다"
+  },
+  "shared_constraints": [
+    "게임별 저장소와 요청 경로를 분리한다",
+    "게임 최종 유효성은 기록 시간이나 단일 SDK 신호만으로 확정하지 않는다",
+    "결측값을 0으로 채우지 않는다",
+    "셋업 항목 변경과 효과를 구분한다",
+    "게임 또는 SDK에 명령을 보내지 않는다"
+  ],
+  "features": [
+    {
+      "guide_name": "최근 주행·파일·랩 선택",
+      "status": "AVAILABLE",
+      "destination": "summary",
+      "iracing_sections": [
+        "run-summary"
+      ],
+      "data_evidence": [
+        "종료된 DuckDB의 Lap/Lap Time/거리 연속성",
+        "파일 카탈로그의 analyzable과 파일 ID"
+      ],
+      "implementation": [
+        "src/analysis/useLmuWorkspace.js",
+        "src/desktop/SourcePicker.jsx",
+        "src/desktop/sessionData.js",
+        "iRacing_Backend/lmu_workspace.py"
+      ],
+      "implemented_scope": "최신 분석 가능 파일 자동 열기, 저장한 랩·다른 파일 기준 복원, 변경 중인 파일 제외, 호환성 검증",
+      "prerequisites_remaining": []
+    },
+    {
+      "guide_name": "제동·가속·동시입력 시간",
+      "status": "AVAILABLE",
+      "destination": "laps",
+      "iracing_sections": [
+        "lap-time-use"
+      ],
+      "data_evidence": [
+        "원본 시간축과 정규화된 브레이크·스로틀",
+        "양쪽 5% 문턱의 선형 교차 시각"
+      ],
+      "implementation": [
+        "src/components/LapTimeUse.js",
+        "iRacing_Backend/lmu_pedal_usage.py",
+        "src/desktop/LapAnalysis.jsx"
+      ],
+      "implemented_scope": "제동만·가속만·동시입력·양쪽 낮음의 배타적 분류. 관측·미관측 시간과 입력 처리 단계 표시",
+      "prerequisites_remaining": []
+    },
+    {
+      "guide_name": "코너 속도·입력·시간 비교",
+      "status": "AVAILABLE",
+      "destination": "corners",
+      "iracing_sections": [
+        "corner-inputs",
+        "comparison",
+        "corner-table"
+      ],
+      "data_evidence": [
+        "기준 랩의 기하 구간 경계",
+        "공통 거리의 속도·브레이크·스로틀·시간"
+      ],
+      "implementation": [
+        "src/desktop/CornerLab.jsx",
+        "src/desktop/Measurements.jsx",
+        "iRacing_Backend/lmu_corners.py",
+        "iRacing_Backend/analysis_bridge.py",
+        "iRacing_Backend/lmu_workspace.py"
+      ],
+      "implemented_scope": "같은 차량·트랙·레이아웃에서 고정 구간 비교. 위치 지표는 근사 관측임을 유지. 코너의 연습 버튼은 LMU 기록 화면으로 이동하며 기준 저장에 필요한 3~6랩 선택을 안내",
+      "prerequisites_remaining": [
+        "공식 코너 번호 확정은 별도 항목 참조"
+      ]
+    },
+    {
+      "guide_name": "주행선·고스트·재생",
+      "status": "PARTIAL",
+      "destination": "corners",
+      "iracing_sections": [
+        "corner-names"
+      ],
+      "data_evidence": [
+        "DuckDB 기록 좌표의 지역 평면 근사",
+        "구간 식별자와 기록 경과 시간"
+      ],
+      "implementation": [
+        "src/desktop/Telemetry.jsx",
+        "src/desktop/CornerLab.jsx",
+        "src/components/CornerMap.js",
+        "iRacing_Backend/lmu_analysis.py",
+        "iRacing_Backend/lmu_replay.py",
+        "iRacing_Backend/lmu_corner_names.py",
+        "src/desktop/CornerNamesPage.jsx"
+      ],
+      "implemented_scope": "기록 좌표 개략도·주행선·고스트. 위성지도는 실제 위치와 맞지 않아 위치 맞춤과 함께 제거했다. 공통 편집 화면에서 확인 후 확정한 코너 번호·이름은 유지한다.",
+      "prerequisites_remaining": [
+        "다른 트랙의 지리 참조 검증",
+        "실측 GPS 위치와 공식 LMU 지도는 아님",
+        "확정 번호의 LMU 실시간 음성 연결"
+      ]
+    },
+    {
+      "guide_name": "제동 구간·감속·풀스로틀",
+      "status": "AVAILABLE",
+      "destination": "expert",
+      "iracing_sections": [],
+      "data_evidence": [
+        "브레이크 8% 시작/5% 해제",
+        "스로틀 95% 시작/90% 해제",
+        "0.15초 이상 구간의 원본 속도·시간·거리"
+      ],
+      "implementation": [
+        "src/desktop/LmuAnalysisPanels.jsx",
+        "iRacing_Backend/lmu_analysis.py",
+        "iRacing_Backend/analysis_bridge.py",
+        "iRacing_Backend/telemetry_core.py"
+      ],
+      "implemented_scope": "제동 경계, 시간·거리, 진입/종료 속도, 평균 감속. 최고 감속을 가속도 채널 없이 추측하지 않음",
+      "prerequisites_remaining": []
+    },
+    {
+      "guide_name": "코너별 반복성",
+      "status": "AVAILABLE",
+      "destination": "laps",
+      "iracing_sections": [
+        "corner-consistency"
+      ],
+      "data_evidence": [
+        "직접 선택한 서로 다른 3~6개 랩",
+        "공통 기하 구간의 시간과 최초 제동/스로틀 20%/풀스로틀 위치"
+      ],
+      "implementation": [
+        "src/desktop/LmuAnalysisPanels.jsx",
+        "src/desktop/LapAnalysis.jsx",
+        "iRacing_Backend/lmu_consistency.py"
+      ],
+      "implemented_scope": "공통 CornerConsistency의 사분위·IQR·이상치·정렬 및 이번 랩과 빠른 3회 비교. 파일+랩으로 식별하고 기준 기하가 같을 때 코너 이동.",
+      "prerequisites_remaining": []
+    },
+    {
+      "guide_name": "랩 기록·구간 조합",
+      "status": "PARTIAL",
+      "destination": "laps",
+      "iracing_sections": [
+        "lap-detail"
+      ],
+      "data_evidence": [
+        "진단을 통과한 기록 랩 시간",
+        "랩별 동일 거리 구간의 원본 시간"
+      ],
+      "implementation": [
+        "src/desktop/LmuLapRecords.jsx",
+        "src/desktop/LapRecords.jsx",
+        "iRacing_Backend/lmu_session_metrics.py",
+        "iRacing_Backend/lmu_workspace.py"
+      ],
+      "implemented_scope": "기록 최저·중앙·편차, 공통 구간 최저 합계. 게임 공식 베스트나 실현 가능한 완주 예측과 구분",
+      "prerequisites_remaining": [
+        "공식 랩 유효성의 파일 연결",
+        "연속 롤링 베스트와 재현 가능 최적의 LMU 검증"
+      ]
+    },
+    {
+      "guide_name": "여러 랩·여러 파일 겹침",
+      "status": "AVAILABLE",
+      "destination": "expert",
+      "iracing_sections": [
+        "lap-overlay"
+      ],
+      "data_evidence": [
+        "같은 파일 최대 8랩과 다른 파일 최대 4랩",
+        "공통 거리와 같은 처리 단계의 입력"
+      ],
+      "implementation": [
+        "src/components/LapOverlay.js",
+        "src/desktop/sessionData.js",
+        "iRacing_Backend/lmu_workspace.py"
+      ],
+      "implemented_scope": "속도·페달·조향 입력 비율(%, 각도 환산 없음)·기어(STEP 변경 이벤트)·시간차·관측 범위.",
+      "prerequisites_remaining": []
+    },
+    {
+      "guide_name": "차량·타이어·서스펜션",
+      "status": "PARTIAL",
+      "destination": "expert",
+      "iracing_sections": [
+        "tire-snapshot",
+        "ride-aero"
+      ],
+      "data_evidence": [
+        "지원 목록의 차량 원본 채널과 명시 단위",
+        "기록 성분 value1~value4",
+        "양쪽이 관측된 공통 거리"
+      ],
+      "implementation": [
+        "src/desktop/LmuAnalysisPanels.jsx",
+        "iRacing_Backend/lmu_vehicle.py",
+        "iRacing_Backend/lmu_vehicle_compare.py"
+      ],
+      "implemented_scope": "타이어·차고·연료·엔진·브레이크 등 지원 채널의 랩 통계와 기준 대비 차이",
+      "prerequisites_remaining": [
+        "파일의 4성분 휠 순서 검증",
+        "타이어 내/외측 온도 대응 검증",
+        "iRacing 종료 스냅샷·에어로 판정과 같은 의미의 LMU 지표 검증"
+      ]
+    },
+    {
+      "guide_name": "차량 원인 분류·G-G·댐퍼",
+      "status": "NOT_IMPLEMENTED",
+      "destination": "expert",
+      "iracing_sections": [
+        "gg-diagram",
+        "damper-velocity"
+      ],
+      "data_evidence": [
+        "일부 차량 채널은 존재하지만 분석 계약은 미연결"
+      ],
+      "implementation": [
+        "src/desktop/LmuFeatureGuide.jsx"
+      ],
+      "implemented_scope": "현재 지원 상태만 안내",
+      "prerequisites_remaining": [
+        "가속도 좌표축·부호·중력 포함 여부 검증",
+        "댐퍼 속도의 원본 의미·단위·휠 순서 검증",
+        "LMU 원인 분류 규칙과 회귀 검증"
+      ]
+    },
+    {
+      "guide_name": "셋업 조회·A/B 변경 항목",
+      "status": "AVAILABLE",
+      "destination": "setup",
+      "iracing_sections": [
+        "ab-manager"
+      ],
+      "data_evidence": [
+        "CarSetup 메타데이터의 허용 목록 항목",
+        "원본 표시문과 설정 인덱스·범위"
+      ],
+      "implementation": [
+        "src/desktop/LmuSetupPanel.jsx",
+        "iRacing_Backend/lmu_setup.py",
+        "iRacing_Backend/lmu_routes.py"
+      ],
+      "implemented_scope": "파일 A/B의 변경·동일·미확인 항목과 필터. 설정 인덱스를 물리 단위로 변환하지 않음",
+      "prerequisites_remaining": []
+    },
+    {
+      "guide_name": "셋업 추천·효과 학습",
+      "status": "NOT_IMPLEMENTED",
+      "destination": "setup",
+      "iracing_sections": [
+        "briefing",
+        "engineer-briefing",
+        "setup-decision",
+        "decision"
+      ],
+      "data_evidence": [
+        "기록 셋업 변경은 읽을 수 있으나 조건 일치·단일 변경 근거가 확정되지 않음"
+      ],
+      "implementation": [
+        "src/desktop/LmuFeatureGuide.jsx",
+        "src/desktop/LmuSetupPanel.jsx"
+      ],
+      "implemented_scope": "효과 미평가 표시. iRacing의 KEEP/REVERT 판정과 장기 효과 학습을 실행하지 않음",
+      "prerequisites_remaining": [
+        "노면·기온·연료·타이어 조건 연결",
+        "실제 단일 변경과 계획 일치 검증",
+        "LMU 전용 실험 상태·판정·기억 저장 구조"
+      ]
+    },
+    {
+      "guide_name": "반복 연습 기준·과제·이력",
+      "status": "AVAILABLE",
+      "destination": "history",
+      "iracing_sections": [
+        "practice-coach",
+        "closed-loop-coach",
+        "priorities"
+      ],
+      "data_evidence": [
+        "파일 해시와 랩 번호로 구분한 원본 3~6랩",
+        "동일 입력 단계와 고정 구간 정의",
+        "제동 시작·스로틀 20% 최초 관측·풀스로틀 편차"
+      ],
+      "implementation": [
+        "src/desktop/LmuPracticePanel.jsx",
+        "iRacing_Backend/lmu_practice.py",
+        "iRacing_Backend/lmu_practice_store.py",
+        "iRacing_Backend/lmu_routes.py"
+      ],
+      "implemented_scope": "기준 과제 저장·조회와 새 랩 재측정 비교 이력. 기준 랩 재사용과 복사한 같은 원본의 중복을 거부",
+      "prerequisites_remaining": [
+        "iRacing의 손실 원인별 조작 처방과 완전한 폐루프 추천은 별도 검증 필요",
+        "저장된 기준·비교 원본 목록을 상세 화면에 별도로 노출하면 감사 편의 향상"
+      ]
+    },
+    {
+      "guide_name": "장기 기억·개인화·주관적 피드백",
+      "status": "PARTIAL",
+      "destination": "history",
+      "iracing_sections": [
+        "memory",
+        "personalization"
+      ],
+      "data_evidence": [
+        "LMU 분석 선택과 측정 요약·사용자 작성 메모"
+      ],
+      "implementation": [
+        "iRacing_Backend/lmu_history.py",
+        "src/desktop/LmuHistoryPanel.jsx"
+      ],
+      "implemented_scope": "파일·내 랩·기준 파일·기준 랩·메모·측정 요약을 LMU 전용 DB에 명시 저장. 검색·차량/트랙/세션 필터·원본 재분석으로 다시 열기. 메모를 셋업 효과 근거로 사용하지 않는다.",
+      "prerequisites_remaining": [
+        "개인화 규칙과 구조화 피드백은 미구현",
+        "셀프 학습과 셋업 효과 근거 분리 유지"
+      ]
+    },
+    {
+      "guide_name": "실시간 입력·엔진·타이어",
+      "status": "AVAILABLE",
+      "destination": "live",
+      "iracing_sections": [
+        "live-coach"
+      ],
+      "data_evidence": [
+        "LMU SDK 텔레메트리와 스코어링",
+        "표본 시각·실시간 여부·제어 주체·일시정지 상태"
+      ],
+      "implementation": [
+        "src/desktop/LmuLivePanel.jsx",
+        "iRacing_Backend/lmu_live.py",
+        "iRacing_Backend/lmu_shared_memory.py"
+      ],
+      "implemented_scope": "켜진 기능의 공통 읽기 전용 연결과 별도 수동 진단 기록. WebSocket 연결 수명, 게임 시작 재시도, 수동 중지·지연 요청·여러 탭 보호. 최신 현재 차량의 입력·엔진·타이어·휠·연결 품질. 오래된 값과 리플레이를 현재값으로 표시하지 않음",
+      "prerequisites_remaining": []
+    },
+    {
+      "guide_name": "실시간 랩·무효 신호",
+      "status": "PARTIAL",
+      "destination": "live",
+      "iracing_sections": [],
+      "data_evidence": [
+        "lap_invalidated",
+        "count_lap_flag",
+        "track_limits_steps",
+        "텔레메트리/스코어링의 독립 랩 ID와 경계"
+      ],
+      "implementation": [
+        "src/desktop/LmuLivePanel.jsx",
+        "iRacing_Backend/lmu_validity.py",
+        "iRacing_Backend/lmu_live.py"
+      ],
+      "implemented_scope": "무효 신호·집계 정책 변화·신호 일치의 관측 이력. 공식 최종 판정은 별도",
+      "prerequisites_remaining": [
+        "게임 화면과 실제 연속 랩의 신호 시차 검증",
+        "공식 판정과 종료 기록의 안전한 연결"
+      ]
+    },
+    {
+      "guide_name": "실시간 연료·경기 정보",
+      "status": "PARTIAL",
+      "destination": "live",
+      "iracing_sections": [],
+      "data_evidence": [
+        "SDK 연료 리터값과 완전 랩 소비",
+        "세션·순위·차량 수·랩 거리·깃발·피트 상태"
+      ],
+      "implementation": [
+        "src/desktop/LmuLivePanel.jsx",
+        "iRacing_Backend/lmu_live_engineer.py",
+        "iRacing_Backend/lmu_live.py"
+      ],
+      "implemented_scope": "최소 2개 깨끗한 완전 랩의 소비 중앙값과 잔량 기준 랩 수, 경기 상태 표. 예비 연료와 피트 전략은 계산하지 않음",
+      "prerequisites_remaining": [
+        "실주행 급유·세션 전환·중단의 추가 검증",
+        "iRacing 수준 완주·피트 전략은 별도 신호와 조건 필요"
+      ]
+    },
+    {
+      "guide_name": "좌우 스포터·접근·위험 안내",
+      "status": "PARTIAL",
+      "destination": "live",
+      "iracing_sections": [],
+      "data_evidence": [
+        "공식 SDK의 차량별 ID·시각·월드 위치와 플레이어 방향을 숫자형 traffic으로 수집",
+        "CrewChief RF2Spotter와 Cartesian spotter의 좌표 변환·겹침 유지·클리어 지연 원리 참조",
+        "기존 연습 DuckDB에는 상대 차량 좌표가 없어 당시 좌우 통과 복원 불가"
+      ],
+      "implementation": [
+        "src/desktop/useLmuSpotter.js",
+        "src/desktop/LmuVoicePanel.jsx",
+        "src/desktop/LmuDesktopRuntime.jsx",
+        "iRacing_Backend/lmu_spotter.py",
+        "iRacing_Backend/lmu_live.py",
+        "iRacing_Backend/lmu_native_bridge.cpp"
+      ],
+      "implemented_scope": "공통 크기 근사의 좌우·양쪽·횡방향 두 대·클리어·반복 안내. 기존 FSM·캐시·단일 오디오 호스트와 공통 스위치 재사용. 기본 꺼짐, 켜진 기능은 실시간 연결을 공유. 서버 50ms WebSocket 판정과 대기 메시지의 경과 시간을 차감한 재생 만료. 실제 주행 10519표본·최대19차량·좌우/클리어/유지24이벤트 확인. 실제 음성 청취와 화면 좌우 대조는 별도 필요",
+      "prerequisites_remaining": [
+        "실제 주행의 주변 차량 공급·주기와 좌우 음성 대조",
+        "차종별 크기와 겹침 경계 검증",
+        "접근·느린차·전방 위험 안내는 미연결"
+      ]
+    },
+    {
+      "guide_name": "자동 엔지니어·피트·손상·전략 안내",
+      "status": "PARTIAL",
+      "destination": "live",
+      "iracing_sections": [],
+      "data_evidence": [
+        "일부 연료·경기 상태 관측은 가능"
+      ],
+      "implementation": [
+        "iRacing_Backend/lmu_voice.py",
+        "iRacing_Backend/lmu_pitwall.py",
+        "src/desktop/LmuVoicePanel.jsx",
+        "src/components/PitWall.js",
+        "manual/lmu-pitwall-parity-20261020.json"
+      ],
+      "implemented_scope": "공통 피트월 화면·보고 범위·담당·목소리 확인·측정 지표·보고 목록. 240문구와62안내 호출 조건 대조. 관측 랩/세션베스트/페이스/일정성, 5초 유지한 순위 변화, 연료, 시간, 노면/온도, 실제 포메이션 정보, 자신의 종료/DQ 전이. 기존 캐시만 사용하고 WebSocket·완료ACK·만료 검사. 페널티 수/피트 요청·정차/펑크·휠 분리는 화면 전용. 모든 iRacing 기능이 연결됐다는 의미는 아님",
+      "prerequisites_remaining": [
+        "피트 서비스·손상·타이어/급유 상태 매핑",
+        "경쟁차·완주 거리·실시간 코너 코칭 등 상세 감사표의 미연결 신호",
+        "LMU 전용 피트 지식과 실제 통과 손실 검증"
+      ]
+    },
+    {
+      "guide_name": "실시간 코너 코치·구간 델타",
+      "status": "NOT_IMPLEMENTED",
+      "destination": "live",
+      "iracing_sections": [],
+      "data_evidence": [
+        "파일 기하 구간과 실시간 랩 거리 각각 존재"
+      ],
+      "implementation": [
+        "src/desktop/LmuFeatureGuide.jsx"
+      ],
+      "implemented_scope": "파일 구간을 실시간 현재 차량에 자동 적용하지 않음",
+      "prerequisites_remaining": [
+        "LMU 차량·트랙·레이아웃 식별자 연결",
+        "고정 구간 정의의 실시간 투영",
+        "깨끗한 통과·세션 전환·입력 부재와 안내 만료 검증"
+      ]
+    },
+    {
+      "guide_name": "F8 질문·마이크·음성 메모",
+      "status": "NOT_IMPLEMENTED",
+      "destination": "live",
+      "iracing_sections": [
+        "voice-review",
+        "voice-review-panel"
+      ],
+      "data_evidence": [
+        "LMU 실측 문맥은 존재하지만 질문·메모 서비스가 iRacing 전용"
+      ],
+      "implementation": [
+        "src/desktop/DesktopRuntime.js",
+        "src/desktop/LmuFeatureGuide.jsx"
+      ],
+      "implemented_scope": "LMU는 iRacing 마이크·음성 런타임을 마운트하지 않음",
+      "prerequisites_remaining": [
+        "LMU 전용 질문 문맥·핫키·메모 저장소",
+        "랩·코너 연결과 사용자 정정",
+        "개인 음성 비저장 원칙·과금 호출·답변 우선순위 검증"
+      ]
+    },
+    {
+      "guide_name": "음성 출력·재생 속도·오버레이",
+      "status": "PARTIAL",
+      "destination": "live",
+      "iracing_sections": [
+        "overlay-settings"
+      ],
+      "data_evidence": [
+        "최신 LMU 운전자 telemetry와 게임 선택 유효기간",
+        "공통 단일 재생기와 기존 native HUD"
+      ],
+      "implementation": [
+        "iRacing_Backend/lmu_overlay.py",
+        "iRacing_Backend/lmu_voice.py",
+        "src/desktop/LmuVoicePanel.jsx",
+        "src/components/OverlaySettings.js"
+      ],
+      "implemented_scope": "공통 출력장치·볼륨·음소거·세 역할 재생 속도·음높이 유지. LMU 실제 페달·기어 HUD와 별도 배치·자동표시 설정. 지연/피트/일시정지/리플레이/게임전환 시 숨김. 켜 둔 기능이 있으면 LMU 선택 중 공통 연결을 준비한다. 실제 주행 API에서 running/ready/visible/driving=true와 error=null 확인. 실제 게임 화면의 위치·전체화면 합성은 별도 대조 필요",
+      "prerequisites_remaining": [
+        "LMU 실시간 코너 과제·기준 비교는 미연결",
+        "LMU 주행 중 실제 안내 청취 검증 필요"
+      ]
+    },
+    {
+      "guide_name": "Garage61 외부 기준",
+      "status": "NOT_SUPPORTED",
+      "destination": "settings",
+      "iracing_sections": [
+        "external-reference"
+      ],
+      "data_evidence": [
+        "현재 Garage61 수집 계약은 iRacing 차량·트랙 기준"
+      ],
+      "implementation": [
+        "src/desktop/SourcePicker.jsx",
+        "iRacing_Backend/lmu_workspace.py"
+      ],
+      "implemented_scope": "LMU에서 Garage61 선택 비활성화. LMU 파일끼리 기준 비교 가능",
+      "prerequisites_remaining": [
+        "LMU를 제공하는 외부 기준 서비스와 명시적인 단위·차량·트랙·조건 계약"
+      ]
+    },
+    {
+      "guide_name": "LMU 기록 폴더 설정",
+      "status": "AVAILABLE",
+      "destination": "settings",
+      "iracing_sections": [
+        "settings"
+      ],
+      "data_evidence": [
+        "사용자 저장 폴더와 환경 변수 우선순위"
+      ],
+      "implementation": [
+        "iRacing_Backend/lmu_settings.py",
+        "src/desktop/LmuSettingsPanel.jsx"
+      ],
+      "implemented_scope": "추가 폴더 저장·제거 즉시 파일 검색에 반영. iRacing 설정과 분리. 기본 경로 유지 및 환경 변수 우선 적용.",
+      "prerequisites_remaining": []
+    }
+  ],
+  "additional_interface_audit": [
+    {
+      "feature": "분석·차량 상세 대화상자",
+      "source": "src/desktop/AnalysisDetails.jsx",
+      "status": "PARTIAL",
+      "lmu_location": "전문가 보기의 차량 상태 및 주행 요약",
+      "remaining": [
+        "원인 분류",
+        "종료 타이어 스냅샷과 에어로 판정",
+        "댐퍼·G-G",
+        "구조화 피드백",
+        "셋업 결정·브리핑"
+      ]
+    },
+    {
+      "feature": "연결 설정",
+      "source": "src/desktop/UtilityWorkspace.jsx",
+      "status": "PARTIAL",
+      "lmu_location": "src/desktop/LmuWorkspacePanel.jsx",
+      "remaining": [
+        "LMU SDK 설정 UI",
+        "게임별 파일 폴더 편집 UI"
+      ]
+    },
+    {
+      "feature": "화면 도움말 토글",
+      "source": "src/desktop/UtilityWorkspace.jsx",
+      "status": "NOT_IMPLEMENTED",
+      "lmu_location": null,
+      "remaining": [
+        "LMU 설정 화면의 마우스 오버 도움말 토글 연결"
+      ]
+    },
+    {
+      "feature": "앱 업데이트 설정",
+      "source": "src/desktop/UtilityWorkspace.jsx",
+      "status": "NOT_IMPLEMENTED",
+      "lmu_location": null,
+      "remaining": [
+        "공통 앱 업데이트 UI를 LMU 설정에서도 노출. 게임별 텔레메트리 근거와 무관한 공통 앱 기능"
+      ]
+    },
+    {
+      "feature": "대화 기록·무전 전달 진단·세션 로그 내보내기",
+      "source": "src/desktop/UtilityWorkspace.jsx",
+      "status": "NOT_IMPLEMENTED",
+      "lmu_location": null,
+      "remaining": [
+        "LMU 전용 음성 이벤트·전달·로그 계약",
+        "개인 메모 및 음성 비저장 원칙 검증"
+      ]
+    },
+    {
+      "feature": "사용 가이드와 원래 화면 목적지",
+      "source": "src/desktop/desktopNavigation.js",
+      "status": "PARTIAL",
+      "lmu_location": "src/desktop/LmuFeatureGuide.jsx",
+      "remaining": [
+        "미구현 기능은 기존 화면 목적지에서 지원 상태와 제한만 안내",
+        "iRacing 가이드 anchor의 LMU 상세 안내 연결"
+      ]
+    }
+  ],
+  "validation_evidence": [
+    {
+      "file": "src/desktop/LmuAnalysisPanels.test.js",
+      "scope": "제동 실측, 여러 파일 일관성, 차량 기준 파일, 셋업 비교, 연습 저장/재측정/재사용 거부, 취소·오류",
+      "tests": 8
+    },
+    {
+      "file": "src/desktop/LmuReferenceSelection.test.js",
+      "scope": "다른 파일 기준 계약, 저장/복원, 호환성 오류, 늦은 랩 목록 취소, 게임 전환",
+      "tests": 6
+    },
+    {
+      "file": "src/desktop/LmuPracticeNavigation.test.js",
+      "scope": "코너 연습의 실제 기록 화면 이동, LMU 탭별 필터 범위, iRacing 필터 유지",
+      "tests": 3
+    },
+    {
+      "file": "logs/lmu-reference-selection-tests-20261020.log",
+      "scope": "기준 파일 선택 관련 6개 테스트 통과 기록"
+    }
+  ],
+  "audit_limitations": [
+    "실시간 기능의 실제 게임 주행 검증을 이 문서로 대체하지 않는다",
+    "전체 빌드와 회귀 테스트는 통합 담당의 최종 결과를 확인한다",
+    "기능이 AVAILABLE이어도 표본이 없거나 파일 단위가 지원되지 않으면 측정값은 미제공이다",
+    "이 파일에는 개인 경로·키·토큰·원시 주행 데이터를 포함하지 않는다"
+  ],
+  "summary_layout": "iRacing과 동일한 DrivingSummary 4카드 재사용. 페달 분포는 랩 분석, 제동·채널 진단은 전문가 보기로 이동."
+}
