@@ -39,6 +39,20 @@ test('waits for the check that runs when the app starts, then opens', async () =
   } finally { jest.useRealTimers(); }
 });
 
+test('a page that opened before the app server keeps asking until it answers', async () => {
+  jest.useFakeTimers();
+  try {
+    const fetcher = jest.fn()
+      .mockImplementationOnce(() => Promise.reject(new TypeError('Failed to fetch')))
+      .mockImplementation(() => reply({ app: app({ available: true, latest: newer }), voice: voice() }));
+    render(<UpdateCenter apiBase="http://api" fetcher={fetcher} />);
+    await settle();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await act(async () => { jest.advanceTimersByTime(3100); });
+    expect(screen.getByRole('dialog')).toHaveTextContent('새 버전 v1.5.0');
+  } finally { jest.useRealTimers(); }
+});
+
 test('a version or missing voice found while the app runs never opens the window', async () => {
   jest.useFakeTimers();
   try {

@@ -137,8 +137,12 @@ def newest_release(releases: list) -> dict | None:
                       "sha256": digest_text.split(":", 1)[1] if digest_text.startswith("sha256:") else None} if asset else None}
 
 
-def unpack(archive: Path, target: Path) -> None:
-    """Unzip with the archive's single top folder removed (GitHub source zips have one) and no path leaving target."""
+def unpack(archive: Path, target: Path) -> dict[str, str]:
+    """Unzip with the archive's single top folder removed (GitHub source zips have one) and no path leaving target.
+
+    Returns the sha256 of every file written, by its path with forward slashes.
+    """
+    hashes = {}
     with zipfile.ZipFile(archive) as source:
         names = [info for info in source.infolist() if not info.is_dir()]
         tops = {info.filename.split("/", 1)[0] for info in names}
@@ -150,8 +154,13 @@ def unpack(archive: Path, target: Path) -> None:
             if not name or base not in destination.parents:
                 raise ValueError(f"압축 파일에 잘못된 경로가 있습니다: {info.filename}")
             destination.parent.mkdir(parents=True, exist_ok=True)
+            sha = hashlib.sha256()
             with source.open(info) as reader, destination.open("wb") as writer:
-                shutil.copyfileobj(reader, writer)
+                for block in iter(lambda: reader.read(1 << 20), b""):
+                    writer.write(block)
+                    sha.update(block)
+            hashes[name] = sha.hexdigest()
+    return hashes
 
 
 def read_pending(root: Path = ROOT) -> dict | None:
@@ -178,17 +187,46 @@ def stage_app(release: dict, root: Path = ROOT, progress: Callable[[int], None] 
     url = asset["url"] if asset else SOURCE_ZIP.format(tag=release["tag"])
     try:
         download(url, archive, progress, (asset or {}).get("sha256"), stop)
-        unpack(archive, work / "app")
+        hashes = unpack(archive, work / "app")
     finally:
         archive.unlink(missing_ok=True)
     found = version_in(work / "app")
     if found != release["version"]:
         clear_staged(root)
         raise ValueError(f"받은 프로그램의 버전({found or '알 수 없음'})이 릴리스 {release['version']}와 다릅니다.")
+    # Reading the installed files is done now, while the app keeps running, so the restart that applies
+    # the update only checks their size and time instead of reading every one of them again.
+    unchanged = {}
+    for relative, sha in hashes.items():
+        if _kept(relative):
+            continue
+        try:
+            stat = (root / relative).stat()
+        except OSError:
+            continue
+        if stat.st_size == (work / "app" / relative).stat().st_size and digest(root / relative) == sha:
+            unchanged[relative] = [stat.st_size, stat.st_mtime_ns]
     pending = {"version": release["version"], "has_build": (work / "app" / "build" / "index.html").is_file(),
-               "staged_at": time.time()}
+               "staged_at": time.time(), "files": hashes, "unchanged": unchanged}
     (work / "pending.json").write_text(json.dumps(pending), encoding="utf-8")
     return pending
+
+
+def _kept(relative: str) -> bool:
+    return relative.startswith(KEEP) or "__pycache__" in relative.split("/")
+
+
+def _same(staged: Path, target: Path, sha: str | None, known: list | None) -> bool:
+    """Whether the installed file already is the staged one; a file unchanged since staging is not read again."""
+    try:
+        stat = target.stat()
+    except OSError:
+        return False
+    if known is not None and [stat.st_size, stat.st_mtime_ns] == known:
+        return True
+    if stat.st_size != staged.stat().st_size:
+        return False
+    return digest(target) == sha if sha else filecmp.cmp(staged, target, shallow=False)
 
 
 def _requirements(root: Path) -> dict[str, str]:
@@ -207,13 +245,14 @@ def apply_staged(root: Path = ROOT, log: Callable[[str], None] = print) -> dict 
         return None
     tree = work_dir(root) / "app"
     before = _requirements(root)
+    hashes, unchanged = pending.get("files") or {}, pending.get("unchanged") or {}
     written = 0
     for path in sorted(tree.rglob("*")):
         relative = path.relative_to(tree).as_posix()
-        if not path.is_file() or relative.startswith(KEEP) or "__pycache__" in path.parts:
+        if not path.is_file() or _kept(relative):
             continue
         target = root / relative
-        if target.is_file() and filecmp.cmp(path, target, shallow=False):
+        if _same(path, target, hashes.get(relative), unchanged.get(relative)):
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_name(target.name + ".update-tmp")

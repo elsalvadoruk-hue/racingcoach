@@ -66,7 +66,8 @@ export function useUpdateStatus(apiBase, fetcher = fetch) {
   useEffect(() => { call(); }, [call]);
   useEffect(() => {
     if (restart) return undefined;
-    const timer = setInterval(() => call(), busy(status) ? 1500 : 600000);
+    // Until the first answer (the page may open before the app's server), ask again every few seconds.
+    const timer = setInterval(() => call(), !status ? 3000 : busy(status) ? 1500 : 600000);
     return () => clearInterval(timer);
   }, [status, restart, call]);
   useEffect(() => {
@@ -114,7 +115,9 @@ function ProgramSection({ app, call, restarting, startRestart }) {
         </div>
         : download.state === 'RUNNING' ? <div className="flex flex-col gap-1">
           <progress className="h-2 w-full" max={download.total || undefined} value={download.total ? download.done : undefined} aria-label="업데이트 받는 중" />
-          <span className="text-xs text-muted-foreground">{megabytes(download.done)}{download.total ? ` / ${megabytes(download.total)}` : ''} 받는 중</span>
+          <span className="text-xs text-muted-foreground">{download.total && download.done >= download.total
+            ? '받은 파일을 풀고 지금 설치와 비교하는 중… (1분 안팎)'
+            : `${megabytes(download.done)}${download.total ? ` / ${megabytes(download.total)}` : ''} 받는 중`}</span>
         </div>
         : <div><Button type="button" onClick={() => call('/app/download', 'POST')}>업데이트 받기</Button></div>}
       {download.state === 'FAILED' && <p className="text-sm text-warning">{download.message}</p>}
@@ -150,8 +153,8 @@ function VoiceSection({ voice, call }) {
           이전 버전 음성 정리 ({voice.obsolete_files.toLocaleString()}개 · {megabytes(voice.obsolete_bytes)})</Button>}
       </div>
     </>}
-    <p className="text-xs leading-relaxed text-muted-foreground">GitHub에서 없는 음성만 골라 받습니다. 받은 음성은 데이터 폴더의 radio_audio·spotter_audio에 바로 들어갑니다.
-      {voice.drive_url && <> 직접 받으려면 <a className="text-primary underline" href={voice.drive_url} target="_blank" rel="noreferrer">Google Drive 음성 폴더</a>를 쓰세요.</>}</p>
+    <p className="text-xs leading-relaxed text-muted-foreground">음성은 여기서 받으면 됩니다. 없는 음성만 골라 받아 데이터 폴더에 바로 넣으므로 압축을 풀거나 폴더를 고를 필요가 없습니다.
+      {voice.drive_url && <> 여기서 받기가 안 될 때만 <a className="text-primary underline" href={voice.drive_url} target="_blank" rel="noreferrer">Google Drive 음성 폴더</a>에서 직접 받으세요.</>}</p>
   </section>;
 }
 
@@ -161,7 +164,7 @@ export function UpdatePanel({ updates }) {
   return <div className="flex min-w-0 flex-col gap-5 [overflow-wrap:anywhere]">
     <ProgramSection app={status.app} call={call} restarting={restarting} startRestart={startRestart} />
     <VoiceSection voice={status.voice} call={call} />
-    {restarting && <p role="status" className="text-sm text-foreground">업데이트를 적용하고 다시 시작하는 중입니다. 잠시 후 화면이 새로 고쳐집니다.</p>}
+    {restarting && <p role="status" className="text-sm text-foreground">업데이트를 적용하고 다시 시작하는 중입니다. 보통 몇 초, 길면 1~2분 걸리고 끝나면 화면이 저절로 새로 고쳐집니다. 실행.bat 창은 닫지 마세요.</p>}
     {error && <p role="alert" className="text-sm text-warning">{error}</p>}
   </div>;
 }
@@ -195,7 +198,8 @@ export default function UpdateCenter({ apiBase, fetcher }) {
     <DialogContent className="max-h-[90vh] overflow-y-auto overflow-x-hidden">
       <DialogHeader>
         <DialogTitle>{newVersion ? `새 버전 v${app.latest.version}` : '업데이트'}</DialogTitle>
-        <DialogDescription>{newVersion ? '업데이트를 받고 다시 시작하면 적용됩니다.' : '이 버전에 필요한 음성 중 빠진 것이 있습니다.'}</DialogDescription>
+        <DialogDescription>{newVersion ? '업데이트를 받고 다시 시작하면 적용됩니다.'
+          : missingVoice ? '이 버전에 필요한 음성 중 빠진 것이 있습니다. 아래에서 바로 받을 수 있습니다.' : '프로그램과 음성이 모두 준비되었습니다.'}</DialogDescription>
       </DialogHeader>
       <UpdatePanel updates={updates} />
       <DialogFooter>

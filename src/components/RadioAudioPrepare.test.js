@@ -16,7 +16,7 @@ test('starts the download, follows progress and stops polling when complete', as
   render(<RadioAudioPrepare apiBase="http://api" />);
   expect(await screen.findByText('40 / 559개 준비됨 · 남은 519개, 약 5000자')).toBeInTheDocument();
   expect(screen.getByText(/지금 고른 스포터 목소리\(Aoede\)의 음성 수입니다/)).toBeInTheDocument();
-  await userEvent.click(screen.getByRole('button', { name: '빠진 음성 받기' }));
+  await userEvent.click(screen.getByRole('button', { name: '빠진 음성 합성' }));
   expect(fetchMock).toHaveBeenLastCalledWith('http://api/api/live-coach/radio-audio/prepare', { method: 'POST' });
   expect(await screen.findByRole('button', { name: '멈추기' })).toBeInTheDocument();
   await act(async () => { jest.advanceTimersByTime(1500); });

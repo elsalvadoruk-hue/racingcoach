@@ -107,6 +107,26 @@ class StageAndApplyTests(unittest.TestCase):
         self.assertIsNone(app_update.read_pending(self.root))
         self.assertIsNone(app_update.apply_staged(self.root))
 
+    def test_files_checked_while_downloading_are_not_read_again_when_applying(self):
+        files = program("1.5.0", **{"README.md": "same\n", "LICENSE.md": "same\n"})
+        for name in ("README.md", "LICENSE.md"):
+            (self.root / name).write_bytes(b"same\n")
+        pending, _ = self.stage(files)
+        self.assertEqual(sorted(pending["unchanged"]), ["LICENSE.md", "README.md", "iRacing_Backend/requirements_core.txt", "실행.bat"])
+        self.assertEqual(pending["files"]["src/App.js"], hashlib.sha256(b"new screen\n").hexdigest())
+        os.utime(self.root / "LICENSE.md", (1000, 1000))                     # touched since, same content
+        (self.root / "실행.bat").write_bytes(b"@echo on\r\n")                 # changed since staging
+        read = []
+        real = app_update.digest
+        with patch.object(app_update, "digest", side_effect=lambda path: read.append(Path(path).name) or real(path)), \
+             patch.object(app_update.filecmp, "cmp", side_effect=AssertionError("staged files are compared by hash")):
+            result = app_update.apply_staged(self.root, log=lambda text: None)
+        self.assertNotIn("README.md", read)                                  # unchanged since staging: not read
+        self.assertIn("LICENSE.md", read)
+        self.assertEqual((result["files"], result["requirements_changed"]), (3, False))   # backend_api, App.js, 실행.bat
+        self.assertEqual((self.root / "실행.bat").read_bytes(), b"@echo off\r\n")
+        self.assertEqual((self.root / "LICENSE.md").stat().st_mtime, 1000)    # same content: left as it was
+
     def test_prebuilt_screen_is_left_newer_than_the_sources(self):
         asset = {"url": "https://example/app.zip", "sha256": None}
         pending, url = self.stage(program("1.5.0", **{"build/index.html": "<html>"}), asset=asset)
