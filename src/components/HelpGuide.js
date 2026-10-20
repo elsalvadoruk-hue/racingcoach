@@ -380,6 +380,8 @@ const SECTIONS = [
     { list: [
       '볼륨은 0~130%로 조절하며 100% 초과 구간과 손잡이는 빨간색입니다. 증폭으로 소리가 찌그러지면 낮추세요. 볼륨 슬라이더와 음소거 버튼은 재생 중에도 바로 적용됩니다. 마이크 입력과 게임 볼륨은 별개입니다.',
       '출력장치를 바꾸면 말하던 답변은 멈춥니다. 쓰던 장치가 끊겨도 저장된 선택은 유지합니다. 사용할 수 없는 동안에는 임시로 Windows 기본 장치로 재생하며 같은 장치가 돌아오면 다음 안내부터 원래 장치로 재생합니다. Windows 기본 출력을 직접 선택하면 그 선택을 유지합니다.',
+      '장치가 2초 안에 돌아오면 말하던 안내를 그대로 이어 갑니다. 끊겨서 멈춘 안내는 장치가 돌아오거나 무전이 비면 처음부터 다시 말합니다(상황이 지난 안내는 제외).',
+      'Windows “통신” 출력은 목록에 나오지 않습니다. 게임 소리를 줄이거나 블루투스 헤드셋을 통화 모드로 바꿀 수 있기 때문입니다. 블루투스 “Hands-Free” 출력에는 “통화용 연결” 표시가 붙으니 일반 헤드폰(스테레오) 출력을 고르세요.',
       '장치 이름이 안 보이면 상단 “출력장치”의 “목록 갱신”을 누르고 브라우저의 마이크 접근을 허용해 주세요. 확인용 마이크는 바로 종료합니다. 장치 연결·분리와 앱으로 돌아올 때 목록을 자동 갱신합니다. 출력장치 선택은 최신 Chrome과 Edge에서 됩니다.',
     ] },
   ], action: ['음성 코치 열기', 'live-coach'] },
@@ -818,6 +820,7 @@ const SECTIONS = [
     ] },
     { list: [
       '처음 설치할 때도 전체 음성팩 1.4.0을 받습니다. 1.4.0은 이전 버전에서 오는 음성 업데이트팩이 없습니다.',
+      '1.4.1: 출력장치가 잠시 끊겨도 안내를 이어 가거나 다시 말합니다. 음성은 1.4.0과 같아 1.4.0 전체 음성팩이 있으면 다시 받지 않습니다.',
       '1.4.0: 랩타임·SOF 안내가 음성 조각(data/radio_audio/pieces의 OGG)을 이어 말합니다. 예전 랩타임 MP3 약 1.4GB를 쓰지 않아 음성 전체가 약 0.6GB입니다. 설치.bat을 다시 실행해야 합니다(soundfile 패키지 추가).',
       '데이터 폴더를 따로 지정했다면 설정 → 설치 설정에 표시된 데이터 폴더 안의 radio_audio, spotter_audio를 지웁니다.',
       '음성 ZIP을 풀 때 data/data 또는 음성팩이름/data처럼 중첩하지 마세요. 별도 데이터 폴더나 음성 경로를 지정했다면 그 실제 경로에 합칩니다.',
@@ -916,7 +919,7 @@ export function UserManual({ onNavigate, hasAnalysis }) {
   }, [sections]);
   return <Card asChild><article className="coach-manual" aria-label="사용 매뉴얼">
     <CardHeader className="coach-manual-intro p-0">
-      <div><CardTitle asChild><h2 className="flex items-center gap-2"><BookOpen aria-hidden="true" size={18} />기능별 사용법</h2></CardTitle><CardDescription>1.4.0 데스크톱 화면 기준입니다. 처음이면 1장, 비교 조작은 2~3장, 셋업 실험은 4~6장, 기록은 7장, 주행 중 음성은 8~12장, 폴더와 키 설정은 18장을 보세요.</CardDescription></div>
+      <div><CardTitle asChild><h2 className="flex items-center gap-2"><BookOpen aria-hidden="true" size={18} />기능별 사용법</h2></CardTitle><CardDescription>1.4.1 데스크톱 화면 기준입니다. 처음이면 1장, 비교 조작은 2~3장, 셋업 실험은 4~6장, 기록은 7장, 주행 중 음성은 8~12장, 폴더와 키 설정은 18장을 보세요.</CardDescription></div>
       <Field className="coach-manual-search"><FieldLabel htmlFor="manual-search" className="sr-only">사용 가이드 검색</FieldLabel><Input ref={searchRef} id="manual-search" aria-label="사용 가이드 검색" type="search" placeholder="기능이나 문제를 검색하세요" value={search} onChange={event => setSearch(event.target.value)} /></Field>
     </CardHeader>
     {!hasAnalysis && <p className="mt-4 text-sm text-muted-foreground">주행 분석이 없어도 매뉴얼을 읽을 수 있습니다. 기능을 사용하려면 IBT 파일을 선택하세요.</p>}

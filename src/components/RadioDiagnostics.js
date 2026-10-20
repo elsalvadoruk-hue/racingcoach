@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 const labels = { started: '재생 시작', completed: '재생 완료', interrupted: '중단', expired: '기한 만료', cancelled: '취소', failed: '실패', muted: '문자만 전달' };
 const reasons = { preempted: '더 우선인 무전으로 전환', nearby_car: '옆 차량 안내 우선', realtime_state_changed: '실시간 상황 변경',
   driver_or_radio_pause: '질문 또는 발화 중지', output_removed: '출력장치 연결 끊김', output_changed: '출력장치 변경', page_closed: '페이지 종료',
-  media_error: '오디오 재생 오류', output_routing: '출력장치 연결 실패', no_playback_window: '전달 구간을 찾기 전에 기한 만료',
+  media_error: '오디오 재생 오류', output_error: '출력장치 일시 끊김', output_routing: '출력장치 연결 실패', no_playback_window: '전달 구간을 찾기 전에 기한 만료',
   condition_or_session_changed: '상황 조건 또는 세션 변경', spotter_disabled: '스포터 중지', connection_lost: '실시간 연결 끊김',
   volume_or_mute: '음소거 또는 볼륨 0', text_only: '문자 전달 설정', audio_preparation: '음성 준비 실패', stopped: '재생 중지' };
 export default function RadioDiagnostics({ apiBase }) {
