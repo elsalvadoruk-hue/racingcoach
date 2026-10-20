@@ -54,6 +54,37 @@ class LmuTelemetrySummary:
     laps: tuple[LmuLapSegment, ...]
 
 
+@dataclass(frozen=True)
+class LmuDistanceSector:
+    sector_number: int
+    distance_start_m: float
+    distance_end_m: float
+    reference_duration_s: float
+    target_duration_s: float
+    delta_time_s: float
+    cumulative_delta_start_s: float
+    cumulative_delta_end_s: float
+    channels: dict[str, dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class LmuLapComparison:
+    reference_lap: int
+    target_lap: int
+    reference_time_s: float
+    target_time_s: float
+    delta_time_s: float
+    sample_count: int
+    distance_start_m: float
+    distance_end_m: float
+    channels: dict[str, dict[str, Any]]
+    points: tuple[dict[str, float], ...]
+    status: str
+    sector_length_m: int
+    sectors: tuple[LmuDistanceSector, ...]
+    common_delta_time_s: float
+
+
 def require_lmu_dependency():
     try:
         import duckdb
@@ -154,7 +185,7 @@ class LmuTelemetryReader:
     def _channel(self, connection, tables, name: str) -> np.ndarray:
         table = self._table(tables, name)
         if table is None:
-            raise KeyError(name)
+            raise LmuTelemetryFormatError(f"채널 테이블이 없습니다: {name}")
         columns = {col.casefold() for col in tables[table]}
         if "value" not in columns or "ts" in columns:
             raise LmuTelemetryFormatError(f"일반 채널 형식이 아닙니다: {name}")
@@ -244,26 +275,196 @@ class LmuTelemetryReader:
 
     def summary(self) -> LmuTelemetrySummary:
         with self._connection() as connection:
+            return self._summary(connection, self._tables(connection))
+
+    def _summary(self, connection, tables) -> LmuTelemetrySummary:
+        specs = self._specs(connection, tables)
+        metadata = self._metadata(connection, tables)
+        counts = {name: int(connection.execute(
+            f"SELECT COUNT(*) FROM {_quote(name)}").fetchone()[0])
+            for name in tables if name.casefold() not in {"metadata", "channelslist", "eventslist"}}
+        events = tuple(name for name, cols in tables.items()
+                       if {"ts", "value"}.issubset({col.casefold() for col in cols}))
+        distance, axis = np.asarray([], dtype=float), None
+        by_name = {spec.name.casefold(): spec for spec in specs}
+        dist_spec, gps_spec = by_name.get("lap dist"), by_name.get("gps time")
+        if dist_spec and gps_spec and dist_spec.unit == "m" and gps_spec.unit == "s":
+            distance = self._channel(connection, tables, dist_spec.name)
+            gps = self._channel(connection, tables, gps_spec.name)
+            if len(gps) and math.isfinite(gps[0]) and len(distance) >= 2:
+                axis = gps[0] + np.arange(len(distance)) / dist_spec.frequency_hz
+        laps = self._laps(self._events(connection, tables, "Lap"),
+                          self._events(connection, tables, "Lap Time"),
+                          self._events(connection, tables, "In Pits"), distance, axis)
+        return LmuTelemetrySummary(self.path, metadata, specs, events, counts, laps)
+
+    @staticmethod
+    def _lap_axis(lap, distance, times):
+        mask = (times >= lap.start_time_s) & (times < lap.end_time_s)
+        t, d = times[mask], distance[mask]
+        # A delayed reset in the first interval may still contain the previous
+        # lap's final sample. Never interpolate through that reset.
+        if len(d) > 1 and d[1] - d[0] < -50:
+            t, d = t[1:], d[1:]
+        if (len(d) < 2 or not np.all(np.isfinite(d)) or
+                np.any(np.diff(d) < 0) or d[-1] <= d[0]):
+            raise LmuTelemetryFormatError("랩 거리 축이 단조 증가하지 않아 비교할 수 없습니다.")
+        # At a stop, use the last timestamp at that distance, explicitly.
+        keep = np.r_[np.diff(d) > 0, True]
+        return t[keep], d[keep]
+
+    @staticmethod
+    def _distance_stats(distance, values, start, end, scale):
+        # Integrate the original piecewise-linear trace, independent of the
+        # display grid. Boundary values are interpolated without extrapolation.
+        knots = np.r_[start, distance[(distance > start) & (distance < end)], end]
+        samples = np.interp(knots, distance, values) * scale
+        integral = np.sum((samples[1:] + samples[:-1]) * np.diff(knots) / 2)
+        return {"entry": float(samples[0]), "exit": float(samples[-1]),
+                "minimum": float(np.min(samples)), "maximum": float(np.max(samples)),
+                "distance_mean": float(integral / (end - start))}
+
+    def analysis_lap(self, lap_number: int):
+        """One native snapshot adapted to game-neutral per-channel time axes."""
+        from lmu_analysis import SOURCE_CHANNELS, normalize_lap
+
+        if type(lap_number) is not int or lap_number < 0:
+            raise ValueError("랩 번호는 0 이상의 정수여야 합니다.")
+        with self._connection() as connection:
             tables = self._tables(connection)
-            specs = self._specs(connection, tables)
-            metadata = self._metadata(connection, tables)
-            counts = {name: int(connection.execute(
-                f"SELECT COUNT(*) FROM {_quote(name)}").fetchone()[0])
-                for name in tables if name.casefold() not in {"metadata", "channelslist", "eventslist"}}
-            events = tuple(name for name, cols in tables.items()
-                           if {"ts", "value"}.issubset({col.casefold() for col in cols}))
-            distance, axis = np.asarray([], dtype=float), None
-            by_name = {spec.name.casefold(): spec for spec in specs}
-            dist_spec, gps_spec = by_name.get("lap dist"), by_name.get("gps time")
-            if dist_spec and gps_spec and dist_spec.unit == "m" and gps_spec.unit == "s":
-                distance = self._channel(connection, tables, dist_spec.name)
-                gps = self._channel(connection, tables, gps_spec.name)
-                if len(gps) and math.isfinite(gps[0]) and len(distance) >= 2:
-                    axis = gps[0] + np.arange(len(distance)) / dist_spec.frequency_hz
-            laps = self._laps(self._events(connection, tables, "Lap"),
-                              self._events(connection, tables, "Lap Time"),
-                              self._events(connection, tables, "In Pits"), distance, axis)
-            return LmuTelemetrySummary(self.path, metadata, specs, events, counts, laps)
+            summary = self._summary(connection, tables)
+            matches = [lap for lap in summary.laps if lap.lap_number == lap_number]
+            if len(matches) != 1:
+                raise LmuTelemetryFormatError("분석할 랩을 하나로 확인할 수 없습니다.")
+            lap = matches[0]
+            if lap.status != "VALIDITY_UNKNOWN" or lap.distance_m is None:
+                raise LmuTelemetryFormatError("시간과 거리 진단을 통과한 기록 랩만 분석할 수 있습니다.")
+            specs = {spec.name.casefold(): spec for spec in summary.channels}
+            gps_spec, distance_spec = specs["gps time"], specs["lap dist"]
+            gps = self._channel(connection, tables, gps_spec.name)
+            if (len(gps) < 2 or not np.all(np.isfinite(gps)) or np.any(np.diff(gps) <= 0) or
+                    not np.allclose(gps, gps[0] + np.arange(len(gps)) / gps_spec.frequency_hz,
+                                    rtol=0, atol=1e-5)):
+                raise LmuTelemetryFormatError("GPS Time이 채널 주파수와 일치하는 연속 시간 축이 아닙니다.")
+            distance = self._channel(connection, tables, distance_spec.name)
+            times = gps[0] + np.arange(len(distance)) / distance_spec.frequency_hz
+            if times[-1] > gps[-1] + 1 / distance_spec.frequency_hz:
+                raise LmuTelemetryFormatError("거리 채널이 GPS Time 기록 범위를 벗어납니다.")
+            times, distance = self._lap_axis(lap, distance, times)
+            required = {name.casefold() for name in SOURCE_CHANNELS}
+            values = {spec.name: self._channel(connection, tables, spec.name)
+                      for spec in summary.channels if spec.name.casefold() in required}
+            return normalize_lap(summary.metadata, lap, specs, values, gps[0], times, distance)
+
+    def compare_laps(self, reference_lap: int, target_lap: int,
+                     points: int = 101, sector_length_m: int = 500) -> LmuLapComparison:
+        if (type(reference_lap) is not int or type(target_lap) is not int or
+                type(points) is not int or reference_lap == target_lap or not 2 <= points <= 501):
+            raise ValueError("서로 다른 랩 번호와 2~501 범위의 비교 지점이 필요합니다.")
+        if type(sector_length_m) is not int or not 100 <= sector_length_m <= 2000:
+            raise ValueError("거리 구간 길이는 100~2000 m 범위의 정수여야 합니다.")
+        # One read-only snapshot; each selected channel is read once, not once
+        # per output point. No reference is chosen automatically.
+        with self._connection() as connection:
+            tables = self._tables(connection)
+            summary = self._summary(connection, tables)
+            by_number = {lap.lap_number: lap for lap in summary.laps}
+            if len(by_number) != len(summary.laps):
+                raise LmuTelemetryFormatError("랩 번호가 중복되어 비교 대상을 구분할 수 없습니다.")
+            if reference_lap not in by_number or target_lap not in by_number:
+                raise LmuTelemetryFormatError("비교할 랩을 찾을 수 없습니다.")
+            reference, target = by_number[reference_lap], by_number[target_lap]
+            if any(lap.status != "VALIDITY_UNKNOWN" or lap.distance_m is None
+                   for lap in (reference, target)):
+                raise LmuTelemetryFormatError("시간과 거리 진단을 통과한 기록 랩만 수동 비교할 수 있습니다. 피트·미완성 랩은 제외합니다.")
+            specs = {spec.name.casefold(): spec for spec in summary.channels}
+            gps_spec, dist_spec = specs["gps time"], specs["lap dist"]
+            gps = self._channel(connection, tables, gps_spec.name)
+            distance = self._channel(connection, tables, dist_spec.name)
+            expected = gps[0] + np.arange(len(gps)) / gps_spec.frequency_hz
+            if (not np.all(np.isfinite(gps)) or np.any(np.diff(gps) <= 0) or
+                    not np.allclose(gps, expected, rtol=0, atol=1e-5)):
+                raise LmuTelemetryFormatError("GPS Time이 채널 주파수와 일치하는 연속 시간 축이 아닙니다.")
+            distance_axis = gps[0] + np.arange(len(distance)) / dist_spec.frequency_hz
+            if distance_axis[-1] > gps[-1] + 1 / dist_spec.frequency_hz:
+                raise LmuTelemetryFormatError("거리 채널이 GPS Time 기록 범위를 벗어납니다.")
+            axes = [self._lap_axis(lap, distance, distance_axis) for lap in (reference, target)]
+            traces = {}
+            low = max(d[0] for t, d in axes)
+            high = min(d[-1] for t, d in axes)
+            for name in ("Ground Speed", "GPS Speed", "Throttle Pos", "Brake Pos", "Steering Pos"):
+                spec = specs.get(name.casefold())
+                if spec is None:
+                    continue
+                values = self._channel(connection, tables, spec.name)
+                times = gps[0] + np.arange(len(values)) / spec.frequency_hz
+                pair = []
+                for lap, (t, d) in zip((reference, target), axes):
+                    if (not len(times) or times[-1] < lap.end_time_s - 1 / spec.frequency_hz - 1e-6):
+                        raise LmuTelemetryFormatError(f"랩 전체의 채널 샘플이 부족합니다: {spec.name}")
+                    mask = (times >= max(t[0], lap.start_time_s)) & (times <= t[-1]) & (times < lap.end_time_s)
+                    sample_times, sample_values = times[mask], values[mask]
+                    if len(sample_times) < 2 or not np.all(np.isfinite(sample_values)):
+                        raise LmuTelemetryFormatError(f"랩 비교 채널의 샘플이 부족하거나 결측값이 있습니다: {spec.name}")
+                    sample_distance = np.interp(sample_times, t, d)
+                    keep = np.r_[np.diff(sample_distance) > 0, True]
+                    sample_distance, sample_values = sample_distance[keep], sample_values[keep]
+                    if len(sample_distance) < 2:
+                        raise LmuTelemetryFormatError(f"거리별 채널 샘플이 부족합니다: {spec.name}")
+                    pair.append((sample_distance, sample_values))
+                    low, high = max(low, sample_distance[0]), min(high, sample_distance[-1])
+                traces[spec.name] = (spec, pair)
+            if not traces or high <= low:
+                raise LmuTelemetryFormatError("두 랩에 공통으로 비교할 수 있는 거리·조작 채널이 없습니다.")
+            grid = np.linspace(low, high, points)
+            elapsed = [np.interp(grid, d, t) - lap.start_time_s
+                       for lap, (t, d) in zip((reference, target), axes)]
+            rows = [{"distance_m": float(position), "distance_pct": float(index * 100 / (points - 1)),
+                     "reference_elapsed_s": float(elapsed[0][index]),
+                     "target_elapsed_s": float(elapsed[1][index]),
+                     "delta_time_s": float(elapsed[1][index] - elapsed[0][index])}
+                    for index, position in enumerate(grid)]
+            metrics = {}
+            for name, (spec, pair) in traces.items():
+                is_speed = name.casefold() in {"ground speed", "gps speed"}
+                scale = 3.6 if is_speed and spec.unit == "m/s" else 1.0
+                ref, tar = [np.interp(grid, d, v) * scale for d, v in pair]
+                delta = tar - ref
+                metrics[name] = {"unit": "km/h" if scale == 3.6 else spec.unit,
+                                 "source_frequency_hz": spec.frequency_hz,
+                                 "reference_mean": float(np.mean(ref)), "target_mean": float(np.mean(tar)),
+                                 "mean_delta": float(np.mean(delta)),
+                                 "mean_absolute_delta": float(np.mean(np.abs(delta))),
+                                 "max_absolute_delta": float(np.max(np.abs(delta)))}
+                for index, row in enumerate(rows):
+                    row.update({f"{name}_reference": float(ref[index]),
+                                f"{name}_target": float(tar[index]), f"{name}_delta": float(delta[index])})
+            # Fixed distance bins are not game timing sectors or named corners.
+            first_boundary = (math.floor(low / sector_length_m) + 1) * sector_length_m
+            if (high - low) / sector_length_m > 500:
+                raise LmuTelemetryFormatError("거리 구간이 너무 많습니다. 구간 길이를 늘리거나 거리 채널을 확인하세요.")
+            boundaries = np.r_[low, np.arange(first_boundary, high, sector_length_m), high]
+            boundary_elapsed = [np.interp(boundaries, d, t) - lap.start_time_s
+                                for lap, (t, d) in zip((reference, target), axes)]
+            boundary_delta = boundary_elapsed[1] - boundary_elapsed[0]
+            sectors = []
+            for index, (start, end) in enumerate(zip(boundaries[:-1], boundaries[1:])):
+                channel_stats = {}
+                for name, (spec, pair) in traces.items():
+                    scale = 3.6 if name.casefold() in {"ground speed", "gps speed"} and spec.unit == "m/s" else 1.0
+                    channel_stats[name] = {"unit": metrics[name]["unit"], **{
+                        label: self._distance_stats(d, v, start, end, scale)
+                        for label, (d, v) in zip(("reference", "target"), pair)}}
+                ref_duration, tar_duration = [float(np.diff(axis[index:index + 2])[0])
+                                              for axis in boundary_elapsed]
+                sectors.append(LmuDistanceSector(index + 1, float(start), float(end),
+                    ref_duration, tar_duration, tar_duration - ref_duration,
+                    float(boundary_delta[index]), float(boundary_delta[index + 1]), channel_stats))
+            return LmuLapComparison(reference_lap, target_lap, reference.recorded_lap_time_s,
+                                    target.recorded_lap_time_s,
+                                    target.recorded_lap_time_s - reference.recorded_lap_time_s,
+                                    points, float(low), float(high), metrics, tuple(rows), "DIAGNOSTIC",
+                                    sector_length_m, tuple(sectors), float(boundary_delta[-1] - boundary_delta[0]))
 
 
 def discover_lmu_telemetry_dirs() -> tuple[Path, ...]:

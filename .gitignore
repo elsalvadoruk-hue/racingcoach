@@ -24,6 +24,8 @@
 !/.githooks/
 /iRacing_Backend/*
 !/iRacing_Backend/*.py
+!/iRacing_Backend/test_lmu_replay_ui.js
+!/iRacing_Backend/lmu_native_bridge.cpp
 !/iRacing_Backend/requirements*.txt
 /scripts/*
 !/scripts/launch_app.py
