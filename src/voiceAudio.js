@@ -78,5 +78,6 @@ export const DEFAULT_RATE = 1.15;
 export const MULTIPART_DEFAULT_RATE = 1.3;
 export const RATE_MIN = 1, RATE_MAX = 1.4;
 
-export const RESUMABLE = ['preempted', 'nearby_car'];
+// output_removed / output_error: the output device went away under the call for a moment (Windows reopening it).
+export const RESUMABLE = ['preempted', 'nearby_car', 'output_removed', 'output_error'];
 export const MAX_RESUMES = 2;

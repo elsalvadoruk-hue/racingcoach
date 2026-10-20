@@ -49,12 +49,31 @@ export function storeSettings(settings) {
 
 let context = null, contextSink = '', sinkFlight = null, noiseBuffer = null, popsReady = false, popsLoading = false;
 const Context = () => (typeof window !== 'undefined' ? window.AudioContext || window.webkitAudioContext : null);
+const lostListeners = new Set();
+
+// Told when the context lost its output device, where the browser reports it (an "error" event).
+export function onLost(listener) {
+  lostListeners.add(listener);
+  return () => { lostListeners.delete(listener); };
+}
+
+// A context whose device failed is let go: the next clip warms a fresh one and, until it runs, plays plain.
+function open() {
+  const made = new (Context())();
+  made.addEventListener?.('error', () => {
+    if (context !== made) return;
+    context = null; contextSink = ''; sinkFlight = null; popsReady = false; popsLoading = false;
+    made.close?.().catch?.(() => {});
+    lostListeners.forEach((listener) => listener());
+  });
+  return made;
+}
 
 // Called from clicks (enabling the spotter, the test sound, changing the setting): a context may only start then.
 export function warm(settings, sinkId = '') {
   if (!settings || !Context()) return;
   try {
-    context = context || new (Context())();
+    context = context || open();
     // With autoplay blocked, resume() can remain pending until a future gesture. Let the native
     // player report that restriction instead of occupying the radio queue indefinitely.
     const resuming = context.state === 'suspended'
@@ -62,15 +81,17 @@ export function warm(settings, sinkId = '') {
     // The pops run in a worklet; until it has loaded (or where there is none) clips play without them.
     if (settings.level !== 'off' && !popsReady && !popsLoading && context.audioWorklet) {
       popsLoading = true;
-      context.audioWorklet.addModule(`${process.env.PUBLIC_URL || ''}/radio-pop-worklet.js`)
-        .then(() => { popsReady = true; }, () => {}).finally(() => { popsLoading = false; });
+      const loading = context;
+      loading.audioWorklet.addModule(`${process.env.PUBLIC_URL || ''}/radio-pop-worklet.js`)
+        .then(() => { if (context === loading) popsReady = true; }, () => {}).finally(() => { if (context === loading) popsLoading = false; });
     }
     if (sinkFlight) return Promise.all([resuming, sinkFlight.then(() => warm(settings, sinkId))]);
     if (sinkId !== contextSink && typeof context.setSinkId === 'function') {
-      const wanted = sinkId;
-      sinkFlight = context.setSinkId(wanted).then(() => { contextSink = wanted; }, () => {})
-        .finally(() => { sinkFlight = null; });
-      return Promise.all([resuming, sinkFlight]);
+      const wanted = sinkId, routing = context;
+      const flight = routing.setSinkId(wanted).then(() => { if (context === routing) contextSink = wanted; }, () => {})
+        .finally(() => { if (sinkFlight === flight) sinkFlight = null; });
+      sinkFlight = flight;
+      return Promise.all([resuming, flight]);
     }
     return resuming;
   } catch { context = null; }

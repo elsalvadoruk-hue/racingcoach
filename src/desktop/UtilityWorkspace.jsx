@@ -6,6 +6,7 @@ import AppSettings from '../components/AppSettings';
 import OverlaySettings from '../components/OverlaySettings';
 import SessionLogExport from '../components/SessionLogExport';
 import RadioAudioPrepare from '../components/RadioAudioPrepare';
+import { UpdateSettings } from '../components/UpdateCenter';
 import RadioDiagnostics from '../components/RadioDiagnostics';
 import { NoteText, VoiceReview, CornerCoach } from '../components/LiveCoach';
 import { HistoryPanel, LongTermMemoryPanel } from '../analysis/HistoryPanels';
@@ -69,8 +70,9 @@ export default function UtilityWorkspace({ workspace, runtime, onNavigate, analy
       <AudioPreferences runtime={runtime} />
       <ExistingPanel id="overlay-settings" title="오버레이" description="주행 중 자동 표시와 미리보기, 크기·위치·불투명도를 설정합니다."><OverlaySettings apiBase={apiBase} /></ExistingPanel>
       <ExistingPanel title="설치 설정"><AppSettings apiBase={apiBase} /></ExistingPanel>
+      <ExistingPanel id="app-update" title="업데이트"><UpdateSettings apiBase={apiBase} /></ExistingPanel>
       <ExistingPanel id="external-reference" title="Garage61 기준·수집"><ReferenceSettings workspace={w} /></ExistingPanel>
-      <ExistingPanel title="엔지니어 음성 준비"><RadioAudioPrepare apiBase={apiBase} /></ExistingPanel>
+      <ExistingPanel title="엔지니어 음성 직접 합성 (Google 키)"><RadioAudioPrepare apiBase={apiBase} /></ExistingPanel>
     </>}
   </section>;
 }

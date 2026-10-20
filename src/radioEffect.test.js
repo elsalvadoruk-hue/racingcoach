@@ -211,3 +211,31 @@ test('a chosen output device is only used when the context can be sent there', a
   await Promise.resolve();
   expect(radioEffect.attach({}, settings(), { sinkId: 'headset' })).toBeNull(); // the clip keeps its own device and plays plain
 });
+
+test('a context that loses its device is let go and the next warm builds a fresh one', async () => {
+  const { Context } = fakeContext();
+  const listeners = [];
+  Context.prototype.addEventListener = function addEventListener(type, listener) { listeners.push([this, type, listener]); };
+  Context.prototype.close = jest.fn(() => Promise.resolve());
+  window.AudioContext = Context;
+  const lost = jest.fn();
+  const unsubscribe = radioEffect.onLost(lost);
+  const plain = settings({ level: 'off' });
+  await radioEffect.warm(plain, 'headset');
+  const first = Context.last;
+  expect(radioEffect.ready(plain, 'headset')).toBe(true);
+  const [[owner, type, fail]] = listeners;
+  expect(owner).toBe(first); expect(type).toBe('error');
+  fail();
+  expect(lost).toHaveBeenCalledTimes(1);
+  expect(first.close).toHaveBeenCalled();
+  expect(radioEffect.ready(plain, 'headset')).toBe(false);
+  expect(radioEffect.attach({}, plain, { sinkId: 'headset' })).toBeNull();   // plays plain meanwhile
+  await radioEffect.warm(plain, 'headset');
+  expect(Context.last).not.toBe(first);
+  expect(radioEffect.ready(plain, 'headset')).toBe(true);
+  fail();                                                                     // the old one again: ignored
+  expect(lost).toHaveBeenCalledTimes(1);
+  expect(radioEffect.ready(plain, 'headset')).toBe(true);
+  unsubscribe();
+});

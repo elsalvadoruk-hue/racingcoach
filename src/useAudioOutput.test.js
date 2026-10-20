@@ -1,5 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
-import useAudioOutput from './useAudioOutput';
+import useAudioOutput, { OUTPUT_GRACE_MS } from './useAudioOutput';
+import { RESUMABLE } from './voiceAudio';
 import LiveCoach from './components/LiveCoach';
 import * as radioEffect from './radioEffect';
 
@@ -169,9 +170,10 @@ test('a Bluetooth disconnect preserves the saved choice and reconnect restores t
   await act(async () => result.current.play('reply'));
   media.enumerateDevices.mockResolvedValue([speaker]);
   await act(async () => media.dispatchEvent(new Event('devicechange')));
+  expect(players[0].pause).not.toHaveBeenCalled();             // not before OUTPUT_GRACE_MS
+  await waitFor(() => expect(players[0].pause).toHaveBeenCalled(), { timeout: OUTPUT_GRACE_MS + 1000 });
   expect(result.current.outputId).toBe('headset');
   expect(localStorage.getItem(storageKey)).toBe('headset');
-  expect(players[0].pause).toHaveBeenCalled();
   expect(result.current.message).toContain('연결이 끊');
   expect(players).toHaveLength(1);
   media.enumerateDevices.mockResolvedValue([headset, speaker]);
@@ -594,4 +596,83 @@ test('default output users continue playing through device list changes without 
   expect(players[0].setSinkId.mock.calls).toEqual([['']]);
   expect(result.current.outputId).toBe('');
   expect(media.getUserMedia).not.toHaveBeenCalled();
+});
+
+test('an output that drops out and returns within the grace leaves the call playing', async () => {
+  const { result } = renderHook(useAudioOutput);
+  await waitFor(() => expect(result.current.devices).toHaveLength(2));
+  act(() => result.current.changeOutput('headset'));
+  const delivery = jest.fn();
+  await act(async () => result.current.play('race-start', 'audio/mpeg', { onStatus: delivery }));
+  media.enumerateDevices.mockResolvedValue([speaker]);
+  await act(async () => media.dispatchEvent(new Event('devicechange')));
+  media.enumerateDevices.mockResolvedValue([headset, speaker]);
+  await act(async () => media.dispatchEvent(new Event('devicechange')));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, OUTPUT_GRACE_MS + 200)));
+  expect(players[0].pause).not.toHaveBeenCalled();
+  expect(delivery.mock.calls.map(([status]) => status)).toEqual(['started']);
+  expect(result.current.message).toBe('');
+});
+
+test('a call cut by a lost output is reported as one to say again', async () => {
+  const { result } = renderHook(useAudioOutput);
+  await waitFor(() => expect(result.current.devices).toHaveLength(2));
+  act(() => result.current.changeOutput('headset'));
+  const delivery = jest.fn();
+  await act(async () => result.current.play('grid', 'audio/mpeg', { onStatus: delivery }));
+  media.enumerateDevices.mockResolvedValue([speaker]);
+  await act(async () => media.dispatchEvent(new Event('devicechange')));
+  await waitFor(() => expect(delivery).toHaveBeenCalledWith('interrupted', 'output_removed'), { timeout: OUTPUT_GRACE_MS + 1000 });
+  expect(RESUMABLE).toEqual(expect.arrayContaining(['output_removed', 'output_error']));
+});
+
+test('a clip failing after it was heard is an output failure to say again, before that a broken clip', async () => {
+  const { result } = renderHook(useAudioOutput);
+  const heard = jest.fn(), broken = jest.fn();
+  await act(async () => result.current.play('heard', 'audio/mpeg', { onStatus: heard }));
+  act(() => players[0].onplaying());
+  act(() => players[0].onerror());
+  expect(heard).toHaveBeenCalledWith('interrupted', 'output_error');
+  expect(heard).not.toHaveBeenCalledWith('failed', expect.anything());
+  expect(result.current.message).toContain('다시 말합니다');
+  expect(result.current.isPlaying).toBe(false);
+  await act(async () => result.current.play('broken', 'audio/mpeg', { onStatus: broken }));
+  act(() => players[1].onerror());
+  expect(broken).toHaveBeenCalledWith('failed', 'media_error');
+});
+
+test('a lost effect context stops only the call it carried, as one to say again', async () => {
+  let lost;
+  jest.spyOn(radioEffect, 'onLost').mockImplementation((listener) => { lost = listener; return () => {}; });
+  const release = jest.fn();
+  jest.spyOn(radioEffect, 'warm').mockImplementation(() => {});
+  const attach = jest.spyOn(radioEffect, 'attach').mockReturnValue({ boosted: true, start() {}, update() {}, release });
+  const { result } = renderHook(useAudioOutput);
+  const delivery = jest.fn();
+  await act(async () => result.current.play('carried', 'audio/mpeg', { onStatus: delivery }));
+  act(() => lost());
+  expect(delivery).toHaveBeenCalledWith('interrupted', 'output_error');
+  expect(release).toHaveBeenCalled();
+  attach.mockReturnValue(null);
+  const plain = jest.fn();
+  await act(async () => result.current.play('plain', 'audio/mpeg', { onStatus: plain }));
+  act(() => lost());
+  expect(plain).not.toHaveBeenCalledWith('interrupted', expect.anything());
+});
+
+test('the Windows communications output is never offered, and a saved one falls back to default', async () => {
+  const communications = { kind: 'audiooutput', deviceId: 'communications', label: '통신 - 헤드셋' };
+  const handsFree = { kind: 'audiooutput', deviceId: 'hf', groupId: 'bt', label: '헤드셋 (WH-1000XM5 Hands-Free AG Audio)' };
+  localStorage.setItem(storageKey, 'communications');
+  media.enumerateDevices.mockResolvedValue([{ kind: 'audiooutput', deviceId: 'default', label: '기본값' }, communications, headset, handsFree]);
+  const { result } = renderHook(useAudioOutput);
+  await waitFor(() => expect(result.current.devices).toHaveLength(2));
+  expect(result.current.devices.map((device) => device.deviceId)).toEqual(['headset', 'hf']);
+  expect(result.current.devices[1]).toEqual({ kind: 'audiooutput', deviceId: 'hf', groupId: 'bt',
+    label: '헤드셋 (WH-1000XM5 Hands-Free AG Audio) · 통화용 연결(게임 소리도 바뀔 수 있음)' });
+  expect(result.current.outputId).toBe('');
+  expect(result.current.message).toContain('통신');
+  expect(localStorage.getItem(storageKey)).toBeNull();
+  await act(async () => result.current.play('call'));
+  expect(players[0].setSinkId.mock.calls).toEqual([['']]);
 });

@@ -3,7 +3,22 @@ import * as radioEffect from './radioEffect';
 import { DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX } from './voiceAudio';
 
 const STORAGE_KEY = 'iracing.voice.outputDevice';
-const savedOutput = () => { try { return localStorage.getItem(STORAGE_KEY) || ''; } catch { return ''; } };
+// Chrome on Windows also lists "communications", the output Windows keeps for calls. Playing there counts as a
+// call: Windows turns the other sounds (the game) down, and a Bluetooth headset switches to its hands-free mode.
+const COMMUNICATIONS = 'communications';
+const storedOutput = () => { try { return localStorage.getItem(STORAGE_KEY) || ''; } catch { return ''; } };
+const savedOutput = () => { const id = storedOutput(); return id === COMMUNICATIONS ? '' : id; };
+const COMMUNICATIONS_MESSAGE = '“통신” 출력은 Windows가 통화로 처리해 게임 소리를 줄이거나 블루투스 헤드셋을 통화 모드로 바꿀 수 있어 Windows 기본 장치로 바꿨습니다. 필요하면 실제 장치를 직접 선택하세요.';
+const HANDS_FREE = /hands[- ]?free/i;
+// Only real outputs: the browser's "default" is the first choice of the list, and "communications" is never offered.
+// A Bluetooth headset's hands-free output is offered with a warning: using it switches the whole headset to call mode.
+const listedOutputs = (all) => all.filter((device) => device.kind === 'audiooutput' && device.deviceId
+  && device.deviceId !== 'default' && device.deviceId !== COMMUNICATIONS)
+  .map((device) => (HANDS_FREE.test(device.label || '') ? { deviceId: device.deviceId, groupId: device.groupId, kind: device.kind,
+    label: `${device.label} · 통화용 연결(게임 소리도 바뀔 수 있음)` } : device));
+// Windows can drop an output for a moment while a game reopens it (a session loading). Only a device that is
+// still gone this long after it disappeared stops what is being said.
+export const OUTPUT_GRACE_MS = 2000;
 const MISSING_OUTPUT_MESSAGE = '선택한 출력장치를 사용할 수 없어 임시로 Windows 기본 장치로 재생합니다. 저장된 선택은 유지하며 같은 장치가 연결되면 다음 안내부터 돌아갑니다.';
 const PLAYBACK_KEY = 'iracing.voice.playback';
 const clampVolume = (value) => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1.3, value)) : 1;
@@ -51,14 +66,14 @@ export default function useAudioOutput() {
   const [outputId, setOutputId] = useState(savedOutput);
   const [refreshing, setRefreshing] = useState(false);
   const [devices, setDevices] = useState([]);
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(() => (storedOutput() === COMMUNICATIONS ? COMMUNICATIONS_MESSAGE : ''));
   const [playback, setPlayback] = useState(savedPlayback);
   const [isPlaying, setIsPlaying] = useState(false);
   const playbackSettings = useRef(playback);
   const [effect, setEffect] = useState(radioEffect.savedSettings);
   const effectSettings = useRef(effect);
   const selected = useRef(outputId), knownDevices = useRef([]), player = useRef(null);
-  const unavailableOutput = useRef('');
+  const unavailableOutput = useRef(''), removalTimer = useRef(null);
   const priorityGate = useRef(false);
   const mounted = useRef(true), refreshSerial = useRef(0);
   const permissionFlight = useRef(null), refreshQueued = useRef(false);
@@ -113,10 +128,22 @@ export default function useAudioOutput() {
   }, []);
   const toggleMute = useCallback(() => updatePlayback({ muted: !playbackSettings.current.muted }), [updatePlayback]);
   const saveOutput = useCallback((id) => {
-    unavailableOutput.current = '';
+    unavailableOutput.current = ''; clearTimeout(removalTimer.current); removalTimer.current = null;
     selected.current = id; setOutputId(id);
     try { if (id) localStorage.setItem(STORAGE_KEY, id); else localStorage.removeItem(STORAGE_KEY); } catch { /* Playback still works without storage. */ }
   }, []);
+  // The chosen device left the list OUTPUT_GRACE_MS ago: if it is still gone, stop the call on it. Calls cut off
+  // this way are said again once the radio is free (RESUMABLE), on Windows default while the device stays away.
+  const confirmRemoval = useCallback(async (id) => {
+    removalTimer.current = null;
+    try {
+      const outputs = listedOutputs(await navigator.mediaDevices.enumerateDevices());
+      if (!mounted.current || selected.current !== id || !outputs.length || outputs.some((device) => device.deviceId === id)) return;
+      unavailableOutput.current = id;
+      stop('output_removed');
+      setMessage('선택한 출력장치의 연결이 끊겼습니다. 저장된 선택은 유지하며 사용할 수 없는 동안에는 임시로 Windows 기본 장치로 재생합니다.');
+    } catch { /* The next device change checks again. */ }
+  }, [stop]);
   const refresh = useCallback(({ ask = false } = {}) => {
     if (!supported) return;
     // Permission can itself trigger devicechange/focus. Finish the user's request first,
@@ -131,8 +158,7 @@ export default function useAudioOutput() {
       try {
         let all = await navigator.mediaDevices.enumerateDevices();
         if (!mounted.current || serial !== refreshSerial.current) return;
-        const listed = (devices) => devices.filter((device) => device.kind === 'audiooutput' && device.deviceId && device.deviceId !== 'default');
-        if (ask && !listed(all).length) {
+        if (ask && !listedOutputs(all).length) {
           const permission = await askDevicePermission();
           if (!mounted.current || serial !== refreshSerial.current) return;
           if (permission === 'denied') {
@@ -142,7 +168,7 @@ export default function useAudioOutput() {
           if (permission === 'granted') all = await navigator.mediaDevices.enumerateDevices();
           if (!mounted.current || serial !== refreshSerial.current) return;
         }
-        const outputs = listed(all);
+        const outputs = listedOutputs(all);
         if (ask) setMessage(outputs.length ? '' : '이 브라우저가 알려 준 출력장치가 Windows 기본 장치뿐입니다. 장치를 연결했는지 확인하세요.');
         // Before microphone permission, browsers can hide saved device IDs. Only
         // classify removal when a previously visible device actually disappears.
@@ -151,9 +177,9 @@ export default function useAudioOutput() {
         knownDevices.current = outputs; setDevices(outputs);
         if (removed) {
           // Bluetooth endpoints may disappear briefly. Only an explicit user choice changes storage.
-          unavailableOutput.current = selected.current;
-          stop('output_removed');
-          setMessage('선택한 출력장치의 연결이 끊겼습니다. 저장된 선택은 유지하며 사용할 수 없는 동안에는 임시로 Windows 기본 장치로 재생합니다.');
+          const missing = selected.current;
+          clearTimeout(removalTimer.current);
+          removalTimer.current = setTimeout(() => confirmRemoval(missing), OUTPUT_GRACE_MS);
         } else if (unavailableOutput.current === selected.current && outputs.some((device) => device.deviceId === selected.current)) {
           unavailableOutput.current = '';
           setMessage('선택한 출력장치가 다시 연결되었습니다. 다음 안내부터 이 장치로 재생합니다.');
@@ -172,10 +198,17 @@ export default function useAudioOutput() {
       });
     }
     return flight;
-  }, [supported, stop]);
+  }, [supported, confirmRemoval]);
   useEffect(() => {
     mounted.current = true;
+    if (storedOutput() === COMMUNICATIONS) { try { localStorage.removeItem(STORAGE_KEY); } catch { /* Still not used. */ } }
     refresh();
+    // The radio effect's audio context lost its device: what it was carrying is said again from the start.
+    const unsubscribe = radioEffect.onLost(() => {
+      if (!player.current?._effect) return;
+      setMessage('출력장치가 잠시 끊겨 안내를 멈췄습니다. 장치가 돌아오면 처음부터 다시 말합니다.');
+      stop('output_error');
+    });
     const media = navigator.mediaDevices;
     const visible = () => { if (document.visibilityState === 'visible') refresh(); };
     media?.addEventListener?.('devicechange', refresh);
@@ -183,6 +216,7 @@ export default function useAudioOutput() {
     document.addEventListener('visibilitychange', visible);
     return () => {
       mounted.current = false; refreshSerial.current += 1; refreshQueued.current = false;
+      clearTimeout(removalTimer.current); removalTimer.current = null; unsubscribe();
       media?.removeEventListener?.('devicechange', refresh);
       window.removeEventListener('focus', refresh);
       document.removeEventListener('visibilitychange', visible);
@@ -272,9 +306,18 @@ export default function useAudioOutput() {
     };
     const chain = (part) => {
       part.onended = () => follow(part);
-      part.onerror = () => { current._finish('failed', 'media_error'); if (player.current === part) { setMessage('음성을 재생하지 못했습니다. 출력장치를 확인하세요.'); stop(); } };
+      part.onerror = () => {
+        // Failing after it was heard is the output going away under it (a device taken or reset), not the clip:
+        // the call is said again from the start once the radio is free.
+        if (part._heard && player.current === part) {
+          setMessage('출력장치가 잠시 끊겨 안내를 멈췄습니다. 장치가 돌아오면 처음부터 다시 말합니다.');
+          stop('output_error'); return;
+        }
+        current._finish('failed', 'media_error'); if (player.current === part) { setMessage('음성을 재생하지 못했습니다. 출력장치를 확인하세요.'); stop(); }
+      };
       // The silent tail of a clip can be skipped so the sentences sit closer together.
       part.onplaying = () => {
+        part._heard = true;
         if (PART_OVERLAP_S > 0 && rest.length && Number.isFinite(part.duration)) setTimeout(() => follow(part),
           Math.max(0, (part.duration - part.currentTime - PART_OVERLAP_S) / part.playbackRate * 1000));
       };

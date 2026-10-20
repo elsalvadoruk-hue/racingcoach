@@ -87,7 +87,7 @@ test('header output works without speech API and stays in sync with detailed set
   await act(async () => media.dispatchEvent(new Event('devicechange')));
   expect(select).toHaveValue('speaker');
   expect(settings).toHaveValue('speaker');
-  expect(within(dialog).getByRole('status')).toHaveTextContent('저장된 선택은 유지');
+  await waitFor(() => expect(within(dialog).getByRole('status')).toHaveTextContent('저장된 선택은 유지'), { timeout: 3000 });
   expect(localStorage.getItem('iracing.voice.outputDevice')).toBe('speaker');
   media.enumerateDevices.mockResolvedValue([microphone, headset, speaker]);
   await act(async () => media.dispatchEvent(new Event('devicechange')));

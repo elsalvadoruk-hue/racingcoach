@@ -245,5 +245,77 @@ class InstallerTests(unittest.TestCase):
         self.assertIn("Check the internet connection", output)
         self.assertNotIn("py install 3.12", output)
 
+
+class UpdateLaunchTests(unittest.TestCase):
+    """A downloaded update is applied before the servers start, and a restart request starts the launcher again."""
+
+    def test_backend_asking_for_restart_stops_the_servers_and_returns_the_restart_code(self):
+        backend, frontend = Mock(), Mock()
+        backend.poll.side_effect = [None, launch_app.app_update.RESTART_EXIT]
+        frontend.poll.return_value = None
+        with tempfile.TemporaryDirectory() as temp, \
+             patch.object(launch_app, "LOG_DIR", Path(temp)), \
+             patch.object(launch_app, "api_ready", side_effect=[False, True]), \
+             patch.object(launch_app, "ui_ready", side_effect=[False, True]), \
+             patch.object(launch_app, "port_busy", return_value=False), \
+             patch.object(launch_app, "apply_update") as apply, \
+             patch.object(launch_app, "commands", return_value={"backend": ["python", "api.py"], "frontend": ["node", "app.js"]}), \
+             patch.object(launch_app.subprocess, "Popen", side_effect=[backend, frontend]) as spawn, \
+             patch.object(launch_app.time, "sleep"), \
+             patch.object(launch_app, "stop_process") as stop:
+            self.assertEqual(launch_app.run(1, False), launch_app.app_update.RESTART_EXIT)
+            apply.assert_called_once_with()
+            self.assertEqual(spawn.call_args_list[0].kwargs["env"][launch_app.app_update.RESTART_ENV], "1")
+            self.assertNotIn(launch_app.app_update.RESTART_ENV, spawn.call_args_list[1].kwargs["env"])
+            self.assertEqual(stop.call_count, 2)
+
+    def test_an_update_is_not_applied_under_a_running_app(self):
+        with patch.object(launch_app, "api_ready", return_value=True), \
+             patch.object(launch_app, "ui_ready", return_value=True), \
+             patch.object(launch_app, "apply_update") as apply, \
+             patch.object(launch_app.webbrowser, "open", return_value=True):
+            self.assertEqual(launch_app.run(1, False), 0)
+            apply.assert_not_called()
+
+    def test_restart_runs_the_launcher_again_without_a_new_browser_tab(self):
+        child = Mock()
+        child.wait.side_effect = [KeyboardInterrupt, 0]
+        with patch.object(launch_app, "run", return_value=launch_app.app_update.RESTART_EXIT), \
+             patch.object(launch_app.sys, "argv", ["launch_app.py", "--dev"]), \
+             patch.object(launch_app.subprocess, "Popen", return_value=child) as spawn:
+            self.assertEqual(launch_app.main(), 0)
+            command = spawn.call_args.args[0]
+            self.assertTrue(command[1].endswith("launch_app.py"))
+            self.assertEqual(command[2:], ["--dev", "--no-browser"])
+
+    def test_applied_update_installs_changed_packages_and_builds_a_source_only_screen(self):
+        result = {"version": "1.5.0", "files": 3, "has_build": False, "requirements_changed": True}
+        with patch.object(launch_app.app_update, "read_pending", return_value={"version": "1.5.0"}), \
+             patch.object(launch_app.app_update, "apply_staged", return_value=result), \
+             patch.object(launch_app, "install_packages") as packages, \
+             patch.object(launch_app, "build_is_current", return_value=False), \
+             patch("install_ui.install", return_value=0) as build:
+            launch_app.apply_update()
+            packages.assert_called_once_with()
+            build.assert_called_once_with()
+
+    def test_prebuilt_update_without_package_changes_only_copies(self):
+        result = {"version": "1.5.0", "files": 3, "has_build": True, "requirements_changed": False}
+        with patch.object(launch_app.app_update, "read_pending", return_value={"version": "1.5.0"}), \
+             patch.object(launch_app.app_update, "apply_staged", return_value=result), \
+             patch.object(launch_app, "install_packages") as packages, \
+             patch("install_ui.install") as build:
+            launch_app.apply_update()
+            packages.assert_not_called()
+            build.assert_not_called()
+
+    def test_a_failed_copy_still_starts_the_current_version(self):
+        with patch.object(launch_app.app_update, "read_pending", return_value={"version": "1.5.0"}), \
+             patch.object(launch_app.app_update, "apply_staged", side_effect=PermissionError("locked")), \
+             patch.object(launch_app, "install_packages") as packages:
+            launch_app.apply_update()
+            packages.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
