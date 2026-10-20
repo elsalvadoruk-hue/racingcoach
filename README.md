@@ -88,6 +88,8 @@ Copyright © 2026 iRacing 주행 코치 제작자.
 
 ## 개발
 
+LMU 지원은 `feature/lmu-telemetry-isolation` 브랜치에서 별도 개발 중입니다. 기존 iRacing 실행 환경과 분리한 파일 진단 단계이며, 집 PC 실행 방법과 남은 작업은 [LMU 개발 안내](manual/lmu-development.md)를 확인하세요.
+
 새로 복제한 저장소에서는 `git config core.hooksPath .githooks`를 실행하세요. 커밋 전에는 스테이징 파일, push 전에는 전체 이력의 비밀 정보·개인 데이터 포함 여부를 검사합니다.
 
 ```powershell

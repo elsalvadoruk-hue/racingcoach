@@ -72,6 +72,8 @@
 *.m4a
 *.flac
 *.ibt
+*.duckdb
+*.duckdb.wal
 *.sqlite*
 *.db
 *.pem

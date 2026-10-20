@@ -13,7 +13,8 @@ import audit_git
 class GitAuditTests(unittest.TestCase):
     def test_private_files_and_audio_are_rejected(self):
         for name in ['data/settings.json', 'a/gcp-key.json', 'a/garage61_api_token.txt',
-                     'x.mp3', 'a.sqlite3', '.env.production', 'artifacts/a.py', 'notes.log']:
+                     'x.mp3', 'a.sqlite3', 'session.duckdb', 'session.duckdb.wal',
+                     '.env.production', 'artifacts/a.py', 'notes.log']:
             with self.subTest(name=name):
                 self.assertIn('forbidden path', audit_git.findings(name, b'harmless'))
 

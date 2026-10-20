@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FORBIDDEN_PARTS = {'data', 'node_modules', '__pycache__', '.venv', 'backups', 'logs',
                    'artifacts', 'verification', 'share', 'tools', 'ui-lab', '.claude', '.vscode'}
 FORBIDDEN_SUFFIXES = {'.mp3', '.wav', '.ogg', '.m4a', '.flac', '.ibt', '.sqlite', '.sqlite3',
-                      '.db', '.pem', '.p12', '.pfx', '.key', '.zip', '.log', '.pyc'}
+                      '.db', '.duckdb', '.wal', '.pem', '.p12', '.pfx', '.key', '.zip', '.log', '.pyc'}
 FORBIDDEN_NAMES = {'gcp-key.json', 'garage61_api_token.txt', 'settings.json',
                    'data-location.txt', 'data-location.txt.old', 'log-upload-url.txt',
                    'credentials.json', 'token.json', 'id_rsa', 'id_ed25519'}
