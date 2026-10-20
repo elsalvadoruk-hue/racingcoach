@@ -810,7 +810,15 @@ const SECTIONS = [
       '마이크로 한 질문과 답변은 “포함”을 체크했을 때만 들어갑니다.',
     ] },
     { h: '업데이트 적용하기' },
-    '프로그램은 GitHub Code → Download ZIP으로 받고, 음성은 README와 릴리즈에 연결된 Google Drive 공유 폴더에서 따로 받습니다. 별도 프로그램 배포 ZIP은 사용하지 않습니다.',
+    '1.4.2부터는 앱을 켤 때 새 버전이 있으면 업데이트 창이 뜹니다. “업데이트 받기”로 받아 두고 “지금 다시 시작해서 적용”을 누르면 잠깐 꺼졌다 켜지면서 적용되고 화면이 새로 고쳐집니다. 데이터 폴더는 그대로 남습니다.',
+    { list: [
+      '업데이트 창은 앱을 켤 때만 뜹니다. 켜 둔 동안 새 버전이 나오면 주행 중에 창을 띄우지 않고 설정 → 업데이트에만 표시합니다.',
+      '“이 버전 건너뛰기”를 누른 버전은 다시 알리지 않습니다. 설정 → 업데이트에서 언제든 확인하고 받을 수 있습니다.',
+      '이 버전에 필요한 음성이 빠져 있으면 같은 창에 개수가 나옵니다. “빠진 음성 받기”는 빠진 음성만 받아 데이터 폴더에 바로 넣습니다. Google Drive 공유 폴더 링크도 함께 표시됩니다.',
+      '“이전 버전 음성 정리”는 예전 버전에만 쓰던 음성만 지웁니다. Google 키로 직접 합성한 음성은 남깁니다.',
+      'Git으로 받은 폴더는 덮어쓰지 않습니다. git pull --ff-only 후 설치.bat을 실행하세요.',
+    ] },
+    '1.4.1 이하에서 올라올 때는 아래처럼 한 번 직접 덮어씁니다. 프로그램은 GitHub Code → Download ZIP으로, 음성은 Google Drive 공유 폴더에서 받습니다.',
     { steps: [
       '설정 맨 위에서 사용하던 버전을 확인하고 앱을 종료합니다. 기존 프로그램 폴더와 실제 데이터 폴더를 백업합니다.',
       'GitHub Code → Download ZIP을 새로 받고 임시 위치에 풉니다. racingcoach-main 폴더 안의 내용물을 기존 실행.bat이 있는 폴더에 덮어씁니다. 기존 data 폴더는 삭제하지 않습니다.',
@@ -820,6 +828,7 @@ const SECTIONS = [
     ] },
     { list: [
       '처음 설치할 때도 전체 음성팩 1.4.0을 받습니다. 1.4.0은 이전 버전에서 오는 음성 업데이트팩이 없습니다.',
+      '1.4.2: 앱 안에서 새 버전과 빠진 음성을 받는 업데이트 창이 생겼습니다. 음성은 1.4.0과 같습니다.',
       '1.4.1: 출력장치가 잠시 끊겨도 안내를 이어 가거나 다시 말합니다. 음성은 1.4.0과 같아 1.4.0 전체 음성팩이 있으면 다시 받지 않습니다.',
       '1.4.0: 랩타임·SOF 안내가 음성 조각(data/radio_audio/pieces의 OGG)을 이어 말합니다. 예전 랩타임 MP3 약 1.4GB를 쓰지 않아 음성 전체가 약 0.6GB입니다. 설치.bat을 다시 실행해야 합니다(soundfile 패키지 추가).',
       '데이터 폴더를 따로 지정했다면 설정 → 설치 설정에 표시된 데이터 폴더 안의 radio_audio, spotter_audio를 지웁니다.',
@@ -919,7 +928,7 @@ export function UserManual({ onNavigate, hasAnalysis }) {
   }, [sections]);
   return <Card asChild><article className="coach-manual" aria-label="사용 매뉴얼">
     <CardHeader className="coach-manual-intro p-0">
-      <div><CardTitle asChild><h2 className="flex items-center gap-2"><BookOpen aria-hidden="true" size={18} />기능별 사용법</h2></CardTitle><CardDescription>1.4.1 데스크톱 화면 기준입니다. 처음이면 1장, 비교 조작은 2~3장, 셋업 실험은 4~6장, 기록은 7장, 주행 중 음성은 8~12장, 폴더와 키 설정은 18장을 보세요.</CardDescription></div>
+      <div><CardTitle asChild><h2 className="flex items-center gap-2"><BookOpen aria-hidden="true" size={18} />기능별 사용법</h2></CardTitle><CardDescription>1.4.2 데스크톱 화면 기준입니다. 처음이면 1장, 비교 조작은 2~3장, 셋업 실험은 4~6장, 기록은 7장, 주행 중 음성은 8~12장, 폴더와 키 설정은 18장을 보세요.</CardDescription></div>
       <Field className="coach-manual-search"><FieldLabel htmlFor="manual-search" className="sr-only">사용 가이드 검색</FieldLabel><Input ref={searchRef} id="manual-search" aria-label="사용 가이드 검색" type="search" placeholder="기능이나 문제를 검색하세요" value={search} onChange={event => setSearch(event.target.value)} /></Field>
     </CardHeader>
     {!hasAnalysis && <p className="mt-4 text-sm text-muted-foreground">주행 분석이 없어도 매뉴얼을 읽을 수 있습니다. 기능을 사용하려면 IBT 파일을 선택하세요.</p>}

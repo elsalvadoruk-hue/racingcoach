@@ -12,6 +12,8 @@ from settings_routes import SettingsRoutesServices, register_routes as register_
 from practice_routes import PracticeRoutesServices, register_routes as register_practice_routes
 from memory_routes import MemoryRoutesServices, register_routes as register_memory_routes
 from workspace_routes import WorkspaceRoutesServices, register_routes as register_workspace_routes
+from update_routes import UpdateRoutesServices, register_routes as register_update_routes
+import app_update
 from api_route_models import (
     AppSettingsBody,
     SecretBody,
@@ -289,7 +291,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "1.4.1"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "1.4.2"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -4125,6 +4127,34 @@ send_session_log = _handlers.send_session_log
 export_session_log = _handlers.export_session_log
 
 
+# The update window: the program from the GitHub releases and the voice clips this version needs.
+UVICORN_SERVER = None                      # set when run as the app, so a restart can stop it cleanly
+restart_requested = threading.Event()
+
+
+def voice_folders() -> dict[str, Path]:
+    """Where the packed voice paths live in this installation, as the coach and spotter look them up."""
+    return {"data/radio_audio/": Path(os.getenv("IRACING_RADIO_AUDIO_DIR") or MEMORY_DB_PATH.parent / "radio_audio"),
+            "data/spotter_audio/": Path(os.getenv("IRACING_SPOTTER_AUDIO_DIR") or app_settings.spotter_audio_dir())}
+
+
+def request_restart() -> bool:
+    """Stop the server so the launcher that supervises it applies the staged update and starts it again."""
+    if os.getenv(app_update.RESTART_ENV) != "1" or UVICORN_SERVER is None:
+        return False
+    restart_requested.set()
+    # The reply reaches the screen first; an open event stream must not keep the old version running.
+    threading.Timer(.5, lambda: setattr(UVICORN_SERVER, "should_exit", True)).start()
+    threading.Timer(15, lambda: os._exit(app_update.RESTART_EXIT)).start()
+    return True
+
+
+app_updater = app_update.AppUpdater(APP_VERSION)
+voice_sync = app_update.VoiceSync(voice_folders)
+get_update_status = register_update_routes(app, UpdateRoutesServices(
+    app_updater=app_updater, voice_sync=voice_sync, request_restart=request_restart))
+
+
 _handlers = register_practice_routes(app, PracticeRoutesServices(
     get_corner_definition_store=lambda: _CORNER_DEFINITION_STORE,
     corner_names_payload=lambda *args, **kwargs: corner_names_payload(*args, **kwargs),
@@ -4221,7 +4251,6 @@ def loopback_sockets(port: int) -> list:
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "24158"))
     host = os.getenv("IRACING_API_HOST", "").strip()
-    if host:
-        uvicorn.run(app, host=host, port=port)
-    else:
-        uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port)).run(sockets=loopback_sockets(port))
+    UVICORN_SERVER = uvicorn.Server(uvicorn.Config(app, host=host or "127.0.0.1", port=port, timeout_graceful_shutdown=3))
+    UVICORN_SERVER.run(sockets=None if host else loopback_sockets(port))
+    raise SystemExit(app_update.RESTART_EXIT if restart_requested.is_set() else 0)

@@ -48,6 +48,8 @@
 !/scripts/overlay_rendering.py
 !/scripts/overlay_commands.py
 !/scripts/test_make_patch.py
+!/scripts/make_release_assets.py
+!/scripts/test_make_release_assets.py
 !/scripts/audit_git.py
 !/scripts/test_audit_git.py
 /releases/*

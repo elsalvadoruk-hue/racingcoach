@@ -2,6 +2,10 @@
 
 The built screen (build/) is served when it is at least as new as its sources;
 otherwise, or with --dev, the React dev server is used.
+
+An update the screen downloaded (iRacing_Backend/app_update.py) is copied over the program here,
+before anything starts. When the screen asks to apply it right away the backend exits with
+app_update.RESTART_EXIT and this launcher starts itself again, so the new launcher does the copying.
 """
 from __future__ import annotations
 
@@ -22,6 +26,9 @@ import urllib.request
 import webbrowser
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "iRacing_Backend"))
+import app_update  # noqa: E402  (standard library only)
+
 # Ports few other programs use; 8000 and 3001 collided with development tools too often.
 API_PORT = 24158
 API_URL = f"http://localhost:{API_PORT}"
@@ -116,6 +123,38 @@ def commands(need_api: bool, need_ui: bool) -> dict[str, list[str]]:
     return result
 
 
+def install_packages() -> None:
+    """What 설치.bat installs, for an update whose package lists changed."""
+    print("필요한 패키지가 바뀌어 설치합니다…", flush=True)
+    backend = ROOT / "iRacing_Backend"
+    result = subprocess.run([sys.executable, "-m", "pip", "install", "--prefer-binary",
+                             "-r", str(backend / "requirements_core.txt"), "-r", str(backend / "requirements_voice.txt")],
+                            cwd=ROOT, env={**os.environ, "PYYAML_FORCE_LIBYAML": "0"}, check=False)
+    if result.returncode:
+        print("패키지를 설치하지 못했습니다. 설치.bat을 한 번 실행하세요.", flush=True)
+
+
+def apply_update() -> None:
+    """Copy a downloaded update over the program while none of it runs; a failure leaves it for the next start."""
+    if not app_update.read_pending(ROOT):
+        return
+    print("내려받은 업데이트를 적용합니다…", flush=True)
+    try:
+        result = app_update.apply_staged(ROOT, log=lambda text: print(text, flush=True))
+    except OSError as error:
+        print(f"업데이트를 적용하지 못했습니다. 이번에는 지금 버전으로 실행합니다. {error}", flush=True)
+        return
+    if not result:
+        return
+    print(f"{result['version']} 적용 완료 · 바뀐 파일 {result['files']:,}개", flush=True)
+    if result["requirements_changed"]:
+        install_packages()
+    if not result["has_build"] and not build_is_current():
+        import install_ui                     # the tag's source came without a built screen
+        if install_ui.install():
+            print("화면을 새로 만들지 못했습니다. 기존 화면으로 실행합니다. 설치.bat을 실행하면 다시 만듭니다.", flush=True)
+
+
 def stop_process(process: subprocess.Popen) -> None:
     if process.poll() is not None:
         return
@@ -134,6 +173,8 @@ def stop_process(process: subprocess.Popen) -> None:
 
 def run(startup_timeout: float, open_browser: bool) -> int:
     api_running, ui_running = api_ready(), ui_ready()
+    if not api_running and not ui_running:
+        apply_update()
     for port, ready in ((API_PORT, api_running), (UI_PORT, ui_running)):
         if not ready and port_busy(port):
             raise RuntimeError(f"{port}번 포트를 다른 프로그램이 사용 중이거나 서버가 아직 준비 중입니다."
@@ -146,7 +187,7 @@ def run(startup_timeout: float, open_browser: bool) -> int:
         for name, command in launch_commands.items():
             env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
             if name == "backend":
-                env["PORT"] = str(API_PORT)
+                env.update({"PORT": str(API_PORT), app_update.RESTART_ENV: "1"})
             else:
                 env.update({"PORT": str(UI_PORT), "HOST": "127.0.0.1", "BROWSER": "none"})
             log = (LOG_DIR / f"{name}.log").open("w", encoding="utf-8")
@@ -174,8 +215,13 @@ def run(startup_timeout: float, open_browser: bool) -> int:
         print("이 창을 유지하세요. 종료하려면 Ctrl+C를 누르거나 이 창을 닫으세요.", flush=True)
         while True:
             for name, process in processes.items():
-                if process.poll() is not None:
-                    raise RuntimeError(f"{name} 실행이 종료되었습니다. 로그: {LOG_DIR / (name + '.log')}")
+                code = process.poll()
+                if code is None:
+                    continue
+                if name == "backend" and code == app_update.RESTART_EXIT:
+                    print("\n업데이트를 적용하려고 다시 시작합니다…", flush=True)
+                    return app_update.RESTART_EXIT
+                raise RuntimeError(f"{name} 실행이 종료되었습니다. 로그: {LOG_DIR / (name + '.log')}")
             time.sleep(1)
     except KeyboardInterrupt:
         print("\n이번에 시작한 서버를 종료합니다.", flush=True)
@@ -185,6 +231,17 @@ def run(startup_timeout: float, open_browser: bool) -> int:
             stop_process(process)
         for log in logs:
             log.close()
+
+
+def relaunch() -> int:
+    """Start the (possibly updated) launcher again, without another browser tab: the open one reloads."""
+    arguments = [argument for argument in sys.argv[1:] if argument != "--no-browser"] + ["--no-browser"]
+    child = subprocess.Popen([sys.executable, str(ROOT / "scripts" / "launch_app.py"), *arguments], cwd=ROOT)
+    while True:
+        try:
+            return child.wait()
+        except KeyboardInterrupt:
+            continue                          # Ctrl+C reaches the new launcher too; it stops its own servers
 
 
 def main() -> int:
@@ -207,7 +264,8 @@ def main() -> int:
             commands(True, True)
             print("Python·Node.js·필수 패키지 확인 완료.", flush=True)
             return 0
-        return run(args.startup_timeout, not args.no_browser)
+        code = run(args.startup_timeout, not args.no_browser)
+        return relaunch() if code == app_update.RESTART_EXIT else code
     except (RuntimeError, OSError) as error:
         print(f"\n실행하지 못했습니다. {error}", file=sys.stderr, flush=True)
         return 1

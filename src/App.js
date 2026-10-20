@@ -6,11 +6,13 @@ import CornerLab from './desktop/CornerLab';
 import { DesktopRuntimeProvider } from './desktop/RuntimePreview';
 import './desktop/lab.css';
 import { HelpLayer } from './components/HelpGuide';
+import UpdateCenter from './components/UpdateCenter';
 
 export default function App() {
   const workspace = useAnalysisWorkspace();
   return <DesktopRuntimeProvider apiBase={API_BASE}>
     <HelpLayer hoverEnabled={workspace.hoverHelpEnabled} />
+    <UpdateCenter apiBase={API_BASE} />
     <SessionModeChangeDialog prompt={workspace.modeChangePrompt} loading={workspace.loading}
       onCancel={() => workspace.setModeChangePrompt(null)} onConfirm={workspace.confirmSessionModeChange} />
     <CornerLab analysisWorkspace={workspace} />

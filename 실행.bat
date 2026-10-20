@@ -6,7 +6,9 @@ if errorlevel 1 goto folder_error
 
 call "scripts\find_python.bat"
 if not defined COACH_PYTHON goto no_python
-call %COACH_PYTHON% "scripts\launch_app.py" %*
+call %COACH_PYTHON% "scripts\launch_app.py" %* & goto finished
+rem An update may rewrite this file while the app runs. "& goto finished" above then finds the way back
+rem by the label, wherever the lines moved, so keep the ":finished" label.
 goto finished
 
 :no_python
