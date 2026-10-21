@@ -4,6 +4,7 @@ import gzip
 import io
 import os
 from pathlib import Path
+import statistics
 import tempfile
 import threading
 import time
@@ -152,18 +153,25 @@ class TrafficLogTests(unittest.TestCase):
             self.assertEqual(len(messages.output), 1)
         self.assertEqual(len(live.samples), 2)
 
-    def test_snapshot_and_record_31_cars_average_under_point_two_ms(self):
-        log = self.new_log()
+    def test_snapshot_and_record_31_cars_five_run_median_under_point_three_ms(self):
         names = set(self.sdk)
         # Include all SDK reads and detached row construction; disk is worker-only.
-        start = time.perf_counter()
-        for i in range(1000):
-            snap = traffic_snapshot(self.sdk, names, self.sample, self.identity)
-            log.record(snap, 'run', i * .1)
-        elapsed_ms = (time.perf_counter() - start) * 1000 / 1000
-        log.close()
-        print(f'Traffic snapshot+record 31 cars: {elapsed_ms:.4f} ms average')
-        self.assertLessEqual(elapsed_ms, .2)
+        # 2026-10-21 user decision: whole-suite concurrent execution introduced
+        # timing variability. Use the median of five 31-car x 1,000-call means
+        # and 0.3 ms instead of 0.2 ms: less than 1% of a 33 ms live tick.
+        # The slow-writer test still enforces the separate 1 ms call maximum.
+        averages = []
+        for repeat in range(5):
+            log = self.new_log()
+            start = time.perf_counter()
+            for i in range(1000):
+                snap = traffic_snapshot(self.sdk, names, self.sample, self.identity)
+                log.record(snap, f'run-{repeat}', i * .1)
+            averages.append((time.perf_counter() - start) * 1000 / 1000)
+            log.close()
+        median_ms = statistics.median(averages)
+        print(f'Traffic snapshot+record 31 cars x 1,000: means={averages}; median={median_ms:.4f} ms')
+        self.assertLessEqual(median_ms, .3)
 
     def test_half_second_gzip_write_does_not_hold_up_record(self):
         log = self.new_log()
@@ -191,6 +199,7 @@ class TrafficLogTests(unittest.TestCase):
                 return self.handle.write(value)
 
         snap = self.snapshot()
+        names = set(self.sdk)
         with patch('traffic_log.gzip.open', SlowFile):
             log.record(snap, 'run', 0.)
             log.flush()
@@ -198,7 +207,7 @@ class TrafficLogTests(unittest.TestCase):
             durations = []
             for i in range(1, 101):
                 start = time.perf_counter_ns()
-                log.record(snap, 'run', i * .1)
+                log.record(traffic_snapshot(self.sdk, names, self.sample, self.identity), 'run', i * .1)
                 durations.append((time.perf_counter_ns() - start) / 1e6)
             self.assertLessEqual(max(durations), 1.)
             log.close()
