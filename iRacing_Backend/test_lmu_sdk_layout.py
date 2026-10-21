@@ -140,11 +140,14 @@ struct Root { Part p[CAP]; };
         if not all((folder / name).is_file() for name in layout.HEADERS):
             self.skipTest('installed SDK unavailable')
         result = layout.load_layout(folder)
-        self.assertEqual(result.root.size, 324824)
-        self.assertEqual(result.types['TelemInfoV01'].size, 1888)
-        self.assertEqual(result.find('data.telemetry').offset, 128464)
-        self.assertEqual(result.types['TelemInfoV01'].find('mLapInvalidated').offset, 745)
-        self.assertEqual(result.types['VehicleScoringInfoV01'].find('mCountLapFlag').offset, 506)
+        # These historical ABI numbers apply only to the reviewed SDK version;
+        # a later supported SDK is allowed to change data structure layout.
+        if result.fingerprint=='e8769bedabbcafe1666c47d71352a8e6391d443e0160eb9b55bbd4ba974a0b3b':
+            self.assertEqual(result.root.size, 324824)
+            self.assertEqual(result.types['TelemInfoV01'].size, 1888)
+            self.assertEqual(result.find('data.telemetry').offset, 128464)
+            self.assertEqual(result.types['TelemInfoV01'].find('mLapInvalidated').offset, 745)
+            self.assertEqual(result.types['VehicleScoringInfoV01'].find('mCountLapFlag').offset, 506)
         self.assertIs(result, layout.load_layout(folder))
         # Check every required field's kind, including scalar signedness.
         types = dict(result.types)
@@ -155,6 +158,29 @@ struct Root { Part p[CAP]; };
         types[telem.name] = replace(telem, fields=members)
         with self.assertRaises(layout.LayoutUnsupported):
             layout.validate_required_fields(types, result.lock)
+
+    def test_sdk_dependency_change_removal_and_preparation_race(self):
+        import shutil
+        from unittest.mock import patch
+        folder=resolve_sdk_dir()
+        if not all((folder/name).is_file() for name in layout.HEADERS): self.skipTest('installed SDK unavailable')
+        with tempfile.TemporaryDirectory() as temp:
+            copied=Path(temp); shutil.copytree(folder,copied,dirs_exist_ok=True)
+            root=copied/'SharedMemoryInterface.hpp'
+            original=root.read_text(encoding='utf-8-sig')
+            extra=copied/'ReaderProbe.hpp'
+            extra.write_text('#pragma once\nstruct ReaderProbe { int value; };\n')
+            root.write_text('#include "ReaderProbe.hpp"\n'+original,encoding='utf-8')
+            first=layout.load_layout(copied)
+            extra.write_text('#pragma once\nstruct ReaderProbe { double value; };\n')
+            second=layout.load_layout(copied)
+            self.assertNotEqual(first.fingerprint,second.fingerprint)
+            self.assertEqual(first.protocol_fingerprint,second.protocol_fingerprint)
+            root.write_text(original,encoding='utf-8'); extra.unlink()
+            self.assertEqual(layout.load_layout(copied).root.size,first.root.size)
+        fingerprint=layout._fingerprint(folder,layout.HEADERS)
+        with patch.object(layout,'_fingerprint',side_effect=[fingerprint,'0'*64]):
+            with self.assertRaises(layout.LayoutUnstable): layout.load_layout(folder,use_cache=False)
 
 
 if __name__ == '__main__':

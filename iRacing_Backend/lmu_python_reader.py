@@ -14,10 +14,15 @@ import uuid
 
 from lmu_shared_memory import (_platform_check, _unavailable, LmuLiveUnavailable,
                                resolve_sdk_dir, sdk_configuration)
-from lmu_sdk_layout import load_layout, LayoutUnsupported, REQUIRED_FIELDS, EVENT_NAMES
+from lmu_sdk_layout import load_layout, LayoutUnsupported, LayoutUnstable, REQUIRED_FIELDS, EVENT_NAMES
 
 LOCK_DIR = Path(__file__).with_name('lmu_lock')
 LOCK_SOURCE = Path(__file__).with_name('lmu_lock.c')
+
+
+def _unsupported_sdk():
+    return LmuLiveUnavailable('CONNECTION_SDK_UNSUPPORTED',
+                              '설치된 LMU SDK의 연결 규약이나 필드를 지원하지 않습니다. 앱 업데이트가 필요합니다.')
 
 
 def load_lock_dll(folder=None, *, source=None, existing=None):
@@ -576,8 +581,10 @@ class PythonSharedMemorySource:
         _platform_check()
         try:
             layout=load_layout(self.sdk_dir)
+        except LayoutUnstable as exc:
+            raise _unavailable('SDK_UNAVAILABLE') from exc
         except LayoutUnsupported as exc:
-            raise _unavailable('CONNECTION_SDK_UNSUPPORTED') from exc
+            raise _unsupported_sdk() from exc
         except (OSError,UnicodeError) as exc:
             raise _unavailable('SDK_UNAVAILABLE') from exc
         if self._handle and self._layout.fingerprint!=layout.fingerprint:
@@ -654,8 +661,10 @@ class PythonSharedMemorySource:
     def _check_headers(self):
         try:
             current=load_layout(self.sdk_dir)
+        except LayoutUnstable as exc:
+            raise _unavailable('SDK_UNAVAILABLE') from exc
         except LayoutUnsupported as exc:
-            raise _unavailable('CONNECTION_SDK_UNSUPPORTED') from exc
+            raise _unsupported_sdk() from exc
         except (OSError,UnicodeError) as exc:
             raise _unavailable('SDK_UNAVAILABLE') from exc
         if current.fingerprint!=self._layout.fingerprint:
@@ -677,7 +686,6 @@ class PythonSharedMemorySource:
             return None
         if not self._dll.lmu_copy_locked(self._busy,self._waiters,self._lock_event,self._view,self._raw_buffer,self._layout.root.size,1000):
             return None
-        if api.wait(self._handle,0)!=258: raise _unavailable('GAME_EXITED')
         member=self._layout.root.find('data')
         return self._raw_buffer.raw[member.offset:member.offset+member.size]
 
@@ -686,7 +694,9 @@ class PythonSharedMemorySource:
         self._timeout(timeout_ms)
         with self._guard:
             try:
-                return self._copy_next_raw(timeout_ms)
+                raw=self._copy_next_raw(timeout_ms)
+                if raw is not None and self._api.wait(self._handle,0)!=258: raise _unavailable('GAME_EXITED')
+                return raw
             except LmuLiveUnavailable:
                 self.close(); raise
 
@@ -696,7 +706,11 @@ class PythonSharedMemorySource:
             try:
                 raw=self._copy_next_raw(timeout_ms)
                 if raw is None: return None
-                result=self._processor.process_frame(raw)
+                tu,su=self._processor.validate_and_copy(raw)
+                # Released lmu_read validates first, then checks process exit,
+                # then serializes. Preserve that error precedence.
+                if self._api.wait(self._handle,0)!=258: raise _unavailable('GAME_EXITED')
+                result=self._processor.snapshot(tu,su)
                 result['session_id']=self._connection_id+':'+result['session_id']
                 return result
             except LmuLiveUnavailable:

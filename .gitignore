@@ -78,6 +78,8 @@
 !/scripts/test_audit_git.py
 !/scripts/dev_lmu_layout_check.py
 !/scripts/build_lmu_lock.py
+!/scripts/dev_lmu_oracle.py
+!/scripts/capture_lmu_raw.py
 /releases/*
 !/releases/[0-9]*.json
 !/releases/voice-[0-9]*.json

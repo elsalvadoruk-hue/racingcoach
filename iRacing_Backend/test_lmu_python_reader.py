@@ -7,6 +7,7 @@ from pathlib import Path
 import statistics
 import struct
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
@@ -232,6 +233,21 @@ class PythonReaderTests(unittest.TestCase):
             self.assert_code('GAME_VERSION_CHANGED',source.read)
             self.assertIsNone(source._handle)
 
+    def test_invalid_frame_precedes_post_copy_game_exit(self):
+        source,api=self.source()
+        with source:
+            offset=self.layout.types['SharedMemoryObjectOut'].find('generic.gameVersion').offset
+            struct.pack_into('<i',api.frame,offset,0)
+            process_checks=[]
+            def wait(handle,timeout):
+                if handle==1:
+                    process_checks.append(handle)
+                    return 258 if len(process_checks)==1 else 0
+                return 0
+            with patch.object(api,'wait',side_effect=wait):
+                self.assert_code('GAME_VERSION_INVALID',source.read)
+            self.assertEqual(len(process_checks),1)
+
     def test_changed_headers_close_before_native_copy(self):
         from dataclasses import replace
         source,api=self.source()
@@ -282,6 +298,51 @@ class PythonReaderTests(unittest.TestCase):
         self.assertIsNone(result['wheels'][0]['temperature_c'][0])
         json.dumps(result,allow_nan=False)
 
+    def test_capture_round_trip_and_truncation_rejection(self):
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+        from capture_lmu_raw import capture,read_header,iter_frames
+        from io import BytesIO
+        source,api=self.source()
+        with tempfile.TemporaryDirectory() as temp:
+            ticks=iter((0,0,2))
+            result=capture(source,2,output_dir=temp,now=lambda:next(ticks))
+            self.assertEqual(result['frames'],1)
+            data=(Path(temp)/result['file']).read_bytes()
+            stream=BytesIO(data); header=read_header(stream)
+            self.assertEqual(header['pid'],4321)
+            self.assertEqual(list(iter_frames(stream,header)),[api.frame.raw])
+            stream=BytesIO(data[:-2]); header=read_header(stream)
+            with self.assertRaises(ValueError): list(iter_frames(stream,header))
+        self.assertIsNone(source._handle)
+        with self.assertRaises(ValueError): capture(source,301)
+
+    def test_appended_event_is_not_exposed_in_output(self):
+        import re,shutil
+        with tempfile.TemporaryDirectory() as temp:
+            folder=Path(temp)
+            shutil.copytree(resolve_sdk_dir(),folder,dirs_exist_ok=True)
+            path=folder/'SharedMemoryInterface.hpp'
+            text=path.read_text(encoding='utf-8-sig')
+            text,count=re.subn(r'\bSME_MAX\s*([,}])','SME_READER_EXTRA,\nSME_MAX\\1',text,count=1)
+            self.assertEqual(count,1)
+            path.write_text(text,encoding='utf-8')
+            layout=load_layout(folder)
+            frame=base_frame(layout).events('SME_UPDATE_TELEMETRY','SME_UPDATE_SCORING','SME_READER_EXTRA')
+            result=FrameProcessor(layout).process_frame(frame.data)
+            self.assertEqual(result['events'],['SME_UPDATE_SCORING','SME_UPDATE_TELEMETRY'])
+
+    def test_released_cpp_fixture_parity(self):
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+        from dev_lmu_oracle import run_fixture
+        from dev_lmu_layout_check import find_msvc
+        try: find_msvc()
+        except (OSError,RuntimeError): self.skipTest('MSVC developer tools unavailable')
+        result=run_fixture()
+        self.assertEqual(result['differences'],[])
+        self.assertEqual(result['traffic_outputs'],22)
+        self.assertEqual(result['measured_outputs'],5)
+        self.assertIn('UNFLAGGED_NEW_SCORING_ADOPTED',result['assertions'])
+
 
 class ReaderPureTests(unittest.TestCase):
     def test_class_hash_and_compound_bytes(self):
@@ -290,6 +351,17 @@ class ReaderPureTests(unittest.TestCase):
         self.assertTrue(tyre_wet(b'RAIN'))
         self.assertFalse(tyre_wet(b'Medium'))
         self.assertIsNone(tyre_wet(b'unknown'))
+
+    def test_oracle_allowance_is_only_for_hypot_fields(self):
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+        from dev_lmu_oracle import difference
+        self.assertIsNone(difference({'snapshot':{'speed_mps':3.0}}, {'snapshot':{'speed_mps':3.0+1e-13}}))
+        self.assertIsNone(difference({'snapshot':{'scoring_cars':[{'speed_mps':3.0}]}},
+                                     {'snapshot':{'scoring_cars':[{'speed_mps':3.0+1e-13}]}}))
+        self.assertIsNotNone(difference({'snapshot':{'fuel_l':3.0}}, {'snapshot':{'fuel_l':3.0+1e-13}}))
+        self.assertIsNotNone(difference({'snapshot':{'speed_mps':0.0}}, {'snapshot':{'speed_mps':1e-15}}))
+        self.assertIsNotNone(difference({'snapshot':{'wheels':[{'speed_mps':3.0}]}},
+                                        {'snapshot':{'wheels':[{'speed_mps':3.0+1e-13}]}}))
 
 
 if __name__=='__main__': unittest.main()

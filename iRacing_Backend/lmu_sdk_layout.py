@@ -18,6 +18,10 @@ class LayoutUnsupported(ValueError):
     """The installed SDK cannot safely be interpreted by this reader."""
 
 
+class LayoutUnstable(LayoutUnsupported):
+    """SDK files changed during inspection; retry after installation settles."""
+
+
 EVENT_NAMES = tuple(('SME_ENTER SME_EXIT SME_STARTUP SME_SHUTDOWN SME_LOAD '
                      'SME_UNLOAD SME_START_SESSION SME_END_SESSION SME_ENTER_REALTIME '
                      'SME_EXIT_REALTIME SME_UPDATE_SCORING SME_UPDATE_TELEMETRY '
@@ -575,7 +579,13 @@ def load_layout(sdk_dir=None, *, require_protocol=True, use_cache=True):
     folder = resolve_sdk_dir(sdk_dir)
     with _GUARD:
         dependencies = _DEPENDENCIES.get(folder, HEADERS)
-        identity = _fingerprint(folder, dependencies)
+        try:
+            identity = _fingerprint(folder, dependencies)
+        except OSError:
+            if tuple(dependencies)==tuple(HEADERS): raise
+            # An update may remove a formerly included file. Reinspect current
+            # root headers instead of keeping that obsolete dependency forever.
+            identity = _fingerprint(folder, HEADERS)
         if use_cache and identity in _CACHE:
             result = _CACHE[identity]
         else:
@@ -584,7 +594,11 @@ def load_layout(sdk_dir=None, *, require_protocol=True, use_cache=True):
             if headers.stack:
                 raise LayoutUnsupported('unbalanced #pragma pack')
             dependencies = tuple(HEADERS) + tuple(sorted(set(headers.files)-set(HEADERS)))
-            identity = _fingerprint(folder, dependencies)
+            digest=hashlib.sha256()
+            for name in dependencies:
+                digest.update(name.encode('utf-8')+b'\0')
+                digest.update(headers.files[name])
+            identity=digest.hexdigest()
             parser = _Parser(source, headers.defines)
             root = parser.resolve('SharedMemoryLayout')
             lock_class = parser.declarations.get('SharedMemoryLock')
@@ -600,9 +614,11 @@ def load_layout(sdk_dir=None, *, require_protocol=True, use_cache=True):
             validate_required_fields(parser.types, lock)
             if parser.types['SharedMemoryGeneric'].find('events').type.count != events['SME_MAX']:
                 raise LayoutUnsupported('event array length differs from SME_MAX')
+            if _fingerprint(folder,dependencies)!=identity:
+                raise LayoutUnstable('SDK files changed while computing layout')
             result = SdkLayout(dict(parser.types), root, lock, identity, protocol, dependencies, events)
             _CACHE[identity] = result
-            _DEPENDENCIES[folder] = dependencies
+        _DEPENDENCIES[folder] = result.dependencies
         if require_protocol:
             result.require_known_protocol()
         return result
