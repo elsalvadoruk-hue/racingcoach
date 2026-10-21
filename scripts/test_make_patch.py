@@ -115,6 +115,30 @@ class PatchTests(unittest.TestCase):
 
 
 class ShareManifestTests(unittest.TestCase):
+    def test_backend_share_holds_bridge_source_and_only_verified_bundle_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, out = Path(folder) / "source", Path(folder) / "share"
+            bundle = root / "iRacing_Backend" / "lmu_bridges" / ("bridge-" + "a" * 24)
+            relative = bundle.relative_to(root).as_posix()
+            write(root, {
+                "iRacing_Backend/lmu_native_bridge.cpp": "// redistributable source",
+                "iRacing_Backend/lmu_shared_memory.py": "# transport",
+                "iRacing_Backend/gcp-key.json": "private key",
+                relative + "/manifest.json": "{}",
+                relative + "/lmu_native_bridge.dll": b"MZprebuilt",
+                "logs/lmu-native/build.log": "private compiler paths",
+            })
+            with patch("lmu_shared_memory.validate_bundled_bridges", return_value=[bundle]):
+                make_share_copy.copy_backend(root, out)
+            self.assertEqual(sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()), sorted([
+                "iRacing_Backend/lmu_native_bridge.cpp", "iRacing_Backend/lmu_shared_memory.py",
+                relative + "/manifest.json", relative + "/lmu_native_bridge.dll",
+            ]))
+            with patch("lmu_shared_memory.validate_bundled_bridges", side_effect=ValueError("invalid bundle")):
+                with self.assertRaisesRegex(ValueError, "invalid bundle"):
+                    make_share_copy.copy_backend(root, Path(folder) / "invalid")
+            self.assertFalse((Path(folder) / "invalid").exists())
+
     def test_a_new_overlay_import_cannot_be_left_out_of_the_share(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

@@ -50,11 +50,13 @@ export function LmuBridgePanel() {
     <CardDescription>스포터·피트월·F8 질문·오버레이는 iRacing과 같은 기능을 그대로 씁니다. LMU를 실행하고 차에 타면 자동으로 LMU에 연결됩니다.</CardDescription></CardHeader>
     <CardContent className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2"><Badge variant={variant}>{label}</Badge><span>{bridge?.message}</span></div>
-      {bridge?.buildable && <p>LMU 공유 메모리를 읽는 작은 프로그램(브리지)을 이 PC에 맞춰 한 번 빌드해야 합니다. Visual Studio C++ 빌드 도구가 필요하고 1분 정도 걸립니다. LMU가 업데이트되면 다시 빌드하라는 안내가 나옵니다.</p>}
+      {bridge?.state === 'READY' && <p>브리지를 사용할 수 있습니다. LMU를 실행하고 차에 탄 뒤 음성 코치에서 스포터나 피트월을 켜 연결을 확인하세요.</p>}
+      {bridge?.buildable && <p>현재 LMU SDK에 맞는 브리지가 없습니다. Visual Studio C++ 빌드 도구를 설치한 뒤 아래 버튼으로 한 번 빌드하세요. 앱 버전을 올리지 않아도 직접 빌드할 수 있습니다. 앱에 포함된 브리지와 SDK가 맞으면 빌드 도구 없이 바로 사용합니다.</p>}
       {error && <p role="alert">{error}</p>}
       <div className="flex flex-wrap gap-2">
         {bridge?.buildable && <Button disabled={busy} onClick={build}>{busy ? '빌드 중…' : '실시간 브리지 빌드'}</Button>}
         <Button variant="outline" disabled={busy} onClick={() => refresh()}>상태 새로고침</Button>
+        <Button variant="outline" asChild><a href="/lmu-bridge-guide.html" target="_blank" rel="noreferrer">브리지 사용법</a></Button>
       </div>
     </CardContent></Card>;
 }

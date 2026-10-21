@@ -45,10 +45,16 @@ def make_app(root: Path, out: Path, allow_dirty: bool = False) -> Path:
     if not build_is_current():
         raise ValueError("build/가 없거나 소스보다 오래됐습니다. 먼저 npm run build를 실행하세요.")
     dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=root,
-                           capture_output=True, text=True, check=True).stdout.strip()
+                           capture_output=True, text=True, encoding="utf-8", check=True).stdout.strip()
     if dirty and not allow_dirty:
         raise ValueError("커밋하지 않은 변경이 있습니다. 릴리스 태그와 같은 내용이 되도록 커밋한 뒤 만드세요.")
-    names = git_files(root) + sorted(path.relative_to(root).as_posix() for path in (root / "build").rglob("*") if path.is_file())
+    from make_share_copy import bundled_bridge_files
+    bridges = bundled_bridge_files(root)
+    committed = git_files(root)
+    missing = sorted(set(bridges) - set(committed))
+    if missing:
+        raise ValueError("LMU 사전 빌드 파일을 먼저 Git에 추가하세요: " + ", ".join(missing))
+    names = committed + sorted(path.relative_to(root).as_posix() for path in (root / "build").rglob("*") if path.is_file())
     target = out / app_update.APP_ASSET.format(version=version)
     out.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(target.name + ".part")

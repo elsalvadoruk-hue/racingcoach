@@ -45,6 +45,35 @@ REQUIRED_OVERLAY_SCRIPTS = ("overlay_sample.py", "overlay_trace.py", "overlay_ce
 DATA_FILES = ("corner-definitions.json", "pit-knowledge.json")
 TEXT_SUFFIXES = {".py", ".js", ".json", ".md", ".txt", ".bat", ".ps1", ".html", ".css", ".map", ".svg", ".yml", ".yaml", ".cfg", ".ini"}
 
+
+def bundled_bridge_files(root: Path) -> list[str]:
+    """Validate production bundles and list only their redistributable files."""
+    backend = root / "iRacing_Backend"
+    if not (backend / "lmu_shared_memory.py").is_file():
+        return []
+    from lmu_shared_memory import validate_bundled_bridges
+    bundles = validate_bundled_bridges(backend / "lmu_bridges")
+    if not bundles:
+        raise ValueError("LMU 사전 빌드 브리지가 없습니다. 먼저 prepare_lmu_bridge.py를 실행하세요.")
+    return [path.relative_to(root).as_posix()
+            for bundle in bundles
+            for path in (bundle / "manifest.json", bundle / "lmu_native_bridge.dll")]
+
+
+def copy_backend(root: Path, out: Path) -> None:
+    """Copy backend sources and verified bundles without build logs or object files."""
+    bridges = bundled_bridge_files(root)
+    backend = root / "iRacing_Backend"
+    (out / "iRacing_Backend").mkdir(parents=True, exist_ok=True)
+    for path in sorted(backend.iterdir()):
+        if path.is_file() and path.name not in BACKEND_SKIP and (
+                path.suffix == ".py" or path.name.startswith("requirements") or path.name == "lmu_native_bridge.cpp"):
+            shutil.copy2(path, out / "iRacing_Backend" / path.name)
+    for name in bridges:
+        destination = out / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / name, destination)
+
 FIRST_RUN = """iRacing 주행 코치 {version} - 처음 실행
 
 그림이 들어간 설명서는 manual 폴더의 "매뉴얼.html"입니다. 더블클릭하면 브라우저로 열립니다.
@@ -273,7 +302,8 @@ def main() -> int:
         return 1
     try:
         validate_share_inputs()
-    except RuntimeError as error:
+        bundled_bridge_files(ROOT)
+    except (RuntimeError, ValueError) as error:
         print(f"공유본을 만들 수 없습니다: {error}")
         return 1
     out.mkdir(parents=True, exist_ok=True)
@@ -283,11 +313,7 @@ def main() -> int:
     for name in ROOT_FOLDERS:
         print(f"{name}/ 복사 중...", flush=True)
         copy_tree(ROOT / name, out / name)
-    backend = ROOT / "iRacing_Backend"
-    (out / "iRacing_Backend").mkdir()
-    for path in sorted(backend.iterdir()):
-        if path.is_file() and path.name not in BACKEND_SKIP and (path.suffix == ".py" or path.name.startswith("requirements")):
-            shutil.copy2(path, out / "iRacing_Backend" / path.name)
+    copy_backend(ROOT, out)
     (out / "scripts").mkdir()
     for name in SCRIPTS:
         shutil.copy2(ROOT / "scripts" / name, out / "scripts" / name)

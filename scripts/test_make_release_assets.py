@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -54,6 +55,47 @@ class VoicePieceTests(unittest.TestCase):
 
 
 class AppAssetTests(unittest.TestCase):
+    def test_app_zip_validates_and_includes_the_prebuilt_bridge(self):
+        import lmu_shared_memory
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            backend = root / "iRacing_Backend"
+            backend.mkdir()
+            (backend / "backend_api.py").write_text('APP_VERSION = "2.0.1"\n', encoding="utf-8")
+            (backend / "lmu_shared_memory.py").write_text("# bundle support\n", encoding="utf-8")
+            source = lmu_shared_memory.BRIDGE_SOURCE.read_bytes()
+            (backend / "lmu_native_bridge.cpp").write_bytes(source)
+            fingerprint = "a" * 64
+            identity = hashlib.sha256(source + fingerprint.encode("ascii")).hexdigest()[:24]
+            bundle = backend / "lmu_bridges" / ("bridge-" + identity)
+            bundle.mkdir(parents=True)
+            dll = bytearray(128)
+            dll[:2] = b"MZ"
+            struct.pack_into("<I", dll, 0x3c, 64)
+            dll[64:68] = b"PE\0\0"
+            struct.pack_into("<H", dll, 68, 0x8664)
+            (bundle / "lmu_native_bridge.dll").write_bytes(dll)
+            (bundle / "manifest.json").write_text(json.dumps({
+                "header_fingerprint": fingerprint, "source_sha256": hashlib.sha256(source).hexdigest(),
+                "dll_sha256": hashlib.sha256(dll).hexdigest(), "bridge_version": 1, "runtime": "STATIC_MSVC",
+            }), encoding="utf-8")
+            (root / "package.json").write_text('{"version":"2.0.1"}', encoding="utf-8")
+            (root / "build").mkdir()
+            (root / "build" / "index.html").write_text("<html>", encoding="utf-8")
+            run = lambda *args: subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+            run("init", "-q")
+            run("add", "iRacing_Backend", "package.json")
+            run("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "x")
+            with patch("launch_app.build_is_current", return_value=True):
+                target = make_release_assets.make_app(root, root / "out")
+                with zipfile.ZipFile(target) as archive:
+                    member = "racingcoach-2.0.1/" + (bundle / "lmu_native_bridge.dll").relative_to(root).as_posix()
+                    self.assertEqual(archive.read(member), dll)
+                (bundle / "lmu_native_bridge.dll").write_bytes(b"damaged")
+                with self.assertRaisesRegex(ValueError, "LMU"):
+                    make_release_assets.make_app(root, root / "bad", allow_dirty=True)
+                self.assertFalse((root / "bad").exists())
+
     def test_app_zip_holds_committed_files_and_the_built_screen(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

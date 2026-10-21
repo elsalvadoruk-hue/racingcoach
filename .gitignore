@@ -32,6 +32,12 @@
 !/iRacing_Backend/test_lmu_replay_ui.js
 !/iRacing_Backend/test_lmu_setup_ui.js
 !/iRacing_Backend/lmu_native_bridge.cpp
+!/iRacing_Backend/lmu_bridges/
+/iRacing_Backend/lmu_bridges/*
+!/iRacing_Backend/lmu_bridges/bridge-*/
+/iRacing_Backend/lmu_bridges/bridge-*/*
+!/iRacing_Backend/lmu_bridges/bridge-*/manifest.json
+!/iRacing_Backend/lmu_bridges/bridge-*/lmu_native_bridge.dll
 !/iRacing_Backend/requirements*.txt
 /scripts/*
 !/scripts/launch_app.py
@@ -60,6 +66,8 @@
 !/scripts/overlay_commands.py
 !/scripts/test_make_patch.py
 !/scripts/make_release_assets.py
+!/scripts/prepare_lmu_bridge.py
+!/scripts/test_prepare_lmu_bridge.py
 !/scripts/test_make_release_assets.py
 !/scripts/audit_git.py
 !/scripts/test_audit_git.py

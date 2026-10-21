@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LMU 버전이 맞지 않을 때 브리지 사용법</title>
+<style>
+/* Layout: one reading column of numbered steps; each step pairs short text with a drawn screen mock. */
+:root{
+  --bg:#f3f5f7; --paper:#ffffff; --fg:#17202a; --muted:#5b6876; --line:#d6dde4;
+  --accent:#d63a2f; --accent-soft:#fde9e7; --ok:#1f8a5b; --ok-soft:#e2f4ea;
+  --win:#eef1f5; --win-bar:#dfe4ea; --vs:#6b3fb8; --vs-soft:#efe8fa;
+  --app:#151a20; --app-card:#1f262e; --app-fg:#e8edf2; --app-muted:#93a1ae; --app-line:#323c46;
+  --sans:"Malgun Gothic",system-ui,sans-serif; --mono:Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f1317; --paper:#171c22; --fg:#e7ecf1; --muted:#9aa7b4; --line:#2c353f;
+  --accent:#ff6b5e; --accent-soft:#3a1d1a; --ok:#4cc58c; --ok-soft:#16301f;
+  --win:#1f252c; --win-bar:#2a323b; --vs:#b08cf0; --vs-soft:#2a2140; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f1317; --paper:#171c22; --fg:#e7ecf1; --muted:#9aa7b4; --line:#2c353f;
+  --accent:#ff6b5e; --accent-soft:#3a1d1a; --ok:#4cc58c; --ok-soft:#16301f;
+  --win:#1f252c; --win-bar:#2a323b; --vs:#b08cf0; --vs-soft:#2a2140; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:16px;line-height:1.65;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:32px 64px}
+main{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:28px}
+h1{font-size:1.9rem;line-height:1.3;margin:0;text-wrap:balance}
+.lead{color:var(--muted);margin:6px 0 0}
+.need{display:flex;flex-wrap:wrap;gap:10px;margin-top:14px}
+.chip{border:1px solid var(--line);background:var(--paper);border-radius:999px;padding:4px 12px;font-size:.88rem}
+.chip b{color:var(--accent)}
+.warn{background:var(--accent-soft);border-left:4px solid var(--accent);padding:12px 16px;border-radius:6px}
+.step{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:22px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);gap:22px;align-items:start}
+.step h2{font-size:1.2rem;margin:0 0 8px;display:flex;gap:10px;align-items:baseline}
+.num{font-family:var(--mono);color:var(--accent);font-size:1rem}
+.step p,.step ol{margin:0 0 8px}
+.step ol{padding-left:20px}
+.step a{color:var(--accent);font-weight:500}
+kbd,.k{font-family:var(--sans);font-weight:700;background:var(--win);border:1px solid var(--line);border-radius:4px;padding:0 6px;white-space:nowrap}
+.mute{color:var(--muted);font-size:.9rem}
+@media (max-width:720px){.step{grid-template-columns:1fr}}
+
+/* drawn screens */
+.screen{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--win);font-size:13px;line-height:1.45;max-width:100%}
+.bar{background:var(--win-bar);padding:6px 10px;display:flex;gap:6px;align-items:center;color:var(--muted);font-size:12px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--line)}
+.body{padding:14px}
+.callout{outline:3px solid var(--accent);outline-offset:3px;border-radius:6px;position:relative}
+.tag{position:absolute;top:-12px;right:-10px;background:var(--accent);color:#fff;font-weight:700;font-size:12px;border-radius:999px;padding:1px 9px;white-space:nowrap}
+.web h4{margin:0 0 4px;font-size:15px}
+.dl{display:inline-block;background:#3b6fd6;color:#fff;border-radius:4px;padding:6px 14px;font-weight:700;margin-top:8px}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{background:var(--paper);border:1px solid var(--line);border-radius:6px;padding:8px;display:flex;gap:8px;align-items:flex-start}
+.tile.on{border-color:var(--vs);background:var(--vs-soft)}
+.box{width:14px;height:14px;border:1.5px solid var(--muted);border-radius:3px;flex:none;margin-top:2px;display:grid;place-items:center;font-size:11px;color:#fff}
+.tile.on .box{background:var(--vs);border-color:var(--vs)}
+.tile small{display:block;color:var(--muted);font-size:11px}
+.install{display:flex;justify-content:flex-end;margin-top:10px}
+.btn{background:var(--vs);color:#fff;border-radius:4px;padding:5px 16px;font-weight:700}
+/* app mock (the app itself is dark) */
+.app{background:var(--app);color:var(--app-fg);border-color:#000}
+.app .bar{background:#0c1014;color:var(--app-muted)}
+.apphead{display:flex;gap:10px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--app-line);flex-wrap:wrap}
+.seg{display:flex;border:1px solid var(--app-line);border-radius:6px;overflow:hidden}
+.seg span{padding:2px 10px;color:var(--app-muted)}
+.seg .sel{background:var(--app-fg);color:var(--app)}
+.appgrid{display:grid;grid-template-columns:96px 1fr;min-height:150px}
+.side{border-right:1px solid var(--app-line);padding:8px;display:flex;flex-direction:column;gap:3px;color:var(--app-muted);font-size:12px}
+.side .pick{color:var(--app-fg);background:var(--app-card);border-radius:4px;padding:1px 6px}
+.side .gap{flex:1}
+.main{padding:12px}
+.card{background:var(--app-card);border:1px solid var(--app-line);border-radius:8px;padding:12px}
+.card h5{margin:0 0 4px;font-size:14px}
+.card p{margin:0 0 8px;color:var(--app-muted);font-size:12px}
+.badge{display:inline-block;border-radius:999px;padding:0 9px;font-size:12px;font-weight:700}
+.bad{background:#c4392f;color:#fff}.good{background:#2f3a44;color:#d9f2e4}
+.abtn{display:inline-block;border-radius:6px;padding:4px 12px;font-weight:700;margin-right:6px;font-size:12px}
+.primary{background:var(--app-fg);color:var(--app)}.outline{border:1px solid var(--app-line);color:var(--app-fg)}
+.okline{color:#7fe0ad;font-size:12px}
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+td,th{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left;vertical-align:top}
+th{white-space:nowrap}
+.faq{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:22px}
+.faq h2{margin:0 0 10px;font-size:1.2rem}
+.tablewrap{overflow-x:auto}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>LMU 버전이 맞지 않을 때 브리지 사용법</h1>
+  <p class="lead">2.0.1부터는 앱에 실시간 브리지가 포함됩니다. 설치된 LMU SDK와 맞으면 빌드 도구 없이 바로 씁니다. 설정 → LMU 실시간 연결에서 <b>준비됨</b>이면 아래 설치 과정은 건너뛰고, LMU에서 차에 탄 뒤 음성 코치의 스포터·피트월을 켜세요.</p>
+  <div class="need">
+    <span class="chip">직접 빌드는 <b>SDK가 맞지 않을 때만</b></span>
+    <span class="chip">설치 시간·용량은 PC와 선택 항목에 따라 다릅니다</span>
+  </div>
+</header>
+
+<section class="faq" aria-labelledby="when-build">
+  <h2 id="when-build">LMU가 패치될 때마다 다시 해야 하나요?</h2>
+  <p><b>LMU 패치마다 브리지를 빌드하거나 주행 코치를 새 버전으로 올릴 필요는 없습니다.</b> 앱은 설치된 SDK 헤더와 브리지가 맞는지 확인합니다. 헤더 구성이 그대로면 기존 브리지를 계속 씁니다.</p>
+  <p><b>빌드 필요</b> 또는 <b>다시 빌드 필요</b>가 나와도 <b>주행 코치 버전을 올리지 않고 아래 5단계로 직접 빌드해서 해결할 수 있습니다.</b> 편하게 연결하려면 먼저 앱 업데이트를 확인하세요. 현재 SDK에 맞는 브리지가 포함된 버전이면 빌드 없이 바로 준비됩니다. 새 앱 버전은 미리 빌드된 파일을 받는 편의 기능이며 직접 빌드의 필수 조건은 아닙니다.</p>
+  <p class="mute">SDK 헤더는 LMU 설치 폴더의 공유 메모리 자료형 정의 파일입니다. 포함된 브리지를 쓸 때도 호환 여부를 확인할 수 있도록 LMU 설치 파일이 필요합니다.</p>
+</section>
+
+<div class="warn"><b>VS Code가 아닙니다.</b> 필요한 것은 <b>Visual Studio Build Tools</b>(마이크로소프트의 무료 C++ 빌드 도구)입니다. VS Code나 Visual Studio 본체는 깔지 않아도 됩니다. 주행 분석(기록 보기)만 쓸 거라면 이 과정 전체가 필요 없습니다.</div>
+
+<section class="step">
+  <div>
+    <h2><span class="num">1</span>빌드 도구 받기</h2>
+    <ol>
+      <li><a href="https://visualstudio.microsoft.com/ko/visual-cpp-build-tools/" target="_blank" rel="noopener">Microsoft C++ Build Tools 페이지</a>를 엽니다.</li>
+      <li><span class="k">Build Tools 다운로드</span> 버튼을 누릅니다.</li>
+      <li>받은 <code>vs_BuildTools.exe</code>를 실행합니다.</li>
+    </ol>
+    <p class="mute">"이 앱이 디바이스를 변경하도록 허용하시겠어요?"가 뜨면 <b>예</b>.</p>
+  </div>
+  <div class="screen" role="img" aria-label="Microsoft C++ Build Tools 다운로드 페이지 그림">
+    <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;visualstudio.microsoft.com</div>
+    <div class="body web">
+      <h4>Microsoft C++ Build Tools</h4>
+      <div class="mute" style="font-size:12px">Visual Studio 없이 C++ 프로그램을 빌드하는 도구</div>
+      <span class="callout dl" style="outline-offset:4px">Build Tools 다운로드<span class="tag">이것</span></span>
+    </div>
+  </div>
+</section>
+
+<section class="step">
+  <div>
+    <h2><span class="num">2</span>"C++를 사용한 데스크톱 개발" 체크하고 설치</h2>
+    <ol>
+      <li>설치 관리자가 잠깐 준비한 뒤 <b>워크로드</b> 화면이 나옵니다.</li>
+      <li><b>C++를 사용한 데스크톱 개발</b> 칸을 눌러 체크합니다. 오른쪽 세부 항목은 기본 그대로 둡니다.</li>
+      <li>오른쪽 아래 <span class="k">설치</span>를 누르고 끝날 때까지 기다립니다.</li>
+    </ol>
+    <p class="mute">이미 Build Tools가 깔려 있다면, 설치 관리자에서 <b>수정</b>을 눌러 같은 칸이 체크돼 있는지만 확인하세요.</p>
+  </div>
+  <div class="screen" role="img" aria-label="Visual Studio Installer 워크로드 선택 화면 그림">
+    <div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>&nbsp;Visual Studio Installer · Build Tools</div>
+    <div class="body">
+      <div style="font-weight:700;margin-bottom:8px">워크로드</div>
+      <div class="tiles">
+        <div class="tile on callout"><span class="box">✓</span><div><b>C++를 사용한 데스크톱 개발</b><small>MSVC, Windows SDK 포함</small></div><span class="tag">체크</span></div>
+        <div class="tile"><span class="box"></span><div>.NET 데스크톱 빌드 도구<small>필요 없음</small></div></div>
+        <div class="tile"><span class="box"></span><div>Node.js 빌드 도구<small>필요 없음</small></div></div>
+        <div class="tile"><span class="box"></span><div>Azure 개발<small>필요 없음</small></div></div>
+      </div>
+      <div class="install"><span class="btn callout">설치<span class="tag">누르기</span></span></div>
+    </div>
+  </div>
+</section>
+
+<section class="step">
+  <div>
+    <h2><span class="num">3</span>앱에서 LMU 고르기</h2>
+    <ol>
+      <li>주행 코치를 <span class="k">실행.bat</span>으로 켭니다.</li>
+      <li>화면 맨 위의 <b>iRacing / LMU</b> 중 <b>LMU</b>를 누릅니다.</li>
+      <li>왼쪽 메뉴 아래쪽의 <b>설정</b>을 누릅니다.</li>
+    </ol>
+  </div>
+  <div class="screen app" role="img" aria-label="주행 코치 화면: 위쪽 LMU 선택과 왼쪽 설정 메뉴 그림">
+    <div class="bar">localhost:24157</div>
+    <div class="apphead"><b>LMU 주행 코치</b><span class="seg callout"><span>iRacing</span><span class="sel">LMU</span><span class="tag">①</span></span></div>
+    <div class="appgrid">
+      <div class="side"><span>주행 요약</span><span>코너 비교</span><span>랩 분석</span><span>음성 코치</span><span class="gap"></span><span>기록</span><span class="pick callout">설정<span class="tag">②</span></span><span>사용 가이드</span></div>
+      <div class="main"><div class="card"><h5>설정</h5><p>LMU 주행 기록 폴더, 실시간 연결…</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section class="step">
+  <div>
+    <h2><span class="num">4</span>"실시간 브리지 빌드" 누르기</h2>
+    <ol>
+      <li>설정 화면에서 <b>LMU 실시간 연결</b> 카드를 찾습니다.</li>
+      <li><b>빌드 필요</b> 또는 <b>다시 빌드 필요</b> 표시 아래의 <span class="k">실시간 브리지 빌드</span>를 누릅니다.</li>
+      <li>버튼이 <b>빌드 중…</b>으로 바뀝니다. 완료될 때까지 창을 닫지 말고 기다리세요. 소요 시간은 PC에 따라 다릅니다.</li>
+    </ol>
+  </div>
+  <div class="screen app" role="img" aria-label="LMU 실시간 연결 카드: 빌드 필요 상태와 실시간 브리지 빌드 버튼 그림">
+    <div class="bar">설정 · LMU</div>
+    <div class="main">
+      <div class="card">
+        <h5>LMU 실시간 연결</h5>
+        <p>스포터·피트월·F8 질문·오버레이는 iRacing과 같은 기능을 그대로 씁니다.</p>
+        <div style="margin-bottom:8px"><span class="badge bad">빌드 필요</span></div>
+        <p>현재 LMU SDK에 맞는 브리지가 없습니다. Visual Studio C++ 빌드 도구를 설치한 뒤 아래 버튼으로 한 번 빌드하세요.</p>
+        <span class="abtn primary callout">실시간 브리지 빌드<span class="tag">누르기</span></span><span class="abtn outline">상태 새로고침</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="step">
+  <div>
+    <h2><span class="num">5</span>"준비됨"이 뜨면 끝</h2>
+    <ol>
+      <li>표시가 <b>준비됨</b>으로 바뀌고 빌드 버튼이 사라지면 성공입니다.</li>
+      <li>이제 LMU를 켜고 <b>차에 탄 뒤</b> 음성 코치에서 스포터·피트월을 켜 실제 연결을 확인합니다.</li>
+    </ol>
+    <p class="mute">“준비됨”은 브리지를 사용할 수 있다는 뜻입니다. 실제 데이터는 차에 탄 상태와 세션에 따라 들어옵니다. 수신되지 않으면 차에 타고 트랙에 나간 뒤 연결 상태를 확인하세요.</p>
+  </div>
+  <div class="screen app" role="img" aria-label="LMU 실시간 연결 카드: 준비됨 상태 그림">
+    <div class="bar">설정 · LMU</div>
+    <div class="main">
+      <div class="card">
+        <h5>LMU 실시간 연결</h5>
+        <p>LMU를 실행하고 차에 타면 자동으로 LMU에 연결됩니다.</p>
+        <div style="margin-bottom:10px"><span class="badge good callout">준비됨<span class="tag">완료</span></span></div>
+        <span class="abtn outline">상태 새로고침</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="faq">
+  <h2>이런 표시가 나오면</h2>
+  <div class="tablewrap"><table>
+    <tr><th>표시</th><th>뜻과 할 일</th></tr>
+    <tr><td><b>준비됨</b></td><td>사용할 수 있는 브리지가 있습니다. 빌드 도구 설치나 직접 빌드 없이 LMU에서 차에 탄 뒤 스포터·피트월을 켜 확인합니다.</td></tr>
+    <tr><td><b>빌드 필요</b></td><td>현재 SDK에 맞는 브리지가 없습니다. 앱 업데이트를 먼저 확인하고, 맞는 브리지가 없다면 위 5단계로 직접 빌드합니다.</td></tr>
+    <tr><td><b>다시 빌드 필요</b></td><td>SDK 헤더 등이 기존 브리지와 달라졌습니다. 앱 업데이트를 확인하거나 4단계에서 다시 빌드합니다. C++ 빌드 도구가 이미 설치돼 있으면 다시 설치하지 않아도 됩니다.</td></tr>
+    <tr><td><b>LMU SDK 없음</b></td><td>SDK 헤더를 찾지 못했습니다. Steam에서 LMU 설치와 게임 파일 무결성을 확인합니다. 기본 위치는 <code>Le Mans Ultimate/Support/SharedMemoryInterface</code>이며 다른 Steam 라이브러리도 자동으로 찾습니다. <code>SharedMemoryInterface.hpp</code>·<code>InternalsPlugin.hpp</code>·<code>PluginObjects.hpp</code> 세 파일이 있는지 확인하세요. 직접 지정해야 한다면 Windows에서 “환경 변수”를 검색해 환경 변수 편집 화면을 열고 사용자 변수 <code>LMU_SDK_DIR</code>를 추가합니다. 값은 이 세 파일이 들어 있는 폴더의 전체 경로로 넣고 앱을 완전히 종료한 뒤 다시 실행하세요. 이후 <span class="k">상태 새로고침</span>을 누릅니다.</td></tr>
+    <tr><td>빌드 중 오류 문장</td><td>대부분 빌드 도구가 없거나 "C++를 사용한 데스크톱 개발"이 빠진 경우입니다. 2단계를 다시 확인하고, PC를 한 번 재시작한 뒤 다시 누르세요.</td></tr>
+  </table></div>
+</section>
+</main>
+</body>
+</html>
