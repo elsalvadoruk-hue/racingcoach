@@ -166,6 +166,7 @@ def _attach_practice(services, full, comparison, body):
         option.update(practice_source='WORKSPACE', practice_focus_index=index)
     full.setdefault('practice_focuses', {})['WORKSPACE'] = [option['focus'] for option in summary['options']]
     comparison.update(practiceSummary=summary, analysisResult=full,
+                      handling=full.get('handling'),
                       practice=full.get('practice'), practiceFocuses=full.get('practice_focuses'))
     return comparison
 

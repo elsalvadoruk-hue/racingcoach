@@ -788,3 +788,12 @@ body { min-width: 1100px; }
 .phase-note { color:hsl(var(--muted-foreground)); font-size:10px; }
 .first-deviation { display:block; font-size:11px; line-height:1.5; white-space:normal; }
 .coaching-panel .first-deviation { flex-shrink:0; }
+.handling-badges { display:flex; flex-wrap:wrap; gap:3px; }
+.handling-badges:empty { display:none; }
+.handling-detail { flex-shrink:0; max-height:140px; overflow-y:auto; }
+.handling-detail h4 { font-size:12px; font-weight:600; margin:0 0 4px; }
+.handling-detail p { font-size:11px; line-height:1.5; margin:3px 0; }
+.handling-detail small,.handling-repeat-card small { display:block; color:hsl(var(--muted-foreground)); }
+.handling-repeat-card ul { display:flex; flex-direction:column; gap:10px; }
+.handling-repeat-card li { display:flex; flex-direction:column; gap:4px; font-size:12px; }
+.driving-summary:has(.handling-repeat-card) { overflow-y:auto; grid-template-rows:30px minmax(420px,1fr) minmax(154px,auto) auto; }

@@ -185,7 +185,7 @@ def measure_phases(analyzer, api):
             'rows': rows, **phase_summary(rows)}
 
 
-def measure_file(path, api, native_events=False, phases=False):
+def measure_file(path, api, native_events=False, phases=False, handling=False):
     telemetry = api.repository.load(path)
     analyzer = api.TelemetryAnalyzer(telemetry)
     # Exercise the same analyzer entry point used by /api/analyze, without AI,
@@ -258,7 +258,8 @@ def measure_file(path, api, native_events=False, phases=False):
             "sample_basis": "RESAMPLED" if game == "lmu" else "NATIVE",
             "track": telemetry.metadata.get("track_name"), "valid_laps": len(analyzer.valid_laps),
             "summary": summarize(rows), "rows": rows,
-            **({'phase_measurement': measure_phases(analyzer, api)} if phases else {})}
+            **({'phase_measurement': measure_phases(analyzer, api)} if phases else {}),
+            **({'handling': result.get('handling')} if handling else {})}
 
 
 def isolate(folder):
@@ -271,6 +272,7 @@ def isolate(folder):
         "IRACING_SPOTTER_AUDIO_DIR": "spotter_audio", "IRACING_EXTERNAL_REFERENCE_DIR": "references",
         "IRACING_LMU_CAR_MODELS_PATH": "models.json", "IRACING_LMU_LAP_VERDICTS_PATH": "verdicts.json",
         "IRACING_GARAGE61_JOB_DIR": "jobs",
+        "IRACING_HANDLING_HISTORY_PATH": "handling-history.json",
     }.items():
         os.environ[key] = str(folder / suffix)
     os.environ.update(IRACING_AI_ENABLED="0", GARAGE61_AUTO_COLLECT="0", IRACING_IMPORT_LEGACY="0")
@@ -284,6 +286,8 @@ def main(argv=None):
                         help='Verify T2 recorded events against the connected analyzer output')
     parser.add_argument('--phases', action='store_true',
                         help='Measure T3 phase residuals and diagnosis changes against file-best laps')
+    parser.add_argument('--handling', action='store_true',
+                        help='Report T4 measured tendencies and calibration coverage without personal history writes')
     args = parser.parse_args(argv)
     with tempfile.TemporaryDirectory(prefix="iracing-analysis-t0-") as temporary:
         isolate(Path(temporary))
@@ -302,7 +306,7 @@ def main(argv=None):
         for path in paths:
             print(f"Measuring {path.name}", flush=True)
             try:
-                report["files"].append(measure_file(path.resolve(), api, args.native_events, args.phases))
+                report["files"].append(measure_file(path.resolve(), api, args.native_events, args.phases, args.handling))
             except Exception as exc:
                 report["errors"].append({"file": path.name, "type": type(exc).__name__, "error": str(exc)})
                 print(f"  {type(exc).__name__}: {exc}", flush=True)
@@ -351,6 +355,21 @@ def main(argv=None):
                              f"{signed['median']} / {signed['p95']} | {absolute['median']} / {absolute['p95']} | "
                              f"{phases['changed_causes']}")
             lines.append(f"T3 gate: {report['t3_gate']}")
+        if args.handling:
+            lines.append('T4 file | corner | phase | kind | accompaniment | laps / valid laps | time cost (s)')
+            for item in report['files']:
+                handling = item['handling']
+                if handling is None:
+                    lines.append(f"{item['file']} | unavailable (missing channels or unmeasured LMU steering)")
+                    continue
+                lines.append(f"{item['file']} | speed quintiles (global k is not the personal baseline): {handling['k_bands']}")
+                lines.append(f"{item['file']} | personal baseline coverage: {handling['coverage']}")
+                for row in handling['corners']:
+                    lines.append(f"{item['file']} | {row['corner_id']} | {row['phase']} | {row['kind']} | "
+                                 f"{row['with']} | {row['laps']} / {row['of_laps']} | {row['time_cost_s']}")
+                if not handling['corners']:
+                    lines.append(f"{item['file']} | no classified tendencies; calibration coverage must also be checked")
+            lines.append('T4 thresholds are initial and unvalidated. Future F8 notes provide driving-feel comparisons; old recordings cannot validate feel.')
         table = "\n".join(lines) + "\n"
         args.out.with_suffix(".txt").write_text(table, encoding="utf-8")
         print(table)

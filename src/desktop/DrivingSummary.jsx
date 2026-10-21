@@ -10,6 +10,7 @@ import { TrackMap } from './Telemetry';
 import { cornerLabel, number, signed, length, data, labRequest, analysisOptions } from './sessionData';
 import { cornerAnnotations } from './cornerAnnotations';
 import { DeviationLine } from './CornerPhases';
+import { HandlingRepeats } from './HandlingViews';
 import { requestJson, API_BASE } from '../analysis/analysisClient';
 import PracticeCoach from '../components/PracticeCoach';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
@@ -103,6 +104,7 @@ export default function DrivingSummary({ comparison, names, onCorner, onCompare,
         <CardFooter className="summary-save-status" role="status"><span className="summary-status-dot" /><p>{lmu ? '기록에서 측정 랩 3~6개로 연습 기준을 저장하고 새 주행의 편차와 시간을 확인하세요.' : error || practice.check?.summary || (practice.active ? `${practice.active.title} · 다음 주행을 분석하면 입력과 구간 시간 변화를 확인합니다.` : '과제를 시작하면 다음 주행 평가와 연결됩니다.')}</p><Button size="sm" variant="outline" onClick={() => lmu ? onPractice?.() : setPracticeOpen(true)}>연습 기록·반복 연습</Button></CardFooter>
       </Card>
     </div>
+    <HandlingRepeats items={comparison.handling?.repeated || comparison.analysisResult?.handling?.repeated} />
     {!lmu && <Dialog open={practiceOpen} onOpenChange={setPracticeOpen}><DialogContent className="desktop-practice-dialog"><DialogHeader><DialogTitle>연습 과제·주행 후 확인</DialogTitle><DialogDescription>입력 변화와 구간 시간은 각각 평가합니다.</DialogDescription></DialogHeader>
       <PracticeCoach apiBase={API_BASE} filename={data.filename} practice={practice} onPracticeChange={next => { data.practice = next; setPractice(next); }} coach={data.analysisResult?.closed_loop_coach}
         visualizations={data.analysisResult?.visualizations} trackLength={length} corners={comparison.corners}

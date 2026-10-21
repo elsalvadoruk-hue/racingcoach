@@ -26,6 +26,7 @@ from analysis_external import ExternalAnalysis
 from analysis_setup import SetupAnalysis
 from analysis_vehicle import VehicleAnalysis
 from analysis_corners import CornerAnalysis
+from handling import HandlingHistory
 from analysis_laps import LapAnalysis
 from racing_geometry import gps_path
 from closed_loop_coach import (
@@ -1334,6 +1335,7 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
         self._metric_cache: dict[tuple[Any, ...], dict[str, Any]] = cache["metrics"]
         self._grid_ids: dict[int, tuple[Any, tuple[Any, ...]]] = cache["ids"]
         self._raw_lap_cache = shared.setdefault('raw_laps', {})
+        self._handling_cache = shared.setdefault('handling', {})
 
 
     def _name_corners(self, corners: list[dict[str, Any]], definitions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1499,6 +1501,14 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                 corner.update(official_turn_number=named.get("number"), turn_name=named.get("name"), label=call)
         result["performance"]["corner_names_confirmed"] = bool(confirmed_names)
         result["performance"]["corner_consistency"] = self._corner_consistency(corners, (lap_selection or {}).get("target_lap"))
+        result['handling'] = self._handling_analysis(corners)
+        if result['handling'] is not None:
+            try:
+                history = HandlingHistory(os.getenv('IRACING_HANDLING_HISTORY_PATH') or app_settings.data_dir() / 'handling-history.json')
+                result['handling']['repeated'] = history.update(self.telemetry.metadata, self.telemetry.signature, result['handling'])
+            except (OSError, ValueError, TypeError, KeyError):
+                logger.warning('Could not save handling history', exc_info=True)
+                result['handling']['repeated'] = []
         return json_safe(result)
 
 

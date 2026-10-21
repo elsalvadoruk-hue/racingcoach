@@ -11,6 +11,7 @@ from analysis_numeric import contiguous_groups, mean_finite, pct_distance, round
 from reference_conditions import telemetry_reference_conditions
 from practice_metrics import KEPT_METRICS
 from closed_loop_coach import first_deviation
+from handling import analyze_handling
 
 
 class CornerAnalysis:
@@ -305,9 +306,31 @@ class CornerAnalysis:
             corner['phases'] = self._corner_phases(target, reference, corner, next_corner)
             corner['first_deviation'] = first_deviation(corner, self.track_length_m)
 
+        handling = self._handling_analysis(ordered)
+        for corner in ordered:
+            corner['handling'] = [item for item in handling['corners'] if item['corner_id'] == corner['id']] if handling else []
+            corner['handling_coverage'] = [item for item in handling['phase_coverage'] if item['corner_id'] == corner['id']] if handling else []
+
         # The UI and briefing consume the largest losses first while the map still
         # uses distance ordering through its markers.
         return sorted(results, key=lambda item: item.get("delta_s") or -999, reverse=True)
+
+    def _handling_analysis(self, corners):
+        if not getattr(self, 'valid_laps', None) or not hasattr(self, 'telemetry'):
+            return None
+        cache = getattr(self, '_handling_cache', None)
+        if cache is None:
+            self._handling_cache = cache = {}
+        key = tuple(sorted((item['id'], item['entry_pct'], item['apex_pct'], item['exit_pct']) for item in corners))
+        if key not in cache:
+            if len(cache) >= 8:
+                cache.pop(next(iter(cache)))
+            cache[key] = analyze_handling(self, corners)
+        result = cache[key]
+        if result is None:
+            return None
+        names = {item['id']: item['label'] for item in corners}
+        return {**result, 'corners': [{**item, 'label': names[item['corner_id']]} for item in result['corners']]}
 
     def _corner_phases(self, target_grid, reference_grid, corner, next_corner):
         """Partition entry-to-exit; compare approach and the following straight separately."""
