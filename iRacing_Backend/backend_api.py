@@ -3819,8 +3819,15 @@ overlay_controller = OverlayController(reference=OverlayReference(
 
 @asynccontextmanager
 async def app_lifespan(_app):
+    # Sends finished drives only while the driver's consent is recorded (session_log_auto).
+    from session_log_auto import AutoUploader
+    uploader = AutoUploader(voice_note_store, APP_VERSION, current_run=lambda: live_telemetry.run_id)
     async with managed_lifespan(live_telemetry, overlay_controller, lambda: warm_background()):
-        yield
+        uploader.start()
+        try:
+            yield
+        finally:
+            uploader.stop()
 
 
 app = create_application(APP_VERSION, app_lifespan, overlay_controller)

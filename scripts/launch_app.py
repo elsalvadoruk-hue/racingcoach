@@ -62,7 +62,10 @@ def require_current_api() -> None:
     """Do not report a successful relaunch while reusing an older API."""
     try:
         spec = json.loads(read_http(f"{API_URL}/openapi.json") or b'{}')
-        supported = 'post' in spec.get('paths', {}).get('/api/lmu/telemetry/import', {})
+        paths = spec.get('paths', {})
+        # Routes added recently: an older server lacks them and must not be reused.
+        supported = ('post' in paths.get('/api/lmu/telemetry/import', {})
+                     and 'put' in paths.get('/api/session-logs/auto', {}))
     except (ValueError, AttributeError, TypeError):
         supported = False
     if not supported:

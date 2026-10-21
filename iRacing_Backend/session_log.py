@@ -22,7 +22,8 @@ import zipfile
 
 FORMAT, FORMAT_VERSION = 'iracing-coach-log', 1
 NAME_KEYS = {'name', 'user_name', 'driver_name', 'team_name', 'abbrev_name', 'initials'}
-PRIVATE_KEYS = {'session_id', 'subsession_id', 'recent'}
+# Ratings, with the track and the time, could point at a named driver in public results.
+PRIVATE_KEYS = {'session_id', 'subsession_id', 'recent', 'irating', 'license', 'user_id', 'cust_id', 'steam_id'}
 PATH = re.compile(r'[A-Za-z]:[\\/]|\\\\|/Users/|/home/')
 
 
@@ -51,6 +52,15 @@ def note_run(context):
     return snapshot.get('run_id') if isinstance(snapshot, dict) else None
 
 
+def _first_session(db, run_id):
+    """Game, track and car stored with the run's radio events (when the drive left no report)."""
+    for (event_json,) in db.execute('SELECT event_json FROM radio_delivery WHERE run_id=? ORDER BY id', (run_id,)):
+        session = json.loads(event_json or '{}').get('session')
+        if isinstance(session, dict):
+            return session
+    return {}
+
+
 def sessions(store, limit=20):
     """The most recent driven sessions that left a delivery log, newest first."""
     with store.connect() as db:
@@ -70,6 +80,9 @@ def sessions(store, limit=20):
                 session_type = (context.get('pit_wall') or {}).get('session_type') or session_type
                 reports += note['source'] == 'AUTO_REPORT'
                 questions += note['source'] != 'AUTO_REPORT'
+            if not identity:
+                identity = _first_session(db, run['run_id'])
+                session_type = session_type or identity.get('session_type')
             result.append({'run_id': run['run_id'], 'started_at': run['started'], 'ended_at': run['ended'],
                            'minutes': round((run['ended'] - run['started']) / 60, 1), 'calls': run['events'],
                            'completed': run['completed'] or 0, 'reports': reports, 'questions': questions,
@@ -107,6 +120,9 @@ def export(store, run_id, app_version, include_questions=False):
         reports.append({'recorded_at': note['created_at'], 'source': note['source'], 'text': None if automatic else note['text'],
                         'reply': note['reply'], 'reply_source': note['reply_source'], 'service_error': note['service_error'],
                         'context': scrub(context)})
+    if not identity:
+        identity = next((event['session'] for event in radio if isinstance(event.get('session'), dict)), {})
+        session_type = session_type or identity.get('session_type')
     by_key = {}
     for event in radio:
         entry = by_key.setdefault(event.get('key') or '?', {})
@@ -114,7 +130,7 @@ def export(store, run_id, app_version, include_questions=False):
         entry[label] = entry.get(label, 0) + 1
     manifest = {
         'format': FORMAT, 'format_version': FORMAT_VERSION, 'app_version': app_version, 'exported_at': time.time(),
-        'run_id': run_id, 'started_at': started, 'ended_at': ended, 'minutes': round((ended - started) / 60, 1),
+        'run_id': run_id, 'game': identity.get('game'), 'started_at': started, 'ended_at': ended, 'minutes': round((ended - started) / 60, 1),
         'track': identity.get('track_name'), 'track_path': identity.get('track_path'), 'track_config': identity.get('track_config'),
         'car': identity.get('car_name'), 'car_path': identity.get('car_path'), 'session_type': session_type,
         'radio_events': len(radio), 'reports': sum(1 for r in reports if r['source'] == 'AUTO_REPORT'),

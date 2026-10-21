@@ -739,7 +739,16 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
 
     @router.post('/radio-delivery')
     async def record_radio_delivery(payload: RadioDeliveryBatch):
-        await asyncio.to_thread(coach.store.record_radio, [e.model_dump() for e in payload.events])
+        # Which game, track and car the call belonged to, so a session log names them even
+        # when the drive left no engineer report. Only for the drive that is running now.
+        live = coach.live
+        with live.lock:
+            run_id, identity = live.run_id, dict(live.identity)
+            session_type = (live.pit_wall.race or {}).get('session_type')
+        session = {key: identity.get(key) for key in ('game', 'track_name', 'track_path', 'track_config', 'car_name', 'car_path')}
+        session['session_type'] = session_type
+        events = [{**e.model_dump(), **({'session': session} if run_id and e.run_id == run_id else {})} for e in payload.events]
+        await asyncio.to_thread(coach.store.record_radio, events)
         return {'recorded': len(payload.events)}
 
     @router.get('/radio-delivery')

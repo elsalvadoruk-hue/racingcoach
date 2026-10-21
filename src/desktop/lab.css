@@ -11,6 +11,9 @@ html { scroll-behavior: auto; }
 .runtime-switch label { display:flex; align-items:center; gap:6px; font-size:12px; white-space:nowrap; }
 .runtime-switch label svg,.runtime-input label svg { width:15px; height:15px; color:hsl(var(--muted-foreground)); }
 .runtime-switch label span { font-size:10px; color:hsl(var(--muted-foreground)); min-width:20px; }
+.log-send-toggle { height:28px; font-size:12px; font-weight:700; letter-spacing:.02em; white-space:nowrap; }
+.log-send-toggle:not(.log-send-on) { color:hsl(var(--muted-foreground)); }
+.log-send-on { box-shadow:0 0 0 1px hsl(var(--primary)), 0 0 10px hsl(var(--primary) / .55); }
 .runtime-input { width:auto; gap:8px; }
 .runtime-input label { display:flex; gap:5px; white-space:nowrap; font-size:12px; }
 .runtime-input select { width:182px; height:32px; font-size:12px; }

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { Textarea } from './ui/textarea';
+import SessionLogAutoSend from './SessionLogAutoSend';
 
 const when = (seconds) => new Date(seconds * 1000).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
@@ -59,11 +60,12 @@ export default function SessionLogExport({ apiBase, visible = true }) {
 
   if (!sessions) return error ? <p role="alert" className="text-sm text-warning">{error}</p> : null;
   return <div aria-label="세션 로그 보내기">
+    {canSend && <SessionLogAutoSend apiBase={apiBase} visible={visible} />}
     <p className="text-sm leading-relaxed text-foreground">주행 한 번의 음성 안내 기록을 파일 하나로 만듭니다. 어떤 안내가 나왔고, 끝까지 들렸는지, 끊기거나 못 나온 이유가 무엇인지와 그때 엔지니어가 본 측정값이 들어 있습니다. 개선을 부탁할 때 이 파일을 보내 주세요.</p>
     <ul className="mt-2 list-disc pl-5 text-xs leading-relaxed text-muted-foreground">
       <li>들어가지 않는 것: 음성, 주행 파일(IBT), 분석 기록, Google 키, Garage61 토큰, 폴더 경로.</li>
-      <li>드라이버 이름은 “Driver 번호”로 바뀝니다. 트랙, 차량, 랩타임, 순위, 연료 같은 숫자는 그대로 들어갑니다.</li>
-      {canSend && <li>“보내기”를 누르면 이 파일이 인터넷으로 앱을 만든 사람의 Google Drive에 전달됩니다. 누를 때만 보내며, 자동으로 보내는 것은 없습니다.</li>}
+      <li>드라이버 이름은 “Driver 번호”로 바뀌고 레이팅과 세션 번호는 빠집니다. 트랙, 차량, 랩타임, 순위, 연료 같은 숫자는 그대로 들어갑니다.</li>
+      {canSend && <li>“보내기”를 누르면 이 파일이 인터넷으로 앱을 만든 사람의 Google Drive에 전달됩니다. “세션 로그 자동 보내기”를 켜지 않으면 누를 때만 보냅니다.</li>}
     </ul>
     <label className="mt-3 flex items-center gap-2 text-sm text-foreground">
       <input type="checkbox" checked={questions} onChange={(event) => setQuestions(event.target.checked)} />

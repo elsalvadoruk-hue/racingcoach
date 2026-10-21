@@ -33,10 +33,15 @@ test('says so when nothing was driven yet', async () => {
 });
 
 test('sending opens a window for the note, sends only on its button, and can be cancelled', async () => {
-  const fetchMock = jest.spyOn(global, 'fetch')
-    .mockImplementationOnce(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ sessions: [session], send_available: true }) }))
-    .mockImplementationOnce(() => Promise.resolve({ ok: false, json: () => Promise.resolve({ detail: '로그를 보내지 못했습니다. 인터넷 연결을 확인하거나 파일을 받아서 직접 보내 주세요.' }) }))
-    .mockImplementationOnce(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ sent: true, name: 'coach-log-lemans-full-20261012-2005.zip' }) }));
+  // Replies by address: the automatic-send switch reads its own status beside the list.
+  const sends = [
+    { ok: false, json: () => Promise.resolve({ detail: '로그를 보내지 못했습니다. 인터넷 연결을 확인하거나 파일을 받아서 직접 보내 주세요.' }) },
+    { ok: true, json: () => Promise.resolve({ sent: true, name: 'coach-log-lemans-full-20261012-2005.zip' }) }];
+  const fetchMock = jest.spyOn(global, 'fetch').mockImplementation(url => Promise.resolve(
+    url.endsWith('/send') ? sends.shift()
+      : url.endsWith('/auto') ? { ok: true, json: () => Promise.resolve({ enabled: false, consent_version: 1, available: true, sent: 0, recent: [] }) }
+        : { ok: true, json: () => Promise.resolve({ sessions: [session], send_available: true }) }));
+  const sendCalls = () => fetchMock.mock.calls.filter(([url]) => url.endsWith('/send')).length;
   render(<SessionLogExport apiBase="http://api" />);
   expect(await screen.findByText(/앱을 만든 사람의 Google Drive에 전달됩니다/)).toBeInTheDocument();
   expect(screen.queryByLabelText('함께 보낼 메모')).toBeNull();                 // no note box until a session is chosen
@@ -45,7 +50,7 @@ test('sending opens a window for the note, sends only on its button, and can be 
   expect(screen.getByRole('dialog')).toHaveTextContent('Circuit des 24 Heures du Mans');
   await userEvent.click(screen.getByRole('button', { name: '취소' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(fetchMock).toHaveBeenCalledTimes(1);                                   // listing only
+  expect(sendCalls()).toBe(0);                                                  // nothing sent
   // Send: a failure keeps the window and the note for another try.
   await userEvent.click(screen.getByRole('button', { name: /주행 로그 보내기/ }));
   await userEvent.type(screen.getByLabelText('함께 보낼 메모'), '12랩쯤 연료 안내가 달랐음');

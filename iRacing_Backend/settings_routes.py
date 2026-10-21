@@ -11,7 +11,8 @@ from fastapi.responses import Response
 import app_settings
 import re
 import session_log
-from api_route_models import AppSettingsBody, SecretBody, SessionLogSend
+from api_route_models import AppSettingsBody, SecretBody, SessionLogAuto, SessionLogSend
+import session_log_auto
 
 logger = logging.getLogger("iRacingSetupTuner")
 
@@ -96,6 +97,18 @@ def register_routes(app, services: SettingsRoutesServices):
             return {"sessions": session_log.sessions(services.get_voice_note_store(), limit), "send_available": bool(app_settings.log_upload_url())}
         except ValueError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    @app.get("/api/session-logs/auto")
+    def session_log_auto_status():
+        return session_log_auto.status()
+
+    @app.put("/api/session-logs/auto")
+    def set_session_log_auto(body: SessionLogAuto):
+        """One switch for iRacing and LMU. Turning it on needs the consent version the screen showed."""
+        try:
+            return session_log_auto.set_enabled(body.enabled, body.consent_version)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/api/session-logs/{run_id}/send")
     def send_session_log(run_id: str, body: SessionLogSend):

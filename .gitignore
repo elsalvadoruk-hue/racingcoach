@@ -5,6 +5,11 @@
 !/.env.development
 !/README.md
 !/LICENSE.md
+# The session-log receiving address: upload-only, shared with every install (session_log.send).
+!/log-upload-url.txt
+!/docs/
+/docs/*
+!/docs/log-upload/
 !/패치 노트.txt
 !/package.json
 !/package-lock.json
@@ -73,7 +78,6 @@
 **/token.json
 **/settings.json
 **/data-location.txt*
-**/log-upload-url.txt
 *.mp3
 *.wav
 *.ogg

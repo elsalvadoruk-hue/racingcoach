@@ -17,7 +17,7 @@ FORBIDDEN_PARTS = {'data', 'node_modules', '__pycache__', '.venv', 'backups', 'l
 FORBIDDEN_SUFFIXES = {'.mp3', '.wav', '.ogg', '.m4a', '.flac', '.ibt', '.sqlite', '.sqlite3',
                       '.db', '.duckdb', '.wal', '.pem', '.p12', '.pfx', '.key', '.zip', '.log', '.pyc'}
 FORBIDDEN_NAMES = {'gcp-key.json', 'garage61_api_token.txt', 'settings.json',
-                   'data-location.txt', 'data-location.txt.old', 'log-upload-url.txt',
+                   'data-location.txt', 'data-location.txt.old',
                    'credentials.json', 'token.json', 'id_rsa', 'id_ed25519'}
 PATTERNS = {
     'private key': re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----'),

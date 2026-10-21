@@ -41,6 +41,19 @@ class SessionLogTests(unittest.TestCase):
         self.store.save('타이어 어때?', context(), source='VOICE')
         self.store.save('자동 보고 · 다른 세션', context(run='another-run-000'), source='AUTO_REPORT')
 
+    def test_a_drive_without_reports_still_names_its_game_track_and_car(self):
+        quiet = 'quiet-run-0000-0000'
+        session = {'game': 'lmu', 'track_name': 'Monza', 'track_path': 'lmu-track-monza', 'track_config': '',
+                   'car_name': 'Team WRT 2026 #32:LM', 'car_path': 'lmu-car-wrt-32', 'session_type': 'Practice'}
+        self.store.record_radio([{'event_id': f'{quiet}:1', 'run_id': quiet, 'key': 'left', 'status': 'completed',
+                                  'session': session, 'at': 1.}])
+        listed = next(row for row in session_log.sessions(self.store) if row['run_id'] == quiet)
+        self.assertEqual((listed['track'], listed['car'], listed['session_type']), ('Monza', 'Team WRT 2026 #32:LM', 'Practice'))
+        name, data = session_log.export(self.store, quiet, '1.4.3')
+        manifest = session_log.read(data)[0]
+        self.assertEqual((manifest['game'], manifest['track'], manifest['session_type']), ('lmu', 'Monza', 'Practice'))
+        self.assertTrue(name.startswith('coach-log-lmu-track-monza-'))
+
     def test_sessions_are_listed_with_their_track_and_counts(self):
         found = {item['run_id']: item for item in session_log.sessions(self.store)}
         self.assertEqual(set(found), {RUN, 'another-run-000'})

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, Headphones, Layers3, Radio, RefreshCw, Volume2 } from 'lucide-react';
+import { ChevronDown, CloudUpload, Headphones, Layers3, Radio, RefreshCw, Volume2 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/card';
@@ -10,11 +10,28 @@ import { Tooltip, TooltipTrigger, TooltipContent } from '../components/ui/toolti
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import VoiceVolumeSlider from '../components/VoiceVolumeSlider';
+import { ConsentDialog, useSessionLogAuto } from '../components/SessionLogAutoSend';
 export { DesktopRuntimeProvider, useLabControls } from './DesktopRuntime';
 
 function DeviceOptions({ devices, kind, selected }) {
   const available = devices.filter(d => d.kind === kind);
   return <><NativeSelectOption value="default">시스템 기본 장치</NativeSelectOption>{selected !== 'default' && !available.some(d => d.deviceId === selected) && <NativeSelectOption value={selected}>저장한 장치 · 현재 확인 필요</NativeSelectOption>}{available.map((device, i) => <NativeSelectOption key={device.deviceId} value={device.deviceId}>{device.label || `${kind === 'audioinput' ? '입력' : '출력'}장치 ${i + 1}`}</NativeSelectOption>)}</>;
+}
+
+// The same switch as in the session log panel: on/off for iRacing and LMU together.
+export function LogSendSwitch({ apiBase }) {
+  const auto = useSessionLogAuto(apiBase);
+  if (!auto.state?.available) return null;
+  // Unlike the switches beside it: a boxed label that lights up while logs are being sent.
+  const on = auto.state.enabled;
+  return <>
+    <Button size="sm" variant={on ? 'default' : 'outline'} aria-pressed={on} aria-label="로그 자동 보내기" disabled={auto.busy}
+      className={`log-send-toggle${on ? ' log-send-on' : ''}`} onClick={() => auto.toggle(!on)}
+      title={on ? '주행이 끝나면 세션 로그를 자동으로 보냅니다 (iRacing·LMU)' : '세션 로그 자동 보내기 꺼짐'}>
+      <CloudUpload data-icon="inline-start" />로그 보내기 {on ? 'ON' : 'OFF'}
+    </Button>
+    <ConsentDialog auto={auto} />
+  </>;
 }
 
 export function RuntimeControls({ runtime }) {
@@ -30,6 +47,7 @@ export function RuntimeControls({ runtime }) {
         <FieldLabel htmlFor={`quick-${key}`}><Icon aria-hidden="true" />{label}<span>{runtime.capability?.[key] === false ? '미지원' : controls[key] ? '켜짐' : '꺼짐'}</span></FieldLabel>
         <Switch id={`quick-${key}`} aria-label={label} checked={controls[key]} disabled={runtime.capability?.[key] === false || (key === 'overlay' ? runtime.overlayBusy || !runtime.overlay?.supported : key === 'spotter' ? runtime.host?.spotter?.preparing : false)} onCheckedChange={value => change(key, value)} />
       </Field>)}
+      <LogSendSwitch apiBase={host.apiBase ?? ''} />
     </FieldGroup>
     <Field orientation="horizontal" className="runtime-input"><FieldLabel htmlFor="output-device-trigger"><Volume2 aria-hidden="true" /><span>출력장치</span></FieldLabel><Button id="output-device-trigger" variant="outline" aria-label="출력장치 선택" aria-haspopup="dialog" aria-expanded={deviceDialog} title={outputLabel} onClick={() => { setDeviceDialog(true); audio.refresh({ ask: true }); }}><span className="truncate">{outputLabel}</span><ChevronDown data-icon="inline-end" /></Button></Field>
     <Dialog open={deviceDialog} onOpenChange={setDeviceDialog}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>오디오 출력장치</DialogTitle><DialogDescription>스포터·엔지니어·질문 답변을 들을 헤드셋이나 스피커를 선택하세요. 목록이 안 보이면 마이크 접근을 허용해 주세요. 확인용 마이크는 바로 종료하며 녹음하지 않습니다.</DialogDescription></DialogHeader>
