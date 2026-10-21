@@ -7,7 +7,7 @@ import { Badge } from '../components/ui/badge';
 import { Field, FieldLabel } from '../components/ui/field';
 import { Switch } from '../components/ui/switch';
 import LmuSettingsPanel from './LmuSettingsPanel';
-import LmuSetupPanel from './LmuSetupPanel';
+import LmuComingSoon from './LmuComingSoon';
 import LmuHistoryPanel from './LmuHistoryPanel';
 import OverlaySettings from '../components/OverlaySettings';
 import { AudioPreferences } from './RuntimePreview';
@@ -16,7 +16,7 @@ import LmuFeatureGuide from './LmuFeatureGuide';
 // Live coaching (voice coach tab) is the shared iRacing screen; this routes
 // only the LMU analysis/settings views.
 export default function LmuWorkspacePanel(props) {
-  if (props.workspace === 'setup') return <LmuSetupPanel onChooseSource={props.onChooseSource} />;
+  if (props.workspace === 'setup') return <LmuComingSoon onNavigate={props.onNavigate} />;
   if (props.workspace === 'history') return <LmuHistoryPanel onChooseSource={props.onChooseSource} onOpenSession={props.onOpenSession} />;
   return <LmuWorkspaceOverview {...props} />;
 }

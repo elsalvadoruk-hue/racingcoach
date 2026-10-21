@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import CornerLab from './CornerLab';
 import LapAnalysis from './LapAnalysis';
 import { activateSession, selectGame } from './sessionData';
@@ -63,6 +63,24 @@ test('iRacing consistency retains its existing shared lap filters', () => {
   expect(screen.getByLabelText('분석할 랩')).toBeInTheDocument();
   expect(screen.getByTestId('lap-range-filter')).toBeInTheDocument();
   expect(screen.getByText(/선택 2랩/)).toBeInTheDocument();
+});
+
+test.each(['lmu', 'iracing'])('only the LMU setup rail shows the coming soon badge (%s)', async game => {
+  selectGame(game);
+  activateSession({ ...session, provider: game === 'lmu' ? 'LMU' : 'IRACING' });
+  render(<CornerLab game={game} onGameChange={jest.fn()} analysisWorkspace={{ game, adoptDesktopAnalysis: jest.fn() }} />);
+  const rail = screen.getByRole('complementary', { name: '작업 보기' });
+  const button = within(rail).getByRole('button', { name: /셋업 실험/ });
+  if (game === 'lmu') {
+    expect(within(button).getByText('준비 중')).toBeInTheDocument();
+    fireEvent.click(button);
+    expect(screen.getByRole('heading', { name: 'LMU 목적지: setup' })).toBeInTheDocument();
+    expect(window.location.hash).toBe('#setup');
+  } else {
+    expect(within(rail).queryByText('준비 중')).not.toBeInTheDocument();
+    expect(button).toHaveAccessibleName('셋업 실험');
+  }
+  await waitFor(() => expect(requestJson).toHaveBeenCalled());
 });
 
 test('the LMU summary route mounts shared DrivingSummary and its history action instead of a separate LMU summary', async () => {

@@ -14,8 +14,8 @@ export const lmuFeatures = [
   ['랩별 시간 쓰임새·코너별 일관성·랩 기록', 'iRacing과 같음', 'laps', '제동·부분·코스팅·풀스로틀, 코너별 분포, 최적 랩'],
   ['여러 랩·여러 파일 겹침', 'iRacing과 같음', 'expert', '속도·페달·조향·기어·시간 차이'],
   ['차량 상태(타이어·서스펜션)', 'LMU 전용', 'expert', '기록된 차량 채널 통계와 두 랩 비교'],
-  ['셋업 조회·A/B 변경 항목', 'LMU 전용', 'setup', '기록에 저장된 셋업 값과 두 파일의 변경 항목'],
-  ['셋업 추천·효과 학습', '지원 안 함', 'setup', 'LMU 셋업 항목의 의미와 범위가 iRacing 셋업 분석과 달라 연결하지 않음'],
+  ['셋업 조회·A/B 변경 항목', '추후 공개', 'setup', 'LMU 셋업 실험은 다음 업데이트에서 공개합니다'],
+  ['셋업 추천·효과 학습', '추후 공개', 'setup', 'LMU 셋업 항목의 의미와 범위가 iRacing 셋업 분석과 달라 연결하지 않음'],
   ['주행 분석 저장·검색·다시 열기', '사용 가능', 'history', '파일·내 랩·기준 랩과 메모 저장'],
   ['스포터(좌우·클리어·접근)', 'iRacing과 같음', 'live', '주변 차 좌표로 좌우 겹침을 계산해 iRacing 스포터에 전달. 차량 크기는 공통 근사값'],
   ['피트월·포메이션 브리핑·깃발·순위·연료', 'iRacing과 같음', 'live', '급유 설정값·수리 시간·인시던트 점수처럼 LMU가 공개하지 않는 값의 안내는 나오지 않음'],
@@ -29,6 +29,6 @@ export const lmuFeatures = [
 export default function LmuFeatureGuide({ onNavigate }) {
   return <><h3>기능별 지원</h3><p>LMU 기록은 iRacing과 같은 분석을 거칩니다. 실시간 음성 코치도 같은 서비스가 LMU를 읽습니다.</p>
     <Table><TableHeader><TableRow><TableHead>기능</TableHead><TableHead>지원</TableHead><TableHead>설명</TableHead><TableHead>화면</TableHead></TableRow></TableHeader><TableBody>
-      {lmuFeatures.map(([name, status, destination, note]) => <TableRow key={name}><TableCell>{name}</TableCell><TableCell><Badge variant={status === '지원 안 함' ? 'outline' : 'secondary'}>{status}</Badge></TableCell><TableCell>{note}</TableCell><TableCell>{onNavigate && <Button variant="ghost" size="sm" onClick={() => onNavigate(destination)}>{name} 열기</Button>}</TableCell></TableRow>)}
+      {lmuFeatures.map(([name, status, destination, note]) => <TableRow key={name}><TableCell>{name}</TableCell><TableCell><Badge variant={['지원 안 함', '추후 공개'].includes(status) ? 'outline' : 'secondary'}>{status}</Badge></TableCell><TableCell>{note}</TableCell><TableCell>{onNavigate && <Button variant="ghost" size="sm" onClick={() => onNavigate(destination)}>{name} 열기</Button>}</TableCell></TableRow>)}
     </TableBody></Table></>;
 }
