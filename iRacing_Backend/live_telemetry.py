@@ -33,6 +33,7 @@ from live_sectors import LapSectors, RivalSectors, place_name
 from live_damage import DamageWatch, PitStopWatch, damage_parts, repair_parts
 from live_pit import COLD_TYRE_S, PitKnowledge, PitLossWatch, TyreWatch, stall_estimate, tyre_advice
 from timing_log import TimingLog
+from traffic_log import TrafficLog, traffic_snapshot
 
 logger = logging.getLogger('iRacingLive')
 
@@ -136,6 +137,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.pit_stop = PitStopWatch()
         self.pit_knowledge = PitKnowledge()   # in memory until the backend gives it a file beside the database
         self.timing_log = TimingLog()         # raw race timing (F2Time study); written only once the backend gives it a folder
+        self.traffic_log = TrafficLog()
         self.tyres = TyreWatch()
         self.pit_loss = PitLossWatch()
         self.drill = CornerDrill()          # today's practice corner with Active Reset (live_drill)
@@ -159,6 +161,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.stop_event.set()
         if self.thread:
             self.thread.join(timeout=3)
+        self.traffic_log.close()
 
     def ingest(self, identity, sample, race=None):
         """Also used by isolated tests. Never accepts telemetry through an HTTP endpoint."""
@@ -416,6 +419,12 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                     race = read_race(sdk, names, sample.get('session_num'))
                     self._race_read_at, self._race_session = self.clock(), race_key
                 self.ingest(identity, sample, race)
+                if self.traffic_log.folder is not None:
+                    try:
+                        self.traffic_log.record(traffic_snapshot(sdk, names, sample, identity),
+                                                self.run_id, sample.get('session_time'))
+                    except Exception:
+                        self.traffic_log.fail(self.run_id)
         finally:
             sdk.unfreeze_var_buffer_latest()
         return True

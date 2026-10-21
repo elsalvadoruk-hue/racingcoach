@@ -74,20 +74,24 @@ class LeftRight:
         self.reset()
 
     def reset(self):
+        self.local = []
         self.occupied = set()
         self.tracks = {}
         self.closing = None       # m/s the slowest car beside us moves along our car; None when unknown
         self.relative = None      # the same, signed: + that car pulls ahead of us, - we pass it
 
     def __call__(self, traffic):
+        self.local = []
         if not traffic or traffic.get('status') != 'AVAILABLE':
             self.occupied, self.closing, self.relative = set(), None, None
             return None
         player = traffic['player']
         now = player.get('telemetry_et')
         sides, occupied, tracks, closing, relative = [[], []], set(), {}, None, None
-        for row in traffic['vehicles']:
-            x, y, z = _local(player, row)
+        coordinates = [(row, _local(player, row)) for row in traffic['vehicles']]
+        self.local = [{'idx': row['vehicle_id'], 'x_m': xyz[0], 'z_m': xyz[2]}
+                      for row, xyz in coordinates]
+        for row, (x, y, z) in coordinates:
             track = self.tracks.get(row['vehicle_id']) or deque()
             if now is not None:
                 track.append((now, z))
@@ -448,6 +452,7 @@ class LmuIrsdk:
                                    else (wetness or 0) >= .1 or (rain or 0) >= .1),
             'PlayerTireCompound': None if wet is None else int(wet),
         }
+        self.vars['TrafficLocal'] = self.left_right.local if self.vars['CarLeftRight'] != 0 else []
         size = max([CHANNEL_ARRAY] + [c['vehicle_id'] + 1 for c in cars])
         arrays = {name: [None] * size for name in (
             'CarIdxLapCompleted', 'CarIdxLapDistPct', 'CarIdxPosition', 'CarIdxClassPosition',

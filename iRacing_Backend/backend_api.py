@@ -210,6 +210,7 @@ from live_telemetry import LiveTelemetry
 from live_pit import PitKnowledge
 from live_formation import RaceHistory
 from timing_log import TimingLog
+from traffic_log import TrafficLog
 from practice import PracticeStore
 from practice_metrics import KEPT_METRICS, success_criteria
 from corner_measurements import CornerMeasurements
@@ -3679,6 +3680,7 @@ live_telemetry = LiveTelemetry(sdk_factory=default_game_sdk if os.name == 'nt' e
 live_telemetry.pit_knowledge = PitKnowledge(os.getenv("IRACING_PIT_KNOWLEDGE_PATH") or MEMORY_DB_PATH.parent / "pit-knowledge.json")
 live_telemetry.race_history = RaceHistory(os.getenv("IRACING_RACE_HISTORY_PATH") or MEMORY_DB_PATH.parent / "race-history.json")
 live_telemetry.timing_log = TimingLog(os.getenv("IRACING_TIMING_LOG_DIR") or MEMORY_DB_PATH.parent / "timing-logs")
+live_telemetry.traffic_log = TrafficLog(os.getenv("IRACING_TRAFFIC_LOG_DIR") or MEMORY_DB_PATH.parent / "traffic-logs")
 # One driving focus at a time, checked on the next run of the same car/track/layout (practice.py).
 practice_store = PracticeStore(os.getenv("IRACING_PRACTICE_PATH") or MEMORY_DB_PATH.parent / "practice-tasks.json")
 live_telemetry.drill.history = DrillHistory(os.getenv('IRACING_DRILL_HISTORY_PATH') or MEMORY_DB_PATH.parent / 'practice-drills.jsonl')

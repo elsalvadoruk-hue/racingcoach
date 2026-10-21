@@ -49,6 +49,8 @@
 !/scripts/make_patch.py
 !/scripts/read_coach_log.py
 !/scripts/read_timing_log.py
+!/scripts/read_traffic_log.py
+!/scripts/replay_lmu_live.py
 !/scripts/find_python.bat
 !/scripts/overlay_sample.py
 !/scripts/overlay_trace.py
