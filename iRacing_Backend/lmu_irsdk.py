@@ -10,6 +10,7 @@ the shared code already treats a missing channel as "unknown" and stays silent.
 """
 from __future__ import annotations
 
+from collections import deque
 import math
 import re
 import time
@@ -67,30 +68,46 @@ class LeftRight:
     ``None`` when coverage is incomplete: the spotter then never calls clear.
     """
 
+    SPAN_S, KEEP_S = .2, 1.   # closing speed over at least this long, from the positions kept this long
+
     def __init__(self):
-        self.occupied = set()
+        self.reset()
 
     def reset(self):
         self.occupied = set()
+        self.tracks = {}
+        self.closing = None       # m/s the slowest car beside us moves along our car; None when unknown
 
     def __call__(self, traffic):
         if not traffic or traffic.get('status') != 'AVAILABLE':
-            self.occupied = set()
+            self.occupied, self.closing = set(), None
             return None
         player = traffic['player']
-        sides, occupied = [[], []], set()
+        now = player.get('telemetry_et')
+        sides, occupied, tracks, closing = [[], []], set(), {}, None
         for row in traffic['vehicles']:
             x, y, z = _local(player, row)
+            track = self.tracks.get(row['vehicle_id']) or deque()
+            if now is not None:
+                track.append((now, z))
+                while track and now - track[0][0] > self.KEEP_S:
+                    track.popleft()
+            tracks[row['vehicle_id']] = track
             margin = GEOMETRY['exit_margin_m'] if row['vehicle_id'] in self.occupied else 0
             if (abs(y) > GEOMETRY['maximum_height_difference_m']
                     or abs(z) > GEOMETRY['car_length_m'] + margin
                     or abs(x) > GEOMETRY['lateral_warning_distance_m'] + margin):
                 continue
             if abs(x) < .5:
+                self.tracks, self.closing = tracks, None
                 return None  # coincident centres give no side; never clear
             sides[0 if x > 0 else 1].append(abs(x))
             occupied.add(row['vehicle_id'])
-        self.occupied = occupied
+            past = next((p for p in reversed(track) if now - p[0] >= self.SPAN_S), None) if now is not None else None
+            if past is not None:
+                speed = abs(z - past[1]) / (now - past[0])
+                closing = speed if closing is None else min(closing, speed)
+        self.occupied, self.tracks, self.closing = occupied, tracks, closing
         left, right = [2 if len(xs) > 1 and max(xs) - min(xs) >= GEOMETRY['car_width_m']
                        else 1 if xs else 0 for xs in sides]
         return 4 if left and right else 5 if left > 1 else 6 if right > 1 else 2 if left else 3 if right else 1
@@ -379,6 +396,8 @@ class LmuIrsdk:
             'TrackTempCrew': s.get('track_temp_c'), 'AirTemp': s.get('ambient_temp_c'),
             'CarLeftRight': (0 if (s.get('speed_mps') or 0) < SPOTTER_MIN_SPEED_MPS and traffic
                              else self.left_right(traffic)),
+            # Not an iRacing variable: how fast the car beside us passes, for the spotter (live_telemetry).
+            'SideClosingMps': self.left_right.closing,
             'PlayerTrackSurface': _surface(player_row, s) if player_row else None,
             'PlayerCarPosition': s.get('overall_position'), 'PlayerCarClassPosition': s.get('class_position'),
             'EngineWarnings': warnings, 'BrakeABSactive': s.get('abs_active'), 'YawRate': s.get('yaw_rate'),

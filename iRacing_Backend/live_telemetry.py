@@ -15,7 +15,7 @@ import threading
 import time
 import uuid
 from race_engineer import RaceEngineer, read_race, parse_measure
-from spotter import Spotter
+from spotter import AlongsideSpeed, Spotter
 from race_radio import RaceRadio
 from radio_policy import TrackSpeechWindows, HOLD_DEFAULT_S
 import radio_phrases
@@ -115,6 +115,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.speech_hold_s = HOLD_DEFAULT_S   # seconds before braking/steering in which no call starts; below zero is off
         self.pit_wall = RaceEngineer()
         self.spotter = Spotter()
+        self.alongside = AlongsideSpeed()     # how fast the car beside us passes (iRacing lap positions)
         self.radio = RaceRadio()
         self.corners = LiveCornerCoach()
         self.controls = ControlAdvisor()
@@ -349,6 +350,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         with self.lock:
             self.overlay_preparation = None
             self.spotter.reset()
+            self.alongside.reset()
             self.radio.reset()
             self.drill.stop(reason)
             self.practice.reset(reason)
@@ -387,8 +389,10 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.state = 'WAITING'
                 self.message = '실제 차량 탑승 대기 · 리플레이는 실시간 코칭에 사용하지 않습니다.'
             else:
-                identity = session_identity(sdk['WeekendInfo'] or {}, sdk['DriverInfo'] or {})
+                weekend, drivers = sdk['WeekendInfo'] or {}, sdk['DriverInfo'] or {}
+                identity = session_identity(weekend, drivers)
                 identity['game'] = self.game
+                sample['side_closing_mps'] = self._side_closing(sdk, names, sample, weekend, drivers)
                 race = None
                 race_key = (identity.get('subsession_id'), sample.get('session_num'))
                 if self.clock() - self._race_read_at >= 1 or race_key != self._race_session:
@@ -398,6 +402,22 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         finally:
             sdk.unfreeze_var_buffer_latest()
         return True
+
+    def _side_closing(self, sdk, names, sample, weekend, drivers):
+        """How fast the car beside us passes along our car, for the spotter (None when unknown).
+        The LMU adapter measures it from 3D positions; iRacing's comes from every car's lap position."""
+        if getattr(sdk, 'game', 'iracing') != 'iracing':
+            return number(sdk['SideClosingMps']) if 'SideClosingMps' in names else None
+        if 'CarIdxLapDistPct' not in names:
+            return None
+        player = sdk['PlayerCarIdx'] if 'PlayerCarIdx' in names else drivers.get('DriverCarIdx')
+        positions = sdk['CarIdxLapDistPct'] or []
+        surfaces = (sdk['CarIdxTrackSurface'] if 'CarIdxTrackSurface' in names else None) or []
+        pits = (sdk['CarIdxOnPitRoad'] if 'CarIdxOnPitRoad' in names else None) or []
+        cars = {idx: pct for idx, pct in enumerate(positions)
+                if idx != player and (idx >= len(surfaces) or surfaces[idx] == 3) and not (idx < len(pits) and pits[idx])}
+        return self.alongside(self.clock(), number(sample.get('distance_pct')), cars,
+                              parse_measure(weekend.get('TrackLength'), 'distance'))
 
     def _loop(self):
         sdk = None

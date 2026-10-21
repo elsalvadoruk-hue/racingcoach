@@ -97,14 +97,25 @@ class TrackSpeechWindows:
         self.previous = dict(sample)
 
     def view(self, sample):
-        result = {'speech_window_s': None, 'workload_in_s': None, 'speech_learned_laps': len(self.laps)}
+        # 'corner_in_s': seconds to the next braking or turning, whoever is beside us (the spotter's
+        # "계속 왼쪽" is worth saying just before it). The other two also count a car alongside as busy.
+        result = {'speech_window_s': None, 'workload_in_s': None, 'corner_in_s': None, 'speech_learned_laps': len(self.laps)}
         if sample.get('on_pit_road') is True or (type(sample.get('speed_mps')) in (float, int) and sample['speed_mps'] < 2):
             return result
         pct = sample.get('distance_pct')
         if len(self.laps) < 2 or type(pct) not in (float, int) or not 0 <= pct < 1:
             return result
-        if not quiet_window(sample) or sample.get('car_left_right') in (2, 3, 4, 5, 6):
-            return {**result, 'speech_window_s': 0., 'workload_in_s': 0.}
+        if not quiet_window(sample):
+            return {**result, 'speech_window_s': 0., 'workload_in_s': 0., 'corner_in_s': 0.}
+        seconds = self._quiet_ahead(pct)
+        if sample.get('car_left_right') in (2, 3, 4, 5, 6):
+            return {**result, 'speech_window_s': 0., 'workload_in_s': 0., 'corner_in_s': round(seconds, 2)}
+        # 'speech_window_s' keeps its safety margin for the display; the hold uses the plain estimate.
+        return {**result, 'speech_window_s': round(max(0., seconds * .8 - 1.), 2), 'workload_in_s': round(seconds, 2),
+                'corner_in_s': round(seconds, 2)}
+
+    def _quiet_ahead(self, pct):
+        """Seconds of learned low-workload road ahead of this point, at most 30."""
         first, seconds, distance = int(pct * self.BINS), 0., 0.
         for offset in range(self.BINS):
             cell = (first + offset) % self.BINS
@@ -119,6 +130,4 @@ class TrackSpeechWindows:
         # A faster current approach must shorten the budget, never extend it.
         if self.rates:
             seconds = min(seconds, distance / max(self.rates))
-        seconds = min(seconds, 30.)
-        # 'speech_window_s' keeps its safety margin for the display; the hold uses the plain estimate.
-        return {**result, 'speech_window_s': round(max(0., seconds * .8 - 1.), 2), 'workload_in_s': round(seconds, 2)}
+        return min(seconds, 30.)

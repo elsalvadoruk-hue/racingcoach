@@ -284,10 +284,10 @@ class SettingsMetadataTests(unittest.TestCase):
     def test_repeat_is_directional_and_clear_confirmation_is_configurable(self):
         spotter = Spotter(); spotter.repeat_seconds = 2; spotter.clear_delay = .3
         s = {'on_track': True, 'is_replay': False, 'on_pit_road': False}
-        for n in range(23):
+        for n in range(26):         # called after the 0.4 s wait, repeated 2 s later
             spotter.ingest({**s, 'car_left_right': 5, 'session_time': n * .1}, 'run', n * .1)
         self.assertEqual([e['key'] for e in spotter.events], ['two_left', 'hold_two_left'])
-        for n in range(23, 26): spotter.ingest({**s, 'car_left_right': 1, 'session_time': n * .1}, 'run', n * .1)
+        for n in range(26, 29): spotter.ingest({**s, 'car_left_right': 1, 'session_time': n * .1}, 'run', n * .1)
         self.assertNotEqual(spotter.confirmed, 1)
-        spotter.ingest({**s, 'car_left_right': 1, 'session_time': 2.61}, 'run', 2.61)
+        spotter.ingest({**s, 'car_left_right': 1, 'session_time': 2.91}, 'run', 2.91)
         self.assertEqual(spotter.events[-1]['key'], 'clear_left')

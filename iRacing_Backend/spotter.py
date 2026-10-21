@@ -46,9 +46,30 @@ HOLD_KEYS = {state: 'hold_' + key for state, key in STATE_KEYS.items()}
 SIDES = {1: (0, 0), 2: (1, 0), 3: (0, 1), 4: (1, 1), 5: (2, 0), 6: (0, 2)}
 
 
+def _arrives(old, new):
+    """Whether a car is new beside us on either side (not one leaving)."""
+    before, after = SIDES.get(old, (0, 0)), SIDES[new]
+    return any(a > b for a, b in zip(after, before))
+
+
 class Spotter:
+    """Side calls for cars that stay beside us.
+
+    2026-10-21: the spotter called every overlap the sim reported, so cars sweeping past in under a second
+    were called "왼쪽 차량" and "왼쪽 클리어" as they went (an LMU practice: 25 calls in 3 minutes, 16 of 23
+    overlaps gone within 0.8 s). A car is now called only once it has stayed beside us ENTER_SECONDS and is
+    not moving along our car faster than PASSING_MPS; one never called is never called clear.
+    """
     FRESH_SECONDS = .5
     EVENT_SECONDS = .6
+    ENTER_SECONDS = .4      # a car beside us this long is staying; one sweeping past is gone sooner
+    PASSING_MPS = 7.        # faster along our car than this (25 km/h) it is past before the call ends
+    UNKNOWN_SECONDS = 1.    # the side picture may drop out this long (LMU coverage) without starting over
+    # "계속 왼쪽" every few seconds of a long side-by-side was most of the side calls in iRacing races
+    # (Le Mans lap 1: 32 in 100 s). Two repeats, then one just before each corner while it lasts.
+    HOLD_REPEATS = 2
+    CORNER_SECONDS = 3.     # a repeat this close to the next braking or turning
+    CORNER_REARM_S = 6.     # and the next corner counts once the road ahead is this long again
 
     def __init__(self):
         self.repeat_seconds, self.clear_delay = 3., .15
@@ -60,36 +81,65 @@ class Spotter:
     def reset(self):
         self.run_id = None
         self.raw = self.confirmed = self.candidate = None
-        self.candidate_since = self.last_sample = self.last_session = self.last_call = None
+        self.candidate_since = self.last_sample = self.last_session = self.last_call = self.unknown_since = None
+        self.holds, self.corner_armed = 0, True
         self.events.clear()
 
     def ingest(self, sample, run_id, now):
         raw = sample.get('car_left_right')
         session = sample.get('session_time')
-        valid = (type(raw) in (int, float) and raw in SIDES
-                 and sample.get('on_track') is True and sample.get('is_replay') is False
-                 and sample.get('on_pit_road') is False)
+        driving = (sample.get('on_track') is True and sample.get('is_replay') is False
+                   and sample.get('on_pit_road') is False)
+        known = type(raw) in (int, float) and raw in SIDES
+        # 0 is the sim's own "off" (parked, crawling): a state, not a dropout.
+        off = type(raw) in (int, float) and raw == 0
         gap = self.last_sample is not None and now - self.last_sample > self.FRESH_SECONDS
         session_gap = (self.last_session is not None and session is not None
                        and (session < self.last_session or session - self.last_session > self.FRESH_SECONDS))
-        if self.run_id != run_id or gap or session_gap or not valid:
+        if self.run_id != run_id or gap or session_gap or not driving or off:
             self.reset()
-        if not valid:
+        if not driving or off:
             return
-        self.run_id, self.raw, self.last_sample, self.last_session = run_id, int(raw), now, session
+        self.run_id, self.last_sample, self.last_session = run_id, now, session
+        if not known:
+            # A missing side picture says nothing about the cars: the call in force stays, silently, and
+            # a longer loss starts over without a clear (unknown never becomes "clear").
+            self.raw = None
+            self.unknown_since = self.unknown_since if self.unknown_since is not None else now
+            if now - self.unknown_since > self.UNKNOWN_SECONDS:
+                self.confirmed = self.candidate = self.candidate_since = self.last_call = None
+                self.events.clear()
+            return
+        self.unknown_since = None
+        raw = int(raw)
+        self.raw = raw
         if raw != self.candidate:
-            self.candidate, self.candidate_since = int(raw), now
-        delay = self.clear_delay if raw == 1 else .05
+            self.candidate, self.candidate_since = raw, now
+        arriving = raw != 1 and _arrives(self.confirmed, raw)
+        delay = self.ENTER_SECONDS if arriving else self.clear_delay if raw == 1 or raw != self.confirmed else .05
         if now - self.candidate_since + 1e-9 < delay:
             return
         if raw != self.confirmed:
+            closing = sample.get('side_closing_mps')
+            if (arriving and type(closing) in (int, float) and closing == closing
+                    and closing > self.PASSING_MPS):
+                return          # sweeping past; called if it settles beside us
             previous = self.confirmed
-            self.confirmed = int(raw)
-            key = self._transition(previous, int(raw))
+            self.confirmed = raw
+            key = self._transition(previous, raw)
+            self.holds, self.corner_armed = 0, True
             if key:
                 self._emit(key, now)
-        elif raw != 1 and self.last_call is not None and now - self.last_call >= self.repeat_seconds:
-            self._emit(HOLD_KEYS[int(raw)], now)
+        elif raw != 1 and self.last_call is not None:
+            corner = sample.get('corner_in_s')
+            corner = corner if type(corner) in (int, float) and corner == corner else None
+            if corner is not None and corner >= self.CORNER_REARM_S:
+                self.corner_armed = True
+            before_corner = corner is not None and corner <= self.CORNER_SECONDS and self.corner_armed
+            if now - self.last_call >= self.repeat_seconds and (self.holds < self.HOLD_REPEATS or before_corner):
+                self.holds += 1
+                self.corner_armed = self.corner_armed and not before_corner
+                self._emit(HOLD_KEYS[raw], now)
 
     def _transition(self, old, new):
         if new == 1:
@@ -128,6 +178,49 @@ class Spotter:
                 'occupied': active and (self.raw != 1 or self.confirmed in STATE_KEYS), 'serial': self.serial, 'events': events,
                 'current_key': STATE_KEYS.get(self.confirmed) if active and self.raw == self.confirmed else None,
                 'state_label': PHRASES.get(STATE_KEYS.get(self.raw), '주변 차량 겹침 없음') if active else '차량 데이터 대기'}
+
+
+class AlongsideSpeed:
+    """How fast the cars beside us move along our car, from every car's lap position (iRacing, 30 Hz).
+
+    The sim says a car is beside us but not which one or how fast. The cars within WINDOW_M along the
+    track are the ones it can be; the slowest of them decides (a car settling beside us must be called).
+    """
+    WINDOW_M = 6.     # along-track distance at which a car can overlap ours
+    NEAR_M = 40.      # cars tracked, so their speed is known before they arrive
+    SPAN_S = .25      # speed over at least this long; single 30 Hz steps are too noisy
+    KEEP_S = 1.
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.tracks = {}
+
+    def __call__(self, now, own_pct, cars, length_m):
+        """cars: {car index: lap fraction} of the other cars on track. Metres per second, or None."""
+        if type(own_pct) not in (int, float) or not 0 <= own_pct < 1 or type(length_m) not in (int, float) or not length_m > 100:
+            self.reset()
+            return None
+        tracks, slowest = {}, None
+        for idx, pct in cars.items():
+            if type(pct) not in (int, float) or not 0 <= pct < 1:
+                continue
+            gap = ((pct - own_pct + .5) % 1 - .5) * length_m
+            if abs(gap) > self.NEAR_M:
+                continue
+            track = self.tracks.get(idx) or deque()
+            track.append((now, gap))
+            while track and now - track[0][0] > self.KEEP_S:
+                track.popleft()
+            tracks[idx] = track
+            if abs(gap) <= self.WINDOW_M:
+                past = next((point for point in reversed(track) if now - point[0] >= self.SPAN_S), None)
+                if past is not None:
+                    speed = abs(gap - past[1]) / (now - past[0])
+                    slowest = speed if slowest is None else min(slowest, speed)
+        self.tracks = tracks
+        return slowest
 
 
 class SpotterAudio:

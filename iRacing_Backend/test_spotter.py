@@ -27,7 +27,7 @@ class SpotterTests(unittest.TestCase):
         self.s.ingest(sample, run, self.now)
         return self.s.view(self.now)
 
-    def stable(self, raw, duration=.16, **extra):
+    def stable(self, raw, duration=Spotter.ENTER_SECONDS + .01, **extra):
         self.tick(raw, **extra)
         return self.tick(raw, duration, **extra)
 
@@ -40,12 +40,27 @@ class SpotterTests(unittest.TestCase):
             self.assertEqual(role_voice('spotter'), 'ko-KR-Chirp3-HD-Fenrir')
 
     def test_initial_clear_and_off_never_announce_clear(self):
-        for raw in [0, None, True, 7, -1, float('nan')]:
+        # 0 is the sim's "off": everything starts over and nothing is called clear.
+        self.stable(2)
+        self.tick(0)
+        self.stable(1)
+        self.assertEqual(self.keys(), [])
+
+    def test_a_short_dropout_keeps_the_call_and_a_long_one_starts_over_silently(self):
+        for raw in [None, True, 7, -1, float('nan')]:
             with self.subTest(raw=raw):
+                self.s.reset()
                 self.stable(2)
-                self.tick(raw)
+                self.assertFalse(self.tick(raw, .3)['active'])
+                self.stable(2)
+                self.assertEqual(self.keys(), ['left'])          # the same car is not called again
                 self.stable(1)
-                self.assertEqual(self.keys(), [])
+                self.assertEqual(self.keys(), ['left', 'clear_left'])
+                self.stable(2)
+                for _ in range(12):
+                    self.tick(raw, .1)
+                self.stable(1)
+                self.assertEqual(self.keys(), [])                # unknown never becomes "clear"
 
     def test_each_occupied_state(self):
         for raw, key in [(2, 'left'), (3, 'right'), (4, 'both'), (5, 'two_left'), (6, 'two_right')]:
@@ -61,10 +76,40 @@ class SpotterTests(unittest.TestCase):
         self.assertFalse(view['events'])
         self.tick(1)
         self.tick(2)
-        self.tick(2, .049)
+        self.tick(2, Spotter.ENTER_SECONDS - .01)
         self.assertEqual(self.keys(), [])
-        self.tick(2, .002)
+        self.tick(2, .02)
         self.assertEqual(self.keys(), ['left'])
+
+    def test_a_car_sweeping_past_is_never_called(self):
+        self.tick(2)
+        self.tick(2, .3)
+        self.stable(1)
+        self.assertEqual(self.keys(), [])                     # gone within the wait: no "left", no "clear"
+        for _ in range(20):
+            self.tick(3, .03, side_closing_mps=12.)           # 43 km/h faster along our car
+        self.stable(1)
+        self.assertEqual(self.keys(), [])
+
+    def test_a_passing_car_that_settles_beside_us_is_called_then(self):
+        for _ in range(20):
+            self.tick(3, .03, side_closing_mps=10.)
+        self.assertEqual(self.keys(), [])
+        self.tick(3, .03, side_closing_mps=2.)
+        self.assertEqual(self.keys(), ['right'])
+        self.stable(1)
+        self.assertEqual(self.keys(), ['right', 'clear_right'])
+
+    def test_a_second_car_arriving_waits_too_and_a_leaving_one_is_said_at_once(self):
+        self.stable(2)
+        self.tick(4)
+        self.tick(4, .2)
+        self.assertEqual(self.keys(), ['left'])
+        self.tick(4, .21)
+        self.assertEqual(self.keys(), ['left', 'both'])
+        self.tick(2)
+        self.tick(2, self.s.clear_delay + .01)
+        self.assertEqual(self.keys(), ['left', 'both', 'left_only'])
 
     def test_clear_confirmation_and_flapping(self):
         self.stable(2)
@@ -97,6 +142,23 @@ class SpotterTests(unittest.TestCase):
         self.assertEqual(self.keys(), ['left', 'hold_left'])
         self.tick(2, .1)
         self.assertEqual(self.keys(), ['left', 'hold_left'])
+
+    def test_a_long_side_by_side_is_repeated_twice_then_only_before_corners(self):
+        self.stable(2, corner_in_s=20.)
+        for _ in range(300):                                  # 30 s alongside on a straight
+            self.tick(2, .1, corner_in_s=20.)
+        self.assertEqual(self.keys(), ['left', 'hold_left', 'hold_left'])
+        for _ in range(40):                                   # the next corner comes up
+            self.tick(2, .1, corner_in_s=2.5)
+        self.assertEqual(self.keys()[-1], 'hold_left')
+        self.assertEqual(len(self.keys()), 4)                 # once for that corner
+        for _ in range(40):
+            self.tick(2, .1, corner_in_s=10.)
+        for _ in range(5):
+            self.tick(2, .1, corner_in_s=2.)
+        self.assertEqual(len(self.keys()), 5)                 # and once for the next
+        self.stable(1)
+        self.assertEqual(self.keys()[-1], 'clear_left')
 
     def test_pending_messages_discard_on_raw_change_and_expiry(self):
         self.assertEqual(len(self.stable(2)['events']), 1)
