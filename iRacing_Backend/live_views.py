@@ -123,7 +123,9 @@ class LiveViews:
                 logger.exception('Pit facts failed; continuing without them')
         if pit_loss_s is None and facts.get('pit_loss_auto_s'):
             view = self.pit_wall.view(snapshot, fuel_use, fuel_laps, reserve_laps, facts['pit_loss_auto_s'], fuel_save_mode)
-        return {**view, **facts, 'pit_loss_source': 'INPUT' if pit_loss_s else 'AUTO' if facts.get('pit_loss_auto_s') else None}
+        energy = self.energy.view(view) if self.game == 'lmu' else {}
+        return {**view, **facts, **energy, 'game': self.game,
+                'pit_loss_source': 'INPUT' if pit_loss_s else 'AUTO' if facts.get('pit_loss_auto_s') else None}
 
     def _pit_facts(self, view, snapshot):
         known_track, known_car = self.pit_knowledge.track(self.identity), self.pit_knowledge.car(self.identity)

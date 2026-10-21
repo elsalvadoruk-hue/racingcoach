@@ -78,6 +78,11 @@ export default function PitWall({ enabled, onToggle, preferences, onChange, view
       <LiveMetric label="무급유 완주 목표 · 여유분 없음" value={unsupported('finish_prediction', '완주 거리 미확인', value(view?.fuel_target_l_per_lap, 'L/랩', 2))} note={view?.fuel_save_feasible === false ? '절약으로는 닿지 않는 거리입니다.' : view?.fuel_save_pct > 0 ? `필요한 절약 ${view.fuel_save_pct}%` : '현재 관측 소비량 기준'} />
       <LiveMetric label="완주까지 부족 · 여유분 제외" value={unsupported('finish_prediction', '완주 거리 미확인', value(view?.fuel_finish_shortfall_l, 'L'))} tone="warning" />
       <LiveMetric label="설정한 안전 여유분" value={value(view?.fuel_reserve_l, 'L')} />
+      {lmu && <>
+        <LiveMetric label="버추얼 에너지" value={view?.energy_pct != null ? `${Number(view.energy_pct).toFixed(1)}%` : '측정 중'} note="스틴트 에너지 한도 중 남은 양" />
+        <LiveMetric label="에너지 랩당 사용" value={view?.energy_pct_per_lap != null ? `${Number(view.energy_pct_per_lap).toFixed(1)}%` : '측정 중'} note={view?.energy_target_pct_per_lap != null ? `완주 목표 랩당 ${Number(view.energy_target_pct_per_lap).toFixed(1)}%` : '깨끗한 랩 3개 이상에서 계산합니다.'} />
+        <LiveMetric label="에너지로 갈 수 있는 랩" value={view?.energy_laps != null ? `${Number(view.energy_laps).toFixed(1)}랩` : '측정 중'} note={view?.energy_limits_stint ? '이번 스틴트는 연료보다 에너지가 먼저 떨어집니다.' : undefined} tone={view?.energy_limits_stint ? 'warning' : undefined} />
+      </>}
       <LiveMetric label="경기 종료 예상" value={view?.finish_total_laps != null ? `내 기준 ${view.finish_total_laps}랩` : lmu ? '종료 랩 확인 필요' : '시간제 레이스에서 계산'}
         note={view?.finish_total_laps != null ? `선두가 종료 시각과 ${value(view?.finish_leader_margin_s, '초', 0)} · 내가 선두 피니시와 ${value(view?.finish_own_margin_s, '초', 0)} 차이${view?.fuel_next_stop_longer_l != null ? ` · 한 랩 늘면 급유 ${Math.ceil(view.fuel_next_stop_longer_l)}L` : ''}` : lmu ? '선두 종료 랩이 확인되기 전에는 완주 거리를 계산하지 않습니다.' : '선두가 시간 종료 뒤 처음 결승선을 지나면 끝납니다.'} />
       <LiveMetric label="예상 피트 총손실" value={unsupported('pit_strategy', '피트 손실 학습 미연결', preferences.pit_loss_s != null ? `${preferences.pit_loss_s}초 · 직접 입력` : view?.pit_loss_auto_s != null ? `${Math.round(view.pit_loss_auto_s)}초 · 자동` : '자료 없음')}

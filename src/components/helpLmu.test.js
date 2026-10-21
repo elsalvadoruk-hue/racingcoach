@@ -54,11 +54,11 @@ test('table and chapter actions navigate, and analysis actions wait for a record
   expect(screen.getByRole('link', { name: titles[8] })).toHaveAttribute('aria-current', 'location');
 });
 
-test('energy stays explicitly pending and has no invented speech examples', () => {
+test('energy explains the pit-wall values and that its voice is still off, without speech examples', () => {
   render(<UserManual sections={LMU_SECTIONS} hasAnalysis onNavigate={jest.fn()} />);
   const energy = screen.getByRole('heading', { name: titles[8] }).closest('section');
-  expect(energy).toHaveTextContent('단위 확인 후 켜집니다');
-  expect(energy).toHaveTextContent('원시값 수집만 준비했습니다');
+  expect(energy).toHaveTextContent('에너지로 갈 수 있는 랩');
+  expect(energy).toHaveTextContent('음성으로 안내합니다');
   expect(within(energy).queryByLabelText('음성 예시')).not.toBeInTheDocument();
 });
 

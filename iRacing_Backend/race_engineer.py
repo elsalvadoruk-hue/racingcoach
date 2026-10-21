@@ -9,6 +9,10 @@ from radio_audio import CALLS, speech_fields
 from spotter_context import estimated_gap_s
 import radio_phrases
 
+# LMU virtual energy calls. The unit (0-1 fraction, lmu_irsdk.virtual_energy_pct) was checked
+# against TinyPedal and LMU's own recordings; the user turned the calls on (2026-10-21).
+ENERGY_CALLS_ENABLED = True
+
 
 def target_position(text):
     match = re.search(r'(?:클래스\s*)?(\d+)\s*(?:위|등)', text)
@@ -518,6 +522,8 @@ class RaceEngineer:
                             phrase=('pit_fuel_full', {'liters': planned}) if full else ('pit_fuel_low', {'liters': planned, 'need': needed}))
         elif fuel_add is not None and fuel_add > .1:
             add('fuel_reserve', 'strategy', '현재 소비량으로 완주는 예상되지만 안전 여유분이 부족합니다. ' + fuel_advice(view, brief=True), 1, cooldown=3600)
+        if ENERGY_CALLS_ENABLED and view.get('game') == 'lmu' and not snapshot.get('on_pit_road'):
+            self._energy_calls(view, add)
         # Flag announcements belong to the cached spotter radio only.
         for side, label in [('behind', '뒤차'), ('ahead', '앞차')]:
             car = view.get(side)
@@ -603,6 +609,45 @@ class RaceEngineer:
                     speech_key=call if call in CALLS else 'coach_' + feeling.lower())
                 break
         return sorted(reports, key=lambda r: -r['priority'])
+
+    @staticmethod
+    def _energy_calls(view, add):
+        """LMU virtual energy, said like fuel: only from measured laps (live_energy.EnergyWatch)."""
+        pct, laps, per_lap = view.get('energy_pct'), view.get('energy_laps'), view.get('energy_pct_per_lap')
+        if pct is None or laps is None or not per_lap:
+            return
+        stint, target = view.get('energy_stint', 0), view.get('energy_target_pct_per_lap')
+        short = (view.get('energy_finish_shortfall_pct') or 0) > .1
+        once = 36000     # once per stint: the token carries the stint
+        if laps < 1:
+            add('ve_critical', 'strategy', priority=3, token=str(stint), cooldown=once, phrase=('ve_critical', {}))
+        elif laps <= 4 and short:
+            left = math.floor(laps)
+            add('ve_laps_left', 'strategy', priority=2, token=f'{stint}:{left}', cooldown=once,
+                phrase=('ve_laps_left', {'laps': left}))
+        if view.get('energy_limits_stint') and short:
+            add('ve_limits_stint', 'strategy', priority=2, token=str(stint), cooldown=once, phrase=('ve_limits_stint', {}))
+        if pct <= 50 and laps >= 1:
+            add('ve_half', 'strategy', token=str(stint), cooldown=once, phrase=('ve_half', {}))
+        if short and target:
+            # A cut within what lifting can do saves the stop; more than that needs one.
+            if target >= per_lap * .9:
+                add('ve_save', 'strategy', priority=2, cooldown=600, token=str(stint),
+                    phrase=('ve_save', {}), also=[('ve_target', {'ve_target': target})])
+            else:
+                add('ve_need_stop', 'strategy', priority=2, token=str(stint), cooldown=once, phrase=('ve_need_stop', {}))
+        elif not short and view.get('remaining_laps') is not None:
+            fraction = view.get('race_fraction')
+            if fraction is not None and .5 <= fraction < .6:
+                add('ve_finish_ok', 'strategy', cooldown=once, token='finish', phrase=('ve_finish_ok', {}))
+            left_s = numeric(view.get('time_remaining_s'))
+            spare = pct - (view.get('remaining_laps') or 0) * per_lap
+            if left_s is not None and 0 < left_s <= 900 and spare >= per_lap:
+                add('ve_spare', 'strategy', cooldown=once, token='spare', phrase=('ve_spare', {}))
+        last, counted = view.get('energy_last_lap_pct'), view.get('energy_laps_counted') or 0
+        if target and last is not None and counted % 3 == 0:
+            add('ve_lap', 'strategy', cooldown=600, token=str(counted),
+                phrase=('ve_lap', {'ve': last}), also=[('ve_target', {'ve_target': target})])
 
     def select(self, candidates, snapshot, level, cached_audio=False):
         now = snapshot['session_time']

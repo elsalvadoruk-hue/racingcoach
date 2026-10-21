@@ -56,7 +56,8 @@ def files_payload(visibility, limit=250):
         stat = path.stat()
         signature = [stat.st_size, stat.st_mtime_ns]
         row = {'name': path.name, 'file_id': file_id(path), 'display_name': path.name, 'provider': 'LMU',
-               'file_signature': signature, 'auto_load': path.resolve().parent != imported}
+               'file_signature': signature, 'auto_load': path.resolve().parent != imported,
+               'imported': path.resolve().parent == imported}
         if recording_busy(path):
             row.update(analyzable=False, status='RECORDING', reason='LMU가 아직 이 파일을 기록 중입니다.')
         else:

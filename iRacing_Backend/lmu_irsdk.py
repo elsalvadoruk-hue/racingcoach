@@ -141,6 +141,17 @@ def nearby_traffic(raw, telemetry_et, vehicle_id):
     return traffic if traffic.get('status') == 'AVAILABLE' else None
 
 
+def virtual_energy_pct(raw):
+    """LMU's mVirtualEnergy is the remaining share of the stint allowance as a fraction (0-1).
+
+    TinyPedal reads the same field as a fraction and multiplies by 100, and LMU's own
+    telemetry recordings store 'Virtual Energy' in % (both checked 2026-10-21).
+    """
+    if type(raw) not in (int, float) or not math.isfinite(raw) or not 0 <= raw <= 1:
+        return None
+    return raw * 100.
+
+
 def _fraction(distance, length):
     if distance is None or not length:
         return None
@@ -398,6 +409,8 @@ class LmuIrsdk:
                              else self.left_right(traffic)),
             # Not an iRacing variable: how fast the car beside us passes, for the spotter (live_telemetry).
             'SideClosingMps': self.left_right.closing,
+            # Not an iRacing variable either: LMU virtual energy left, in % (live_energy).
+            'VirtualEnergyPct': virtual_energy_pct(s.get('virtual_energy_raw')),
             'PlayerTrackSurface': _surface(player_row, s) if player_row else None,
             'PlayerCarPosition': s.get('overall_position'), 'PlayerCarClassPosition': s.get('class_position'),
             'EngineWarnings': warnings, 'BrakeABSactive': s.get('abs_active'), 'YawRate': s.get('yaw_rate'),

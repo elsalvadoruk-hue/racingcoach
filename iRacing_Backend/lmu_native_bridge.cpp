@@ -328,6 +328,7 @@ std::string snapshot(Source* s, bool tu, bool su) {
     NUM("best_lap_time",v && v->mBestLapTime>0,v->mBestLapTime);
     NUM("outstanding_penalties",v && v->mNumPenalties>=0,static_cast<int>(v->mNumPenalties));
     NUM("fuel_l",t && t->mFuel>=0,t->mFuel);
+    NUM("virtual_energy_raw", t && t->mVirtualEnergy>=0, t->mVirtualEnergy);
     NUM("fuel_capacity_l",t && t->mFuelCapacity>0,t->mFuelCapacity);
     NUM("lap_distance_m",v,v->mLapDist);
     NUM("track_length_m",aligned && si.mLapDist>0,si.mLapDist);

@@ -40,7 +40,9 @@ export function useLmuWorkspace() {
         let lastError;
         for (const [index, file] of files.entries()) {
           if (controller.signal.aborted) return;
-          if (file.analyzable !== true) continue;
+          // A recording without one valid lap has no lap times or reference to show:
+          // open the newest one that does. It stays available in the file picker.
+          if (file.analyzable !== true || !(file.valid_laps > 0)) continue;
           if (!initial && (file.auto_load === false || state.handled.get(file.name) === fileVersion(file)
             || previous.get(file.name) !== fileVersion(file))) continue;
           const filename = file.name;

@@ -7,13 +7,42 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+import hashlib
+import json
 import math
 import os
+import re
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
 import numpy as np
 
+
+
+# BoP and the fuel/energy allowance change from patch to patch; they say nothing about the model.
+_NOT_MODEL = re.compile(r"FUEL|ENERGY|BALLAST|WEIGHT|POWER|RESTRICT|BOP", re.I)
+
+
+def car_model_key(car_setup, car_class) -> Optional[str]:
+    """Identify the car model, not the entry (team, year and number).
+
+    LMU records only the entry name (``Team WRT 2026 #32:LM``). Every entry of a
+    model shares its garage: the same settings with the same ranges. Those ranges
+    are fingerprinted, so another livery of the same car compares as the same car.
+    """
+    try:
+        setup = json.loads(car_setup) if isinstance(car_setup, str) else None
+    except ValueError:
+        return None
+    if not isinstance(setup, dict):
+        return None
+    ranges = sorted((key, bool(item.get("available")), item.get("minValue"), item.get("maxValue"))
+                    for key, item in setup.items()
+                    if isinstance(item, dict) and key.startswith("VM_") and not _NOT_MODEL.search(key))
+    if len(ranges) < 20:
+        return None
+    digest = hashlib.sha1(json.dumps([str(car_class or "").casefold(), ranges]).encode()).hexdigest()
+    return f"lmu-model-{digest[:16]}"
 
 class LmuTelemetryUnavailable(RuntimeError):
     """The optional LMU dependency is unavailable."""
@@ -166,7 +195,12 @@ class LmuTelemetryReader:
                    "CarName": "car_name", "CarClass": "car_class",
                    "DriverName": "driver_name", "SessionType": "session_type",
                    "RecordingTime": "recording_time", "Version": "version"}
-        return {aliases[key]: str(value or "") for key, value in rows if key in aliases}
+        metadata = {aliases[key]: str(value or "") for key, value in rows if key in aliases}
+        model = car_model_key(next((value for key, value in rows if key == "CarSetup"), None),
+                              metadata.get("car_class"))
+        if model:
+            metadata["car_model_key"] = model
+        return metadata
 
     def _specs(self, connection, tables) -> tuple[LmuChannelSpec, ...]:
         table = self._table(tables, "channelsList")

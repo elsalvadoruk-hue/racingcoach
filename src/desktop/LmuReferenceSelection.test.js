@@ -9,7 +9,7 @@ jest.mock('../analysis/analysisClient', () => ({ requestJson: jest.fn() }));
 const A = 'aaaaaaaaaaaaaaaaaaaaaaaa', B = 'bbbbbbbbbbbbbbbbbbbbbbbb', C = 'cccccccccccccccccccccccc';
 const lap = n => ({ lap_number: n, lap_time_s: 117 + n, status: 'VALID', valid: true, complete: true, invalid_reason: null });
 const ownLaps = [lap(1), lap(2)], referenceLaps = [lap(7), lap(8)];
-const files = [A, B, C].map((name, index) => ({ name, file_name: `${['current', 'reference', 'third'][index]}.duckdb`, display_name: `${['current', 'reference', 'third'][index]}.duckdb`, analyzable: true }));
+const files = [A, B, C].map((name, index) => ({ name, file_name: `${['current', 'reference', 'third'][index]}.duckdb`, display_name: `${['current', 'reference', 'third'][index]}.duckdb`, analyzable: true, valid_laps: 2 }));
 const comparison = { provider: 'LMU', target_lap: 2, reference_lap: 7, reference_filename: B, corners: [], trace: [] };
 const sourceSession = { provider: 'LMU', kind: 'LIVE_LOCAL', filename: A, file_name: 'current.duckdb', defaultTarget: 2, defaultReference: 1,
   session: { track_name: 'Monza', car_name: 'GT3', track_length_m: 5793 }, laps: ownLaps, corners: [], initialComparison: {}, external: [] };
@@ -224,4 +224,18 @@ test('game selection and unmount cancel the reference request without applying l
   await act(async () => pending.resolve({ laps: referenceLaps }));
   expect(onApply).not.toHaveBeenCalled(); expect(data.provider).toBe('iracing');
   expect(screen.queryByLabelText('비교 기준')).not.toBeInTheDocument();
+});
+
+test('an automatic reference that cannot be found is explained in words, not as a server code', async () => {
+  override = path => (path.endsWith('/references') ? Promise.resolve({ files: [], personalReference: { status: 'UNAVAILABLE', reason: 'NO_COMPATIBLE_PERSONAL_LAP' } }) : undefined);
+  picker();
+  expect(await screen.findByText(/유효하게 완주한 랩이 없어 자동 기준이 없습니다/)).toBeInTheDocument();
+  expect(screen.queryByText(/NO_COMPATIBLE_PERSONAL_LAP/)).not.toBeInTheDocument();
+});
+
+test('a downloaded recording chosen as the automatic reference is named as an imported lap, not the driver\'s own', async () => {
+  override = path => (path.endsWith('/references') ? Promise.resolve({ files: [], personalReference: { status: 'READY', filename: B, lap: 7, lap_time_s: 115.665, imported: true, driver_name: 'Fast Driver' } }) : undefined);
+  picker();
+  expect(await screen.findByText(/가져온 기록 \(Fast Driver\)/)).toBeInTheDocument();
+  expect(screen.getByRole('option', { name: /가장 빠른 랩 · 자동 \(가져온 기록 포함\)/ })).toBeInTheDocument();
 });

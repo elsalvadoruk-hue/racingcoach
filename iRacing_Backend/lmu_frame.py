@@ -89,7 +89,8 @@ def normalise_traffic(raw, telemetry_et, vehicle_id):
 
 _NUMBERS = {'game_version', 'vehicle_id', 'telemetry_et', 'scoring_et', 'lap_start_et',
             'scoring_lap_start_et', 'total_laps', 'last_lap_time', 'count_lap_flag',
-            'track_limits_steps', 'speed_mps', 'throttle_ratio', 'brake_ratio', 'steering_ratio'}
+            'track_limits_steps', 'speed_mps', 'throttle_ratio', 'brake_ratio', 'steering_ratio',
+            'virtual_energy_raw'}
 _BOOLEANS = {'telemetry_updated', 'scoring_updated', 'lap_invalidated', 'in_pits', 'realtime', 'paused',
              'abs_active', 'tc_active', 'speed_limiter_active', 'under_yellow', 'in_garage_stall'}
 _EVENTS = {'SME_ENTER', 'SME_EXIT', 'SME_STARTUP', 'SME_SHUTDOWN', 'SME_LOAD', 'SME_UNLOAD',

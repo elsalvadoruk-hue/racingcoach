@@ -1,6 +1,7 @@
 """Read-only iRacing SDK sampling and bounded, timestamped question context."""
 from __future__ import annotations
 from live_coaching import LiveCoaching
+from live_energy import EnergyWatch
 from live_views import LiveViews
 from live_reporting import LiveReporting
 
@@ -63,7 +64,7 @@ CHANNELS = {
     'session_time': 'SessionTime', 'session_num': 'SessionNum', 'lap_number': 'Lap',
     'distance_pct': 'LapDistPct', 'speed_mps': 'Speed', 'brake': 'Brake',
     'throttle': 'Throttle', 'steering_rad': 'SteeringWheelAngle', 'gear': 'Gear',
-    'fuel_l': 'FuelLevel', 'brake_bias': 'dcBrakeBias', 'abs_setting': 'dcABS',
+    'fuel_l': 'FuelLevel', 'virtual_energy_pct': 'VirtualEnergyPct', 'brake_bias': 'dcBrakeBias', 'abs_setting': 'dcABS',
     'tc_setting': 'dcTractionControl', 'on_track': 'IsOnTrack', 'on_pit_road': 'OnPitRoad',
     'is_replay': 'IsReplayPlaying', 'track_temp_c': 'TrackTempCrew',
     'air_temp_c': 'AirTemp', 'incidents': 'PlayerCarMyIncidentCount',
@@ -110,6 +111,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.last_clock = None
         self.lap_fuel = None
         self.fuel_history = deque(maxlen=5)
+        self.energy = EnergyWatch()
         self.fuel_feedback = deque(maxlen=3)
         self.speech_windows = TrackSpeechWindows()
         self.speech_hold_s = HOLD_DEFAULT_S   # seconds before braking/steering in which no call starts; below zero is off
@@ -176,6 +178,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.lap_fuel = None
                 self.fuel_history.clear()
                 self.fuel_feedback.clear()
+                self.energy.reset()
                 self.speech_windows.reset()
                 self.pit_wall.reset()
                 self.spotter.reset()
@@ -207,6 +210,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                         self._briefed['timing_log_failed'] = True
                         logger.exception('Race timing log failed; recording stopped for this run')
             self._track_fuel(sample)
+            self.energy.ingest(sample)
             sample['fuel_l_per_lap'] = max(self.fuel_history) if self.fuel_history else None
             self.spotter.ingest(sample, self.run_id, now)
             self.radio.ingest(sample, self.run_id, now, race)

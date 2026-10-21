@@ -28,6 +28,7 @@ FORMATS = {
     'turn': str, 'place': str,
     'kph': lambda v: f'{round(v)}킬로미터', 'steer': lambda v: f'{v:.1f}도',
     'count': lambda v: f'{int(v)}대', 'temp': lambda v: f'{round(v)}도',
+    've': lambda v: f'{v:.1f}퍼센트', 've_target': lambda v: f'{v:.1f}퍼센트',
     # Strength of field, to the nearest hundred: "약 2300" is how a field is told, not 2347.
     'rating': lambda v: f'{int(v / 100 + .5) * 100}',
     # How many times: "두 번", never "2번" (read as a number, "이 번", like a corner).
@@ -74,6 +75,8 @@ PREPARED = {
     'consistent': {'gap': tenths(.1, .3)},
     'pit_fuel_low': None,
     'pit_fuel_add': {'liters': range(1, 121)}, 'laps_to_go': {'laps': range(1, 61)},
+    # LMU virtual energy per lap and its laps left (race_engineer._energy_calls).
+    've_lap': {'ve': tenths(1.0, 9.9)}, 've_target': {'ve_target': tenths(1.0, 9.9)}, 've_laps_left': {'laps': range(1, 5)},
     # After a contact: what changed between the laps before and after it (live_damage).
     'repair_pace_loss': {'loss': tenths(.7, 5.0)},
     'damage_slower': {'loss': tenths(.7, 5.0)}, 'damage_vmax': {'kph': range(2, 31)}, 'damage_steer': {'steer': tenths(.4, 3.0)},
@@ -189,6 +192,17 @@ PHRASES = {
     'pit_run_dry': ('strategy', ['연료를 끝까지 쓰고 들어와야 합니다.', '일찍 들어오면 끝까지 못 갑니다.']),
     'box_end_of_lap': ('strategy', ['이번 랩 끝나고 피트합니다.', '이번 랩까지 돌고 피트합니다.']),
     'box_now': ('strategy', ['이번 랩에 피트 들어오세요.', '이번 랩 끝에 박스입니다.']),
+    # LMU virtual energy (live_energy): the stint allowance, measured and said like fuel.
+    've_lap': ('strategy', ['이번 랩 에너지는 {ve}입니다.', '이번 랩 에너지 사용은 {ve}입니다.']),
+    've_target': ('strategy', ['랩당 목표는 {ve_target}입니다.', '목표는 랩당 {ve_target}입니다.']),
+    've_laps_left': ('strategy', ['남은 에너지는 {laps}입니다.', '에너지로 갈 수 있는 랩은 {laps}입니다.']),
+    've_half': ('strategy', ['에너지 절반 남았습니다.', '에너지 반 썼습니다.']),
+    've_critical': ('strategy', ['에너지가 거의 없습니다. 이번 랩에 들어오세요.', '에너지 바닥입니다. 이번 랩에 피트 들어오세요.']),
+    've_finish_ok': ('strategy', ['지금 페이스면 에너지로 완주합니다.', '에너지는 완주까지 충분합니다.']),
+    've_save': ('strategy', ['완주하려면 에너지를 줄이세요.', '에너지를 아껴야 합니다.']),
+    've_need_stop': ('strategy', ['에너지로는 완주가 안 됩니다. 피트가 한 번 더 필요합니다.', '에너지 때문에 피트를 한 번 더 들어갑니다.']),
+    've_spare': ('strategy', ['에너지 여유가 있습니다. 더 써도 됩니다.', '에너지가 남습니다. 밀어도 됩니다.']),
+    've_limits_stint': ('strategy', ['이번 스틴트는 연료보다 에너지가 먼저 떨어집니다.', '피트 시점은 에너지가 정합니다.']),
     'repair_pace_same': ('race', ['충돌 뒤 랩타임 손실은 없었습니다.', '충돌 뒤에도 랩타임은 그대로였습니다.']),
     'repair_pace_loss': ('race', ['충돌 뒤 랩당 {loss} 느려져 있습니다.', '충돌 뒤 랩타임이 {loss} 느려진 상태입니다.']),
     'tyre_keep': ('strategy', ['타이어는 바꾸지 않습니다.', '타이어는 그대로 갑니다.']),

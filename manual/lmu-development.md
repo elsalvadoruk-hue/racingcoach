@@ -1117,3 +1117,14 @@ $lmuCheck.live | Select-Object state, observation_mode, journal_state, recording
 마지막 실제 진단은 약 102초의 포메이션 뒤 128MiB 한도에서 끝나 레이스 중 옐로우·화이트·완주 전이를 포함하지 않는다. 위 실제 재생과 자동 검증은 수정 근거이며 게임 내 실시간 청취 결과를 대신하지 않는다. 적용하려면 실행 중인 Python 백엔드를 앱 종료 후 다시 실행해야 한다. 이 작업에서는 정상 앱이나 게임을 강제로 재시작하지 않았다.
 
 최종 검증: 임시 데이터 경로·AI/수집 비활성화 환경에서 LMU 백엔드 630개 통과(`logs/lmu-race-continuity-backend-final-20261020.log`). 공유 오디오·LMU 피트월·스포터·런타임 화면 117개 통과. production build는 `main.e937a65b.js`이며 기존 다른 파일의 연산자 괄호 관련 lint 경고 6개가 남아 있다. 설치된 SDK의 네이티브 컴파일 및 게임 비연결 probe도 통과했다.
+
+## 2026-10-21: 가져온 기준 표시·차종 식별·첫 화면·기준 속도·버추얼 에너지 (Claude)
+
+- **가져온 기록:** `data/lmu-imports`의 기록도 자동 기준 후보입니다. 결과에 `imported`, `driver_name`(DuckDB `metadata.DriverName`, 한 줄만 읽고 캐시)을 붙이고 화면은 "가져온 기록 (이름)"으로 표시합니다. LMU 자동 기준 선택지 이름은 "비슷한 조건의 가장 빠른 랩 · 자동 (가져온 기록 포함)"입니다.
+- **차종 식별:** DuckDB는 차종 없이 엔트리 이름(`Team WRT 2026 #32:LM`)만 저장합니다. `lmu_telemetry.car_model_key`가 `CarSetup`의 `VM_*` 항목별 `available`·`minValue`·`maxValue`와 차급을 해시해 `car_model_key`(`lmu-model-…`)를 만듭니다. 연료·에너지·밸러스트·출력 관련 항목은 BoP로 바뀌므로 뺍니다. `personal_reference.identity`가 이 키를 엔트리 이름보다 먼저 씁니다. 로컬 기록 9개에서 #32 GT3 7개(다른 드라이버 기록 포함)가 같은 키, 하이퍼카 #15 2개가 다른 키였습니다. **다른 리버리 기록으로는 아직 확인하지 못했습니다.** 실시간 SDK에는 `mVehicleModel`이 있지만 이번에는 쓰지 않았습니다.
+- **첫 화면:** `useLmuWorkspace`가 `valid_laps > 0`인 기록만 자동으로 엽니다(새 기록 자동 반영도 같음). 유효 랩 0개 기록은 선택 창에서 직접 열 수 있습니다. 하이퍼카 `03_53_40Z`의 무효 판정은 `SurfaceTypes`(네 바퀴 자갈·잔디)로 맞다고 확인했습니다.
+- **자동 기준 속도:** `personal_reference_files` 표에 기록마다 크기·수정 시각·버전을 남겨, 유효 랩이 없는 기록도 버전마다 한 번만 읽습니다. LMU 버전은 `workspace_personal_reference.INDEX_VERSION['LMU']`(`lmu-model-1`)이며 저장하는 조건이나 차종 식별을 바꾸면 올립니다. 실제 기록으로 첫 조회 약 2.8초, 이후 0.04초(전에는 매번 약 2초).
+- **버추얼 에너지 단위:** SDK `mVirtualEnergy`는 0~1 비율입니다(TinyPedal `lmu_reader.virtual_energy`가 "fraction"으로 읽고 ×100, 2026-10-20 커밋 `112f84b`). LMU DuckDB의 `Virtual Energy` 채널 단위는 `%`(20Hz)이고 실제 기록에서 100→89.3%(하이퍼카), 100→65.4%(GT3 7랩)로 줄었습니다. `lmu_irsdk.virtual_energy_pct`는 0~1만 받아 ×100, 그 밖은 `None`입니다.
+- **에너지 측정·표시:** `live_energy.EnergyWatch`(출발선에서 시작한 깨끗한 랩, 피트로드·옐로·급유·0.3% 미만 제외, 최근 5랩 평균, 3랩 미만은 모름). `LiveViews._pit_view`가 LMU일 때만 `energy_*`와 `game`을 붙이고 피트월에 세 칸을 표시합니다.
+- **에너지 음성:** `RaceEngineer._energy_calls`와 `radio_phrases`의 `ve_*` 10개 키(전략 엔지니어, 각 2표현, 숫자 두 개는 두 문장으로 나눔). 사용자 승인으로 `ENERGY_CALLS_ENABLED = True`(2026-10-21). 사전 합성 목록에 약 380문장이 늘었고 아직 받지 않았습니다(켜고 받기 전에는 처음 쓰일 때 합성).
+- **실시간 반영:** 브리지 소스의 `virtual_energy_raw`를 쓰려면 앱 재시작 뒤 설정 → LMU 실시간 연결에서 브리지를 다시 빌드해야 합니다. 실제 주행에서의 에너지 값 확인은 아직입니다.

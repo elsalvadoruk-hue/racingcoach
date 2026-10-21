@@ -61,7 +61,7 @@ beforeEach(() => {
       payload = route === 'files' ? { provider: 'LMU', files: [{ name: FILE_ID, file_id: FILE_ID,
         file_name: FILE_NAME, display_name: FILE_NAME, provider: 'LMU', analyzable: true,
         track_name: 'Monza', car_name: 'GT3', session_type: 'Practice', detected_laps: 2,
-        measurement_laps: 2, complete_laps: 2, reference_status: 'VALIDITY_UNVERIFIED' }] }
+        measurement_laps: 2, complete_laps: 2, valid_laps: 2, reference_status: 'VALIDITY_UNVERIFIED' }] }
         : route === 'session' ? session
         : route === 'references' ? { provider: 'LMU', files: [], status: 'UNSUPPORTED' }
         : route === 'comparison' ? { ...comparison, ...JSON.parse(options.body) }

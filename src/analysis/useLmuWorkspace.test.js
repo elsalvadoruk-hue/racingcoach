@@ -10,7 +10,7 @@ const session = (filename, target = 3, reference = 2) => ({
   filename, provider: 'LMU', defaultTarget: target, defaultReference: reference,
   session: { track_length_m: 5793 }, laps: [], corners: [], initialComparison: {},
 });
-const file = name => ({ name, analyzable: true });
+const file = name => ({ name, analyzable: true, valid_laps: 1 });
 const unavailable = status => Object.assign(new Error(`unavailable ${status}`), { status });
 const workspaceData = () => jest.requireActual('../desktop/sessionData').data;
 let resolvePending;
@@ -269,4 +269,14 @@ describe('recordings arriving while the LMU screen stays open', () => {
     await tick(); await tick();
     expect(labRequest).toHaveBeenCalledTimes(calls);
   });
+});
+
+test('the first screen skips a newer recording without a valid lap and opens the newest one with laps', async () => {
+  labRequest.mockResolvedValueOnce({ files: [
+    { name: 'gravel', analyzable: true, status: 'COACHING_ONLY', valid_laps: 0, complete_laps: 3 },
+    { name: 'pending', analyzable: true, valid_laps: null }, file('good'),
+  ] }).mockResolvedValueOnce(session('good'));
+  const { result } = renderHook(useLmuWorkspace);
+  await waitFor(() => expect(result.current.selectedFile).toBe('good'));
+  expect(labRequest.mock.calls.map(([route, body]) => [route, body.filename])).toEqual([['files', undefined], ['session', 'good']]);
 });

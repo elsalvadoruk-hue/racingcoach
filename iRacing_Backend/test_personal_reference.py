@@ -46,6 +46,15 @@ class PersonalReferenceTests(unittest.TestCase):
         path.unlink()
         self.assertEqual(self.index.candidates('IRACING', self.key), [])
 
+    def test_a_recording_without_valid_laps_is_read_once_per_index_version(self):
+        path = self.root / 'gravel.duckdb'
+        path.write_bytes(b'all laps off track')
+        self.index.index_recording('LMU', path, self.key, [
+            {'lap': 2, 'eligible': False, 'lap_time_s': 111.8, 'conditions': {}}], version='v1')
+        self.assertTrue(self.index.has_recording('LMU', path, 'v1'))
+        self.assertFalse(self.index.has_recording('LMU', path, 'v2'))
+        self.assertEqual(self.index.candidates('LMU', self.key), [])
+
     def test_different_vehicle_or_layout_and_invalid_laps_never_enter_candidates(self):
         self.put('best.ibt', 100)
         self.assertEqual(len(self.index.candidates('IRACING', self.key)), 1)

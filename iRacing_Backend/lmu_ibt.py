@@ -176,6 +176,8 @@ class LmuIbtReader:
         metadata = IBTReader._extract_metadata(None, session_info, '')
         layout = metadata_in.get('track_layout') or ''
         metadata.update(game='lmu', car_class=metadata_in.get('car_class') or None,
+                        driver_name=str(metadata_in.get('driver_name') or '').strip() or None,
+                        car_model_key=metadata_in.get('car_model_key') or None,
                         steering_scale=steering_scale, steering_half_range_deg=round(math.degrees(half_range), 1),
                         accel_source='DERIVED_GPS_SPEED', validity_source='LMU_TIMING_AND_TRACK_EDGE',
                         track_layout=layout, recording_time=metadata_in.get('recording_time'),
