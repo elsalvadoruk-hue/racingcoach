@@ -15,7 +15,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from overlay_preferences import PreferencesStore, default_path
+from overlay_preferences import PreferencesStore, default_path, settings_path, car_key
 from overlay_visibility import VisibilityStore, driving, preparing
 from overlay_cards import SessionCards
 
@@ -44,9 +44,38 @@ class OverlayController:
         self.monitor = None
         self.suspended = False
         self.log_directory = None
+        self.settings_target = None
+        self.selected_game = 'iracing'
+        self.car_name = None
+
+    def _target(self, identity):
+        game = identity.get('game') or ('iracing' if car_key(identity) else self.selected_game)
+        return ('lmu' if game == 'lmu' else 'iracing', car_key(identity))
+
+    def _select_target(self, identity):
+        target = self._target(identity)
+        if target != self.settings_target:
+            if self.preview:
+                return
+            if self.process is not None and self.process.poll() is None:
+                self.stop()
+            old_game = (self.settings_target or ('iracing', None))[0]
+            self.settings_target = target
+            self.cards.reset()
+            if target[0] != old_game:
+                self.auto_show = None
+        self.car_name = identity.get('car_name') or identity.get('car_path')
+
+    def select_game(self, game):
+        with self.operation_lock:
+            self.selected_game = 'lmu' if game == 'lmu' else 'iracing'
+            self._select_target(self.latest.get('identity') or {})
 
     def visibility_store(self):
-        return VisibilityStore(self.store().path.with_name('overlay-visibility.json'))
+        legacy = self.path or default_path()
+        game = (self.settings_target or (self.selected_game, None))[0]
+        return VisibilityStore(settings_path(legacy.parent, game).with_name('visibility.json'),
+                               legacy.with_name('overlay-visibility.json'))
 
     def enabled(self):
         if self.auto_show is None:
@@ -54,7 +83,10 @@ class OverlayController:
         return self.auto_show
 
     def store(self):
-        return PreferencesStore(self.path or default_path())
+        legacy = self.path or default_path()
+        game, key = self.settings_target or (self.selected_game, None)
+        path = settings_path(legacy.parent, game, key)
+        return PreferencesStore(path, [settings_path(legacy.parent, game), legacy])
 
     def status(self):
         with self.condition:
@@ -67,6 +99,9 @@ class OverlayController:
                     "ready": running and self.current is not None,
                     **(self.current if running and self.current else {"settings": saved, "goal": "abs", "scene": "during"}),
                     "auto_show": self.enabled(), "preview": self.preview and running,
+                    "settings_target": {"game": (self.settings_target or (self.selected_game, None))[0],
+                                        "car_key": (self.settings_target or (self.selected_game, None))[1],
+                                        "car_name": self.car_name},
                     "driving": not self.suspended and driving(self.latest), "suspended": self.suspended,
                     "visible": bool(running and self.current and self.current.get('visible')),
                     "reference": self.reference.status() if self.reference else None,
@@ -131,6 +166,7 @@ class OverlayController:
         with self.operation_lock:
             if self.suspended:
                 raise RuntimeError('현재 선택한 게임에서 오버레이를 여세요.')
+            self._select_target(self.latest.get('identity') or {})
             self._start_child()
             self.command('display', {'mode': 'preview', 'visible': True})
             self.preview = True
@@ -150,6 +186,14 @@ class OverlayController:
             self.auto_show = enabled
             return self.sync(self.latest)
 
+    def delete_car_settings(self):
+        with self.operation_lock:
+            if not self.settings_target or not self.settings_target[1]:
+                raise RuntimeError('차량을 확인한 뒤 차량 설정을 지울 수 있습니다.')
+            self.stop()
+            self.store().path.unlink(missing_ok=True)
+            return self.status()
+
     def sync(self, view):
         with self.operation_lock:
             if self.suspended:
@@ -160,6 +204,8 @@ class OverlayController:
             running = self.process is not None and self.process.poll() is None
             if self.preview and not running:
                 self.preview = False
+            self._select_target(view.get('identity') or {})
+            running = self.process is not None and self.process.poll() is None
             show = self.enabled() and driving(view)
             if self.reference:
                 self.reference.observe(view, self.enabled() and preparing(view) and not self.preview)
@@ -301,38 +347,44 @@ class DemoBody(BaseModel):
 def routes(controller, prefix="/api/overlay"):
     router = APIRouter(prefix=prefix)
 
-    def call(operation, *args):
+    def call(game, operation, *args):
         try:
-            return operation(*args)
+            with controller.operation_lock:
+                controller.select_game(game)
+                return operation(*args)
         except (OSError, RuntimeError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
     @router.get("")
-    def status():
-        return controller.status()
+    def status(game: Literal['iracing', 'lmu'] = 'iracing'):
+        return call(game, controller.status)
 
     @router.post("/preview")
-    def start():
-        return call(controller.start)
+    def start(game: Literal['iracing', 'lmu'] = 'iracing'):
+        return call(game, controller.start)
 
     @router.delete("/preview")
-    def stop():
-        return call(controller.end_preview)
+    def stop(game: Literal['iracing', 'lmu'] = 'iracing'):
+        return call(game, controller.end_preview)
 
     @router.put('/visibility')
-    def visibility(body: VisibilityBody):
-        return call(controller.set_visibility, body.enabled)
+    def visibility(body: VisibilityBody, game: Literal['iracing', 'lmu'] = 'iracing'):
+        return call(game, controller.set_visibility, body.enabled)
 
     @router.put("/settings")
-    def appearance(body: AppearanceBody):
-        return call(controller.command, "settings", body.model_dump(exclude_none=True))
+    def appearance(body: AppearanceBody, game: Literal['iracing', 'lmu'] = 'iracing'):
+        return call(game, controller.command, "settings", body.model_dump(exclude_none=True))
+
+    @router.delete('/settings/car')
+    def delete_car(game: Literal['iracing', 'lmu'] = 'iracing'):
+        return call(game, controller.delete_car_settings)
 
     @router.post("/fixed")
-    def fixed(body: FixedBody):
-        return call(controller.command, "fixed", {"fixed": body.fixed})
+    def fixed(body: FixedBody, game: Literal['iracing', 'lmu'] = 'iracing'):
+        return call(game, controller.command, "fixed", {"fixed": body.fixed})
 
     @router.post("/demo")
-    def demo(body: DemoBody):
-        return call(controller.command, "demo", body.model_dump(exclude_none=True))
+    def demo(body: DemoBody, game: Literal['iracing', 'lmu'] = 'iracing'):
+        return call(game, controller.command, "demo", body.model_dump(exclude_none=True))
 
     return router

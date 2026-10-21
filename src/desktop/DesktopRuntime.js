@@ -3,6 +3,7 @@ import LiveCoach from '../components/LiveCoach';
 import { controlsFromHost, workspaceFromHash } from './labControlState';
 import { listAudioDevices } from './labAudioDevices';
 import { voiceCapability } from './labVoiceCapability';
+import { useGame } from '../lib/gameContext';
 
 const RuntimeContext = createContext(null);
 
@@ -22,18 +23,19 @@ export function useLabControls() {
 }
 
 function RuntimeBridge({ host, children }) {
+  const { selectedGame } = useGame();
   const { apiBase } = host;
   const [overlay, setOverlay] = useState(null), [overlayBusy, setOverlayBusy] = useState(false);
   const [devices, setDevices] = useState([]), [message, setMessage] = useState(''), [deviceBusy, setDeviceBusy] = useState(false);
   const refreshOutputs = host.audioOutput.refresh;
   const mounted = useRef(false), permissionFlight = useRef(null), generation = useRef(0), overlayMutation = useRef(false);
   const requestOverlay = useCallback(async (enabled) => {
-    const response = await fetch(`${apiBase}/api/overlay${enabled === undefined ? '' : '/visibility'}`,
+    const response = await fetch(`${apiBase}/api/overlay${enabled === undefined ? '' : '/visibility'}?game=${selectedGame}`,
       enabled === undefined ? { cache: 'no-store' } : { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
     const data = await response.json();
     if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '오버레이 상태를 확인하지 못했습니다.');
     return data;
-  }, [apiBase]);
+  }, [apiBase, selectedGame]);
   useEffect(() => {
     let active = true;
     const refresh = async () => {

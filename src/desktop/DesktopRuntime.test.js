@@ -1,3 +1,4 @@
+import { GameContext } from '../lib/gameContext';
 import React from 'react';
 import { act, render, waitFor } from '@testing-library/react';
 import { DesktopRuntimeProvider } from './DesktopRuntime';
@@ -52,7 +53,7 @@ test('overlay switch sends a real visibility update and uses the acknowledged st
   render(<DesktopRuntimeProvider apiBase={mockHost.apiBase}>{value => { runtime = value; return null; }}</DesktopRuntimeProvider>);
   await waitFor(() => expect(runtime.overlay?.supported).toBe(true));
   await act(async () => { await runtime.change('overlay', true); });
-  expect(global.fetch).toHaveBeenCalledWith(`${mockHost.apiBase}/api/overlay/visibility`, expect.objectContaining({ method: 'PUT', body: JSON.stringify({ enabled: true }) }));
+  expect(global.fetch).toHaveBeenCalledWith(`${mockHost.apiBase}/api/overlay/visibility?game=iracing`, expect.objectContaining({ method: 'PUT', body: JSON.stringify({ enabled: true }) }));
   expect(runtime.controls.overlay).toBe(true);
 });
 
@@ -77,4 +78,13 @@ test('device permission is requested only by an explicit action and every tempor
   const result = await listAudioDevices(media, null, { ask: true });
   expect(media.getUserMedia).toHaveBeenCalledWith({ audio: true }); expect(stopOne).toHaveBeenCalledTimes(1); expect(stopTwo).toHaveBeenCalledTimes(1);
   expect(result).toMatchObject({ permission: 'granted', devices: [{ deviceId: 'mic' }] });
+});
+
+
+test('LMU header overlay requests include its selected game', async () => {
+  let runtime;
+  render(<GameContext.Provider value={{ selectedGame: 'lmu', activeGame: 'lmu' }}><DesktopRuntimeProvider apiBase={mockHost.apiBase}>{value => { runtime = value; return null; }}</DesktopRuntimeProvider></GameContext.Provider>);
+  await waitFor(() => expect(runtime.overlay?.supported).toBe(true));
+  await act(async () => runtime.change('overlay', true));
+  expect(global.fetch.mock.calls.every(([url]) => new URL(url).searchParams.get('game') === 'lmu')).toBe(true);
 });

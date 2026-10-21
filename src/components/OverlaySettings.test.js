@@ -1,3 +1,4 @@
+import { GameContext } from '../lib/gameContext';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import OverlaySettings from './OverlaySettings';
@@ -6,6 +7,28 @@ const base = { supported: true, running: true, ready: true, goal: 'abs', scene: 
   settings: { width: 121, height: 122, x: 300, y: 100, content_opacity: 100, background_opacity: 85, fixed: false } };
 const reply = (data, ok = true) => Promise.resolve({ ok, json: () => Promise.resolve(data) });
 afterEach(() => { jest.restoreAllMocks(); jest.useRealTimers(); });
+
+test('LMU requests carry the selected game and only the known car can be reset', async () => {
+  let view = { ...base, settings_target: { game: 'lmu', car_key: 'porsche-963', car_name: 'Porsche 963' } };
+  const mock = jest.spyOn(global, 'fetch').mockImplementation((url, options) => {
+    expect(new URL(url).searchParams.get('game')).toBe('lmu');
+    if (options.method === 'DELETE') view = { ...view, settings: { ...view.settings, width: 100 } };
+    return reply(view);
+  });
+  render(<GameContext.Provider value={{ selectedGame: 'lmu', activeGame: 'lmu' }}><OverlaySettings apiBase="http://api" /></GameContext.Provider>);
+  expect(await screen.findByText('적용 대상: LMU · Porsche 963 (이 차량 설정)')).toBeVisible();
+  await userEvent.click(screen.getByRole('button', { name: '이 차량 설정 지우기' }));
+  expect(mock).toHaveBeenLastCalledWith('http://api/api/overlay/settings/car?game=lmu', { method: 'DELETE' });
+  await waitFor(() => expect(screen.getByLabelText('가로 크기 (%)')).toHaveValue(100));
+  expect(screen.getByText('이 차량 설정을 지웠습니다. 게임 기본값을 사용합니다.')).toBeVisible();
+});
+
+test('unknown car shows game defaults and no car deletion control', async () => {
+  jest.spyOn(global, 'fetch').mockImplementation(() => reply({ ...base, settings_target: { game: 'iracing', car_key: null } }));
+  render(<OverlaySettings apiBase="http://api" />);
+  expect(await screen.findByText('적용 대상: iRacing · 게임 기본값')).toBeVisible();
+  expect(screen.queryByRole('button', { name: '이 차량 설정 지우기' })).not.toBeInTheDocument();
+});
 
 test('reports the actual task, measured progress and pinned reference and clears it on session change', async () => {
   jest.useFakeTimers();
@@ -69,7 +92,7 @@ test('an older backend does not pretend automatic display is on or offer an unsu
 });
 
 test('a missing visibility route explains the server mismatch without claiming the change was saved', async () => {
-  jest.spyOn(global, 'fetch').mockImplementation((url) => url.endsWith('/visibility')
+  jest.spyOn(global, 'fetch').mockImplementation((url) => new URL(url).pathname.endsWith('/visibility')
     ? Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ detail: 'Not Found' }) })
     : reply({ ...base, auto_show: true }));
   render(<OverlaySettings apiBase="http://api" />);
@@ -84,7 +107,7 @@ test('a missing visibility route explains the server mismatch without claiming t
 test('automatic-display preference saves independently without erasing pending appearance edits', async () => {
   let view = { ...base, preview: true, auto_show: true };
   const fetchMock = jest.spyOn(global, 'fetch').mockImplementation((url, options) => {
-    if (url.endsWith('/visibility')) view = { ...view, auto_show: JSON.parse(options.body).enabled };
+    if (new URL(url).pathname.endsWith('/visibility')) view = { ...view, auto_show: JSON.parse(options.body).enabled };
     return reply(view);
   });
   render(<OverlaySettings apiBase="http://api" />);
@@ -93,7 +116,7 @@ test('automatic-display preference saves independently without erasing pending a
   await userEvent.click(screen.getByRole('switch', { name: '주행 중 자동 표시' }));
   await waitFor(() => expect(screen.getByRole('switch', { name: '주행 중 자동 표시' })).not.toBeChecked());
   expect(width).toHaveValue(147);
-  expect(fetchMock).toHaveBeenLastCalledWith('http://api/api/overlay/visibility', expect.objectContaining({
+  expect(fetchMock).toHaveBeenLastCalledWith('http://api/api/overlay/visibility?game=iracing', expect.objectContaining({
     method: 'PUT', body: JSON.stringify({ enabled: false }),
   }));
 });
@@ -102,7 +125,7 @@ test('applies pending edits before saving and disables every appearance field un
   let view = JSON.parse(JSON.stringify(base));
   const fetchMock = jest.spyOn(global, 'fetch').mockImplementation((url, options) => {
     if (options.method === 'PUT') view = { ...view, settings: { ...view.settings, ...JSON.parse(options.body) } };
-    if (url.endsWith('/fixed')) view = { ...view, settings: { ...view.settings, fixed: JSON.parse(options.body).fixed } };
+    if (new URL(url).pathname.endsWith('/fixed')) view = { ...view, settings: { ...view.settings, fixed: JSON.parse(options.body).fixed } };
     return reply(view);
   });
   render(<OverlaySettings apiBase="http://api" />);
@@ -111,7 +134,7 @@ test('applies pending edits before saving and disables every appearance field un
   await userEvent.click(screen.getByRole('button', { name: '현재 설정 저장·고정' }));
   expect(await screen.findByRole('button', { name: '고정 해제·편집' })).toBeEnabled();
   expect(fetchMock.mock.calls.filter(([, options]) => options.method !== 'GET').map(([url]) => url))
-    .toEqual(['http://api/api/overlay/settings', 'http://api/api/overlay/fixed']);
+    .toEqual(['http://api/api/overlay/settings?game=iracing', 'http://api/api/overlay/fixed?game=iracing']);
   expect(width).toHaveValue(150);
   screen.getAllByRole('spinbutton').forEach((input) => expect(input).toBeDisabled());
   screen.getAllByRole('slider').forEach((input) => expect(input).toBeDisabled());
@@ -135,7 +158,7 @@ test('dragging both sliders updates percentages immediately and applies only opa
   fireEvent.change(content, { target: { value: '0' } });
   fireEvent.change(background, { target: { value: '100' } });
   await act(async () => { jest.advanceTimersByTime(80); });
-  expect(fetchMock).toHaveBeenLastCalledWith('http://api/api/overlay/settings', expect.objectContaining({
+  expect(fetchMock).toHaveBeenLastCalledWith('http://api/api/overlay/settings?game=iracing', expect.objectContaining({
     method: 'PUT', body: JSON.stringify({ content_opacity: 0, background_opacity: 100 }),
   }));
   expect(content).toHaveValue('0');
@@ -153,7 +176,7 @@ test('saving during a slow drag waits for the latest value without resetting new
       view = { ...view, settings: { ...view.settings, ...JSON.parse(options.body) } };
       resolve({ ok: true, json: () => Promise.resolve(view) });
     }));
-    if (url.endsWith('/fixed')) view = { ...view, settings: { ...view.settings, fixed: JSON.parse(options.body).fixed } };
+    if (new URL(url).pathname.endsWith('/fixed')) view = { ...view, settings: { ...view.settings, fixed: JSON.parse(options.body).fixed } };
     return reply(view);
   });
   render(<OverlaySettings apiBase="http://api" />);
@@ -169,12 +192,12 @@ test('saving during a slow drag waits for the latest value without resetting new
   expect(content).toHaveValue('37');
   expect(width).toHaveValue(146);
   fireEvent.click(screen.getByRole('button', { name: '현재 설정 저장·고정' }));
-  expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/fixed'))).toBe(false);
+  expect(fetchMock.mock.calls.some(([url]) => new URL(url).pathname.endsWith('/fixed'))).toBe(false);
   await act(async () => { releases.shift()(); });
   await act(async () => { releases.shift()(); });
   expect(await screen.findByRole('button', { name: '고정 해제·편집' })).toBeEnabled();
   const writes = fetchMock.mock.calls.filter(([, options]) => options.method !== 'GET');
-  expect(writes.map(([url, options]) => [url.split('/').pop(), JSON.parse(options.body)]))
+  expect(writes.map(([url, options]) => [new URL(url).pathname.split('/').pop(), JSON.parse(options.body)]))
     .toEqual([
       ['settings', { content_opacity: 80 }], ['settings', { content_opacity: 37 }],
       ['settings', { width: 146, height: 122, x: 300, y: 100, content_opacity: 37, background_opacity: 85 }],
@@ -193,7 +216,7 @@ test('closing flushes the final slider value before stopping the preview', async
   fireEvent.change(screen.getByRole('slider', { name: '배경 불투명도' }), { target: { value: '24' } });
   await act(async () => { fireEvent.click(screen.getByRole('button', { name: '미리보기 끄기' })); });
   expect(fetchMock.mock.calls.filter(([, options]) => options.method !== 'GET').map(([url, options]) => [url, options.method]))
-    .toEqual([['http://api/api/overlay/settings', 'PUT'], ['http://api/api/overlay/preview', 'DELETE']]);
+    .toEqual([['http://api/api/overlay/settings?game=iracing', 'PUT'], ['http://api/api/overlay/preview?game=iracing', 'DELETE']]);
 });
 
 test('unmounting discards queued opacity changes and prevents later requests', async () => {
@@ -223,7 +246,7 @@ test('a failed live update keeps the chosen percentage editable and prevents a p
   expect(screen.getByRole('alert')).toHaveTextContent('연결을 확인하세요.');
   expect(content).toHaveValue('56');
   expect(content).toBeEnabled();
-  expect(fetchMock.mock.calls.some(([url]) => url.endsWith('/fixed'))).toBe(false);
+  expect(fetchMock.mock.calls.some(([url]) => new URL(url).pathname.endsWith('/fixed'))).toBe(false);
 });
 
 test('polling does not erase an unsaved edit and failures do not claim a saved layout', async () => {
@@ -246,10 +269,10 @@ test('closing the preview and checking celebration are explicit actions', async 
   await screen.findByLabelText('가로 크기 (%)');
   await userEvent.click(screen.getByText('샘플 장면과 축하 효과'));
   await userEvent.click(screen.getByRole('button', { name: '5/5 축하 보기' }));
-  expect(fetchMock).toHaveBeenLastCalledWith('http://api/api/overlay/demo', expect.objectContaining({
+  expect(fetchMock).toHaveBeenLastCalledWith('http://api/api/overlay/demo?game=iracing', expect.objectContaining({
     method: 'POST', body: JSON.stringify({ celebrate: true }),
   }));
   await waitFor(() => expect(screen.getByRole('button', { name: '미리보기 끄기' })).toBeEnabled());
   await act(async () => { await userEvent.click(screen.getByRole('button', { name: '미리보기 끄기' })); });
-  expect(fetchMock).toHaveBeenLastCalledWith('http://api/api/overlay/preview', { method: 'DELETE' });
+  expect(fetchMock).toHaveBeenLastCalledWith('http://api/api/overlay/preview?game=iracing', { method: 'DELETE' });
 });

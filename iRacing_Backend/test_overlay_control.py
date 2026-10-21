@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -56,6 +57,7 @@ class PreferenceTests(unittest.TestCase):
 class OverlayRouteTests(unittest.TestCase):
     def setUp(self):
         self.controller = Mock()
+        self.controller.operation_lock = threading.RLock()
         self.controller.command.return_value = {"running": True}
         app = FastAPI()
         app.include_router(routes(self.controller))

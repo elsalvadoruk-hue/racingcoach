@@ -18,15 +18,16 @@ def driving(view):
 
 
 class VisibilityStore:
-    def __init__(self, path):
+    def __init__(self, path, fallback=None):
         self.path = Path(path)
+        self.fallback = Path(fallback) if fallback else None
 
     def load(self):
         try:
             value = json.loads(self.path.read_text(encoding='utf-8'))
             return value.get('version') == 1 and value.get('enabled') is True
         except FileNotFoundError:
-            return True
+            return VisibilityStore(self.fallback).load() if self.fallback else True
         except (OSError, ValueError, AttributeError):
             return False
 

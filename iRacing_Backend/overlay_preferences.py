@@ -1,6 +1,7 @@
 """Overlay appearance only. Importing this module opens no app or personal stores."""
 import json
 import os
+import re
 from pathlib import Path
 import tempfile
 
@@ -13,6 +14,22 @@ LIMITS = {"width": (75, 200), "height": (75, 200), "x": (-100000, 100000),
 def default_path():
     import app_settings
     return app_settings.data_dir() / "overlay-settings.json"
+
+
+def car_key(identity):
+    value = str(identity.get('car_path') or identity.get('car_name') or '').lower()
+    key = re.sub(r'[^a-z0-9]+', '-', value).strip('-')[:80].rstrip('-')
+    if not key:
+        return None
+    if key == 'visibility' or value == '_default':
+        key = 'car-' + key
+    return key[:80]
+
+
+def settings_path(data_dir, game, key=None):
+    if key is not None and not re.fullmatch(r'[a-z0-9-]{1,80}', key):
+        raise ValueError('Invalid overlay car key')
+    return Path(data_dir) / 'overlay' / ('lmu' if game == 'lmu' else 'iracing') / f'{key or "_default"}.json'
 
 
 def normalize(values):
@@ -29,22 +46,27 @@ def normalize(values):
 
 
 class PreferencesStore:
-    def __init__(self, path):
+    def __init__(self, path, fallbacks=None):
         self.path = Path(path)
+        if fallbacks is None and self.path.parent.name in ('iracing', 'lmu') and self.path.parent.parent.name == 'overlay':
+            fallbacks = [self.path.with_name('_default.json'), self.path.parents[2] / 'overlay-settings.json']
+        self.fallbacks = [Path(p) for p in (fallbacks or []) if Path(p) != self.path]
         self.load_error = None
 
     def load(self):
         self.load_error = None
-        try:
-            values = json.loads(self.path.read_text(encoding="utf-8"))
-            if not isinstance(values, dict) or values.get("version") != 1:
-                raise ValueError("Unsupported overlay settings")
-            return normalize(values)
-        except FileNotFoundError:
-            return dict(DEFAULTS)
-        except (OSError, ValueError):
-            self.load_error = "저장된 오버레이 설정을 읽지 못해 기본값으로 열었습니다."
-            return dict(DEFAULTS)
+        for path in [self.path, *self.fallbacks]:
+            try:
+                values = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(values, dict) or values.get("version") != 1:
+                    raise ValueError("Unsupported overlay settings")
+                return normalize(values)
+            except FileNotFoundError:
+                continue
+            except (OSError, ValueError):
+                self.load_error = "저장된 오버레이 설정을 읽지 못해 기본값으로 열었습니다."
+                return dict(DEFAULTS)
+        return dict(DEFAULTS)
 
     def save(self, values):
         self.path.parent.mkdir(parents=True, exist_ok=True)
