@@ -8,6 +8,7 @@ import { NativeSelect } from './ui/native-select';
 import { Input } from './ui/input';
 import { Switch } from './ui/switch';
 import React from 'react';
+import { readGameItem } from '../lib/gameStorage';
 
 export const ENGINEERS = {
   coach: { label: '주행 코치', voice: 'Algenib', style: 'border-primary/30 bg-primary/10 text-primary', description: '코너 느낌과 다음 주행 행동' },
@@ -16,9 +17,9 @@ export const ENGINEERS = {
 };
 
 export const PIT_WALL_KEY = 'iracing.voice.pitWall.v1';
-export function readPitPreferences(storageKey = PIT_WALL_KEY) {
+export function readPitPreferences(storageKey = PIT_WALL_KEY, game = 'iracing') {
   try {
-    const saved = JSON.parse(localStorage.getItem(storageKey));
+    const saved = JSON.parse(readGameItem(storageKey, game));
     return { level: ['important', 'all', 'off'].includes(saved?.level) ? saved.level : 'important',
       fuel_save_mode: ['off', 'finish', 'reserve'].includes(saved?.fuel_save_mode) ? saved.fuel_save_mode : 'finish',
       reserve_laps: typeof saved?.reserve_laps === 'number' && saved.reserve_laps >= 0 && saved.reserve_laps <= 3 ? saved.reserve_laps : .5,

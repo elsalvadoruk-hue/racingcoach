@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useGame, useGameSettings } from './lib/gameContext';
+import { readGameItem, writeGameItem } from './lib/gameStorage';
 import * as radioEffect from './radioEffect';
 import { DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX } from './voiceAudio';
 
@@ -6,8 +8,9 @@ const STORAGE_KEY = 'iracing.voice.outputDevice';
 // Chrome on Windows also lists "communications", the output Windows keeps for calls. Playing there counts as a
 // call: Windows turns the other sounds (the game) down, and a Bluetooth headset switches to its hands-free mode.
 const COMMUNICATIONS = 'communications';
-const storedOutput = () => { try { return localStorage.getItem(STORAGE_KEY) || ''; } catch { return ''; } };
-const savedOutput = () => { const id = storedOutput(); return id === COMMUNICATIONS ? '' : id; };
+const storedOutput = game => readGameItem(STORAGE_KEY, game) || '';
+const savedOutput = game => { const id = storedOutput(game); return id === COMMUNICATIONS ? '' : id; };
+const storeOutput = (game, id) => writeGameItem(STORAGE_KEY, game, id);
 const COMMUNICATIONS_MESSAGE = '“통신” 출력은 Windows가 통화로 처리해 게임 소리를 줄이거나 블루투스 헤드셋을 통화 모드로 바꿀 수 있어 Windows 기본 장치로 바꿨습니다. 필요하면 실제 장치를 직접 선택하세요.';
 const HANDS_FREE = /hands[- ]?free/i;
 // Only real outputs: the browser's "default" is the first choice of the list, and "communications" is never offered.
@@ -25,13 +28,16 @@ const clampVolume = (value) => typeof value === 'number' && Number.isFinite(valu
 export { DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX };
 const clampRate = (value, fallback = DEFAULT_RATE) => typeof value === 'number' && Number.isFinite(value)
   ? Math.round(Math.max(RATE_MIN, Math.min(RATE_MAX, value)) * 100) / 100 : fallback;
-const savedPlayback = () => {
+const savedPlayback = game => {
   try {
-    const saved = JSON.parse(localStorage.getItem(PLAYBACK_KEY));
+    const saved = JSON.parse(readGameItem(PLAYBACK_KEY, game));
     return { volume: clampVolume(saved?.volume), muted: saved?.muted === true, rate: clampRate(saved?.rate, MULTIPART_DEFAULT_RATE),
       spotterRate: clampRate(saved?.spotterRate), pitwallRate: clampRate(saved?.pitwallRate) };
   } catch { return { volume: 1, muted: false, rate: MULTIPART_DEFAULT_RATE, spotterRate: DEFAULT_RATE, pitwallRate: DEFAULT_RATE }; }
 };
+
+const storePlayback = (game, value) => writeGameItem(PLAYBACK_KEY, game, JSON.stringify(value));
+const storeEffect = (game, value) => radioEffect.storeSettings(value, game);
 
 // The answer to a question the driver asked over the radio is what he most wants to hear:
 // nothing interrupts it, not even a side-by-side call, which is said after it if still true.
@@ -62,17 +68,19 @@ const askDevicePermission = async () => {
 const clipSource = (clip, mime) => (String(clip).startsWith('data:') ? clip : `data:${mime};base64,${clip}`);
 
 export default function useAudioOutput() {
+  const { selectedGame, activeGame } = useGame();
   const supported = typeof HTMLMediaElement.prototype.setSinkId === 'function' && !!navigator.mediaDevices?.enumerateDevices;
-  const [outputId, setOutputId] = useState(savedOutput);
+  const [outputId, setOutputId, appliedOutput] = useGameSettings(savedOutput, storeOutput);
   const [refreshing, setRefreshing] = useState(false);
   const [devices, setDevices] = useState([]);
-  const [message, setMessage] = useState(() => (storedOutput() === COMMUNICATIONS ? COMMUNICATIONS_MESSAGE : ''));
-  const [playback, setPlayback] = useState(savedPlayback);
+  const [message, setMessage] = useState(() => (storedOutput(selectedGame) === COMMUNICATIONS ? COMMUNICATIONS_MESSAGE : ''));
+  const [playback, setPlayback, appliedPlayback] = useGameSettings(savedPlayback, storePlayback);
   const [isPlaying, setIsPlaying] = useState(false);
-  const playbackSettings = useRef(playback);
-  const [effect, setEffect] = useState(radioEffect.savedSettings);
-  const effectSettings = useRef(effect);
-  const selected = useRef(outputId), knownDevices = useRef([]), player = useRef(null);
+  const playbackSettings = useRef(appliedPlayback); playbackSettings.current = appliedPlayback;
+  const [effect, setEffect, appliedEffect] = useGameSettings(radioEffect.savedSettings, storeEffect);
+  const effectSettings = useRef(appliedEffect); effectSettings.current = appliedEffect;
+  const selected = useRef(appliedOutput), knownDevices = useRef([]), player = useRef(null);
+  selected.current = appliedOutput;
   const unavailableOutput = useRef(''), removalTimer = useRef(null);
   const priorityGate = useRef(false);
   const mounted = useRef(true), refreshSerial = useRef(0);
@@ -101,17 +109,20 @@ export default function useAudioOutput() {
   const isPriorityBlocked = useCallback(() => priorityGate.current || !!player.current?._priority, []);
   const audioBusy = useCallback(() => !!player.current, []);
   const updatePlayback = useCallback((patch) => {
-    const next = { ...playbackSettings.current, ...patch };
-    next.volume = clampVolume(next.volume); next.rate = clampRate(next.rate, MULTIPART_DEFAULT_RATE);
-    next.spotterRate = clampRate(next.spotterRate); next.pitwallRate = clampRate(next.pitwallRate);
-    playbackSettings.current = next; setPlayback(next);
+    const next = setPlayback(current => {
+      const value = { ...current, ...patch };
+      value.volume = clampVolume(value.volume); value.rate = clampRate(value.rate, MULTIPART_DEFAULT_RATE);
+      value.spotterRate = clampRate(value.spotterRate); value.pitwallRate = clampRate(value.pitwallRate);
+      return value;
+    });
+    if (selectedGame !== activeGame) return;
+    playbackSettings.current = next;
     if (player.current) {
       player.current.volume = Math.min(1, next.volume); player.current.muted = next.muted;
       player.current._effect?.update?.(next);
       if (next.volume > 1 && !player.current._effect?.boosted) setMessage('현재 음성은 100%로 재생됩니다. 증폭은 다음 안내부터 적용되며 최신 Chrome 또는 Edge가 필요합니다.');
     }
-    try { localStorage.setItem(PLAYBACK_KEY, JSON.stringify(next)); } catch { /* Controls still work without storage. */ }
-  }, []);
+  }, [setPlayback, selectedGame, activeGame]);
   const changeVolume = useCallback((volume) => {
     radioEffect.warm(effectSettings.current, selected.current);
     updatePlayback({ volume, muted: false });
@@ -122,16 +133,18 @@ export default function useAudioOutput() {
   const changePitwallRate = useCallback((pitwallRate) => updatePlayback({ pitwallRate }), [updatePlayback]);
   // The radio effect applies from the next clip on. Changing it is a click, which lets the audio context start.
   const changeEffect = useCallback((patch) => {
-    const next = radioEffect.cleanSettings({ ...effectSettings.current, ...patch });
-    effectSettings.current = next; setEffect(next); radioEffect.storeSettings(next);
-    radioEffect.warm(next, selected.current);
-  }, []);
-  const toggleMute = useCallback(() => updatePlayback({ muted: !playbackSettings.current.muted }), [updatePlayback]);
+    const next = radioEffect.cleanSettings({ ...effect, ...patch });
+    setEffect(next);
+    if (selectedGame === activeGame) { effectSettings.current = next; radioEffect.warm(next, selected.current); }
+  }, [effect, setEffect, selectedGame, activeGame]);
+  const toggleMute = useCallback(() => updatePlayback({ muted: !playback.muted }), [updatePlayback, playback.muted]);
   const saveOutput = useCallback((id) => {
-    unavailableOutput.current = ''; clearTimeout(removalTimer.current); removalTimer.current = null;
-    selected.current = id; setOutputId(id);
-    try { if (id) localStorage.setItem(STORAGE_KEY, id); else localStorage.removeItem(STORAGE_KEY); } catch { /* Playback still works without storage. */ }
-  }, []);
+    setOutputId(id);
+    if (selectedGame === activeGame) {
+      unavailableOutput.current = ''; clearTimeout(removalTimer.current); removalTimer.current = null;
+      selected.current = id;
+    }
+  }, [setOutputId, selectedGame, activeGame]);
   // The chosen device left the list OUTPUT_GRACE_MS ago: if it is still gone, stop the call on it. Calls cut off
   // this way are said again once the radio is free (RESUMABLE), on Windows default while the device stays away.
   const confirmRemoval = useCallback(async (id) => {
@@ -201,7 +214,6 @@ export default function useAudioOutput() {
   }, [supported, confirmRemoval]);
   useEffect(() => {
     mounted.current = true;
-    if (storedOutput() === COMMUNICATIONS) { try { localStorage.removeItem(STORAGE_KEY); } catch { /* Still not used. */ } }
     refresh();
     // The radio effect's audio context lost its device: what it was carrying is said again from the start.
     const unsubscribe = radioEffect.onLost(() => {
@@ -223,10 +235,16 @@ export default function useAudioOutput() {
       stop('page_closed');
     };
   }, [refresh, stop]);
+  useEffect(() => {
+    if (storedOutput(selectedGame) === COMMUNICATIONS) storeOutput(selectedGame, '');
+  }, [selectedGame]);
+  useEffect(() => {
+    unavailableOutput.current = ''; clearTimeout(removalTimer.current); removalTimer.current = null;
+  }, [activeGame]);
   const changeOutput = useCallback((id) => {
-    stop('output_changed'); saveOutput(id); setMessage('');
-    radioEffect.warm(effectSettings.current, id);
-  }, [stop, saveOutput]);
+    saveOutput(id); setMessage('');
+    if (selectedGame === activeGame) { stop('output_changed'); radioEffect.warm(effectSettings.current, id); }
+  }, [stop, saveOutput, selectedGame, activeGame]);
   const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall' } = {}) => {
     // Multipart calls use their own absolute rate, never a multiplier of the role's rate.
     // Capture it once so every sentence keeps the same speed until this call ends.
@@ -371,7 +389,7 @@ export default function useAudioOutput() {
       current._finish('failed', failure.name || 'playback_error'); stop();
     }
   }, [supported, stop]);
-  return { outputId, devices, supported, message, refresh, refreshing, changeOutput, play, stop, stopNormal,
+  return { applied: { ...appliedPlayback, outputId: appliedOutput }, outputId, devices, supported, message, refresh, refreshing, changeOutput, play, stop, stopNormal,
     setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, isPlaying,
     volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, rate: playback.rate, changeRate,
     spotterRate: playback.spotterRate, changeSpotterRate, pitwallRate: playback.pitwallRate, changePitwallRate, effect, changeEffect };

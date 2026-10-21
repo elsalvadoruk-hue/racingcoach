@@ -78,7 +78,8 @@ class LiveViews:
             latest = dict(self.samples[-1]) if self.samples else None
             fresh = latest is not None and now - latest['wall_time'] < 2 and self.state == 'CONNECTED'
             if not fresh:
-                return {'connected': False, 'identity': {}, 'snapshot': None, 'recent': [], 'captured_at': now}
+                return {'connected': False, 'game': self.game if self.state == 'CONNECTED' else None,
+                        'identity': {}, 'snapshot': None, 'recent': [], 'captured_at': now}
             # Five samples/sec for twenty seconds is sufficient to anchor a comment;
             # the full live buffer never leaves this process or enters the database.
             # Only the newest twenty seconds are needed; don't walk the whole buffer.
@@ -94,7 +95,8 @@ class LiveViews:
                     last_time = point['session_time']
             if not recent or recent[-1]['session_time'] != latest['session_time']:
                 recent.append(latest)
-            return {'connected': True, 'identity': dict(self.identity), 'snapshot': latest,
+            return {'connected': True, 'game': self.game if self.state == 'CONNECTED' else None,
+                    'identity': dict(self.identity), 'snapshot': latest,
                     'recent': recent, 'captured_at': now,
                     'fuel_l_per_lap': max(self.fuel_history) if self.fuel_history else None,
                     'fuel_observed_laps': len(self.fuel_history),

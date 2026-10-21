@@ -1,8 +1,10 @@
+import { GameContext } from '../lib/gameContext';
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import LiveCoach from './LiveCoach';
 import { PIT_WALL_KEY } from './PitWall';
 import useAudioOutput from '../useAudioOutput';
+import { VoiceRecorder } from '../voiceAudio';
 
 jest.mock('../useAudioOutput');
 let output, pendingReport, count, fetched;
@@ -26,6 +28,40 @@ beforeEach(() => {
 });
 afterEach(() => { global.WebSocket = originalSocket; global.fetch = originalFetch; jest.useRealTimers(); jest.restoreAllMocks(); });
 
+test('LMU pit wall edits preserve iRacing values and reports apply only the connected game', async () => {
+  localStorage.setItem(PIT_WALL_KEY, JSON.stringify({ reserve_laps: .8 }));
+  let context = { selectedGame: 'lmu', activeGame: 'iracing', liveGame: 'iracing' };
+  const app = () => <GameContext.Provider value={context}><LiveCoach apiBase="http://test" visible /></GameContext.Provider>;
+  const { rerender } = render(app());
+  expect(screen.getByLabelText('완주 여유 연료 랩')).toHaveValue(.8);
+  fireEvent.change(screen.getByLabelText('완주 여유 연료 랩'), { target: { value: '2' } });
+  expect(JSON.parse(localStorage.getItem(`${PIT_WALL_KEY}.lmu`)).reserve_laps).toBe(2);
+  expect(JSON.parse(localStorage.getItem(PIT_WALL_KEY)).reserve_laps).toBe(.8);
+  await waitFor(() => expect(fetched.some(r => r.url.endsWith('/reports') && r.body.reserve_laps === .8)).toBe(true));
+  context = { ...context, activeGame: 'lmu', liveGame: 'lmu' }; rerender(app());
+  await waitFor(() => expect(fetched.some(r => r.url.endsWith('/reports') && r.body.reserve_laps === 2)).toBe(true));
+  context = { ...context, selectedGame: 'iracing' }; rerender(app());
+  expect(screen.getByLabelText('완주 여유 연료 랩')).toHaveValue(.8);
+});
+
+test('editing an inactive game microphone preserves the active recorder and next game uses its own device', async () => {
+  localStorage.setItem('iracing.voice.inputDevice', 'iracing-mic');
+  const open = jest.spyOn(VoiceRecorder.prototype, 'open').mockResolvedValue();
+  const close = jest.spyOn(VoiceRecorder.prototype, 'close').mockImplementation(() => {});
+  let context = { selectedGame: 'lmu', activeGame: 'iracing', liveGame: 'iracing' }, host;
+  const app = () => <GameContext.Provider value={context}><LiveCoach apiBase="http://test" visible>{value => { host = value; return null; }}</LiveCoach></GameContext.Provider>;
+  const { rerender } = render(app());
+  await act(async () => host.prepare());
+  expect(open).toHaveBeenLastCalledWith('iracing-mic');
+  act(() => host.changeInputDevice('lmu-mic'));
+  expect(host.armed).toBe(true); expect(close).not.toHaveBeenCalled();
+  expect(localStorage.getItem('iracing.voice.inputDevice')).toBe('iracing-mic');
+  context = { ...context, activeGame: 'lmu', liveGame: 'lmu' }; rerender(app());
+  expect(close).toHaveBeenCalledTimes(1); expect(host.armed).toBe(false);
+  await act(async () => host.prepare());
+  expect(open).toHaveBeenLastCalledWith('lmu-mic');
+});
+
 test('three male voices, preferences and automatic reports use the common audio output', async () => {
   render(<LiveCoach apiBase="http://test" visible />);
   const panel = screen.getByRole('region', { name: '레이스 피트월' });
@@ -36,8 +72,8 @@ test('three male voices, preferences and automatic reports use the common audio 
   fireEvent.change(screen.getByLabelText('예상 피트 총손실 초'), { target: { value: '25' } });
   fireEvent.change(screen.getByLabelText('완주 여유 연료 랩'), { target: { value: '1' } });
   fireEvent.change(screen.getByLabelText('연료 절약 목표'), { target: { value: 'reserve' } });
-  expect(JSON.parse(localStorage.getItem(PIT_WALL_KEY))).toMatchObject({ pit_loss_s: 25, reserve_laps: 1 });
-  expect(JSON.parse(localStorage.getItem(PIT_WALL_KEY)).fuel_save_mode).toBe('reserve');
+  expect(JSON.parse(localStorage.getItem(`${PIT_WALL_KEY}.iracing`))).toMatchObject({ pit_loss_s: 25, reserve_laps: 1 });
+  expect(JSON.parse(localStorage.getItem(`${PIT_WALL_KEY}.iracing`)).fuel_save_mode).toBe('reserve');
   fireEvent.click(screen.getByRole('button', { name: '자동 보고 시작' }));
   await screen.findByText('완주 연료가 부족합니다.');
   expect(output.play).toHaveBeenCalledWith('auto-audio', 'audio/mpeg', expect.objectContaining({ onStatus: expect.any(Function) }));

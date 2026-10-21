@@ -1,3 +1,5 @@
+import React from 'react';
+import { GameContext } from './lib/gameContext';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import useAudioOutput, { OUTPUT_GRACE_MS } from './useAudioOutput';
 import { RESUMABLE } from './voiceAudio';
@@ -12,6 +14,33 @@ const originalFetch = global.fetch;
 const originalMedia = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
 const originalSink = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'setSinkId');
 let media, players;
+
+test('LMU edits leave the active iRacing audio untouched and are applied when LMU connects', async () => {
+  localStorage.setItem(storageKey, 'headset');
+  localStorage.setItem('iracing.voice.playback', JSON.stringify({ volume: .6, pitwallRate: 1.15 }));
+  let context = { selectedGame: 'lmu', activeGame: 'iracing', liveGame: 'iracing' };
+  const wrapper = ({ children }) => <GameContext.Provider value={context}>{children}</GameContext.Provider>;
+  const { result, rerender } = renderHook(useAudioOutput, { wrapper });
+  expect(result.current.volume).toBe(.6);
+  await act(async () => result.current.play('iracing'));
+  act(() => { result.current.changeVolume(.2); result.current.changePitwallRate(1.4); result.current.changeOutput('speaker'); result.current.changeEffect({ enabled: true }); });
+  expect(players[0].pause).not.toHaveBeenCalled();
+  expect(players[0].volume).toBe(.6);
+  await act(async () => result.current.play('still-iracing'));
+  expect(players[1].setSinkId).toHaveBeenCalledWith('headset');
+  expect(players[1].playbackRate).toBe(1.15);
+  expect(players[1].volume).toBe(.6);
+  context = { ...context, activeGame: 'lmu', liveGame: 'lmu' }; rerender();
+  await act(async () => result.current.play('lmu'));
+  expect(players[2].setSinkId).toHaveBeenCalledWith('speaker');
+  expect(players[2].playbackRate).toBe(1.4);
+  expect(players[2].volume).toBe(.2);
+  context = { ...context, selectedGame: 'iracing' }; rerender();
+  expect(result.current.volume).toBe(.6);
+  expect(result.current.outputId).toBe('headset');
+  expect(localStorage.getItem(storageKey)).toBe('headset');
+  expect(JSON.parse(localStorage.getItem('iracing.voice.playback')).volume).toBe(.6);
+});
 
 test('130% is saved while native media stays within its allowed range, with an explicit fallback', async () => {
   const { result, unmount } = renderHook(useAudioOutput);
@@ -140,7 +169,7 @@ test.each(['coach', 'spotter'])('answers from %s and replay retain the speaker c
     expect(player.volume).toBe(.45); expect(player.muted).toBe(false);
   });
   expect(players[0].pause).toHaveBeenCalled();
-  expect(localStorage.getItem(storageKey)).toBe('headset');
+  expect(localStorage.getItem(`${storageKey}.iracing`) ?? localStorage.getItem(storageKey)).toBe('headset');
 });
 
 test('saved output survives remount and is not discarded before microphone permission reveals IDs', async () => {
@@ -150,7 +179,7 @@ test('saved output survives remount and is not discarded before microphone permi
   const first = renderHook(useAudioOutput);
   await act(async () => {});
   expect(first.result.current.outputId).toBe('headset');
-  expect(localStorage.getItem(storageKey)).toBe('headset');
+  expect(localStorage.getItem(`${storageKey}.iracing`) ?? localStorage.getItem(storageKey)).toBe('headset');
   first.unmount();
   media.enumerateDevices.mockResolvedValue([headset]);
   const second = renderHook(useAudioOutput);
@@ -160,7 +189,7 @@ test('saved output survives remount and is not discarded before microphone permi
   expect(players[0].volume).toBe(.35); expect(players[0].muted).toBe(true);
   act(() => second.result.current.changeVolume(0));
   expect(players[0].volume).toBe(0); expect(players[0].muted).toBe(false);
-  expect(JSON.parse(localStorage.getItem('iracing.voice.playback'))).toEqual({ volume: 0, muted: false, rate: 1.3, spotterRate: 1.15, pitwallRate: 1.15 });
+  expect(JSON.parse(localStorage.getItem('iracing.voice.playback.iracing'))).toEqual({ volume: 0, muted: false, rate: 1.3, spotterRate: 1.15, pitwallRate: 1.15 });
 });
 
 test('a Bluetooth disconnect preserves the saved choice and reconnect restores the next call without replaying old audio', async () => {
@@ -173,7 +202,7 @@ test('a Bluetooth disconnect preserves the saved choice and reconnect restores t
   expect(players[0].pause).not.toHaveBeenCalled();             // not before OUTPUT_GRACE_MS
   await waitFor(() => expect(players[0].pause).toHaveBeenCalled(), { timeout: OUTPUT_GRACE_MS + 1000 });
   expect(result.current.outputId).toBe('headset');
-  expect(localStorage.getItem(storageKey)).toBe('headset');
+  expect(localStorage.getItem(`${storageKey}.iracing`) ?? localStorage.getItem(storageKey)).toBe('headset');
   // The notice is set right after the pause; under a loaded full run it lands a render later.
   await waitFor(() => expect(result.current.message).toContain('연결이 끊'));
   expect(players).toHaveLength(1);
@@ -200,7 +229,7 @@ test('missing saved device uses default temporarily while retaining the preferen
   expect(players[0].setSinkId.mock.calls).toEqual([['missing'], ['']]);
   expect(players[0].play).toHaveBeenCalled();
   expect(result.current.outputId).toBe('missing');
-  expect(localStorage.getItem(storageKey)).toBe('missing');
+  expect(localStorage.getItem(`${storageKey}.iracing`) ?? localStorage.getItem(storageKey)).toBe('missing');
   expect(result.current.message).toContain('기본 장치로 재생');
   expect(warm).toHaveBeenLastCalledWith(expect.any(Object), '');
   expect(attach).toHaveBeenLastCalledWith(players[0], expect.any(Object), expect.objectContaining({ sinkId: '' }));
@@ -494,7 +523,7 @@ test('a temporarily hidden or empty device list leaves playing audio and the pre
     await act(async () => media.dispatchEvent(new Event('devicechange')));
     expect(players[0].pause).not.toHaveBeenCalled();
     expect(result.current.outputId).toBe('headset');
-    expect(localStorage.getItem(storageKey)).toBe('headset');
+    expect(localStorage.getItem(`${storageKey}.iracing`) ?? localStorage.getItem(storageKey)).toBe('headset');
   }
 });
 
@@ -509,7 +538,7 @@ test.each(['', 'speaker'])('an explicit choice of %s during disconnect wins over
   await act(async () => media.dispatchEvent(new Event('devicechange')));
   await act(async () => result.current.play('new-call'));
   expect(result.current.outputId).toBe(choice);
-  expect(localStorage.getItem(storageKey)).toBe(choice || null);
+  expect(localStorage.getItem(`${storageKey}.iracing`) ?? localStorage.getItem(storageKey)).toBe(choice);
   if (choice) expect(players[0].setSinkId.mock.calls).toEqual([[choice]]);
 });
 
@@ -548,7 +577,7 @@ test.each(['NotAllowedError', 'AbortError', 'NotFoundError'])('multipart routing
     players.push(player); return player;
   });
   await act(async () => players[0].onended());
-  expect(localStorage.getItem(storageKey)).toBe('headset');
+  expect(localStorage.getItem(`${storageKey}.iracing`) ?? localStorage.getItem(storageKey)).toBe('headset');
   if (name === 'NotFoundError') {
     expect(players[1].setSinkId.mock.calls).toEqual([['headset'], ['']]);
     expect(players[1].play).toHaveBeenCalled();
@@ -581,7 +610,7 @@ test('an old routing rejection cannot replace a newer output choice or fall back
   });
   expect(players[0].setSinkId.mock.calls).toEqual([['headset']]);
   expect(players[0].play).not.toHaveBeenCalled();
-  expect(localStorage.getItem(storageKey)).toBe('speaker');
+  expect(localStorage.getItem(`${storageKey}.iracing`) ?? localStorage.getItem(storageKey)).toBe('speaker');
   await act(async () => result.current.play('new-call'));
   expect(players[1].setSinkId.mock.calls).toEqual([['speaker']]);
 });
@@ -673,7 +702,8 @@ test('the Windows communications output is never offered, and a saved one falls 
     label: '헤드셋 (WH-1000XM5 Hands-Free AG Audio) · 통화용 연결(게임 소리도 바뀔 수 있음)' });
   expect(result.current.outputId).toBe('');
   expect(result.current.message).toContain('통신');
-  expect(localStorage.getItem(storageKey)).toBeNull();
+  expect(localStorage.getItem(`${storageKey}.iracing`)).toBe('');
+  expect(localStorage.getItem(storageKey)).toBe('communications');
   await act(async () => result.current.play('call'));
   expect(players[0].setSinkId.mock.calls).toEqual([['']]);
 });

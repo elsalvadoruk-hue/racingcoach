@@ -19,6 +19,13 @@ import SpotterPanel from './SpotterPanel';
 import useRadioDiagnostics from '../useRadioDiagnostics';
 import RadioDiagnostics from './RadioDiagnostics';
 import RadioAudioPrepare from './RadioAudioPrepare';
+import { useGame, useGameSettings } from '../lib/gameContext';
+import { readGameItem, writeGameItem } from '../lib/gameStorage';
+
+const readInput = game => readGameItem('iracing.voice.inputDevice', game) || '';
+const storeInput = (game, value) => writeGameItem('iracing.voice.inputDevice', game, value);
+const readWall = game => readPitPreferences(PIT_WALL_KEY, game);
+const storeWall = (game, value) => writeGameItem(PIT_WALL_KEY, game, JSON.stringify(value));
 
 const FEELINGS = { UNDERSTEER: '앞이 밀림', OVERSTEER: '뒤가 불안', BRAKING: '제동 불안', KERB: '연석 불안', DIFFICULT: '어려움', IMPROVED: '편해짐' };
 const phaseText = (note) => {
@@ -70,10 +77,11 @@ export function CornerCoach({ coach, connected, controls }) {
 }
 
 export default function LiveCoach({ apiBase, visible, onSaved, children, monitor = false }) {
+  const { selectedGame, activeGame, setLiveGame } = useGame();
   const [status, setStatus] = useState(null);
   const [notes, setNotes] = useState([]);
   const [armed, setArmed] = useState(false);
-  const [inputDevice, setInputDevice] = useState(() => { try { return localStorage.getItem('iracing.voice.inputDevice') || ''; } catch { return ''; } });
+  const [inputDevice, setInputDevice, appliedInput] = useGameSettings(readInput, storeInput);
   const [phase, setPhase] = useState('idle');
   const [mode, setMode] = useState('measured');
   const [speak, setSpeak] = useState(true);
@@ -84,7 +92,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const lastMime = useRef('audio/mpeg');
   const lastChannel = useRef('pitwall');
   const [wallEnabled, setWallEnabled] = useState(false);
-  const [wallPreferences, setWallPreferences] = useState(readPitPreferences);
+  const [wallPreferences, setWallPreferences, appliedWall] = useGameSettings(readWall, storeWall);
   const [wallView, setWallView] = useState(null);
   const audioOutput = useAudioOutput();
   const recordDelivery = useRadioDiagnostics(apiBase);
@@ -93,18 +101,27 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     session_time: note.context?.snapshot?.session_time, lap_number: note.context?.snapshot?.lap_number,
     distance_pct: note.context?.snapshot?.distance_pct }), []);
   const { outputId, devices: outputDevices, supported: outputSupported, message: outputMessage, refresh: refreshOutputs, changeOutput, play, volume, muted, changeVolume, toggleMute, rate, changeRate, spotterRate, changeSpotterRate, pitwallRate, changePitwallRate, effect, changeEffect, isPlaying, isPriorityBlocked } = audioOutput;
+  const appliedAudio = audioOutput.applied || audioOutput;
   const stopSpeaking = audioOutput.stopNormal || audioOutput.stop;
   const blocked = useRef(null), busyAudio = useRef(null), reportResumes = useRef(new Map());
   blocked.current = audioOutput.isPriorityBlocked; busyAudio.current = audioOutput.audioBusy;
   const recorder = useRef(null), microphoneEpoch = useRef(0), state = useRef({ phase: 'idle', armed: false });
-  const spotter = useSpotter(apiBase, audioOutput, { busy: phase !== 'idle', specialists: wallEnabled && wallPreferences.level !== 'off', level: wallPreferences.level, recordDelivery });
+  const spotter = useSpotter(apiBase, audioOutput, { busy: phase !== 'idle', specialists: wallEnabled && appliedWall.level !== 'off', level: appliedWall.level, recordDelivery });
   useEffect(() => { if (spotter.enabled) setWallEnabled(true); }, [spotter.enabled]);
   const turn = useRef(null), stopRequested = useRef(false), timeout = useRef(null);
   const mounted = useRef(true), options = useRef({ mode, speak }), saved = useRef(onSaved);
   options.current = { mode, speak }; saved.current = onSaved;
   const reportEpoch = useRef(0), wallOptions = useRef(null), playing = useRef(false), reportPoll = useRef(null);
-  wallOptions.current = { ...wallPreferences, level: wallEnabled ? wallPreferences.level : 'off', speak: speak && !muted && volume > 0, basic_spotter: spotter.enabled };
+  wallOptions.current = { ...appliedWall, level: wallEnabled ? appliedWall.level : 'off', speak: speak && !appliedAudio.muted && appliedAudio.volume > 0, basic_spotter: spotter.enabled };
   playing.current = isPlaying;
+  const lastActiveGame = useRef(activeGame);
+  useEffect(() => {
+    if (lastActiveGame.current === activeGame) return;
+    lastActiveGame.current = activeGame; reportEpoch.current += 1; microphoneEpoch.current += 1;
+    state.current.armed = false; setArmed(false); clearTimeout(timeout.current);
+    recorder.current?.close(); recorder.current = null;
+    if (state.current.phase !== 'sending') { state.current.phase = 'idle'; setPhase('idle'); }
+  }, [activeGame]);
   const driving = useRef(null);
   driving.current = spotter.enabled && spotter.view?.radio?.connected ? spotter.view.radio : status?.snapshot;
   const drivingConnected = useRef(true);
@@ -201,14 +218,14 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     const load = async () => {
       if (running) return;
       running = true;
-      try { const data = await request('/status'); if (!stopped) setStatus(data); }
+      try { const data = await request('/status'); if (!stopped) { setStatus(data); setLiveGame?.(['iracing', 'lmu'].includes(data.game) ? data.game : null); } }
       catch (failure) { if (!stopped) setError(errorMessage(failure)); }
       finally { running = false; }
     };
     load(); const id = setInterval(load, !visible && !armed && !wallEnabled && !spotter.enabled ? 15000 : 1200);
     if (visible) request('/notes').then((data) => { if (!stopped) setNotes(data.notes || []); }).catch(() => {});
     return () => { stopped = true; clearInterval(id); };
-  }, [monitor, visible, armed, wallEnabled, spotter.enabled, request]);
+  }, [monitor, visible, armed, wallEnabled, spotter.enabled, request, setLiveGame]);
   useEffect(() => {
     if (!visible && !wallEnabled) return undefined;
     let stopped = false, running = false, lastPoll = 0;
@@ -278,7 +295,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     reportPoll.current = poll;
     poll(); const timer = setInterval(poll, 2000);
     return () => { stopped = true; reportPoll.current = null; clearInterval(timer); };
-  }, [visible, wallEnabled, request, play, isPriorityBlocked, recordDelivery, deliveryEvent]);
+  }, [visible, wallEnabled, activeGame, request, play, isPriorityBlocked, recordDelivery, deliveryEvent]);
   useEffect(() => {
     if (!armed && !wallEnabled) return undefined;
     let socket, retry, stopped = false;
@@ -314,7 +331,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     changePhase('arming');
     try {
       const capture = new VoiceRecorder(); recorder.current = capture;
-      await capture.open(inputDevice);
+      await capture.open(appliedInput);
       if (!mounted.current || microphoneTicket !== microphoneEpoch.current || recorder.current !== capture) { capture.close(); return; }
       state.current.armed = true; setArmed(true); changePhase('idle');
     } catch (failure) { if (microphoneTicket === microphoneEpoch.current && mounted.current) { setError(errorMessage(failure)); recorder.current?.close(); recorder.current = null; changePhase('idle'); } }
@@ -329,22 +346,18 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     catch (failure) { setError(errorMessage(failure)); changePhase('idle'); }
   };
   const changeWallPreferences = (patch) => {
-    reportEpoch.current += 1;
-    setWallPreferences((current) => {
-      const next = { ...current, ...patch };
-      try { localStorage.setItem(PIT_WALL_KEY, JSON.stringify(next)); } catch { /* Settings remain usable. */ }
-      return next;
-    });
+    if (selectedGame === activeGame) reportEpoch.current += 1;
+    setWallPreferences(current => ({ ...current, ...patch }));
   };
   const toggleWall = () => { reportEpoch.current += 1; setWallEnabled((current) => !current); stopSpeaking(); };
   const changeInputDevice = (value) => {
-    // A recorder keeps its original stream. Close it before selecting a new microphone.
+    // Editing another game must not close the active game's stream.
+    if (selectedGame !== activeGame) { setInputDevice(value === 'default' ? '' : value); return; }
     if (state.current.phase === 'sending') return;
     microphoneEpoch.current += 1;
     state.current.armed = false; setArmed(false); clearTimeout(timeout.current);
     recorder.current?.close(); recorder.current = null; changePhase('idle');
     setInputDevice(value === 'default' ? '' : value);
-    try { localStorage.setItem('iracing.voice.inputDevice', value === 'default' ? '' : value); } catch { /* Selection remains usable. */ }
   };
   const testVoice = async (role) => {
     if (state.current.phase !== 'idle') return;

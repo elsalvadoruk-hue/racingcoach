@@ -151,13 +151,14 @@ test('the driver picks whether the focus is measured on own laps or the Garage61
   fireEvent.click(screen.getByRole('button', { name: '내 주행' }));
   expect(screen.getByText(/오늘의 한 가지: 풀스로틀 복귀 지연/)).toBeInTheDocument();
   expect(screen.getByTestId('practice-reference')).toHaveTextContent('손실 기준: 내 기준 랩 7');
-  expect(window.localStorage.getItem('iracing.practice.source')).toBe('PERSONAL');
+  expect(window.localStorage.getItem('iracing.practice.source.iracing')).toBe('PERSONAL');
   fireEvent.click(screen.getByText('이 과제로 연습 시작'));
   await waitFor(() => expect(global.fetch).toHaveBeenCalled());
   expect(JSON.parse(global.fetch.mock.calls[0][1].body)).toEqual({ filename: 'a.ibt', focus_index: 0, source: 'PERSONAL' });
 });
 
 test('picking Garage61 without it in the analysis offers to analyse again, or says what is missing', () => {
+  window.localStorage.clear();
   window.localStorage.setItem('iracing.practice.source', 'GARAGE61');
   const again = jest.fn();
   const { rerender } = render(<PracticeCoach apiBase="" filename="a.ibt" practice={null} coach={coach}

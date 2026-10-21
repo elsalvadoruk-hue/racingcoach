@@ -7,17 +7,21 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 're
 import { createPortal } from 'react-dom';
 import { BookOpen, CircleHelp } from 'lucide-react';
 import { helpFor } from './helpContent';
+import { useGame } from '../lib/gameContext';
+import { readGameItem, writeGameItem } from '../lib/gameStorage';
 
 export const HOVER_HELP_KEY = 'iracing-tuner.hover-help.v1';
 export function useHoverHelpSetting() {
+  const { selectedGame } = useGame();
   const [enabled, setEnabled] = useState(() => {
-    try { return localStorage.getItem(HOVER_HELP_KEY) !== 'false'; }
+    try { return readGameItem(HOVER_HELP_KEY, selectedGame) !== 'false'; }
     catch { return true; }
   });
+  useEffect(() => { setEnabled(readGameItem(HOVER_HELP_KEY, selectedGame) !== 'false'); }, [selectedGame]);
   const toggle = () => {
     const next = !enabled;
     setEnabled(next);
-    try { localStorage.setItem(HOVER_HELP_KEY, String(next)); }
+    try { writeGameItem(HOVER_HELP_KEY, selectedGame, String(next)); }
     catch { /* The toggle still works if browser storage is unavailable. */ }
   };
   return [enabled, toggle];

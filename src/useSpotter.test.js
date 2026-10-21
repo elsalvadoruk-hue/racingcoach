@@ -1,3 +1,5 @@
+import React from 'react';
+import { GameContext } from './lib/gameContext';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import useSpotter from './useSpotter';
 import { playBeep } from './drillBeeps';
@@ -20,6 +22,32 @@ const frame = (raw, key = null, extra = {}) => ({ type: 'spotter', active: true,
   events: key ? [{ serial: 1, key, state: raw, run_id: 'run', expires_in_ms: 500 }] : [], ...extra });
 const send = (socket, message) => act(() => socket.onmessage({ data: JSON.stringify(message) }));
 const enable = async (result) => act(async () => result.current.toggle());
+
+test('editing LMU preserves iRacing settings and resends the connected game on transition', async () => {
+  localStorage.setItem('iracing.spotter.settings', JSON.stringify({ repeat_seconds: 5 }));
+  let context = { selectedGame: 'lmu', activeGame: 'iracing', liveGame: 'iracing' };
+  const wrapper = ({ children }) => <GameContext.Provider value={context}>{children}</GameContext.Provider>;
+  const { result, rerender } = renderHook(() => useSpotter('http://test', audio), { wrapper });
+  expect(result.current.settings.repeat_seconds).toBe(5);
+  await act(async () => result.current.changeSettings({ repeat_seconds: 2 }));
+  expect(global.fetch).not.toHaveBeenCalled();
+  expect(JSON.parse(localStorage.getItem('iracing.spotter.settings.lmu')).repeat_seconds).toBe(2);
+  expect(JSON.parse(localStorage.getItem('iracing.spotter.settings')).repeat_seconds).toBe(5);
+  await enable(result);
+  expect(JSON.parse(global.fetch.mock.calls[0][1].body).repeat_seconds).toBe(5);
+  const oldSocket = sockets[0];
+  context = { ...context, activeGame: 'lmu', liveGame: 'lmu' };
+  rerender();
+  await waitFor(() => expect(sockets).toHaveLength(2));
+  const put = global.fetch.mock.calls.filter(([, options]) => options.method === 'PUT');
+  expect(put).toHaveLength(1);
+  expect(JSON.parse(put[0][1].body).repeat_seconds).toBe(2);
+  expect(oldSocket.close).toHaveBeenCalled();
+  send(sockets[1], frame(2, 'left'));
+  expect(audio.play).toHaveBeenCalledWith('left', 'audio/mpeg', expect.any(Object));
+  context = { ...context, selectedGame: 'iracing' }; rerender();
+  expect(result.current.settings.repeat_seconds).toBe(5);
+});
 
 test('only explicit enable prepares clips and starts a dedicated websocket without a microphone', async () => {
   const { result } = renderHook(() => useSpotter('http://test', audio));
@@ -390,7 +418,7 @@ test('spotter preferences persist and apply without reconnecting or preparing ne
   expect(JSON.parse(global.fetch.mock.calls[0][1].body).repeat_seconds).toBe(5);
   await act(async () => result.current.changeSettings({ pit_box_enabled: true }));
   expect(global.fetch.mock.calls.at(-1)[0]).toBe('http://test/api/live-coach/spotter/settings');
-  expect(JSON.parse(localStorage.getItem('iracing.spotter.settings')).pit_box_enabled).toBe(true);
+  expect(JSON.parse(localStorage.getItem('iracing.spotter.settings.iracing')).pit_box_enabled).toBe(true);
   expect(sockets).toHaveLength(1);
   expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/prepare'))).toHaveLength(1);
 });

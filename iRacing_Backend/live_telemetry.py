@@ -259,6 +259,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         # The fast event path does not copy the 180-second coaching buffer.
         with self.lock:
             view = self.spotter.view(self.clock(), after, connected=self.state == 'CONNECTED')
+            view['game'] = self.game if self.state == 'CONNECTED' else None
             view['radio'] = self.radio.view(self.clock()) if self.state == 'CONNECTED' else {'connected': False, 'events': [], 'history': [], 'capabilities': {}}
             view['settings'] = self.spotter_settings()
             # Only the beeps travel on the fast path; the attempts table is read with /drill.

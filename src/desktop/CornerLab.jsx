@@ -32,6 +32,7 @@ import { desktopDestination, requestedCornerLocation, openVoiceCorner } from './
 import WorkspaceNotices from './WorkspaceNotices';
 import LmuWorkspacePanel from './LmuWorkspacePanel';
 import LmuAnalysisPanels from './LmuAnalysisPanels';
+import { writeGameItem } from '../lib/gameStorage';
 
 const EMPTY_TRACE = [];
 
@@ -119,10 +120,12 @@ function Workspace({ onSession, runtime, analysisWorkspace, busy, failure, game,
   const timelineRef = useRef(null);
   const [pedalOverlay, setPedalOverlay] = useState(false);
   const [activeNote, setActiveNote] = useState(null);
-  const [channelOrder, setChannelOrder] = useState(readChannelOrder);
+  const [channelOrders, setChannelOrders] = useState(() => ({ iracing: readChannelOrder('iracing'), lmu: readChannelOrder('lmu') }));
+  const channelOrder = channelOrders[game];
+  const setChannelOrder = useCallback(update => setChannelOrders(current => ({ ...current, [game]: typeof update === 'function' ? update(current[game]) : update })), [game]);
   const [draggingChannel, setDraggingChannel] = useState(null);
   const channelDrag = useRef(null);
-  useEffect(() => { try { localStorage.setItem(CHANNEL_ORDER_KEY, JSON.stringify(channelOrder)); } catch { setNotice('채널 순서를 브라우저에 저장하지 못했습니다.'); } }, [channelOrder]);
+  useEffect(() => { writeGameItem(CHANNEL_ORDER_KEY, game, JSON.stringify(channelOrder)); }, [channelOrder, game]);
   useEffect(() => {
     const move = event => {
       const start = channelDrag.current;
@@ -134,7 +137,7 @@ function Workspace({ onSession, runtime, analysisWorkspace, busy, failure, game,
     const stop = () => { channelDrag.current = null; setDraggingChannel(null); };
     window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', stop); window.addEventListener('pointercancel', stop); window.addEventListener('blur', stop);
     return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); window.removeEventListener('pointercancel', stop); window.removeEventListener('blur', stop); };
-  }, []);
+  }, [setChannelOrder]);
   const [names, setNames] = useState(readNames);
   const [namesPage, setNamesPage] = useState(window.location.hash === '#corner-names');
   useEffect(() => { const change = () => setNamesPage(window.location.hash === '#corner-names'); window.addEventListener('hashchange', change); return () => window.removeEventListener('hashchange', change); }, []);

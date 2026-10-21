@@ -9,8 +9,10 @@ import { HelpLayer } from './components/HelpGuide';
 import UpdateCenter from './components/UpdateCenter';
 import { selectGame } from './desktop/sessionData';
 import { useLmuWorkspace } from './analysis/useLmuWorkspace';
+import { GameContext } from './lib/gameContext';
 
 export default function App() {
+  const [liveGame, setLiveGame] = useState(null);
   const [game, setGame] = useState(() => {
     let saved; try { saved = localStorage.getItem('coach.selected-game.v1'); } catch { /* Default game. */ }
     const initial = saved === 'lmu' ? 'lmu' : 'iracing';
@@ -22,7 +24,9 @@ export default function App() {
     try { localStorage.setItem('coach.selected-game.v1', next); } catch { /* Selection remains usable. */ }
     setGame(next);
   };
-  return game === 'lmu' ? <LmuApp onGameChange={changeGame} /> : <IracingApp onGameChange={changeGame} />;
+  return <GameContext.Provider value={{ selectedGame: game, liveGame, activeGame: liveGame ?? game, setLiveGame }}>
+    {game === 'lmu' ? <LmuApp onGameChange={changeGame} /> : <IracingApp onGameChange={changeGame} />}
+  </GameContext.Provider>;
 }
 
 function IracingApp({ onGameChange }) {

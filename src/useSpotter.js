@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useGame, useGameSettings } from './lib/gameContext';
+import { readGameItem, writeGameItem } from './lib/gameStorage';
 import { RESUMABLE, MAX_RESUMES, DEFAULT_RATE } from './voiceAudio';
 import { eventSound, playBeep } from './drillBeeps';
 
 const SETTINGS_KEY = 'iracing.spotter.settings';
 export const SPOTTER_VOICES = [['Fenrir', '남성 · 기본'], ['Algieba', '남성'], ['Schedar', '남성'], ['Aoede', '여성']];
 const DEFAULT_SETTINGS = { voice: 'Fenrir', formation_calls: 5, repeat_seconds: 3, clear_delay: .15, traffic_enabled: true, pit_box_enabled: false };
-const savedSettings = () => {
+const savedSettings = game => {
   try {
-    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    const saved = JSON.parse(readGameItem(SETTINGS_KEY, game));
     return { voice: SPOTTER_VOICES.some(([name]) => name === saved?.voice) ? saved.voice : 'Fenrir',
       formation_calls: Number.isInteger(saved?.formation_calls) && saved.formation_calls >= 0 && saved.formation_calls <= 8 ? saved.formation_calls : 5,
       repeat_seconds: [2, 3, 5].includes(saved?.repeat_seconds) ? saved.repeat_seconds : 3,
@@ -16,7 +18,12 @@ const savedSettings = () => {
   } catch { return DEFAULT_SETTINGS; }
 };
 
-export default function useSpotter(apiBase, { play, setPriorityGate, cancelPriority, audioBusy, muted, volume, outputId }, { busy = false, specialists = true, level = 'all', recordDelivery } = {}) {
+const storeSettings = (game, value) => writeGameItem(SETTINGS_KEY, game, JSON.stringify(value));
+
+export default function useSpotter(apiBase, audioOutput, { busy = false, specialists = true, level = 'all', recordDelivery } = {}) {
+  const { selectedGame, activeGame } = useGame();
+  const { play, setPriorityGate, cancelPriority, audioBusy } = audioOutput;
+  const { muted, volume, outputId } = audioOutput.applied || audioOutput;
   // The drill beeps follow the radio's output device and volume without reconnecting the socket.
   const outputRef = useRef(outputId); outputRef.current = outputId;
   const volumeRef = useRef(volume); volumeRef.current = volume ?? 1;
@@ -25,7 +32,11 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
   const [preparing, setPreparing] = useState(false);
   const [view, setView] = useState(null);
   const [error, setError] = useState('');
-  const [settings, setSettings] = useState(savedSettings), [settingsBusy, setSettingsBusy] = useState(false);
+  const [settings, setSettings, appliedSettings] = useGameSettings(savedSettings, storeSettings);
+  const applied = useRef(appliedSettings); applied.current = appliedSettings;
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [readyGame, setReadyGame] = useState(activeGame);
+  const previousGame = useRef(activeGame);
   const [voice, setVoice] = useState(settings.voice);
   const overlapPending = useRef(null);
   const clips = useRef(null), epoch = useRef(0), mounted = useRef(true);
@@ -61,7 +72,7 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
     try {
       if (!clips.current) {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(applied.current) });
         const manifest = await response.json();
         if (!response.ok) throw new Error(manifest.detail || '스포터 음성 준비 실패');
         if (!manifest.clips?.test?.audio_base64) throw new Error('스포터 음성을 확인하지 못했습니다.');
@@ -70,17 +81,20 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
         setVoice((manifest.voice || 'Fenrir').replace('ko-KR-Chirp3-HD-', ''));
       } else {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT',
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(settings) });
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(applied.current) });
         if (!response.ok) throw new Error('스포터 설정을 적용하지 못했습니다.');
+        if (!mounted.current || ticket !== epoch.current) return;
       }
-      if (mounted.current && ticket === epoch.current) { setEnabled(true); setPreparing(false); }
+      if (mounted.current && ticket === epoch.current) { setReadyGame(activeGame); setEnabled(true); setPreparing(false); }
     } catch (failure) {
       if (mounted.current && ticket === epoch.current) { setError(failure.message); setPreparing(false); }
     }
   };
   const changeSettings = async (patch) => {
     const next = { ...settings, ...patch }, ticket = epoch.current;
-    setSettings(next); setSettingsBusy(true);
+    setSettings(next);
+    if (selectedGame !== activeGame) return;
+    setSettingsBusy(true);
     try {
       if ('voice' in patch && patch.voice !== settings.voice) {
         // Another voice is another set of clips: fetched now when the spotter is on, at the next start otherwise.
@@ -100,12 +114,42 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
       }
       if (!mounted.current || ticket !== epoch.current) return;
       setSettings(next); setError('');
-      try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(next)); } catch { /* Settings still apply for this page. */ }
     } catch (failure) {
       if (mounted.current && ticket === epoch.current) { setSettings(settings); setError(failure.message); }
     }
     finally { if (mounted.current) setSettingsBusy(false); }
   };
+  useEffect(() => {
+    if (previousGame.current === activeGame) return;
+    previousGame.current = activeGame;
+    const ticket = ++epoch.current;
+    setReadyGame(null); clips.current = null; state.current = { active: false };
+    overlapPending.current = null; radioQueue.current.clear(); heard.current.clear(); rendered.current.clear();
+    clearTimeout(release.current); cancelPriority?.(); setView(null);
+    const apply = async () => {
+      setSettingsBusy(true);
+      try {
+        const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(applied.current) });
+        if (!response.ok) throw new Error('스포터 설정을 적용하지 못했습니다.');
+        if (!mounted.current || ticket !== epoch.current) return;
+        if (enabled) {
+          const prepared = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(applied.current) });
+          const manifest = await prepared.json();
+          if (!prepared.ok || !manifest.clips?.test?.audio_base64) throw new Error('스포터 음성을 확인하지 못했습니다.');
+          if (!mounted.current || ticket !== epoch.current) return;
+          clips.current = manifest.clips;
+        }
+        if (mounted.current && ticket === epoch.current) { setVoice(applied.current.voice); setReadyGame(activeGame); setError(''); }
+      } catch (failure) {
+        if (mounted.current && ticket === epoch.current) { setError(failure.message); setEnabled(false); }
+      } finally { if (mounted.current && ticket === epoch.current) { setSettingsBusy(false); setPreparing(false); } }
+    };
+    apply();
+    // Enabling and edits use their own explicit handlers; this effect resends only on a game transition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeGame, apiBase, cancelPriority]);
   const announce = useCallback(async (key, valid, variant = null, onStatus) => {
     const choices = clips.current?.[key]?.variants;
     const selected = choices?.length ? choices[(variant ?? 0) % choices.length] : clips.current?.[key];
@@ -239,7 +283,7 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
     } finally { processing.current.delete(event.id); if (!event.cached) rendering.current = false; }
   }, [apiBase, logEvent]);
   useEffect(() => {
-    if (!enabled) return undefined;
+    if (!enabled || readyGame !== activeGame) return undefined;
     let socket, retry, stopped = false;
     const ticket = epoch.current;
     let serverOffset = null;
@@ -346,17 +390,17 @@ export default function useSpotter(apiBase, { play, setPriorityGate, cancelPrior
       else pumpOverlap();
     }, 100);
     return () => { stopped = true; overlapPending.current = null; clearTimeout(retry); clearTimeout(release.current); clearInterval(watchdog); socket?.close(); cancelPriority?.(); };
-  }, [enabled, apiBase, announce, cancelPriority, setPriorityGate, pumpRadio, pumpOverlap, logEvent]);
+  }, [enabled, readyGame, activeGame, apiBase, announce, cancelPriority, setPriorityGate, pumpRadio, pumpOverlap, logEvent]);
   const test = () => {
     if (!state.current.occupied) announce('test', () => !state.current.occupied);
   };
   // The spotter speaks from this tab: closing or reloading it while on asks first (the browser shows its own wording).
   useEffect(() => {
-    if (!enabled) return undefined;
+    if (!enabled || readyGame !== activeGame) return undefined;
     const ask = (event) => { event.preventDefault(); event.returnValue = ''; return ''; };
     window.addEventListener('beforeunload', ask);
     return () => window.removeEventListener('beforeunload', ask);
-  }, [enabled]);
+  }, [enabled, readyGame, activeGame]);
 
   return { enabled, preparing, view, error, voice, settings, settingsBusy, changeSettings, toggle: enable, test };
 }

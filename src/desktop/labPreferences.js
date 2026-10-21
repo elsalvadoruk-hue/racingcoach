@@ -1,11 +1,12 @@
+import { readGameItem } from '../lib/gameStorage';
 export const CHANNEL_ORDER_KEY = 'iracing.ui-lab.channel-order.v1';
 export const DEFAULT_CHANNEL_ORDER = ['delta', 'speed', 'brake', 'throttle', 'pedals', 'steering', 'gear'];
 
 export function normalizeChannelOrder(value) {
   return [...new Set([...(Array.isArray(value) ? value : []), ...DEFAULT_CHANNEL_ORDER])].filter(key => DEFAULT_CHANNEL_ORDER.includes(key));
 }
-export function readChannelOrder() {
-  try { return normalizeChannelOrder(JSON.parse(localStorage.getItem(CHANNEL_ORDER_KEY))); } catch { return [...DEFAULT_CHANNEL_ORDER]; }
+export function readChannelOrder(game = 'iracing') {
+  try { return normalizeChannelOrder(JSON.parse(readGameItem(CHANNEL_ORDER_KEY, game))); } catch { return [...DEFAULT_CHANNEL_ORDER]; }
 }
 export function moveChannel(order, from, to) {
   if (from === to || !order.includes(from) || !order.includes(to)) return order;

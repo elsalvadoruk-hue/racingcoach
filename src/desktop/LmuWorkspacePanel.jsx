@@ -12,6 +12,7 @@ import LmuHistoryPanel from './LmuHistoryPanel';
 import OverlaySettings from '../components/OverlaySettings';
 import { AudioPreferences } from './RuntimePreview';
 import LmuFeatureGuide from './LmuFeatureGuide';
+import { GameSettingsNotice } from '../lib/gameContext';
 
 // Live coaching (voice coach tab) is the shared iRacing screen; this routes
 // only the LMU analysis/settings views.
@@ -67,6 +68,7 @@ function LmuWorkspaceOverview({ workspace, onChooseSource, onNavigate, analysisW
       <li>처음 한 번은 설정의 'LMU 실시간 연결'에서 브리지를 빌드하세요.</li>
     </ol><LmuFeatureGuide onNavigate={onNavigate} /></>}
     {workspace === 'settings' && <>
+      <GameSettingsNotice />
       <LmuBridgePanel />
       <LmuSettingsPanel onChooseSource={onChooseSource} />
       {runtime?.supported !== false && <AudioPreferences runtime={runtime} />}

@@ -6,6 +6,7 @@
 // Whenever the effect cannot be applied safely (no Web Audio, the context not running yet, a chosen
 // output device the context cannot be sent to) the clip plays exactly as it always did.
 
+import { readGameItem, writeGameItem } from './lib/gameStorage';
 const KEY = 'iracing.voice.radioEffect';
 export const EFFECT_LEVELS = [['off', '끔'], ['light', '약하게'], ['medium', '중간'], ['strong', '강하게'], ['harder', '더 강하게']];
 // Band of a radio voice, how hard it is driven, and how much hiss rides under it.
@@ -40,11 +41,11 @@ export function cleanSettings(saved) {
     voice: within(value.voice, 20, 150, DEFAULTS.voice), noise: within(value.noise, 0, 400, DEFAULTS.noise),
   };
 }
-export function savedSettings() {
-  try { return cleanSettings(JSON.parse(localStorage.getItem(KEY))); } catch { return { ...DEFAULTS }; }
+export function savedSettings(game = 'iracing') {
+  try { return cleanSettings(JSON.parse(readGameItem(KEY, game))); } catch { return { ...DEFAULTS }; }
 }
-export function storeSettings(settings) {
-  try { localStorage.setItem(KEY, JSON.stringify(settings)); } catch { /* The effect still applies for this page. */ }
+export function storeSettings(settings, game = 'iracing') {
+  writeGameItem(KEY, game, JSON.stringify(settings));
 }
 
 let context = null, contextSink = '', sinkFlight = null, noiseBuffer = null, popsReady = false, popsLoading = false;

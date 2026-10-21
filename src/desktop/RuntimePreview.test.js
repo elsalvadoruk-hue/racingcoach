@@ -26,10 +26,10 @@ test('voice settings expose the boost range in red and save normal-speed playbac
   expect(rate).toHaveValue('1.3');
   expect(rate).toHaveAttribute('min', '1');
   fireEvent.change(rate, { target: { value: '1' } });
-  expect(JSON.parse(localStorage.getItem('iracing.voice.playback'))).toMatchObject({ volume: 1, rate: 1, spotterRate: 1.15, pitwallRate: 1.15 });
+  expect(JSON.parse(localStorage.getItem('iracing.voice.playback.iracing'))).toMatchObject({ volume: 1, rate: 1, spotterRate: 1.15, pitwallRate: 1.15 });
   fireEvent.change(screen.getByRole('slider', { name: '스포터 속도' }), { target: { value: '1.2' } });
   fireEvent.change(screen.getByRole('slider', { name: '피트월 속도' }), { target: { value: '1.3' } });
-  expect(JSON.parse(localStorage.getItem('iracing.voice.playback'))).toMatchObject({ rate: 1, spotterRate: 1.2, pitwallRate: 1.3 });
+  expect(JSON.parse(localStorage.getItem('iracing.voice.playback.iracing'))).toMatchObject({ rate: 1, spotterRate: 1.2, pitwallRate: 1.3 });
 });
 
 function Controls({ speechAvailable = false }) {
@@ -81,14 +81,14 @@ test('header output works without speech API and stays in sync with detailed set
   expect(within(select).queryByRole('option', { name: '이전 출력장치' })).not.toBeInTheDocument();
   expect(media.getUserMedia).not.toHaveBeenCalled();
   fireEvent.change(select, { target: { value: 'speaker' } });
-  expect(localStorage.getItem('iracing.voice.outputDevice')).toBe('speaker');
+  expect(localStorage.getItem('iracing.voice.outputDevice.iracing')).toBe('speaker');
   expect(settings).toHaveValue('speaker');
   media.enumerateDevices.mockResolvedValue([microphone, headset]);
   await act(async () => media.dispatchEvent(new Event('devicechange')));
   expect(select).toHaveValue('speaker');
   expect(settings).toHaveValue('speaker');
   await waitFor(() => expect(within(dialog).getByRole('status')).toHaveTextContent('저장된 선택은 유지'), { timeout: 3000 });
-  expect(localStorage.getItem('iracing.voice.outputDevice')).toBe('speaker');
+  expect(localStorage.getItem('iracing.voice.outputDevice.iracing')).toBe('speaker');
   media.enumerateDevices.mockResolvedValue([microphone, headset, speaker]);
   await act(async () => media.dispatchEvent(new Event('devicechange')));
   expect(select).toHaveValue('speaker');
@@ -122,7 +122,7 @@ test('microphone selection remains available in detailed settings and cannot cha
   await act(async () => {});
   expect(select).toHaveValue('default');
   expect(screen.getByRole('combobox', { name: '출력장치', exact: true })).toHaveValue('default');
-  expect(localStorage.getItem('iracing.voice.outputDevice')).toBeNull();
+  expect(localStorage.getItem('iracing.voice.outputDevice.iracing')).toBeNull();
 });
 
 test('unsupported browsers keep an explanation and a disabled output selector', async () => {

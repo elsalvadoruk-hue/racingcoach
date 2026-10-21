@@ -177,7 +177,7 @@ test('long tracks show useful segments first while every segment remains selecta
 });
 
 test('the map line is coloured by where the lap loses time and the colouring can be switched off', () => {
-  window.localStorage.removeItem('iracing.map.lossColour');
+  window.localStorage.removeItem('iracing.map.lossColour.iracing');
   const dense = Array.from({ length: 201 }, (_, i) => ({ distance_pct: i / 200, target_speed_kph: 100, reference_speed_kph: 100,
     delta_s: Math.min(.3, Math.max(0, (i - 40) / 20 * .3)) }));   // loses 0.3 s between 20% and 30% of the lap
   const path = dense.map((point) => ({ distance_pct: point.distance_pct, lat: 37 + point.distance_pct / 100, lon: 127 + Math.sin(point.distance_pct * Math.PI) / 100 }));
@@ -188,8 +188,8 @@ test('the map line is coloured by where the lap loses time and the colouring can
   expect(screen.getByTestId('map-loss-legend')).toHaveTextContent('빨강 = 잃은 곳');
   fireEvent.click(screen.getByTestId('map-loss-toggle'));
   expect(screen.queryAllByTestId('map-loss-run')).toHaveLength(0);
-  expect(window.localStorage.getItem('iracing.map.lossColour')).toBe('off');
-  window.localStorage.removeItem('iracing.map.lossColour');
+  expect(window.localStorage.getItem('iracing.map.lossColour.iracing')).toBe('off');
+  window.localStorage.removeItem('iracing.map.lossColour.iracing');
 });
 
 test('the ghost replay puts both laps on the map at the same time since their lap start', () => {

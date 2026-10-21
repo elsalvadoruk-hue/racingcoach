@@ -4,6 +4,8 @@ import FocusMiniMap from './FocusMiniMap';
 import CornerDrillPanel from './CornerDrillPanel';
 import CornerTrace, { CAUSE_EVENT } from './CornerTrace';
 import PracticeDrillHistory from './PracticeDrillHistory';
+import { useGame } from '../lib/gameContext';
+import { readGameItem, writeGameItem } from '../lib/gameStorage';
 
 // "Today's one thing": one driving focus at a time, checked on the next run with measurements only
 // (iRacing_Backend/practice.py). The detailed closed-loop panel stays below for drivers who want more.
@@ -23,7 +25,7 @@ const cornerText = (focus) => {
 };
 // The driver's pick of what losses are measured against, kept between files.
 const SOURCE_KEY = 'iracing.practice.source';
-const storedSource = () => { try { return window.localStorage.getItem(SOURCE_KEY); } catch { return null; } };
+const storedSource = game => readGameItem(SOURCE_KEY, game);
 
 const CIRCLED = '①②③④⑤⑥⑦⑧⑨⑩';
 const numbered = (labels) => labels.map((label, i) => `${CIRCLED[i] || `${i + 1}.`} ${label}`).join(', ');
@@ -43,16 +45,18 @@ function InputChange({ row, target }) {
 
 export default function PracticeCoach({ apiBase, filename, practice, coach, visualizations, trackLength, corners = [], loadWindow, referenceLabel,
   externalCorners = [], externalLoadWindow, externalLabel, focusSets, garage61Available = false, onUseGarage61, onPracticeChange }) {
+  const { selectedGame } = useGame();
   const [view, setView] = useState(practice);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [choice, setChoice] = useState(0);
   useEffect(() => { setView(practice); setError(''); }, [practice]);
   const hasGarage61 = (focusSets?.GARAGE61 || []).length > 0;
-  const [sourcePick, setSourcePick] = useState(() => storedSource());
+  const [sourcePick, setSourcePick] = useState(() => storedSource(selectedGame));
+  useEffect(() => { setSourcePick(storedSource(selectedGame)); }, [selectedGame]);
   // the driver's last pick, else the Garage61 fast laps when this analysis has them
   const pickedSource = sourcePick === 'PERSONAL' || sourcePick === 'GARAGE61' ? sourcePick : hasGarage61 ? 'GARAGE61' : 'PERSONAL';
-  const pickSource = (value) => { setSourcePick(value); try { window.localStorage.setItem(SOURCE_KEY, value); } catch { /* per-viewer convenience only */ } };
+  const pickSource = (value) => { setSourcePick(value); writeGameItem(SOURCE_KEY, selectedGame, value); };
   const focuses = (focusSets ? focusSets[pickedSource] || [] : coach?.ranked_focuses || []).slice(0, 3);
   useEffect(() => {
     const concrete = focuses.findIndex((item) => item.root_cause !== 'DRIVER_VARIANCE');

@@ -9,6 +9,8 @@ import GeographicMapTilesPlain from './GeographicMapTiles';
 import { IMAGERY_CREDIT } from '../lib/geographicMap';
 import { colourRuns } from '../lib/lossColours';
 import { gapAt, heldPositionAt as heldAt, replayPair, timeline } from '../lib/ghost';
+import { useGame } from '../lib/gameContext';
+import { readGameItem, writeGameItem } from '../lib/gameStorage';
 
 const EMPTY_LINE = [];
 
@@ -17,7 +19,7 @@ const ASPECT = 600 / 360;
 const GeographicMapTiles = React.memo(GeographicMapTilesPlain);
 // The driver's choice of plain or loss-coloured line, kept between files (per browser, convenience only).
 const LOSS_KEY = 'iracing.map.lossColour';
-const savedLoss = () => { try { return window.localStorage.getItem(LOSS_KEY) !== 'off'; } catch { return true; } };
+const savedLoss = game => readGameItem(LOSS_KEY, game) !== 'off';
 const GHOST_SPEEDS = [1, 2, 4];
 const clock = (seconds) => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(1).padStart(4, '0')}`;
 // A car that has finished (or not yet started) its observed stretch stays at its first or last point.
@@ -155,7 +157,9 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
   const [failedRoad, setFailedRoad] = useState(null);
   const [failedSatellite, setFailedSatellite] = useState(null);
   const [failedDiagram, setFailedDiagram] = useState(null);
-  const [lossOn, setLossOn] = useState(savedLoss);
+  const { selectedGame } = useGame();
+  const [lossOn, setLossOn] = useState(() => savedLoss(selectedGame));
+  useEffect(() => { setLossOn(savedLoss(selectedGame)); }, [selectedGame]);
   const targetTimeline = useMemo(() => timeline(projected), [projected]);
   const referenceTimeline = useMemo(() => timeline(referenceProjected), [referenceProjected]);
   const rangeStart = selectedRange?.[0], rangeEnd = selectedRange?.[1];
@@ -236,7 +240,7 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
     </>;
   }, [projected, referenceProjected, rangeKey, lossColoured, loss]); // eslint-disable-line react-hooks/exhaustive-deps
   const toggleLoss = () => setLossOn((value) => {
-    try { window.localStorage.setItem(LOSS_KEY, value ? 'off' : 'on'); } catch { /* convenience only */ }
+    writeGameItem(LOSS_KEY, selectedGame, value ? 'off' : 'on');
     return !value;
   });
   useEffect(() => { setBackgroundMode(geographic ? 'satellite' : 'road'); }, [trackMap?.trackId, geographic]);

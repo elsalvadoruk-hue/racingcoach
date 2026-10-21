@@ -186,6 +186,21 @@ class SpotterTests(unittest.TestCase):
                 self.stable(1)
                 self.assertNotIn('clear_left', self.keys())
 
+    def test_status_and_context_identify_only_the_connected_game(self):
+        live = LiveTelemetry(clock=lambda: 1000.)
+        self.assertIsNone(live.spotter_status()['game'])
+        self.assertIsNone(live.context()['game'])
+        live.ingest({}, {**self.sample, 'session_num': 0})
+        self.assertEqual(live.spotter_status()['game'], 'iracing')
+        self.assertEqual(live.context()['game'], 'iracing')
+        live.game = 'lmu'
+        live.ingest({}, {**self.sample, 'session_num': 0})
+        self.assertEqual(live.spotter_status()['game'], 'lmu')
+        self.assertEqual(live.context()['game'], 'lmu')
+        live.state = 'DISCONNECTED'
+        self.assertIsNone(live.spotter_status()['game'])
+        self.assertIsNone(live.context()['game'])
+
     def test_live_status_has_stricter_freshness_than_coaching(self):
         clock = [self.now]
         live = LiveTelemetry(clock=lambda: clock[0])

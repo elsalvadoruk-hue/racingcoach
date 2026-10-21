@@ -28,7 +28,7 @@ test('the production host opens the selected microphone and disarms it before a 
   expect(mockOpen).toHaveBeenCalledWith('usb-mic'); expect(host.armed).toBe(true);
   act(() => host.changeInputDevice('second-mic'));
   expect(host.armed).toBe(false); expect(mockClose).toHaveBeenCalled();
-  expect(localStorage.getItem('iracing.voice.inputDevice')).toBe('second-mic');
+  expect(localStorage.getItem('iracing.voice.inputDevice.iracing')).toBe('second-mic');
   await act(async () => { await host.prepare(); });
   expect(mockOpen).toHaveBeenLastCalledWith('second-mic');
 });
