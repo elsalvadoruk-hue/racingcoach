@@ -12,10 +12,24 @@ from pathlib import Path
 import shutil
 import sys
 import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'iRacing_Backend'))
 import lmu_shared_memory as sm
+from lmu_bridge_downloads import asset_name
+
+
+def make_download_asset(artifact, output, sdk_dir=None):
+    sm.validate_bundled_bridges(artifact.parent)
+    output.mkdir(parents=True, exist_ok=True)
+    target = output / asset_name(sdk_dir)
+    partial = target.with_suffix('.zip.part')
+    with zipfile.ZipFile(partial, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for name in ('manifest.json', 'lmu_native_bridge.dll'):
+            archive.write(artifact / name, name)
+    partial.replace(target)
+    return target
 
 
 def prepare(sdk_dir=None, output=None):
@@ -53,6 +67,9 @@ def main():
     manifest = json.loads((target / 'manifest.json').read_text(encoding='utf-8'))
     print(f'LMU 배포 브리지 준비됨: {target.relative_to(ROOT)}')
     print(f"SDK SHA-256: {manifest['header_fingerprint']}")
+    asset = make_download_asset(target, ROOT / 'share' / 'lmu-bridges', args.sdk_dir)
+    print(f'자동 연결 배포 파일: {asset.relative_to(ROOT)}')
+    print(f'gh release upload lmu-bridges "{asset}"')
     print('DLL과 manifest.json을 함께 커밋한 뒤 앱 릴리스 ZIP을 만드세요.')
     return 0
 

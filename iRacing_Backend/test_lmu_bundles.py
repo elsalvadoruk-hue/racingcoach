@@ -34,7 +34,7 @@ class BundledBridgeTests(unittest.TestCase):
         struct.pack_into('<H', dll, 68, 0x8664)
         (self.artifact / 'lmu_native_bridge.dll').write_bytes(dll)
         self.manifest = {'bridge_version': 1, 'header_fingerprint': sm.header_fingerprint(self.sdk),
-                         'source_sha256': hashlib.sha256(sm.BRIDGE_SOURCE.read_bytes()).hexdigest(),
+                         'source_sha256': hashlib.sha256(sm.bridge_source_bytes()).hexdigest(),
                          'dll_sha256': hashlib.sha256(dll).hexdigest(), 'runtime': 'STATIC_MSVC'}
         self.save_manifest()
 

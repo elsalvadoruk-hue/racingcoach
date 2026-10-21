@@ -63,7 +63,7 @@ class AppAssetTests(unittest.TestCase):
             backend.mkdir()
             (backend / "backend_api.py").write_text('APP_VERSION = "2.0.1"\n', encoding="utf-8")
             (backend / "lmu_shared_memory.py").write_text("# bundle support\n", encoding="utf-8")
-            source = lmu_shared_memory.BRIDGE_SOURCE.read_bytes()
+            source = lmu_shared_memory.bridge_source_bytes()
             (backend / "lmu_native_bridge.cpp").write_bytes(source)
             fingerprint = "a" * 64
             identity = hashlib.sha256(source + fingerprint.encode("ascii")).hexdigest()[:24]

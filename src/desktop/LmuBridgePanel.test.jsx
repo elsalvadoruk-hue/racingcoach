@@ -15,18 +15,26 @@ test('a ready bundled bridge guides the driver to connect without offering a bui
   expect(await screen.findByText(/LMU를 실행하고 차에 탄 뒤 음성 코치에서/)).toBeVisible();
   expect(screen.queryByRole('button', { name: '실시간 브리지 빌드' })).not.toBeInTheDocument();
   expect(requestJson).toHaveBeenCalledTimes(1);
-  expect(screen.getByRole('link', { name: '브리지 사용법' })).toHaveAttribute('href', '/lmu-bridge-guide.html');
+  expect(screen.getByRole('link', { name: '연결 도움말' })).toHaveAttribute('href', '/lmu-bridge-guide.html');
 });
 
-test('an SDK mismatch explains and preserves the manual build fallback', async () => {
+test('a missing connection file is prepared with one connect action and no build', async () => {
   requestJson.mockResolvedValueOnce({ state: 'ABI_MISMATCH', buildable: true, message: 'SDK 변경' });
   requestJson.mockResolvedValueOnce({ state: 'READY', buildable: false, message: '빌드 완료' });
   render(<LmuBridgePanel />);
-  const build = await screen.findByRole('button', { name: '실시간 브리지 빌드' });
-  expect(screen.getByText(/현재 LMU SDK에 맞는 브리지가 없습니다/)).toBeVisible();
-  fireEvent.click(build);
+  const connect = await screen.findByRole('button', { name: '실시간 연결' });
+  expect(screen.getByText(/연결에 필요한 파일은 앱이 자동으로 준비합니다/)).toBeVisible();
+  fireEvent.click(connect);
   expect(await screen.findByText('빌드 완료')).toBeVisible();
-  expect(requestJson).toHaveBeenLastCalledWith('/api/lmu/live/bridge/build', { method: 'POST', timeoutMs: 180000 });
+  expect(requestJson).toHaveBeenLastCalledWith('/api/lmu/live/connect', { method: 'POST' });
+  expect(screen.queryByRole('button', { name: '실시간 브리지 빌드' })).not.toBeInTheDocument();
+});
+
+test('preparing connection disables repeat requests and offers no compiler steps', async () => {
+  requestJson.mockResolvedValue({ state: 'CONNECTION_PREPARING', message: '연결 파일을 받는 중입니다.' });
+  render(<LmuBridgePanel />);
+  expect(await screen.findByRole('button', { name: '연결 준비 중…' })).toBeDisabled();
+  expect(screen.queryByText(/Visual Studio/)).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '실시간 브리지 빌드' })).not.toBeInTheDocument();
 });
 

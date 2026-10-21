@@ -1,7 +1,0 @@
-{
-  "bridge_version": 1,
-  "header_fingerprint": "e8769bedabbcafe1666c47d71352a8e6391d443e0160eb9b55bbd4ba974a0b3b",
-  "source_sha256": "06f76a2417c94d45e5f0c303f5e98c17a994a86b1fb0c9435dd47ea7d226b30e",
-  "dll_sha256": "33d56a166d8c92f042cf2b529d985b7d2e6b33c8a2672b4ace7cd3505bea5fc0",
-  "runtime": "STATIC_MSVC"
-}
