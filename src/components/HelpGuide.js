@@ -845,6 +845,7 @@ const SECTIONS = [
     ] },
     { list: [
       '처음 설치할 때도 음성은 앱을 처음 켤 때 뜨는 업데이트 창에서 받습니다(약 0.66GB).',
+      '2.0.0: Le Mans Ultimate(LMU)를 지원합니다. 상단에서 LMU를 고르면 LMU 주행 기록 분석과 실시간 스포터·엔지니어·오버레이를 씁니다. 세션 로그 자동 보내기가 생겼습니다. 설치.bat을 다시 실행해야 합니다(duckdb 패키지 추가).',
       '1.4.3: 업데이트를 적용할 때 기다리는 시간을 줄였고, 음성 받는 방법 안내를 정리했습니다.',
       '1.4.2: 앱 안에서 새 버전과 빠진 음성을 받는 업데이트 창이 생겼습니다. 음성은 1.4.0과 같습니다.',
       '1.4.1: 출력장치가 잠시 끊겨도 안내를 이어 가거나 다시 말합니다. 음성은 1.4.0과 같아 1.4.0 전체 음성팩이 있으면 다시 받지 않습니다.',
@@ -932,7 +933,7 @@ function ManualBlock({ block, onNavigate }) {
 }
 
 export function UserManual({ onNavigate, hasAnalysis, sections: allSections = SECTIONS, heading = '기능별 사용법',
-  intro = '1.4.3 데스크톱 화면 기준입니다. 처음이면 1장, 비교 조작은 2~3장, 셋업 실험은 4~6장, 기록은 7장, 주행 중 음성은 8~12장, 폴더와 키 설정은 18장을 보세요.',
+  intro = '2.0.0 데스크톱 화면 기준입니다. 처음이면 1장, 비교 조작은 2~3장, 셋업 실험은 4~6장, 기록은 7장, 주행 중 음성은 8~12장, 폴더와 키 설정은 18장을 보세요.',
   emptyHint = '주행 분석이 없어도 매뉴얼을 읽을 수 있습니다. 기능을 사용하려면 IBT 파일을 선택하세요.' }) {
   const [search, setSearch] = useState('');
   const [activeChapter, setActiveChapter] = useState(allSections[0]?.id);
