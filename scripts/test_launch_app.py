@@ -14,6 +14,7 @@ import launch_app
 class LauncherTests(unittest.TestCase):
     def test_existing_app_is_reused_without_launching_or_stopping_processes(self):
         with patch.object(launch_app, "api_ready", return_value=True), \
+             patch.object(launch_app, "require_current_api"), \
              patch.object(launch_app, "ui_ready", return_value=True), \
              patch.object(launch_app.subprocess, "Popen") as spawn, \
              patch.object(launch_app, "stop_process") as stop, \
@@ -38,6 +39,7 @@ class LauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, \
              patch.object(launch_app, "LOG_DIR", Path(temp)), \
              patch.object(launch_app, "api_ready", return_value=True), \
+             patch.object(launch_app, "require_current_api"), \
              patch.object(launch_app, "ui_ready", side_effect=[False, True]), \
              patch.object(launch_app, "port_busy", return_value=False), \
              patch.object(launch_app, "commands", return_value={"frontend": ["node", "app.js"]}) as commands, \
@@ -65,6 +67,27 @@ class LauncherTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "backend.log"):
                 launch_app.run(1, False)
             stop.assert_called_once_with(process)
+
+
+class ApiCompatibilityTests(unittest.TestCase):
+    def test_old_running_backend_is_not_silently_reused_or_stopped(self):
+        with patch.object(launch_app, 'api_ready', return_value=True), \
+             patch.object(launch_app, 'ui_ready', return_value=True), \
+             patch.object(launch_app, 'read_http', return_value=b'{"paths":{"/api/lmu/workspace/{route}":{"post":{}}}}'), \
+             patch.object(launch_app.subprocess, 'Popen') as spawn, \
+             patch.object(launch_app, 'stop_process') as stop:
+            with self.assertRaisesRegex(RuntimeError, '이전 분석 서버'):
+                launch_app.run(1, False)
+            spawn.assert_not_called()
+            stop.assert_not_called()
+
+    def test_current_import_api_is_accepted_but_missing_or_malformed_contract_is_rejected(self):
+        with patch.object(launch_app, 'read_http', return_value=b'{"paths":{"/api/lmu/telemetry/import":{"post":{}}}}'):
+            launch_app.require_current_api()
+        for response in (None, b'not json', b'{"paths":null}', b'{"paths":{"/api/lmu/telemetry/import":{"get":{}}}}'):
+            with self.subTest(response=response), patch.object(launch_app, 'read_http', return_value=response):
+                with self.assertRaises(RuntimeError):
+                    launch_app.require_current_api()
 
 
 class ScreenSelectionTests(unittest.TestCase):
@@ -271,6 +294,7 @@ class UpdateLaunchTests(unittest.TestCase):
 
     def test_an_update_is_not_applied_under_a_running_app(self):
         with patch.object(launch_app, "api_ready", return_value=True), \
+             patch.object(launch_app, "require_current_api"), \
              patch.object(launch_app, "ui_ready", return_value=True), \
              patch.object(launch_app, "apply_update") as apply, \
              patch.object(launch_app.webbrowser, "open", return_value=True):

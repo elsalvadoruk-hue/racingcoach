@@ -58,6 +58,18 @@ def api_ready() -> bool:
         return False
 
 
+def require_current_api() -> None:
+    """Do not report a successful relaunch while reusing an older API."""
+    try:
+        spec = json.loads(read_http(f"{API_URL}/openapi.json") or b'{}')
+        supported = 'post' in spec.get('paths', {}).get('/api/lmu/telemetry/import', {})
+    except (ValueError, AttributeError, TypeError):
+        supported = False
+    if not supported:
+        raise RuntimeError("이전 분석 서버가 계속 실행 중이어서 새 기능을 적용할 수 없습니다."
+                           "\n기존 실행.bat 창을 모두 닫은 뒤 다시 실행하세요. 브라우저를 닫는 것만으로는 서버가 종료되지 않습니다.")
+
+
 def ui_ready() -> bool:
     data = read_http(UI_URL)
     if not data:
@@ -173,6 +185,8 @@ def stop_process(process: subprocess.Popen) -> None:
 
 def run(startup_timeout: float, open_browser: bool) -> int:
     api_running, ui_running = api_ready(), ui_ready()
+    if api_running:
+        require_current_api()
     if not api_running and not ui_running:
         apply_update()
     for port, ready in ((API_PORT, api_running), (UI_PORT, ui_running)):

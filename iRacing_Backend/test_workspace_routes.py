@@ -116,6 +116,7 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
         laps = self.post('file-laps')
         self.assertEqual(laps.status_code, 200, laps.text)
         self.assertEqual(len(laps.json()['laps']), 3)
+        self.assertTrue(all(lap['status'] == 'VALID' and lap['complete'] for lap in laps.json()['laps']))
         overlay = self.post('overlay', {'filename': 'baseline.ibt', 'laps': [2, 3], 'base_lap': 2, 'start_pct': .1, 'end_pct': .4})
         self.assertEqual(overlay.status_code, 200, overlay.text)
         result = overlay.json()

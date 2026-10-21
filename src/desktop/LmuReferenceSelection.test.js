@@ -7,7 +7,7 @@ import { activateSession, data, LAST_SESSION_KEY, LMU_SESSION_KEY, rememberSessi
 
 jest.mock('../analysis/analysisClient', () => ({ requestJson: jest.fn() }));
 const A = 'aaaaaaaaaaaaaaaaaaaaaaaa', B = 'bbbbbbbbbbbbbbbbbbbbbbbb', C = 'cccccccccccccccccccccccc';
-const lap = n => ({ lap_number: n, lap_time_s: 117 + n, status: 'VALIDITY_UNKNOWN', valid: null, complete: true, measurement_eligible: true });
+const lap = n => ({ lap_number: n, lap_time_s: 117 + n, status: 'VALID', valid: true, complete: true, invalid_reason: null });
 const ownLaps = [lap(1), lap(2)], referenceLaps = [lap(7), lap(8)];
 const files = [A, B, C].map((name, index) => ({ name, file_name: `${['current', 'reference', 'third'][index]}.duckdb`, display_name: `${['current', 'reference', 'third'][index]}.duckdb`, analyzable: true }));
 const comparison = { provider: 'LMU', target_lap: 2, reference_lap: 7, reference_filename: B, corners: [], trace: [] };
@@ -74,9 +74,9 @@ test('can import a DuckDB as the current driving file', async () => {
   await waitFor(() => expect(requestJson.mock.calls.some(([path, options]) => path.endsWith('/session') && JSON.parse(options.body).filename === 'new.duckdb')).toBe(true));
 });
 
-test('cancel and import errors preserve the selected reference and allow another attempt', async () => {
+test('failed imports block comparison with the previous reference until a successful retry', async () => {
   override = path => path.includes('/telemetry/import?') ? Promise.reject(new Error('LMU 데이터베이스를 읽을 수 없습니다.')) : undefined;
-  picker(); await ready();
+  const onApply = jest.fn(); picker(onApply); await ready();
   const input = screen.getByLabelText('열 DuckDB 파일');
   fireEvent.change(input, { target: { files: [] } });
   expect(requestJson.mock.calls.some(([path]) => path.includes('/telemetry/import?'))).toBe(false);
@@ -84,6 +84,30 @@ test('cancel and import errors preserve the selected reference and allow another
   expect(await screen.findByRole('alert')).toHaveTextContent('LMU 데이터베이스를 읽을 수 없습니다.');
   expect(screen.getByLabelText('기준 주행 파일 · LMU')).toHaveValue(A);
   expect(screen.getByRole('button', { name: '기준 DuckDB 파일 열기…' })).toBeEnabled();
+  const apply = screen.getByRole('button', { name: '선택한 랩 비교하기' });
+  expect(apply).toBeDisabled();
+  fireEvent.click(apply); expect(onApply).not.toHaveBeenCalled();
+  override = path => path.includes('/telemetry/import?') ? Promise.resolve({ file: { name: 'retry.duckdb', analyzable: true } }) : undefined;
+  fireEvent.change(input, { target: { files: [new File(['fixture'], 'retry.duckdb')] } });
+  await waitFor(() => expect(screen.getByLabelText('비교 기준')).toHaveValue('9'));
+  expect(screen.getByLabelText('기준 주행 파일 · LMU')).toHaveValue('retry.duckdb');
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  await waitFor(() => expect(apply).toBeEnabled());
+});
+
+test('an old running backend explains the import 404 and requires explicit reference selection to reuse a previous file', async () => {
+  override = path => path.includes('/telemetry/import?') ? Promise.reject(Object.assign(new Error('Not Found'), { status: 404 })) : undefined;
+  const onApply = jest.fn(); picker(onApply); await ready();
+  fireEvent.click(screen.getByRole('button', { name: '기준 DuckDB 파일 열기…' }));
+  fireEvent.change(screen.getByLabelText('열 DuckDB 파일'), { target: { files: [new File(['fixture'], 'reference.duckdb')] } });
+  expect(await screen.findByRole('alert')).toHaveTextContent('reference.duckdb 파일을 가져오지 못해 적용하지 않았습니다. 실행 중인 분석 서버가 이전 버전입니다.');
+  expect(screen.getByRole('alert')).not.toHaveTextContent('Not Found');
+  expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeDisabled();
+  expect(onApply).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('기준 주행 파일 · LMU'), { target: { value: B } });
+  await waitFor(() => expect(screen.getByLabelText('비교 기준')).toHaveValue('8'));
+  expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });
 
 test('unmount aborts an import and ignores its delayed result', async () => {

@@ -71,6 +71,13 @@ class LmuImportTests(unittest.TestCase):
         second = client.post('/api/lmu/telemetry/import?filename=reference.duckdb', content=circuit.read_bytes()).json()['file']['name']
         listing = client.post('/api/lmu/workspace/files', json={}).json()['files']
         self.assertEqual({row['name'] for row in listing}, {first, second})
+        laps = client.post('/api/lmu/workspace/file-laps', json={'filename': second}).json()['laps']
+        # SourcePicker uses status/measurement_eligible, not the overlay-only valid flag.
+        self.assertEqual([lap['status'] for lap in laps], ['VALID', 'VALID', 'INVALID', 'VALID'])
+        self.assertTrue(all(lap['complete'] for lap in laps))
+        self.assertTrue(laps[0]['valid'])
+        self.assertFalse(laps[2]['valid'])
+        self.assertIsNotNone(laps[2]['invalid_reason'])
         response = client.post('/api/lmu/workspace/session', json={'filename': first, 'preview': True})
         self.assertEqual(response.status_code, 200, response.text)
         response = client.post('/api/lmu/workspace/comparison', json={'filename': first,

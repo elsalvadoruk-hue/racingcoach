@@ -2489,7 +2489,8 @@ def lap_overlay_payload(telemetry: ParsedTelemetry, payload: LapOverlayRequest) 
 
 def file_laps_payload(telemetry: ParsedTelemetry) -> dict[str, Any]:
     """The finished laps of a file, for picking one to overlay."""
-    return {"laps": [{"lap_number": lap.lap_number, "lap_time_s": round_or_none(lap.lap_time_s, 3), "valid": bool(lap.valid)}
+    return {"laps": [{"lap_number": lap.lap_number, "lap_time_s": round_or_none(lap.lap_time_s, 3), "valid": bool(lap.valid),
+                      "status": lap.status, "complete": bool(lap.complete), "invalid_reason": lap.invalid_reason}
                      for lap in telemetry.laps if lap.lap_time_s],
             "track_name": telemetry.metadata.get("track_name"), "track_config": telemetry.metadata.get("track_config"),
             "car_name": telemetry.metadata.get("car_name")}

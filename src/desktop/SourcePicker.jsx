@@ -30,6 +30,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   const [error, setError] = useState('');
   const [importBusy, setImportBusy] = useState(false);
   const [importNotice, setImportNotice] = useState('');
+  const [importError, setImportError] = useState('');
   const fileInput = useRef(null);
   const importTarget = useRef('reference');
   const importController = useRef(null);
@@ -105,6 +106,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     return () => { controller.abort(); setPersonalBusy(false); };
   }, [file, own, referenceSelection, session]);
   function chooseAutomatic() {
+    setImportError('');
     setReferenceSelection('AUTO');
     if (personalReference) {
       setReferenceFile(personalReference.filename || file);
@@ -120,12 +122,12 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     event.target.value = '';
     if (!selectedFile) return;
     if (!selectedFile.name.toLowerCase().endsWith('.duckdb')) {
-      setError('완료된 LMU .duckdb 파일을 선택하세요.'); return;
+      setImportError('완료된 LMU .duckdb 파일을 선택하세요. 선택한 파일은 적용되지 않았습니다.'); return;
     }
     const destination = importTarget.current;
     const controller = new AbortController();
     importController.current = controller;
-    setImportBusy(true); setError(''); setImportNotice('');
+    setImportBusy(true); setError(''); setImportError(''); setImportNotice('');
     try {
       const result = await requestJson(`/api/lmu/telemetry/import?filename=${encodeURIComponent(selectedFile.name)}`, {
         method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: selectedFile,
@@ -141,13 +143,19 @@ export default function SourcePicker({ target, reference, external, onApply, ana
       }
       setImportNotice(`${selectedFile.name} 파일을 가져왔습니다. ${destination === 'source' ? '주행' : '기준'} 랩을 선택하세요.`);
     } catch (error) {
-      if (mounted.current && !controller.signal.aborted) setError(error.message);
+      if (mounted.current && !controller.signal.aborted) {
+        const reason = error.status === 404
+          ? '실행 중인 분석 서버가 이전 버전입니다. 실행.bat 창을 닫고 다시 실행한 뒤 파일을 다시 선택하세요.'
+          : error.message;
+        setImportError(`${selectedFile.name} 파일을 가져오지 못해 적용하지 않았습니다. ${reason}`);
+      }
     } finally {
       if (mounted.current) setImportBusy(false);
       if (importController.current === controller) importController.current = null;
     }
   }
   async function apply() {
+    if (importBusy || importError) return;
     setBusy(true); setError('');
     try {
       let externalFiles = mode === 'GARAGE61' ? selected : [];
@@ -170,7 +178,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   const label = lap => `${lap.lap_number}랩 · ${lapTime(lap.lap_time_s)} · ${lapStatus(lap)}${isBestLap(lap, options) ? ' · ★ 베스트' : ''}${lap.invalid_reason ? ` · ${lap.invalid_reason}` : ''}`;
   const lapClass = lap => `${sessionTypeTone(session)}-lap-option${(!allowed(lap) || !lapIsComplete(lap)) ? ' lap-option-faint' : ''}${isBestLap(lap, options) ? ' best-lap-option' : ''}`;
   return <div className="source-picker">{lmu && <input ref={fileInput} type="file" accept=".duckdb" aria-label="열 DuckDB 파일" hidden onChange={importDuckdb} />}<FieldGroup>
-    <Field><FieldLabel htmlFor="source-file">주행 파일 · {lmu ? 'LMU DuckDB' : 'IBT'}</FieldLabel><NativeSelect id="source-file" disabled={importBusy} value={file} onChange={e => { setFile(e.target.value); setReferenceFile(e.target.value); setReferenceLaps([]); }}>
+    <Field><FieldLabel htmlFor="source-file">주행 파일 · {lmu ? 'LMU DuckDB' : 'IBT'}</FieldLabel><NativeSelect id="source-file" disabled={importBusy} value={file} onChange={e => { setImportError(''); setFile(e.target.value); setReferenceFile(e.target.value); setReferenceLaps([]); }}>
       {!file && <NativeSelectOption value="">{lmu ? 'LMU 파일을 선택하세요' : 'IBT 파일을 선택하세요'}</NativeSelectOption>}
       {data.filename && !files.some(f => f.name === data.filename) && <NativeSelectOption value={data.filename}>{data.filename}</NativeSelectOption>}
       {files.map(f => <NativeSelectOption key={f.name} value={f.name} disabled={f.analyzable === false} className={`${sessionTypeTone(f)}-file-option${f.valid_laps === 0 || f.complete_laps === 0 ? ' file-option-faint' : ''}`}>{f.track_name || f.name} · {fileLapLabel(f)} · {sessionTypeLabel(f)} · {f.car_name || ''} · {f.display_name || f.file_name || f.name}</NativeSelectOption>)}
@@ -178,17 +186,18 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     <Field><FieldLabel htmlFor="target-lap">내 주행</FieldLabel><NativeSelect id="target-lap" className={isBestLap(ownLap, options) ? 'best-lap-select' : ''} value={own} disabled={importBusy || busy} onChange={e => setOwn(e.target.value)}>{options.map((l, index) => <NativeSelectOption key={`${l.lap_number}-${l.status}-${index}`} value={String(l.lap_number)} disabled={!allowed(l)} className={lapClass(l)}>{label(l)}</NativeSelectOption>)}</NativeSelect><p>{ownLap ? `${lapStatus(ownLap)} 랩${!lapIsComplete(ownLap) ? ' · 완주 랩이 아니며 관측된 정상 구간만 비교합니다.' : ownLap.measurement_eligible ? ' · 기록된 측정값을 비교하며 게임 유효성은 확인 필요입니다.' : ownLap.status !== 'VALID' ? ' · 관측된 정상 구간만 비교합니다.' : ''}` : '비교할 수 있는 랩을 선택하세요.'} · 연한 표시는 완주 유효 랩이 아니거나 비교 자료가 없는 랩입니다.</p></Field>
     <Field><FieldLabel htmlFor="reference-mode">기준 종류</FieldLabel><NativeSelect id="reference-mode" value={mode} onChange={e => { setMode(e.target.value); if (e.target.value === 'LOCAL') chooseAutomatic(); }} disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)}><NativeSelectOption value="LOCAL">내 기준 랩</NativeSelectOption><NativeSelectOption disabled={lmu || !refs.length} value="GARAGE61">Garage61 · 내려받은 기준</NativeSelectOption></NativeSelect></Field>
     {mode === 'LOCAL' && <Field><FieldLabel htmlFor="reference-selection">기준 선택 방식</FieldLabel><NativeSelect id="reference-selection" value={referenceSelection} disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)} onChange={e => { if (e.target.value === 'AUTO') chooseAutomatic(); else setReferenceSelection('MANUAL'); }}><NativeSelectOption value="AUTO">비슷한 조건의 내 베스트 랩 · 자동</NativeSelectOption><NativeSelectOption value="MANUAL">파일·랩 직접 선택</NativeSelectOption></NativeSelect><p>{lmu ? '같은 차량·트랙·레이아웃의 가장 빠른 기록을 다른 파일까지 찾아 사용합니다. 비 여부만 크게 구분하고 온도·타이어 차이는 제한하지 않습니다. 강수 정보가 없으면 건조·젖음 정보로 구분하며 날씨 미상 기록도 허용합니다.' : '같은 차량·트랙·레이아웃에서 조건이 비슷한 가장 빠른 기록을 다른 파일까지 찾아 사용합니다. 젖은 노면과 마른 노면은 섞지 않습니다.'}</p>{referenceSelection === 'AUTO' && personalReference && <p role="status">{personalReference.filename ? `자동 기준: ${personalReference.file_name || files.find(f => f.name === personalReference.filename)?.file_name || personalReference.filename} · ${personalReference.lap ?? personalReference.lap_number}랩 · ${lapTime(personalReference.lap_time_s)}` : personalReference.reason || '조건이 맞는 내 기준 랩이 없습니다.'}{personalReference.filename === file && String(personalReference.lap ?? personalReference.lap_number) === own ? ' · 선택한 내 주행이 베스트 랩입니다.' : ''}</p>}</Field>}
-    {mode === 'LOCAL' && <Field><FieldLabel htmlFor="lmu-reference-file">기준 주행 파일 · {lmu ? 'LMU' : 'IBT'}</FieldLabel><NativeSelect id="lmu-reference-file" value={referenceFile || file} onChange={e => { setReferenceSelection('MANUAL'); setReferenceFile(e.target.value); }} disabled={importBusy || busy || referenceSelection === 'AUTO' || Boolean(analysisWorkspace?.activeTrial)}>{referenceFile && !files.some(f => f.name === referenceFile) && <NativeSelectOption value={referenceFile}>{referenceFile}</NativeSelectOption>}{files.filter(f => f.analyzable !== false).map(f => <NativeSelectOption key={f.name} value={f.name}>{f.display_name || f.file_name || f.name}{f.name === file ? ' · 같은 파일' : ''}</NativeSelectOption>)}</NativeSelect>{lmu && <Button variant="outline" disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)} onClick={() => openDuckdb('reference')}>기준 DuckDB 파일 열기…</Button>}<p>같은 차량·트랙·레이아웃의 다른 기록도 기준으로 선택할 수 있습니다.</p></Field>}
+    {mode === 'LOCAL' && <Field><FieldLabel htmlFor="lmu-reference-file">기준 주행 파일 · {lmu ? 'LMU' : 'IBT'}</FieldLabel><NativeSelect id="lmu-reference-file" value={referenceFile || file} onChange={e => { setImportError(''); setReferenceSelection('MANUAL'); setReferenceFile(e.target.value); }} disabled={importBusy || busy || referenceSelection === 'AUTO' || Boolean(analysisWorkspace?.activeTrial)}>{referenceFile && !files.some(f => f.name === referenceFile) && <NativeSelectOption value={referenceFile}>{referenceFile}</NativeSelectOption>}{files.filter(f => f.analyzable !== false).map(f => <NativeSelectOption key={f.name} value={f.name}>{f.display_name || f.file_name || f.name}{f.name === file ? ' · 같은 파일' : ''}</NativeSelectOption>)}</NativeSelect>{lmu && <Button variant="outline" disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)} onClick={() => openDuckdb('reference')}>기준 DuckDB 파일 열기…</Button>}<p>같은 차량·트랙·레이아웃의 다른 기록도 기준으로 선택할 수 있습니다.</p></Field>}
     {mode === 'LOCAL' ? <Field><FieldLabel htmlFor="reference-lap">비교 기준</FieldLabel><NativeSelect id="reference-lap" className={isBestLap(baseOptions.find(l => String(l.lap_number) === base), baseOptions) ? 'best-lap-select' : ''} value={base} onChange={e => { setReferenceSelection('MANUAL'); setBase(e.target.value); }} disabled={importBusy || busy || referenceBusy || referenceSelection === 'AUTO' || Boolean(analysisWorkspace?.activeTrial)}>{baseOptions.map((l, index) => <NativeSelectOption key={`${l.lap_number}-${l.status}-${index}`} value={String(l.lap_number)} disabled={!measurableLap(l)} className={!measurableLap(l) ? 'lap-option-faint' : undefined}>{label(l)}</NativeSelectOption>)}</NativeSelect>{referenceBusy && <p role="status">기준 파일의 랩 확인 중…</p>}</Field> : <Field><FieldLabel htmlFor="reference-files">Garage61 기준 · Ctrl 키로 여러 랩 선택</FieldLabel><select id="reference-files" multiple size={5} value={selected} onChange={e => setSelected([...e.target.selectedOptions].map(o => o.value))} disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)}>{refs.map(r => <option key={r.name} value={r.name}>{r.driver_name || '드라이버'} · {lapTime(r.lap_time_s)} · {r.car_name}</option>)}</select><p>1개: 실주행 비교 · 여러 개: 기존 조건 가중 종합 기준. 선택 {selected.length}개</p>{!refs.length && <p>이 차량·트랙과 맞는 내려받은 기준이 없습니다.</p>}</Field>}
   </FieldGroup><p className="dialog-copy">{lmu ? '기록된 랩타임으로 비교합니다. 파일에 별도의 유효·무효 판정값은 없어 게임 판정은 확인 필요로 표시합니다. 날씨·타이어 조건은 확인 필요이며 셋업 효과로 단정하지 않습니다.' : 'IBT 파일을 바꾸거나 Garage61 기준을 선택하면 지도·구간 수치가 함께 바뀝니다. 전문가 보기에서는 같은 트랙의 다른 IBT 랩도 겹칠 수 있습니다.'}</p>
     {referenceSelection === 'AUTO' && personalReference?.conditions?.warnings?.includes('SURFACE_CONDITION_UNKNOWN') && <p role="status">{lmu ? '날씨 정보가 없는 기록도 다른 파일까지 찾아 비교 기준으로 사용합니다. 강수·노면 조건은 확인 필요입니다.' : '노면 상태를 확인할 수 없어 같은 파일에서만 자동 기준을 선택했습니다.'}</p>}
     {lmu && <p className="dialog-copy">다운로드한 .duckdb도 열 수 있습니다. 파일 선택 창에서 고르면 앱에 복사본을 보관합니다. 원본은 그대로 남습니다.</p>}
     {importBusy && <p role="status">DuckDB 파일을 가져오는 중…</p>}
     {importNotice && <p role="status">{importNotice}</p>}
+    {importError && <p role="alert" className="loss">{importError}</p>}
     {error && <p role="alert" className="loss">{error}</p>}
     {referenceError && <p role="alert">{referenceError}</p>}
     {referenceNotice && <p role="status">{referenceNotice}</p>}
-    <Button disabled={importBusy || busy || referenceBusy || personalBusy || Boolean(referenceError) || !session || !own || (mode === 'LOCAL' && !baseOptions.some(l => String(l.lap_number) === base && measurableLap(l))) || (mode === 'GARAGE61' && !selected.length)} onClick={apply}>{busy ? '주행 데이터 계산 중…' : '선택한 랩 비교하기'}</Button>
+    <Button disabled={importBusy || Boolean(importError) || busy || referenceBusy || personalBusy || Boolean(referenceError) || !session || !own || (mode === 'LOCAL' && !baseOptions.some(l => String(l.lap_number) === base && measurableLap(l))) || (mode === 'GARAGE61' && !selected.length)} onClick={apply}>{busy ? '주행 데이터 계산 중…' : '선택한 랩 비교하기'}</Button>
     {analysisWorkspace && !lmu && <ConnectionControls workspace={analysisWorkspace} />}
   </div>;
 }
