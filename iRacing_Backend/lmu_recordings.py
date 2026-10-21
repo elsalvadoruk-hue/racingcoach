@@ -46,12 +46,17 @@ def recording_busy(path: Path) -> bool:
 
 
 def files_payload(visibility, limit=250):
+    from lmu_imports import import_dir
+    imported = import_dir().resolve()
     fields = ('car_name', 'car_path', 'track_name', 'track_path', 'track_config', 'track_platform_id', 'analyzable',
               'reason', 'detected_laps', 'complete_laps', 'valid_laps', 'metadata_pending', 'status', 'retryable',
               'session_type', 'session_duration_s', 'suggested_session_mode')
     rows = []
     for path in recordings(limit):
-        row = {'name': path.name, 'file_id': file_id(path), 'display_name': path.name, 'provider': 'LMU'}
+        stat = path.stat()
+        signature = [stat.st_size, stat.st_mtime_ns]
+        row = {'name': path.name, 'file_id': file_id(path), 'display_name': path.name, 'provider': 'LMU',
+               'file_signature': signature, 'auto_load': path.resolve().parent != imported}
         if recording_busy(path):
             row.update(analyzable=False, status='RECORDING', reason='LMU가 아직 이 파일을 기록 중입니다.')
         else:
@@ -60,5 +65,9 @@ def files_payload(visibility, limit=250):
             except (OSError, ValueError) as exc:
                 info = {'analyzable': False, 'status': 'UNAVAILABLE', 'reason': str(exc)}
             row.update({key: info.get(key) for key in fields})
+            after = path.stat()
+            if recording_busy(path) or signature != [after.st_size, after.st_mtime_ns]:
+                row.update(analyzable=False, status='RECORDING', retryable=True,
+                           reason='LMU가 아직 이 파일을 기록 중입니다.')
         rows.append(row)
     return {'provider': 'LMU', 'files': rows}

@@ -42,6 +42,17 @@ async function ready() {
 }
 const callBody = route => JSON.parse(requestJson.mock.calls.find(([path]) => path.endsWith(`/${route}`))[1].body);
 
+test('keeps automatic recording application paused for the entire file picker lifetime', async () => {
+  const resume = jest.fn(), pauseAutomaticSelection = jest.fn(() => resume);
+  const { unmount } = render(<SourcePicker target="2" reference="1" external={[]}
+    analysisWorkspace={{ game: 'lmu', pauseAutomaticSelection }} onApply={jest.fn()} />);
+  await ready();
+  expect(pauseAutomaticSelection).toHaveBeenCalledTimes(1);
+  expect(resume).not.toHaveBeenCalled();
+  unmount();
+  expect(resume).toHaveBeenCalledTimes(1);
+});
+
 test('opens a native file input and imports a downloaded DuckDB directly as the manual reference', async () => {
   const imported = 'download-123456789abc.duckdb';
   override = path => path.includes('/telemetry/import?') ? Promise.resolve({ file: { name: imported, analyzable: true } })

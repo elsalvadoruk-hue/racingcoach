@@ -148,6 +148,39 @@ class LmuIbtTests(unittest.TestCase):
 
 @unittest.skipUnless(duckdb, 'LMU 전용 의존성을 설치하지 않은 환경입니다.')
 class LmuRecordingsTests(unittest.TestCase):
+    def test_catalog_versions_change_and_imported_references_do_not_auto_open(self):
+        import lmu_recordings
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            current = root / 'drive.duckdb'
+            current.write_bytes(b'first')
+            imported = root / 'imports'
+            imported.mkdir()
+            reference = imported / 'reference.duckdb'
+            reference.write_bytes(b'reference')
+            with patch.object(lmu_recordings, 'recordings', return_value=[current, reference]), \
+                    patch('lmu_imports.import_dir', return_value=imported):
+                before = lmu_recordings.files_payload(lambda p: {'analyzable': True})['files']
+                self.assertTrue(before[0]['auto_load'])
+                self.assertFalse(before[1]['auto_load'])
+                current.write_bytes(b'longer recording')
+                after = lmu_recordings.files_payload(lambda p: {'analyzable': True})['files']
+                self.assertNotEqual(before[0]['file_signature'], after[0]['file_signature'])
+
+    def test_a_recording_changed_during_visibility_is_not_ready(self):
+        import lmu_recordings
+        with tempfile.TemporaryDirectory() as folder:
+            current = Path(folder) / 'drive.duckdb'
+            current.write_bytes(b'first')
+            def changing_visibility(path):
+                path.write_bytes(b'extended recording')
+                return {'analyzable': True}
+            with patch.object(lmu_recordings, 'recordings', return_value=[current]):
+                row = lmu_recordings.files_payload(changing_visibility)['files'][0]
+            self.assertFalse(row['analyzable'])
+            self.assertEqual(row['status'], 'RECORDING')
+            self.assertTrue(row['retryable'])
+
     def test_recordings_resolve_by_name_or_old_id_and_busy_files_are_listed_not_read(self):
         import lmu_recordings
         with tempfile.TemporaryDirectory() as folder:

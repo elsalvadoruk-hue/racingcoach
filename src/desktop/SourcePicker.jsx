@@ -39,6 +39,8 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   lockedReferences.current = analysisWorkspace?.activeTrial;
   const workspaceRef = useRef(analysisWorkspace);
   workspaceRef.current = analysisWorkspace;
+  const pauseAutomaticSelection = analysisWorkspace?.pauseAutomaticSelection;
+  useEffect(() => pauseAutomaticSelection?.(), [pauseAutomaticSelection]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => () => importController.current?.abort(), [lmu]);
   useEffect(() => {
