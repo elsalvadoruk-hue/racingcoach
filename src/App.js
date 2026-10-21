@@ -16,12 +16,14 @@ export default function App() {
   const [game, setGame] = useState(() => {
     let saved; try { saved = localStorage.getItem('coach.selected-game.v1'); } catch { /* Default game. */ }
     const initial = saved === 'lmu' ? 'lmu' : 'iracing';
+    document.documentElement.dataset.game = initial;
     selectGame(initial); return initial;
   });
   const changeGame = next => {
     if (!next || next === game) return;
     selectGame(next);
     try { localStorage.setItem('coach.selected-game.v1', next); } catch { /* Selection remains usable. */ }
+    document.documentElement.dataset.game = next;
     setGame(next);
   };
   return <GameContext.Provider value={{ selectedGame: game, liveGame, activeGame: liveGame ?? game, setLiveGame }}>

@@ -236,3 +236,25 @@ test('while the ghost replay runs a panel over the map shows both cars speed, ge
   expect(panel).toHaveTextContent('5단');
   expect(panel).toHaveTextContent('기준보다 1.00초 느림');
 });
+
+
+test('changing game redraws cached chart and map colours without changing the comparison', () => {
+  delete document.documentElement.dataset.game;
+  const props = { trace, corners, pathData, referencePath: pathData, trackLengthM: 5000 };
+  const { container, rerender } = render(<CornerComparison {...props} />);
+  expect(container.querySelector('.recharts-line path[stroke="#66c6ef"]')).toBeInTheDocument();
+  expect(screen.getByTestId('map-reference-line')).toHaveAttribute('stroke', '#f0ad72');
+  try {
+    document.documentElement.dataset.game = 'lmu';
+    rerender(<CornerComparison {...props} />);
+    expect(container.querySelector('.recharts-line path[stroke="#FF5A73"]')).toBeInTheDocument();
+    expect(container.querySelector('.recharts-line path[stroke="#66c6ef"]')).not.toBeInTheDocument();
+    expect(screen.getByTestId('map-reference-line')).toHaveAttribute('stroke', '#7FB2FF');
+    document.documentElement.dataset.game = 'iracing';
+    rerender(<CornerComparison {...props} />);
+    expect(container.querySelector('.recharts-line path[stroke="#66c6ef"]')).toBeInTheDocument();
+    expect(screen.getByTestId('map-reference-line')).toHaveAttribute('stroke', '#f0ad72');
+  } finally {
+    delete document.documentElement.dataset.game;
+  }
+});

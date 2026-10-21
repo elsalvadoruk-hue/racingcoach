@@ -104,6 +104,7 @@ afterEach(() => {
 test('LMU analyses its own recordings and shares the iRacing live coach without mic access or unsolicited audio', async () => {
   render(<App />);
   expect(await screen.findByRole('heading', { name: 'LMU 주행 코치' })).toBeVisible();
+  expect(document.documentElement.dataset.game).toBe('lmu');
   await waitFor(() => expect(paths()).toContain('/api/lmu/workspace/files'));
   expect(iracingAnalysis()).toEqual([]);
   fireEvent.click(screen.getByRole('button', { name: '설정', exact: true }));
@@ -170,12 +171,14 @@ test('switching between LMU and iRacing preserves the existing iRacing session s
   await screen.findByRole('heading', { name: 'LMU 주행 코치' });
   fireEvent.click(screen.getByRole('radio', { name: 'iRacing', exact: true }));
   await screen.findByRole('heading', { name: 'iRacing 주행 코치' });
+  expect(document.documentElement.dataset.game).toBe('iracing');
   await waitFor(() => expect(paths()).toContain('/api/files'));
   expect(localStorage.getItem(LAST_SESSION_KEY)).toBe(saved);
   fireEvent.click(screen.getByRole('radio', { name: 'LMU', exact: true }));
   await screen.findByRole('heading', { name: 'LMU 주행 코치' });
   expect(localStorage.getItem(LAST_SESSION_KEY)).toBe(saved);
   expect(localStorage.getItem('coach.selected-game.v1')).toBe('lmu');
+  expect(document.documentElement.dataset.game).toBe('lmu');
 });
 
 test('late iRacing startup responses cannot start memory or Garage61 loading after switching to LMU', async () => {

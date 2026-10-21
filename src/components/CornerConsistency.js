@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Button } from './ui/button';
-import { COMPARISON_COLORS } from '../chartTheme';
+import { comparisonColors } from '../chartTheme';
 
 // How much each corner varies from lap to lap (RaceStudio 3's box plots), and the target lap against the
 // corner's three fastest passes (its "fastest N sectors"), over the laps picked with the lap filter.
@@ -33,11 +33,11 @@ function Box({ stats, scale }) {
   const x = (time) => Math.min(100, ((time - stats.min) / scale) * 100);
   return (
     <svg viewBox="0 0 100 14" preserveAspectRatio="none" className="h-4 w-full" aria-hidden="true">
-      <line x1={x(stats.whiskerLow)} x2={x(stats.whiskerHigh)} y1="7" y2="7" stroke={COMPARISON_COLORS.muted} strokeWidth="0.6" vectorEffect="non-scaling-stroke" />
-      <rect x={x(stats.q1)} y="2" width={Math.max(0.6, x(stats.q3) - x(stats.q1))} height="10" fill="rgba(102,198,239,.25)" stroke={COMPARISON_COLORS.target} strokeWidth="1" vectorEffect="non-scaling-stroke" />
-      <line x1={x(stats.median)} x2={x(stats.median)} y1="2" y2="12" stroke={COMPARISON_COLORS.target} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-      {stats.outliers.map((time, index) => <circle key={index} cx={x(time)} cy="7" r="1.2" fill={COMPARISON_COLORS.muted} />)}
-      {Number.isFinite(stats.target) && <circle cx={x(stats.target)} cy="7" r="2" fill={COMPARISON_COLORS.reference} />}
+      <line x1={x(stats.whiskerLow)} x2={x(stats.whiskerHigh)} y1="7" y2="7" stroke={comparisonColors().muted} strokeWidth="0.6" vectorEffect="non-scaling-stroke" />
+      <rect x={x(stats.q1)} y="2" width={Math.max(0.6, x(stats.q3) - x(stats.q1))} height="10" fill={comparisonColors().target} fillOpacity={.25} stroke={comparisonColors().target} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+      <line x1={x(stats.median)} x2={x(stats.median)} y1="2" y2="12" stroke={comparisonColors().target} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+      {stats.outliers.map((time, index) => <circle key={index} cx={x(time)} cy="7" r="1.2" fill={comparisonColors().muted} />)}
+      {Number.isFinite(stats.target) && <circle cx={x(stats.target)} cy="7" r="2" fill={comparisonColors().reference} />}
     </svg>
   );
 }

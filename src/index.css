@@ -51,6 +51,57 @@
     --coach-warning: hsl(var(--warning));
     --coach-success: hsl(var(--success));
   }
+  :root[data-game="lmu"] {
+    --background: 228 50% 4%;
+    --foreground: 228 33% 97%;
+    --card: 228 50% 9%;
+    --card-foreground: 228 33% 97%;
+    --popover: 226 48% 12%;
+    --popover-foreground: 228 33% 97%;
+    --primary: 350 100% 56%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 228 47% 16%;
+    --secondary-foreground: 227 28% 87%;
+    --muted: 227 48% 14%;
+    --muted-foreground: 225 22% 70%;
+    --accent: 228 46% 19%;
+    --accent-foreground: 228 33% 97%;
+    --destructive: 351 100% 77%;
+    --destructive-foreground: 344 75% 9%;
+    --success: 142 69% 58%;
+    --warning: 40 100% 67%;
+    --chart-reference: 216 100% 75%;
+    --border: 227 37% 22%;
+    --input: 228 35% 28%;
+    --ring: 351 100% 65%;
+    --chart-tooltip-background: var(--popover);
+    --chart-tooltip-border: var(--input);
+    --chart-tooltip-text: var(--popover-foreground);
+    --chart-ghost-background: var(--popover);
+    --chart-entry-point: var(--foreground);
+    --chart-entry-label: var(--muted-foreground);
+    --chart-gap-fill: var(--warning);
+    --app-legacy-background: var(--background);
+    --app-legacy-foreground: var(--foreground);
+    --app-legacy-link: var(--primary);
+    --trace-grid: hsl(var(--border) / .55);
+    --trace-zero: hsl(var(--foreground) / .55);
+  }
+  /* Legacy decoration values preserve the iRacing appearance. */
+  :root {
+    --chart-tooltip-background: 210.000000000 30.612244898% 19.215686275%;
+    --chart-tooltip-border: 213.157894737 24.675324675% 30.196078431%;
+    --chart-tooltip-text: 213.333333333 36.000000000% 90.196078431%;
+    --chart-ghost-background: 213.750000000 32.000000000% 9.803921569%;
+    --chart-entry-point: 214.285714286 31.818181818% 91.372549020%;
+    --chart-entry-label: 0.000000000 0.000000000% 73.333333333%;
+    --chart-gap-fill: 37.692307692 92.125984252% 50.196078431%;
+    --app-legacy-background: 220.000000000 13.043478261% 18.039215686%;
+    --app-legacy-foreground: 0.000000000 0.000000000% 100.000000000%;
+    --app-legacy-link: 192.857142857 95.061728395% 68.235294118%;
+    --trace-grid: rgba(71, 85, 105, 0.55);
+    --trace-zero: rgba(226, 232, 240, 0.55);
+  }
   * { @apply border-border; }
   html { @apply bg-background; scroll-behavior: smooth; }
   body { margin: 0; @apply bg-background font-sans text-foreground antialiased; }

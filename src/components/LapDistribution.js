@@ -1,5 +1,5 @@
 import React from 'react';
-import { COMPARISON_COLORS } from '../chartTheme';
+import { comparisonColors } from '../chartTheme';
 import { summarize } from './CornerConsistency';
 
 // A and B lap times side by side (RaceStudio 3's box plots across sessions): is the change bigger than the
@@ -28,7 +28,7 @@ export default function LapDistribution({ distribution }) {
   const span = Math.max(0.5, high - low);
   const x = (time) => 6 + ((time - low) / span) * 88;
   const result = verdict(a, b);
-  const rows = [['A · 변경 전', a, distribution.baseline, COMPARISON_COLORS.reference], ['B · 변경 후', b, distribution.candidate, COMPARISON_COLORS.target]];
+  const rows = [['A · 변경 전', a, distribution.baseline, comparisonColors().reference], ['B · 변경 후', b, distribution.candidate, comparisonColors().target]];
   const message = {
     BIGGER: '차이가 평소 랩 간 흔들림보다 큽니다. 셋업 효과일 가능성이 높습니다.',
     SIMILAR: '차이가 평소 랩 간 흔들림과 비슷합니다. 랩을 더 모으면 판단이 분명해집니다.',

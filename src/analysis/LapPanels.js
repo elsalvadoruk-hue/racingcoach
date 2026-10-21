@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from "react";
-import { COMPARISON_COLORS } from "../chartTheme";
+import { comparisonColors, chartDecoration } from "../chartTheme";
 import { Button } from "../components/ui/button";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "../components/ui/table";
 import { Input } from "../components/ui/input";
@@ -22,6 +22,8 @@ export function SessionModeHint({ file, stored, current }) {
 
 export function TraceChart({ trace = [], targetLap, referenceLap }) {
   const [mode, setMode] = useState('speed');
+  const colors = comparisonColors();
+  const lmu = document.documentElement.dataset.game === 'lmu';
 
   const draw = useCallback(
     (ctx, width, height) => {
@@ -51,10 +53,10 @@ export function TraceChart({ trace = [], targetLap, referenceLap }) {
       const valueSpan = Math.max(maxValue - minValue, 1e-6);
       const y = (value) => padding.top + (1 - (value - minValue) / valueSpan) * plotHeight;
 
-      ctx.strokeStyle = 'rgba(71, 85, 105, 0.55)';
+      ctx.strokeStyle = chartDecoration('--trace-grid');
       ctx.lineWidth = 1;
       ctx.font = '13px ui-monospace, SFMono-Regular, Menlo, monospace';
-      ctx.fillStyle = COMPARISON_COLORS.muted;
+      ctx.fillStyle = colors.muted;
       ctx.textAlign = 'right';
       ctx.textBaseline = 'middle';
       for (let row = 0; row <= 4; row += 1) {
@@ -104,7 +106,7 @@ export function TraceChart({ trace = [], targetLap, referenceLap }) {
             && point.reference_speed_p75_kph !== null && point.reference_speed_p75_kph !== undefined
         );
         if (hasReferenceBand) {
-          ctx.fillStyle = `${COMPARISON_COLORS.reference}1f`;
+          ctx.fillStyle = `${colors.reference}1f`;
           ctx.beginPath();
           let started = false;
           trace.forEach((point) => {
@@ -120,10 +122,11 @@ export function TraceChart({ trace = [], targetLap, referenceLap }) {
           ctx.closePath();
           ctx.fill();
         }
-        drawLine('reference_speed_kph', COMPARISON_COLORS.reference, 2, true);
-        drawLine('target_speed_kph', COMPARISON_COLORS.target, 2.4);
+        drawLine('reference_speed_kph', colors.reference, 2, true);
+        drawLine('target_speed_kph', colors.target, 2.4);
 
-        ctx.fillStyle = 'rgba(248, 113, 113, 0.18)';
+        // LMU-only contrast increase approved by the user; preserve iRacing alpha.
+        ctx.fillStyle = lmu ? 'rgba(248, 113, 113, 0.60)' : 'rgba(248, 113, 113, 0.18)';
         ctx.beginPath();
         trace.forEach((point, index) => {
           const barHeight = Math.max(0, point.brake || 0) * plotHeight * 0.2;
@@ -136,7 +139,7 @@ export function TraceChart({ trace = [], targetLap, referenceLap }) {
         ctx.fill();
       } else {
         if (minValue < 0 && maxValue > 0) {
-          ctx.strokeStyle = 'rgba(226, 232, 240, 0.55)';
+          ctx.strokeStyle = chartDecoration('--trace-zero');
           ctx.setLineDash([5, 5]);
           ctx.beginPath();
           ctx.moveTo(padding.left, y(0));
@@ -157,7 +160,7 @@ export function TraceChart({ trace = [], targetLap, referenceLap }) {
         });
       }
     },
-    [mode, trace]
+    [mode, trace, colors, lmu]
   );
 
   const canvasRef = useCanvasRenderer(draw, [draw]);
@@ -168,11 +171,11 @@ export function TraceChart({ trace = [], targetLap, referenceLap }) {
         <div className="flex items-center gap-3 text-sm">
           {mode === 'speed' ? (
             <>
-              <span className="flex items-center gap-1.5" style={{ color: COMPARISON_COLORS.target }}>
-                <span className="h-0.5 w-5" style={{ background: COMPARISON_COLORS.target }} /> 대상 랩 {targetLap ?? '--'}
+              <span className="flex items-center gap-1.5" style={{ color: colors.target }}>
+                <span className="h-0.5 w-5" style={{ background: colors.target }} /> 대상 랩 {targetLap ?? '--'}
               </span>
-              <span className="flex items-center gap-1.5" style={{ color: COMPARISON_COLORS.reference }}>
-                <span className="w-5 border-t-2 border-dashed" style={{ borderColor: COMPARISON_COLORS.reference }} /> 기준 랩 {referenceLap ?? '--'}
+              <span className="flex items-center gap-1.5" style={{ color: colors.reference }}>
+                <span className="w-5 border-t-2 border-dashed" style={{ borderColor: colors.reference }} /> 기준 랩 {referenceLap ?? '--'}
               </span>
             </>
           ) : (

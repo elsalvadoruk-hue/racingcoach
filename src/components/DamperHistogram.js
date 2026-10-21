@@ -1,6 +1,6 @@
 import React from 'react';
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { COMPARISON_COLORS } from '../chartTheme';
+import { comparisonColors } from '../chartTheme';
 
 // Damper velocity histograms (RaceStudio 3's suspension analysis). Positive velocity is compression (bump).
 // One run, or A (before the change) and B (after it) laid over each other.
@@ -38,8 +38,8 @@ export default function DamperHistogram({ current, baseline, candidate }) {
       </p>
       {pair && (
         <div className="flex flex-wrap gap-4 text-sm">
-          <span style={{ color: COMPARISON_COLORS.reference }}>┄ A · 변경 전</span>
-          <span style={{ color: COMPARISON_COLORS.target }}>━ B · 변경 후</span>
+          <span style={{ color: comparisonColors().reference }}>┄ A · 변경 전</span>
+          <span style={{ color: comparisonColors().target }}>━ B · 변경 후</span>
         </div>
       )}
       <div className="grid gap-4 md:grid-cols-2">
@@ -54,14 +54,14 @@ export default function DamperHistogram({ current, baseline, candidate }) {
               <div className="mt-2 h-40 w-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={rows(edges, a, b)} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
-                    <CartesianGrid stroke={COMPARISON_COLORS.grid} strokeDasharray="3 3" />
-                    <XAxis dataKey="v" type="number" domain={[edges[0], edges[edges.length - 1]]} stroke={COMPARISON_COLORS.muted} tick={{ fontSize: 10 }} tickFormatter={(value) => `${value}`} />
-                    <YAxis width={34} stroke={COMPARISON_COLORS.muted} tick={{ fontSize: 10 }} unit="%" />
-                    <ReferenceLine x={0} stroke={COMPARISON_COLORS.muted} />
+                    <CartesianGrid stroke={comparisonColors().grid} strokeDasharray="3 3" />
+                    <XAxis dataKey="v" type="number" domain={[edges[0], edges[edges.length - 1]]} stroke={comparisonColors().muted} tick={{ fontSize: 10 }} tickFormatter={(value) => `${value}`} />
+                    <YAxis width={34} stroke={comparisonColors().muted} tick={{ fontSize: 10 }} unit="%" />
+                    <ReferenceLine x={0} stroke={comparisonColors().muted} />
                     <Tooltip formatter={(value, name) => [pct(value), name]} labelFormatter={(value) => `${value > 0 ? '+' : ''}${value} mm/s`}
-                      contentStyle={{ background: COMPARISON_COLORS.canvas, border: `1px solid ${COMPARISON_COLORS.grid}` }} />
-                    {a && <Line dataKey="a" name={nameA} stroke={pair ? COMPARISON_COLORS.reference : COMPARISON_COLORS.target} strokeDasharray={pair ? '4 3' : undefined} dot={false} strokeWidth={2} isAnimationActive={false} />}
-                    {b && <Line dataKey="b" name="B · 변경 후" stroke={COMPARISON_COLORS.target} dot={false} strokeWidth={2} isAnimationActive={false} />}
+                      contentStyle={{ background: comparisonColors().canvas, border: `1px solid ${comparisonColors().grid}` }} />
+                    {a && <Line dataKey="a" name={nameA} stroke={pair ? comparisonColors().reference : comparisonColors().target} strokeDasharray={pair ? '4 3' : undefined} dot={false} strokeWidth={2} isAnimationActive={false} />}
+                    {b && <Line dataKey="b" name="B · 변경 후" stroke={comparisonColors().target} dot={false} strokeWidth={2} isAnimationActive={false} />}
                   </LineChart>
                 </ResponsiveContainer>
               </div>

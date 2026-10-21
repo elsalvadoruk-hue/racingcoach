@@ -1,4 +1,4 @@
-import { COMPARISON_COLORS } from "../chartTheme";
+import { comparisonColors } from "../chartTheme";
 import React, { useState, useMemo } from "react";
 import { Button } from "../components/ui/button";
 import { ISSUE_LABELS, cx, formatNumber, formatSigned } from './analysisShared';
@@ -154,14 +154,14 @@ export function RacingLineSvg({ geometry, labelPrefix }) {
   if (!geometry) return null;
   return (
     <svg viewBox={`0 0 ${geometry.width} ${geometry.height}`} className="h-auto w-full" role="img" aria-label={`${labelPrefix} 내 주행라인과 Garage61 기준라인 비교`}>
-      <polygon points={geometry.fillPolygon} fill="#f59e0b" opacity="0.12" />
-      <polyline points={geometry.referenceLine} fill="none" stroke={COMPARISON_COLORS.reference} strokeWidth="5" strokeDasharray="9 6" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
-      <polyline points={geometry.targetLine} fill="none" stroke={COMPARISON_COLORS.target} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" opacity="0.96" />
+      <polygon points={geometry.fillPolygon} fill="hsl(var(--chart-gap-fill))" opacity="0.12" />
+      <polyline points={geometry.referenceLine} fill="none" stroke={comparisonColors().reference} strokeWidth="5" strokeDasharray="9 6" strokeLinecap="round" strokeLinejoin="round" opacity="0.9" />
+      <polyline points={geometry.targetLine} fill="none" stroke={comparisonColors().target} strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" opacity="0.96" />
       {geometry.focusTarget && geometry.focusReference && (
         <>
           <line x1={geometry.focusTarget.x} y1={geometry.focusTarget.y} x2={geometry.focusReference.x} y2={geometry.focusReference.y} stroke="#fbbf24" strokeWidth="2.5" strokeDasharray="7 6" />
-          <circle cx={geometry.focusTarget.x} cy={geometry.focusTarget.y} r="5" fill={COMPARISON_COLORS.target} stroke={COMPARISON_COLORS.canvas} strokeWidth="2" />
-          <circle cx={geometry.focusReference.x} cy={geometry.focusReference.y} r="5" fill={COMPARISON_COLORS.reference} stroke={COMPARISON_COLORS.canvas} strokeWidth="2" />
+          <circle cx={geometry.focusTarget.x} cy={geometry.focusTarget.y} r="5" fill={comparisonColors().target} stroke={comparisonColors().canvas} strokeWidth="2" />
+          <circle cx={geometry.focusReference.x} cy={geometry.focusReference.y} r="5" fill={comparisonColors().reference} stroke={comparisonColors().canvas} strokeWidth="2" />
           {geometry.focusMid && (
             <text x={geometry.focusMid.x} y={geometry.focusMid.y - 10} textAnchor="middle" fill="#fde68a" fontSize="15" fontWeight="800">
               {geometry.focusGapLabel}
@@ -171,14 +171,14 @@ export function RacingLineSvg({ geometry, labelPrefix }) {
       )}
       {geometry.start && (
         <>
-          <circle cx={geometry.start.x} cy={geometry.start.y} r="4" fill="#e2e8f0" />
-          <text x={geometry.start.x + 8} y={geometry.start.y - 8} fill="#bbbbbb" fontSize="13" fontWeight="700">IN</text>
+          <circle cx={geometry.start.x} cy={geometry.start.y} r="4" fill="hsl(var(--chart-entry-point))" />
+          <text x={geometry.start.x + 8} y={geometry.start.y - 8} fill="hsl(var(--chart-entry-label))" fontSize="13" fontWeight="700">IN</text>
         </>
       )}
       {geometry.end && (
         <>
-          <circle cx={geometry.end.x} cy={geometry.end.y} r="4" fill="#e2e8f0" />
-          <text x={geometry.end.x + 8} y={geometry.end.y - 8} fill="#bbbbbb" fontSize="13" fontWeight="700">OUT</text>
+          <circle cx={geometry.end.x} cy={geometry.end.y} r="4" fill="hsl(var(--chart-entry-point))" />
+          <text x={geometry.end.x + 8} y={geometry.end.y - 8} fill="hsl(var(--chart-entry-label))" fontSize="13" fontWeight="700">OUT</text>
         </>
       )}
     </svg>
@@ -285,8 +285,8 @@ export function RacingLineMiniMap({ corner }) {
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-4 text-xs">
-        <span className="flex items-center gap-2" style={{ color: COMPARISON_COLORS.target }}><span className="h-1 w-8 rounded" style={{ background: COMPARISON_COLORS.target }} />내 라인</span>
-        <span className="flex items-center gap-2" style={{ color: COMPARISON_COLORS.reference }}><span className="w-8 border-t-4 border-dashed" style={{ borderColor: COMPARISON_COLORS.reference }} />Garage61 대표 실주행 기준</span>
+        <span className="flex items-center gap-2" style={{ color: comparisonColors().target }}><span className="h-1 w-8 rounded" style={{ background: comparisonColors().target }} />내 라인</span>
+        <span className="flex items-center gap-2" style={{ color: comparisonColors().reference }}><span className="w-8 border-t-4 border-dashed" style={{ borderColor: comparisonColors().reference }} />Garage61 대표 실주행 기준</span>
         <span className="flex items-center gap-2 text-warning"><span className="h-3 w-8 rounded bg-warning/30" />라인 차이 영역</span>
         <span className="flex items-center gap-2 text-warning"><span className="w-8 border-t-2 border-dashed border-warning" />가장 큰 라인 차이</span>
       </div>

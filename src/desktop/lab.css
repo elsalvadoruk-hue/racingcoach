@@ -1,5 +1,7 @@
 /* Approved desktop workspace; the local application keeps its original origin. */
 :root { --lab-target: hsl(var(--primary)); --lab-reference: hsl(var(--chart-reference)); --lab-abs-yellow: hsl(48 100% 62%); --lab-abs-red: hsl(4 94% 64%); }
+:root[data-game="lmu"] .rail-link[aria-current="page"] { color:hsl(var(--primary)); background:hsl(var(--primary)/.10); }
+:root[data-game="lmu"] [role="tab"][data-state="active"] { color:hsl(var(--primary)); }
 html { scroll-behavior: auto; }
 .lab-header { gap:16px; }
 .lab-brand { flex-shrink:0; }

@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { COMPARISON_COLORS } from '../chartTheme';
+import { comparisonColors } from '../chartTheme';
 
 // Where each lap's time goes (RaceStudio 3's brake / coast / full-throttle / corner lap statistics).
 // The first four split the lap; cornering overlaps them and is shown on its own.
@@ -10,7 +10,7 @@ export const PARTS = [
   { key: 'part_throttle', label: '부분 스로틀', color: '#e6b450' },
   { key: 'full_throttle', label: '풀스로틀', color: '#5fbf77' },
 ];
-const CORNER = { key: 'corner', label: '코너링', color: COMPARISON_COLORS.target };
+const CORNER = { key: 'corner', label: '코너링' };
 export const LMU_PARTS = [
   { key: 'BRAKE_ONLY', label: '제동만', color: '#e5675a' },
   { key: 'THROTTLE_ONLY', label: '가속만', color: '#5fbf77' },
@@ -26,6 +26,7 @@ export default function LapTimeUse({ laps = [], provider = 'iracing' }) {
   // only the older measurement-only payload has pedal_usage.
   const lmu = provider === 'lmu' && laps.some(lap => lap.pedal_usage) && !laps.some(lap => lap.time_use?.share_pct);
   const parts = lmu ? LMU_PARTS : PARTS;
+  const corner = { ...CORNER, color: comparisonColors().target };
   const rows = useMemo(() => lmu ? laps.filter(lap => lap.measurement_eligible && lap.pedal_usage?.observed_time_s > 0).map(lap => ({ ...lap,
     time_use: { share_pct: Object.fromEntries(lap.pedal_usage.categories.map(part => [part.key, part.observed_percent])) } }))
     : laps.filter((lap) => lap.status === 'VALID' && lap.time_use?.share_pct), [laps, lmu]);
@@ -50,7 +51,7 @@ export default function LapTimeUse({ laps = [], provider = 'iracing' }) {
         {hasCorner ? ' 코너링은 횡가속 0.5g 이상인 시간이라 다른 칸과 겹칩니다.' : ''}
       </p>
       <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
-        {[...parts, ...(hasCorner ? [CORNER] : [])].map((part) => (
+        {[...parts, ...(hasCorner ? [corner] : [])].map((part) => (
           <span key={part.key} className="inline-flex items-center gap-1.5">
             <span className="inline-block h-2.5 w-2.5 rounded-sm" style={{ background: part.color }} />{part.label} 평균 {pct(average[part.key])}
           </span>
@@ -78,12 +79,12 @@ export default function LapTimeUse({ laps = [], provider = 'iracing' }) {
         <div className="h-56 w-full">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={trend} margin={{ top: 8, right: 12, bottom: 4, left: 0 }}>
-              <CartesianGrid stroke={COMPARISON_COLORS.grid} strokeDasharray="3 3" />
-              <XAxis dataKey="lap" stroke={COMPARISON_COLORS.muted} tick={{ fontSize: 10 }} tickFormatter={(value) => `랩 ${value}`} />
-              <YAxis width={40} stroke={COMPARISON_COLORS.muted} tick={{ fontSize: 10 }} unit="%" domain={[0, 'auto']} />
+              <CartesianGrid stroke={comparisonColors().grid} strokeDasharray="3 3" />
+              <XAxis dataKey="lap" stroke={comparisonColors().muted} tick={{ fontSize: 10 }} tickFormatter={(value) => `랩 ${value}`} />
+              <YAxis width={40} stroke={comparisonColors().muted} tick={{ fontSize: 10 }} unit="%" domain={[0, 'auto']} />
               <Tooltip formatter={(value, name) => [pct(value), name]} labelFormatter={(value) => `랩 ${value}`}
-                contentStyle={{ background: COMPARISON_COLORS.canvas, border: `1px solid ${COMPARISON_COLORS.grid}` }} />
-              {[...parts, ...(hasCorner ? [CORNER] : [])].map((part) => (
+                contentStyle={{ background: comparisonColors().canvas, border: `1px solid ${comparisonColors().grid}` }} />
+              {[...parts, ...(hasCorner ? [corner] : [])].map((part) => (
                 <Line key={part.key} type="monotone" dataKey={part.key} name={part.label} stroke={part.color} dot={{ r: 2 }} strokeWidth={2} isAnimationActive={false} connectNulls={false} />
               ))}
             </LineChart>

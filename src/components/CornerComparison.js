@@ -2,7 +2,7 @@ import { Button } from './ui/button';
 import CornerMap from './CornerMap';
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { HelpHint } from './HelpGuide';
-import { COMPARISON_COLORS } from '../chartTheme';
+import { comparisonColors } from '../chartTheme';
 import { findRegisteredTrackMap, projectComparisonPaths } from '../lib/trackMapProjection';
 import { findOfficialTrackMap } from '../lib/officialTrackMaps';
 import { lossColour, lossRates, lossScale, rateAt } from '../lib/lossColours';
@@ -11,8 +11,6 @@ import {
 } from 'recharts';
 export { projectComparisonPaths } from '../lib/trackMapProjection';
 
-const TARGET = COMPARISON_COLORS.target;
-const REFERENCE = COMPARISON_COLORS.reference;
 const finite = (value) => typeof value === 'number' && Number.isFinite(value);
 const valueOf = (point, field, legacy) => {
   const value = Object.prototype.hasOwnProperty.call(point, field) ? point[field] : point[legacy];
@@ -75,6 +73,8 @@ function Reading({ value, digits, unit, color }) {
 }
 
 export default function CornerComparison({ trace = [], corners = [], pathData = [], referencePath = [], referenceLineSource, trackIdentity, trackLengthM, referenceLabel = '기준 주행', onRangeChange, detailTrace, detailPath, detailReferencePath, detailLineSource, detailLoading = false, detailQuality, comparisonKey, requestedCorner }) {
+  const colors = comparisonColors();
+  const TARGET = colors.target, REFERENCE = colors.reference;
   const [selected, setSelected] = useState(null);
   const [activePct, setActivePct] = useState(null);
   const [showAllCorners, setShowAllCorners] = useState(false);
@@ -158,19 +158,19 @@ export default function CornerComparison({ trace = [], corners = [], pathData = 
     const hasReference = Boolean(channel.reference && visibleRows.some((point) => finite(point[channel.reference])));
     const element = !hasTarget && !hasReference ? null : <ResponsiveContainer width="100%" height="100%" minWidth={0}>
       <ComposedChart data={visibleRows} syncId={syncId} syncMethod="value" onMouseMove={handleChartMove} margin={CHART_MARGIN}>
-        <CartesianGrid stroke={COMPARISON_COLORS.grid} strokeDasharray="3 3" />
-        <XAxis dataKey="distance" type="number" domain={[rangeStart * distanceScale, rangeEnd * distanceScale]} allowDataOverflow tickFormatter={(value) => `${Math.round(value)}${isMeters ? 'm' : '%'}`} stroke={COMPARISON_COLORS.muted} tick={{ fontSize: 10 }} height={X_AXIS_HEIGHT} />
-        <YAxis width={Y_AXIS_WIDTH} domain={channel.domain || ['auto', 'auto']} allowDecimals={!channel.stepped} stroke={COMPARISON_COLORS.muted} tick={{ fontSize: 10 }} />
-        <Tooltip contentStyle={{ background: '#223140', borderColor: '#3a4b60', borderRadius: 10, fontSize: 12, color: '#dde5ef' }} labelFormatter={(value) => `거리 ${Number(value).toFixed(isMeters ? 0 : 1)} ${isMeters ? 'm' : '%'}`} formatter={(value, name) => [finite(value) ? `${value.toFixed(channel.digits)} ${channel.unit}` : '측정 불가', name]} />
-        {channel.key === 'delta' && <ReferenceLine y={0} stroke={COMPARISON_COLORS.muted} />}
-        {apexPct !== null && <ReferenceLine x={apexPct * distanceScale} stroke={COMPARISON_COLORS.muted} strokeDasharray="2 4" />}
+        <CartesianGrid stroke={colors.grid} strokeDasharray="3 3" />
+        <XAxis dataKey="distance" type="number" domain={[rangeStart * distanceScale, rangeEnd * distanceScale]} allowDataOverflow tickFormatter={(value) => `${Math.round(value)}${isMeters ? 'm' : '%'}`} stroke={colors.muted} tick={{ fontSize: 10 }} height={X_AXIS_HEIGHT} />
+        <YAxis width={Y_AXIS_WIDTH} domain={channel.domain || ['auto', 'auto']} allowDecimals={!channel.stepped} stroke={colors.muted} tick={{ fontSize: 10 }} />
+        <Tooltip contentStyle={{ background: 'hsl(var(--chart-tooltip-background))', borderColor: 'hsl(var(--chart-tooltip-border))', borderRadius: 10, fontSize: 12, color: 'hsl(var(--chart-tooltip-text))' }} labelFormatter={(value) => `거리 ${Number(value).toFixed(isMeters ? 0 : 1)} ${isMeters ? 'm' : '%'}`} formatter={(value, name) => [finite(value) ? `${value.toFixed(channel.digits)} ${channel.unit}` : '측정 불가', name]} />
+        {channel.key === 'delta' && <ReferenceLine y={0} stroke={colors.muted} />}
+        {apexPct !== null && <ReferenceLine x={apexPct * distanceScale} stroke={colors.muted} strokeDasharray="2 4" />}
         {channel.key === 'speed' && visibleRows.some((point) => point.speedBand) && <Area dataKey="speedBand" name="기준 속도 IQR" stroke="none" fill={REFERENCE} fillOpacity={.12} connectNulls={false} isAnimationActive={false} tooltipType="none" />}
         {hasReference && <Line dataKey={channel.reference} name={referenceLabel || '기준 주행'} stroke={REFERENCE} strokeDasharray="5 3" strokeWidth={2} type={channel.stepped ? 'stepAfter' : 'linear'} dot={false} connectNulls={false} isAnimationActive={false} />}
         {hasTarget && <Line dataKey={channel.key} name={channel.key === 'delta' ? '내 주행 − 기준' : '내 주행'} stroke={TARGET} strokeWidth={2} type={channel.stepped ? 'stepAfter' : 'linear'} dot={false} connectNulls={false} isAnimationActive={false} />}
       </ComposedChart>
     </ResponsiveContainer>;
     return { channel, hasTarget, hasReference, element };
-  }), [visibleRows, syncId, handleChartMove, rangeStart, rangeEnd, distanceScale, isMeters, apexPct, referenceLabel]);
+  }), [visibleRows, syncId, handleChartMove, rangeStart, rangeEnd, distanceScale, isMeters, apexPct, referenceLabel, colors, TARGET, REFERENCE]);
   const cursorShare = cursorRow && rangeEnd > rangeStart ? (cursorRow.distance_pct - rangeStart) / (rangeEnd - rangeStart) : null;
   const metrics = corner?.target || corner?.target_metrics;
   const referenceMetrics = corner?.reference || corner?.ref_metrics;
@@ -217,7 +217,7 @@ export default function CornerComparison({ trace = [], corners = [], pathData = 
                 {element}
                 {finite(cursorShare) && <div aria-hidden="true" data-testid="chart-cursor" style={{ position: 'absolute', pointerEvents: 'none', top: CHART_MARGIN.top, bottom: X_AXIS_HEIGHT + CHART_MARGIN.bottom,
                   left: `calc(${CHART_MARGIN.left + Y_AXIS_WIDTH}px + (100% - ${CHART_MARGIN.left + Y_AXIS_WIDTH + CHART_MARGIN.right}px) * ${cursorShare})`,
-                  borderLeft: `1px dashed ${COMPARISON_COLORS.cursor}` }} />}
+                  borderLeft: `1px dashed ${colors.cursor}` }} />}
               </div>}
             </div>;
           })}

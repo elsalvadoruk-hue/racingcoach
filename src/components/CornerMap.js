@@ -4,7 +4,7 @@ import { Button } from './ui/button';
 import { Alert, AlertDescription } from './ui/alert';
 import { Badge } from './ui/badge';
 import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group';
-import { COMPARISON_COLORS } from '../chartTheme';
+import { comparisonColors } from '../chartTheme';
 import GeographicMapTilesPlain from './GeographicMapTiles';
 import { IMAGERY_CREDIT } from '../lib/geographicMap';
 import { colourRuns } from '../lib/lossColours';
@@ -113,15 +113,15 @@ function GhostPanel({ target, reference, gap, lineLabel, aggregate }) {
   </>;
   const speedGap = target && reference && finite(target.speed) && finite(reference.referenceSpeed) ? target.speed - reference.referenceSpeed : null;
   return <div data-testid="ghost-panel" className="pointer-events-none absolute left-2.5 top-2.5 flex w-[19rem] flex-col gap-2 rounded-lg border border-white/10 p-3 text-xs tabular-nums shadow-lg"
-    style={{ background: 'rgba(17, 24, 33, .85)' }}>
+    style={{ background: 'hsl(var(--chart-ghost-background) / .85)' }}>
     <div className="grid grid-cols-[minmax(0,1fr)_3.75rem_2.25rem_3rem_3rem] items-center gap-x-2 gap-y-1.5 whitespace-nowrap">
       <span />
       <span className="text-right text-[10px] text-muted-foreground">속도</span>
       <span className="text-right text-[10px] text-muted-foreground">기어</span>
       <span className="text-[10px] text-muted-foreground">스로틀</span>
       <span className="text-[10px] text-muted-foreground">브레이크</span>
-      {cells('내 랩', COMPARISON_COLORS.target, target?.speed, target?.gear, target?.throttle, target?.brake)}
-      {cells('기준 랩', COMPARISON_COLORS.reference, reference?.referenceSpeed, reference?.referenceGear, reference?.referenceThrottle, reference?.referenceBrake)}
+      {cells('내 랩', comparisonColors().target, target?.speed, target?.gear, target?.throttle, target?.brake)}
+      {cells('기준 랩', comparisonColors().reference, reference?.referenceSpeed, reference?.referenceGear, reference?.referenceThrottle, reference?.referenceBrake)}
     </div>
     <div className="flex justify-between gap-2 whitespace-nowrap border-t border-white/10 pt-2 text-foreground">
       <span>{finite(gap) ? (Math.abs(gap) < .005 ? '시간 차이 없음' : gap > 0 ? `기준보다 ${gap.toFixed(2)}초 느림` : `기준보다 ${(-gap).toFixed(2)}초 빠름`) : '시간 차이 --'}</span>
@@ -221,6 +221,7 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
   const lossColoured = Boolean(!diagramMode && loss && lossOn);
   const rangeKey = selectedRange ? selectedRange.join(':') : '';
   // The driven and reference lines are drawn once per change of path, range or colouring, not per frame.
+  const colors = comparisonColors();
   const lineLayer = useMemo(() => {
     const inRange = points => selectedRange ? points.filter(point => point.distance_pct >= selectedRange[0] && point.distance_pct <= selectedRange[1]) : points;
     const highlighted = inRange(projected);
@@ -233,12 +234,12 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
         {colourRuns(highlighted, loss.colourAt).map((run, index) => <polyline key={'loss-' + index} data-testid="map-loss-run" data-colour={run.colour || ''} points={line(run.points)} fill="none" stroke={run.colour || 'var(--coach-muted)'} strokeWidth="5" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />)}
       </> : <>
         {segments(projected).map((segment, index) => <polyline key={index} points={line(segment)} fill="none" stroke="var(--coach-muted)" strokeOpacity=".55" strokeWidth="3" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />)}
-        {segments(highlighted).map((segment, index) => <polyline key={'h-' + index} points={line(segment)} fill="none" stroke={COMPARISON_COLORS.target} strokeWidth="5" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />)}
+        {segments(highlighted).map((segment, index) => <polyline key={'h-' + index} points={line(segment)} fill="none" stroke={colors.target} strokeWidth="5" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />)}
       </>}
-      {selectedRange && segments(referenceProjected).map((segment, index) => <polyline key={'reference-background-' + index} points={line(segment)} fill="none" stroke={COMPARISON_COLORS.reference} strokeOpacity=".25" strokeWidth="2" strokeDasharray="7 5" vectorEffect="non-scaling-stroke" />)}
-      {segments(referenceHighlighted).filter(segment => segment.length > 1).map((segment, index) => <polyline key={'reference-' + index} data-testid="map-reference-line" points={line(segment)} fill="none" stroke={COMPARISON_COLORS.reference} strokeWidth="3" strokeDasharray="7 5" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />)}
+      {selectedRange && segments(referenceProjected).map((segment, index) => <polyline key={'reference-background-' + index} points={line(segment)} fill="none" stroke={colors.reference} strokeOpacity=".25" strokeWidth="2" strokeDasharray="7 5" vectorEffect="non-scaling-stroke" />)}
+      {segments(referenceHighlighted).filter(segment => segment.length > 1).map((segment, index) => <polyline key={'reference-' + index} data-testid="map-reference-line" points={line(segment)} fill="none" stroke={colors.reference} strokeWidth="3" strokeDasharray="7 5" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />)}
     </>;
-  }, [projected, referenceProjected, rangeKey, lossColoured, loss]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projected, referenceProjected, rangeKey, lossColoured, loss, colors]); // eslint-disable-line react-hooks/exhaustive-deps
   const toggleLoss = () => setLossOn((value) => {
     writeGameItem(LOSS_KEY, selectedGame, value ? 'off' : 'on');
     return !value;
@@ -468,8 +469,8 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
     </div>
   );
   const lineSource = (!diagramMode && <div className="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 pb-3 text-sm" data-testid="map-line-source">
-      <span style={{ color: COMPARISON_COLORS.target }}>━ 내 실제 주행</span>
-      {hasReference && <span style={{ color: COMPARISON_COLORS.reference }} title={referenceLineSource?.reference_file}>┄ {lineLabel} · 실제 랩</span>}
+      <span style={{ color: comparisonColors().target }}>━ 내 실제 주행</span>
+      {hasReference && <span style={{ color: comparisonColors().reference }} title={referenceLineSource?.reference_file}>┄ {lineLabel} · 실제 랩</span>}
       {hasReference && referenceLineSource?.chart_basis === 'AGGREGATE' && <span className="text-xs text-muted-foreground">지도: 대표 실제 랩 · 그래프: 여러 랩 종합 기준</span>}
       {lossColoured && <span className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="map-loss-legend">
         <span aria-hidden="true" className="inline-block h-2 w-16 rounded" style={{ background: 'linear-gradient(90deg, rgb(34,197,94), rgb(229,231,235), rgb(239,68,68))' }} />
@@ -496,7 +497,7 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
         {finite(ghost) && <>
           <Button variant="outline" size="sm" aria-pressed={follow} onClick={() => setFollow(value => !value)} className="w-28">{follow ? '따라가기 끄기' : '따라가기'}</Button>
           <Button variant="outline" size="sm" onClick={() => { setPlaying(false); showGhost(null); }}>고스트 끄기</Button>
-          <span className="whitespace-nowrap text-xs"><span style={{ color: COMPARISON_COLORS.target }}>● 내 랩</span> <span style={{ color: COMPARISON_COLORS.reference }}>● {lineLabel}</span></span>
+          <span className="whitespace-nowrap text-xs"><span style={{ color: comparisonColors().target }}>● 내 랩</span> <span style={{ color: comparisonColors().reference }}>● {lineLabel}</span></span>
         </>}
       </div>
       {finite(ghost) && <div className="flex items-center gap-3">
@@ -526,23 +527,23 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
         return <g key={corner.id} role="button" tabIndex={0} aria-label={`${corner.label || corner.id} 확대`} aria-pressed={active} onClick={() => onSelect(corner.id)} onKeyDown={event => {
           if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(corner.id); }
         }} className="coach-map-marker">
-          <circle cx={point.x} cy={point.y} r={(active ? 14 : 11) * unit} fill={active ? COMPARISON_COLORS.target : COMPARISON_COLORS.cursor} stroke={COMPARISON_COLORS.canvas} strokeWidth="2" vectorEffect="non-scaling-stroke" />
-          <text x={point.x} y={point.y + 4 * unit} textAnchor="middle" fill={COMPARISON_COLORS.canvas} fontSize={11 * unit} fontWeight="700">{String(corner.id).replace(/^C/, '')}</text>
+          <circle cx={point.x} cy={point.y} r={(active ? 14 : 11) * unit} fill={active ? comparisonColors().target : comparisonColors().cursor} stroke={comparisonColors().canvas} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+          <text x={point.x} y={point.y + 4 * unit} textAnchor="middle" fill={comparisonColors().canvas} fontSize={11 * unit} fontWeight="700">{String(corner.id).replace(/^C/, '')}</text>
         </g>;
       })}
-      {cursor && !ghostTarget && <circle cx={cursor.x} cy={cursor.y} r={(cursorOnMarker ? 18 : 7) * unit} fill="none" stroke={COMPARISON_COLORS.target} strokeWidth="2" vectorEffect="non-scaling-stroke" pointerEvents="none" />}
-      {hasReference && referenceCursor && !ghostTarget && <circle data-testid="map-reference-cursor" cx={referenceCursor.x} cy={referenceCursor.y} r={7 * unit} fill="none" stroke={COMPARISON_COLORS.reference} strokeWidth="2" vectorEffect="non-scaling-stroke" pointerEvents="none" />}
-      {ghostReference && <circle ref={referenceDot} data-testid="ghost-reference" cx={ghostReference.x} cy={ghostReference.y} r={7 * unit} fill={COMPARISON_COLORS.reference} stroke={COMPARISON_COLORS.canvas} strokeWidth="2" vectorEffect="non-scaling-stroke" pointerEvents="none" />}
-      {ghostTarget && <circle ref={targetDot} data-testid="ghost-target" cx={ghostTarget.x} cy={ghostTarget.y} r={8 * unit} fill={COMPARISON_COLORS.target} stroke={COMPARISON_COLORS.canvas} strokeWidth="2" vectorEffect="non-scaling-stroke" pointerEvents="none" />}
+      {cursor && !ghostTarget && <circle cx={cursor.x} cy={cursor.y} r={(cursorOnMarker ? 18 : 7) * unit} fill="none" stroke={comparisonColors().target} strokeWidth="2" vectorEffect="non-scaling-stroke" pointerEvents="none" />}
+      {hasReference && referenceCursor && !ghostTarget && <circle data-testid="map-reference-cursor" cx={referenceCursor.x} cy={referenceCursor.y} r={7 * unit} fill="none" stroke={comparisonColors().reference} strokeWidth="2" vectorEffect="non-scaling-stroke" pointerEvents="none" />}
+      {ghostReference && <circle ref={referenceDot} data-testid="ghost-reference" cx={ghostReference.x} cy={ghostReference.y} r={7 * unit} fill={comparisonColors().reference} stroke={comparisonColors().canvas} strokeWidth="2" vectorEffect="non-scaling-stroke" pointerEvents="none" />}
+      {ghostTarget && <circle ref={targetDot} data-testid="ghost-target" cx={ghostTarget.x} cy={ghostTarget.y} r={8 * unit} fill={comparisonColors().target} stroke={comparisonColors().canvas} strokeWidth="2" vectorEffect="non-scaling-stroke" pointerEvents="none" />}
       </g>}
     </svg>
     {ghostTarget && <GhostPanel target={channelsAt(traceRows, ghostTarget.pct)} reference={ghostReference ? channelsAt(traceRows, ghostReference.pct) : null} gap={ghostGap} lineLabel={lineLabel} aggregate={referenceLineSource?.chart_basis === 'AGGREGATE'} />}
     {/* The scale sits on the screen, not in the map: a camera that moves every frame (the ghost replay's
         "따라가기") would otherwise drag it along a step behind. */}
     {metersPerUnit > 0 && <div data-testid="map-distance-scale" aria-label={`${scaleMeters}미터 눈금`} className="pointer-events-none absolute bottom-2.5 left-2.5 rounded-[5px] px-2 pb-1.5 pt-1 text-[11px] leading-tight"
-      style={{ background: COMPARISON_COLORS.canvas, opacity: .9, color: COMPARISON_COLORS.cursor }}>
+      style={{ background: comparisonColors().canvas, opacity: .9, color: comparisonColors().cursor }}>
       <div>{scaleMeters >= 1000 ? `${scaleMeters / 1000} km` : `${scaleMeters} m`}</div>
-      <svg width={scaleMeters / metersPerUnit / unit + 2} height="6" className="block" aria-hidden="true"><path d={`M1 1 V5 H${scaleMeters / metersPerUnit / unit + 1} V1`} fill="none" stroke={COMPARISON_COLORS.cursor} strokeWidth="2" /></svg>
+      <svg width={scaleMeters / metersPerUnit / unit + 2} height="6" className="block" aria-hidden="true"><path d={`M1 1 V5 H${scaleMeters / metersPerUnit / unit + 1} V1`} fill="none" stroke={comparisonColors().cursor} strokeWidth="2" /></svg>
     </div>}
     </div>
     {compactControls && <div className="compact-map-footer">{backgroundSource}<details className="compact-map-info"><summary>지도 설명·색상 안내</summary>{lineSource}<p>{schematic ? '게임 기록 좌표 개략도입니다. 실제 지리 위치와 공식 도로 경계는 확인하지 않았습니다. 휠로 확대하고 좌클릭 드래그로 이동하세요.' : '실세계 항공사진은 촬영 시점에 따라 iRacing 코스 모델과 다를 수 있습니다. GPS는 관측된 주행선이며 공식 도로 경계가 아닙니다. 휠로 확대하고 좌클릭 드래그로 이동하세요.'}</p></details></div>}

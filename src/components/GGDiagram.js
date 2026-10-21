@@ -1,5 +1,5 @@
 import React from 'react';
-import { COMPARISON_COLORS } from '../chartTheme';
+import { comparisonColors } from '../chartTheme';
 
 // G-G diagram (RaceStudio 3's scatter of lateral against longitudinal acceleration): right turns to the
 // right, acceleration up, braking down. The line is the grip actually used in each direction.
@@ -16,8 +16,8 @@ function envelopePath(data, toXY) {
 
 export default function GGDiagram({ current, baseline, candidate }) {
   const pair = Boolean(baseline || candidate);
-  const runs = (pair ? [[baseline, COMPARISON_COLORS.reference, 'A · 변경 전', '5 4'], [candidate, COMPARISON_COLORS.target, 'B · 변경 후', null]]
-    : [[current, COMPARISON_COLORS.target, '이번 주행', null]]).filter(([data]) => data?.available);
+  const runs = (pair ? [[baseline, comparisonColors().reference, 'A · 변경 전', '5 4'], [candidate, comparisonColors().target, 'B · 변경 후', null]]
+    : [[current, comparisonColors().target, '이번 주행', null]]).filter(([data]) => data?.available);
   if (!runs.length) {
     const reason = [current, baseline, candidate].find((item) => item?.reason)?.reason;
     return <p className="text-sm text-muted-foreground">{reason === 'NO_ACCELERATION_CHANNELS' ? '이 주행 파일에는 가속도 기록이 없습니다.' : '유효한 랩이 없어 G-G 그림을 그리지 않았습니다.'}</p>;
@@ -38,15 +38,15 @@ export default function GGDiagram({ current, baseline, candidate }) {
       </p>
       <div className="flex flex-wrap items-start gap-6">
         <svg viewBox={`0 0 ${SIZE} ${SIZE}`} className="h-auto w-full max-w-[320px]" role="img" aria-label="G-G 그림">
-          <rect width={SIZE} height={SIZE} fill={COMPARISON_COLORS.canvas} rx="8" />
-          {rings.map((g) => <circle key={g} cx={SIZE / 2} cy={SIZE / 2} r={g * scale} fill="none" stroke={COMPARISON_COLORS.grid} strokeWidth="1" />)}
-          <line x1={SIZE / 2} x2={SIZE / 2} y1="6" y2={SIZE - 6} stroke={COMPARISON_COLORS.grid} />
-          <line y1={SIZE / 2} y2={SIZE / 2} x1="6" x2={SIZE - 6} stroke={COMPARISON_COLORS.grid} />
-          {rings.filter((g) => Number.isInteger(g)).map((g) => <text key={g} x={SIZE / 2 + 3} y={SIZE / 2 - g * scale + 10} fontSize="9" fill={COMPARISON_COLORS.muted}>{g}g</text>)}
-          <text x={SIZE / 2} y="14" textAnchor="middle" fontSize="9" fill={COMPARISON_COLORS.muted}>가속</text>
-          <text x={SIZE / 2} y={SIZE - 6} textAnchor="middle" fontSize="9" fill={COMPARISON_COLORS.muted}>제동</text>
-          <text x="8" y={SIZE / 2 - 4} fontSize="9" fill={COMPARISON_COLORS.muted}>왼쪽</text>
-          <text x={SIZE - 8} y={SIZE / 2 - 4} textAnchor="end" fontSize="9" fill={COMPARISON_COLORS.muted}>오른쪽</text>
+          <rect width={SIZE} height={SIZE} fill={comparisonColors().canvas} rx="8" />
+          {rings.map((g) => <circle key={g} cx={SIZE / 2} cy={SIZE / 2} r={g * scale} fill="none" stroke={comparisonColors().grid} strokeWidth="1" />)}
+          <line x1={SIZE / 2} x2={SIZE / 2} y1="6" y2={SIZE - 6} stroke={comparisonColors().grid} />
+          <line y1={SIZE / 2} y2={SIZE / 2} x1="6" x2={SIZE - 6} stroke={comparisonColors().grid} />
+          {rings.filter((g) => Number.isInteger(g)).map((g) => <text key={g} x={SIZE / 2 + 3} y={SIZE / 2 - g * scale + 10} fontSize="9" fill={comparisonColors().muted}>{g}g</text>)}
+          <text x={SIZE / 2} y="14" textAnchor="middle" fontSize="9" fill={comparisonColors().muted}>가속</text>
+          <text x={SIZE / 2} y={SIZE - 6} textAnchor="middle" fontSize="9" fill={comparisonColors().muted}>제동</text>
+          <text x="8" y={SIZE / 2 - 4} fontSize="9" fill={comparisonColors().muted}>왼쪽</text>
+          <text x={SIZE - 8} y={SIZE / 2 - 4} textAnchor="end" fontSize="9" fill={comparisonColors().muted}>오른쪽</text>
           {runs.map(([data, color], runIndex) => data.points.map(([x, y], index) => (
             <circle key={`${runIndex}-${index}`} cx={SIZE / 2 + x * scale} cy={SIZE / 2 - y * scale} r="0.9" fill={color} opacity={pair ? 0.18 : 0.3} />
           )))}
