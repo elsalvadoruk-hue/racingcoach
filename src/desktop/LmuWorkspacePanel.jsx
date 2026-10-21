@@ -11,7 +11,8 @@ import LmuComingSoon from './LmuComingSoon';
 import LmuHistoryPanel from './LmuHistoryPanel';
 import OverlaySettings from '../components/OverlaySettings';
 import { AudioPreferences } from './RuntimePreview';
-import LmuFeatureGuide from './LmuFeatureGuide';
+import { UserManual } from '../components/HelpGuide';
+import { LMU_SECTIONS } from '../components/helpLmu';
 import { GameSettingsNotice } from '../lib/gameContext';
 
 // Live coaching (voice coach tab) is the shared iRacing screen; this routes
@@ -61,12 +62,10 @@ function LmuWorkspaceOverview({ workspace, onChooseSource, onNavigate, analysisW
   const title = { settings: '설정', guide: 'LMU 사용 가이드' }[workspace];
   return <section className="wide-workspace" aria-label={`LMU ${title}`}>
     <div className="wide-heading"><div><h2>{title}</h2><p>LMU 기록 파일 분석과 실시간 음성 코치 설정입니다.</p></div>{onChooseSource && <Button variant="outline" onClick={onChooseSource}>주행 선택</Button>}</div>
-    {workspace === 'guide' && <><ol>
-      <li>상단에서 LMU를 선택하면 최근 분석 가능한 주행을 자동으로 엽니다. 기록 중이거나 측정 가능한 랩이 없는 파일은 건너뜁니다.</li>
-      <li>LMU 게임 설정에서 텔레메트리 자동 기록을 켜야 주행 파일이 남습니다.</li>
-      <li>음성 코치 탭은 iRacing과 같습니다. LMU를 실행하고 차에 타면 스포터·피트월이 자동으로 LMU에 연결됩니다.</li>
-      <li>처음 한 번은 설정의 'LMU 실시간 연결'에서 브리지를 빌드하세요.</li>
-    </ol><LmuFeatureGuide onNavigate={onNavigate} /></>}
+    {workspace === 'guide' && <UserManual sections={LMU_SECTIONS} heading="LMU 사용법"
+      intro="iRacing과 다른 점은 1장, 처음 연결은 2장, 주행 중 음성은 6~10장, 폴더와 게임별 설정은 15장을 보세요."
+      emptyHint="주행 분석이 없어도 매뉴얼을 읽을 수 있습니다. 기능을 사용하려면 LMU DuckDB 주행 파일을 선택하세요."
+      hasAnalysis={!!analysisWorkspace.analysis} onNavigate={onNavigate} />}
     {workspace === 'settings' && <>
       <GameSettingsNotice />
       <LmuBridgePanel />
