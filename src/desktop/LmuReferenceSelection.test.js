@@ -18,7 +18,7 @@ let override;
 beforeEach(() => {
   localStorage.clear(); selectGame('lmu'); activateSession(sourceSession); override = () => undefined; requestJson.mockReset();
   requestJson.mockImplementation((path, options = {}) => {
-    const body = options.body ? JSON.parse(options.body) : {};
+    const body = options.body instanceof File ? options.body : options.body ? JSON.parse(options.body) : {};
     const custom = override(path, body, options);
     if (custom !== undefined) return custom;
     const route = path.split('/').pop();
@@ -41,6 +41,69 @@ async function ready() {
   await waitFor(() => expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled());
 }
 const callBody = route => JSON.parse(requestJson.mock.calls.find(([path]) => path.endsWith(`/${route}`))[1].body);
+
+test('opens a native file input and imports a downloaded DuckDB directly as the manual reference', async () => {
+  const imported = 'download-123456789abc.duckdb';
+  override = path => path.includes('/telemetry/import?') ? Promise.resolve({ file: { name: imported, analyzable: true } })
+    : path.endsWith('/comparison') ? Promise.resolve({ ...comparison, reference_filename: imported, reference_lap: 9 }) : undefined;
+  const onApply = jest.fn(); picker(onApply); await ready();
+  const input = screen.getByLabelText('열 DuckDB 파일');
+  expect(input).toHaveAttribute('type', 'file'); expect(input).toHaveAttribute('accept', '.duckdb');
+  const click = jest.spyOn(input, 'click');
+  fireEvent.click(screen.getByRole('button', { name: '기준 DuckDB 파일 열기…' }));
+  expect(click).toHaveBeenCalledTimes(1);
+  const file = new File(['synthetic duckdb'], '다운로드.duckdb');
+  fireEvent.change(input, { target: { files: [file] } });
+  await waitFor(() => expect(screen.getByLabelText('비교 기준')).toHaveValue('9'));
+  expect(screen.getByLabelText('기준 선택 방식')).toHaveValue('MANUAL');
+  expect(screen.getByLabelText('기준 주행 파일 · LMU')).toHaveValue(imported);
+  expect(screen.getByLabelText('주행 파일 · LMU DuckDB')).toHaveValue(A);
+  const upload = requestJson.mock.calls.find(([path]) => path.includes('/telemetry/import?'));
+  expect(upload[1].body).toBe(file); expect(upload[1].headers['Content-Type']).toBe('application/octet-stream');
+  fireEvent.click(screen.getByRole('button', { name: '선택한 랩 비교하기' }));
+  await waitFor(() => expect(onApply).toHaveBeenCalledTimes(1));
+  expect(callBody('comparison')).toMatchObject({ filename: A, reference_filename: imported, reference_lap: 9 });
+});
+
+test('can import a DuckDB as the current driving file', async () => {
+  override = path => path.includes('/telemetry/import?') ? Promise.resolve({ file: { name: 'new.duckdb', analyzable: true } }) : undefined;
+  picker(); await ready();
+  fireEvent.click(screen.getByRole('button', { name: 'DuckDB 파일 열기…' }));
+  fireEvent.change(screen.getByLabelText('열 DuckDB 파일'), { target: { files: [new File(['fixture'], 'new.duckdb')] } });
+  await waitFor(() => expect(screen.getByLabelText('주행 파일 · LMU DuckDB')).toHaveValue('new.duckdb'));
+  await waitFor(() => expect(requestJson.mock.calls.some(([path, options]) => path.endsWith('/session') && JSON.parse(options.body).filename === 'new.duckdb')).toBe(true));
+});
+
+test('cancel and import errors preserve the selected reference and allow another attempt', async () => {
+  override = path => path.includes('/telemetry/import?') ? Promise.reject(new Error('LMU 데이터베이스를 읽을 수 없습니다.')) : undefined;
+  picker(); await ready();
+  const input = screen.getByLabelText('열 DuckDB 파일');
+  fireEvent.change(input, { target: { files: [] } });
+  expect(requestJson.mock.calls.some(([path]) => path.includes('/telemetry/import?'))).toBe(false);
+  fireEvent.change(input, { target: { files: [new File(['bad'], 'bad.duckdb')] } });
+  expect(await screen.findByRole('alert')).toHaveTextContent('LMU 데이터베이스를 읽을 수 없습니다.');
+  expect(screen.getByLabelText('기준 주행 파일 · LMU')).toHaveValue(A);
+  expect(screen.getByRole('button', { name: '기준 DuckDB 파일 열기…' })).toBeEnabled();
+});
+
+test('unmount aborts an import and ignores its delayed result', async () => {
+  let pending;
+  override = (path, body, options) => path.includes('/telemetry/import?') ? new Promise(resolve => { pending = { resolve, signal: options.signal }; }) : undefined;
+  const onApply = jest.fn(); const view = picker(onApply); await ready();
+  fireEvent.change(screen.getByLabelText('열 DuckDB 파일'), { target: { files: [new File(['fixture'], 'new.duckdb')] } });
+  expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeDisabled();
+  view.unmount(); expect(pending.signal.aborted).toBe(true);
+  await act(async () => pending.resolve({ file: { name: 'late.duckdb' } }));
+  expect(onApply).not.toHaveBeenCalled(); expect(data.filename).toBe(A);
+});
+
+test('iRacing has no DuckDB picker or import buttons', async () => {
+  selectGame('iracing'); activateSession({ ...sourceSession, provider: 'iracing' });
+  render(<SourcePicker target="2" reference="1" external={[]} analysisWorkspace={{ game: 'iracing' }} onApply={jest.fn()} />);
+  await waitFor(() => expect(screen.getByLabelText('기준 주행 파일 · IBT').options).toHaveLength(3));
+  expect(screen.queryByLabelText('열 DuckDB 파일')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /DuckDB 파일 열기/ })).not.toBeInTheDocument();
+});
 
 test('applies another file reference with its own lap options and precise comparison identities', async () => {
   const onApply = jest.fn(); picker(onApply); await ready();

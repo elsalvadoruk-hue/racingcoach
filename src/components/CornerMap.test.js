@@ -39,6 +39,22 @@ test('optional compact controls join playback and map actions, retain visible im
   const before = camera(); fireEvent.click(zoom); expect(camera()).not.toEqual(before);
 });
 
+test('LMU schematic removes satellite controls and every imagery layer even with geographic and registered map inputs', () => {
+  const map = library.maps.find(m => m.trackId === 127);
+  render(<CornerMap schematic projected={points} referenceProjected={points} trackMap={map} geographic geographicMetersPerUnit={1} corners={[corner]} onSelect={jest.fn()} onHover={jest.fn()} compactControls />);
+  expect(screen.queryByRole('radio', { name: '위성 지도' })).not.toBeInTheDocument();
+  expect(screen.queryByTestId('map-geographic-background')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('map-satellite-background')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('map-road-background')).not.toBeInTheDocument();
+  expect(screen.getByTestId('map-background-source')).toHaveTextContent('기록 좌표 개략도');
+  expect(screen.getByTestId('map-background-source')).not.toHaveTextContent('Esri');
+  const line = screen.getByTestId('map-reference-line').getAttribute('points');
+  const before = camera();
+  fireEvent.click(screen.getByRole('button', { name: '지도 확대' }));
+  expect(camera()).not.toEqual(before);
+  expect(screen.getByTestId('map-reference-line')).toHaveAttribute('points', line);
+});
+
 test('global imagery failure preserves both actual GPS lines and can be removed without changing the camera', () => {
   render(<CornerMap projected={points} referenceProjected={points.map(p => ({ ...p, y: p.y + 10 }))} geographic geographicMetersPerUnit={1} corners={[corner]} selected={corner} selectedRange={[.4, .6]} onSelect={jest.fn()} onHover={jest.fn()} />);
   const tileImages = screen.getByTestId('map-geographic-background').querySelectorAll('image');

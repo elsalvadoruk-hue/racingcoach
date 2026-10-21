@@ -180,6 +180,8 @@ class LmuIbtReader:
                         accel_source='DERIVED_GPS_SPEED', validity_source='LMU_TIMING_AND_TRACK_EDGE',
                         track_layout=layout, recording_time=metadata_in.get('recording_time'),
                         official_track_id=official_track_id(metadata_in.get('track_name'), layout))
+        from lmu_personal_reference import recording_conditions
+        metadata['lmu_lap_conditions'] = recording_conditions(reader, summary)
         return ParsedTelemetry(path=self.path, signature=file_signature(self.path), tick_rate=TICK_RATE,
                                buffer_length=0, record_count=len(time), data_offset=0, session_text='',
                                session_info=session_info, variables={}, channels=channels,

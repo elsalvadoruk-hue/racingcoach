@@ -140,6 +140,12 @@ def register_routes(app, services: LmuRoutesServices = LmuRoutesServices()):
     from lmu_settings import register_routes as register_settings_routes
     register_settings_routes(app, services.discover_dirs)
 
+    @app.post('/api/lmu/telemetry/import')
+    async def import_lmu_file(request: Request, filename: str = Query(max_length=240)):
+        from lmu_imports import import_recording
+        dependency_check()
+        return await import_recording(request, filename, services.reader_factory)
+
     from lmu_history import register_history_routes
     async def history_workspace(body):
         shared = getattr(app.state, 'workspace_request', None)

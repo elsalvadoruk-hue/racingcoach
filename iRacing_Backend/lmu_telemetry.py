@@ -513,6 +513,10 @@ def discover_lmu_telemetry_dirs() -> tuple[Path, ...]:
         candidates = [folder / "UserData" / "Telemetry" for folder in installed]
         from lmu_settings import saved_folders
         candidates.extend(Path(path) for path in saved_folders())
+    from lmu_imports import import_dir
+    imported = import_dir()
+    if imported.is_dir():
+        candidates.append(imported)
     unique = {str(path.resolve()).casefold(): path.resolve() for path in candidates}
     return tuple(unique.values())
 

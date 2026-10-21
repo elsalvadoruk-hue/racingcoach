@@ -413,10 +413,10 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
   const visibleCorners = (diagramMode ? [] : corners).map(corner => ({ corner, point: finite(corner.apex_pct) ? nearest(projected, corner.apex_pct) : null }))
     .filter(({ point }) => point && point.x >= view.x && point.x <= view.x + view.width && point.y >= view.y && point.y <= view.y + view.height);
   const cursorOnMarker = cursor && visibleCorners.some(({ point }) => Math.hypot(point.x - cursor.x, point.y - cursor.y) < 16 * unit);
-  const roadAvailable = !diagramMode && trackMap && failedRoad !== trackMap.assets.active;
-  const satelliteFailed = trackMap && failedSatellite === trackMap.assets.background;
+  const roadAvailable = !schematic && !diagramMode && trackMap && failedRoad !== trackMap.assets.active;
+  const satelliteFailed = !schematic && trackMap && failedSatellite === trackMap.assets.background;
   const satelliteVisible = roadAvailable && backgroundMode === 'satellite' && !satelliteFailed;
-  const geographicVisible = !diagramMode && geographic && backgroundMode === 'satellite';
+  const geographicVisible = !schematic && !diagramMode && geographic && backgroundMode === 'satellite';
   const assetUrl = path => `${process.env.PUBLIC_URL || ''}${path}`;
   const mapBox = trackMap?.viewBox || [];
   const backgroundCredit = trackMap?.provenance?.background;
@@ -437,7 +437,7 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
           <ToggleGroupItem value="road" aria-label="도로 지도">도로</ToggleGroupItem>
           <ToggleGroupItem value="satellite" aria-label="위성 지도" disabled={satelliteFailed}>위성</ToggleGroupItem>
         </ToggleGroup>}
-        {!diagramMode && geographic && <ToggleGroup type="single" size="sm" variant="outline" value={backgroundMode === 'satellite' ? 'satellite' : 'line'} onValueChange={value => { if (value === 'road' && onRoadMap) onRoadMap(); else if (value) setBackgroundMode(value); }} aria-label="지도 배경">
+        {!schematic && !diagramMode && geographic && <ToggleGroup type="single" size="sm" variant="outline" value={backgroundMode === 'satellite' ? 'satellite' : 'line'} onValueChange={value => { if (value === 'road' && onRoadMap) onRoadMap(); else if (value) setBackgroundMode(value); }} aria-label="지도 배경">
           {onRoadMap && <ToggleGroupItem value="road" aria-label="도로 지도">도로</ToggleGroupItem>}
           <ToggleGroupItem value="line" aria-label="GPS 라인 지도">라인</ToggleGroupItem>
           <ToggleGroupItem value="satellite" aria-label="위성 지도">위성</ToggleGroupItem>
