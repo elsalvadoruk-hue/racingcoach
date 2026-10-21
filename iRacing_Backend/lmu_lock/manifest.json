@@ -1,0 +1,13 @@
+{
+  "lock_version": 1,
+  "source_sha256": "6cf7e77cc3f083ae378cb7f6a58892ef6be532d5d283b716154f32aa8157712a",
+  "dll_sha256": "43a9de79b8aa71d4f2a3aa9055ab81cc4754c21965c70596399f9660bdba4d92",
+  "runtime": "STATIC_MSVC",
+  "dependencies": [
+    "KERNEL32.dll"
+  ],
+  "exports": [
+    "lmu_copy_locked",
+    "lmu_lock_version"
+  ]
+}

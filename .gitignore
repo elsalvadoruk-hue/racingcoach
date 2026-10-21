@@ -32,6 +32,11 @@
 !/iRacing_Backend/test_lmu_replay_ui.js
 !/iRacing_Backend/test_lmu_setup_ui.js
 !/iRacing_Backend/lmu_native_bridge.cpp
+!/iRacing_Backend/lmu_lock.c
+!/iRacing_Backend/lmu_lock/
+/iRacing_Backend/lmu_lock/*
+!/iRacing_Backend/lmu_lock/lmu_lock.dll
+!/iRacing_Backend/lmu_lock/manifest.json
 !/iRacing_Backend/lmu_bridges/
 /iRacing_Backend/lmu_bridges/*
 !/iRacing_Backend/lmu_bridges/bridge-*/
@@ -72,6 +77,7 @@
 !/scripts/audit_git.py
 !/scripts/test_audit_git.py
 !/scripts/dev_lmu_layout_check.py
+!/scripts/build_lmu_lock.py
 /releases/*
 !/releases/[0-9]*.json
 !/releases/voice-[0-9]*.json
