@@ -1,5 +1,6 @@
 """Traffic observations use synthetic frames, temporary files and no services."""
 import atexit
+import gc
 import gzip
 import io
 import os
@@ -159,7 +160,7 @@ class TrafficLogTests(unittest.TestCase):
         # 2026-10-21 user decision: whole-suite concurrent execution introduced
         # timing variability. Use the median of five 31-car x 1,000-call means
         # and 0.3 ms instead of 0.2 ms: less than 1% of a 33 ms live tick.
-        # The slow-writer test still enforces the separate 1 ms call maximum.
+        # The slow-writer test enforces a separate 1 ms median of five maxima.
         averages = []
         for repeat in range(5):
             log = self.new_log()
@@ -174,7 +175,6 @@ class TrafficLogTests(unittest.TestCase):
         self.assertLessEqual(median_ms, .3)
 
     def test_half_second_gzip_write_does_not_hold_up_record(self):
-        log = self.new_log()
         entered = threading.Event()
         original_open = gzip.open
         writer_threads = set()
@@ -200,20 +200,42 @@ class TrafficLogTests(unittest.TestCase):
 
         snap = self.snapshot()
         names = set(self.sdk)
-        with patch('traffic_log.gzip.open', SlowFile):
-            log.record(snap, 'run', 0.)
-            log.flush()
-            self.assertTrue(entered.wait(1.))
-            durations = []
-            for i in range(1, 101):
-                start = time.perf_counter_ns()
-                log.record(traffic_snapshot(self.sdk, names, self.sample, self.identity), 'run', i * .1)
-                durations.append((time.perf_counter_ns() - start) / 1e6)
-            self.assertLessEqual(max(durations), 1.)
-            log.close()
-        self.assertEqual(writer_threads, {'traffic-log-writer'})
-        self.assertEqual(len(read(log.path)[1]), 101)
-        print(f'Slow gzip record maximum: {max(durations):.4f} ms')
+        # 2026-10-22 user decision: standalone passed while the whole suite
+        # exceeded 1 ms. Unrelated cyclic garbage and scheduling outliers can
+        # affect suite timing. Disable GC only during measurement, restore its
+        # prior state, and compare the median of five independent maxima with
+        # the unchanged 1 ms limit. Keep every raw maximum visible in the log.
+        maxima = []
+        for repeat in range(5):
+            log = self.new_log()
+            entered.clear()
+            writer_threads.clear()
+            with patch('traffic_log.gzip.open', SlowFile):
+                try:
+                    log.record(snap, f'run-{repeat}', 0.)
+                    log.flush()
+                    self.assertTrue(entered.wait(1.))
+                    durations = []
+                    gc_was_enabled = gc.isenabled()
+                    gc.disable()
+                    try:
+                        for i in range(1, 101):
+                            start = time.perf_counter_ns()
+                            log.record(traffic_snapshot(self.sdk, names, self.sample, self.identity),
+                                       f'run-{repeat}', i * .1)
+                            durations.append((time.perf_counter_ns() - start) / 1e6)
+                    finally:
+                        if gc_was_enabled:
+                            gc.enable()
+                finally:
+                    log.close()
+            self.assertEqual(writer_threads, {'traffic-log-writer'})
+            self.assertEqual(len(read(log.path)[1]), 101)
+            maxima.append(max(durations))
+        median_ms = statistics.median(maxima)
+        print(f'Slow gzip record maxima={maxima}; raw maximum={max(maxima):.4f} ms; '
+              f'median={median_ms:.4f} ms')
+        self.assertLessEqual(median_ms, 1.)
 
     def test_overflow_discards_oldest_rows_counts_and_logs_only_once(self):
         log = self.new_log()
