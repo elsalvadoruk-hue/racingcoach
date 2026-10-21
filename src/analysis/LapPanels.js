@@ -126,7 +126,7 @@ export function TraceChart({ trace = [], targetLap, referenceLap }) {
         drawLine('target_speed_kph', colors.target, 2.4);
 
         // LMU-only contrast increase approved by the user; preserve iRacing alpha.
-        ctx.fillStyle = lmu ? 'rgba(248, 113, 113, 0.60)' : 'rgba(248, 113, 113, 0.18)';
+        ctx.fillStyle = lmu ? 'rgba(248, 113, 113, 0.65)' : 'rgba(248, 113, 113, 0.18)';
         ctx.beginPath();
         trace.forEach((point, index) => {
           const barHeight = Math.max(0, point.brake || 0) * plotHeight * 0.2;

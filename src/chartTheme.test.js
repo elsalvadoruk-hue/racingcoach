@@ -13,7 +13,7 @@ test('the default and explicit iRacing palettes keep the original values', () =>
 
 test('LMU is read on each call and does not change the legacy palette', () => {
   document.documentElement.dataset.game = 'lmu';
-  expect(comparisonColors()).toEqual({ target: '#FF5A73', reference: '#7FB2FF', canvas: '#0B1022', grid: '#26304F', muted: '#9AA3BF', cursor: '#C9D0E6' });
+  expect(comparisonColors()).toEqual({ target: '#8AB4DE', reference: '#D7B088', canvas: '#182436', grid: '#2B3C53', muted: '#A6B2C4', cursor: '#D0DAE7' });
   expect(COMPARISON_COLORS.target).toBe('#66c6ef');
   document.documentElement.dataset.game = 'iracing';
   expect(comparisonColors()).toBe(COMPARISON_COLORS);

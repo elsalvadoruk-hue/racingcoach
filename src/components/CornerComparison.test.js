@@ -247,9 +247,9 @@ test('changing game redraws cached chart and map colours without changing the co
   try {
     document.documentElement.dataset.game = 'lmu';
     rerender(<CornerComparison {...props} />);
-    expect(container.querySelector('.recharts-line path[stroke="#FF5A73"]')).toBeInTheDocument();
+    expect(container.querySelector('.recharts-line path[stroke="#8AB4DE"]')).toBeInTheDocument();
     expect(container.querySelector('.recharts-line path[stroke="#66c6ef"]')).not.toBeInTheDocument();
-    expect(screen.getByTestId('map-reference-line')).toHaveAttribute('stroke', '#7FB2FF');
+    expect(screen.getByTestId('map-reference-line')).toHaveAttribute('stroke', '#D7B088');
     document.documentElement.dataset.game = 'iracing';
     rerender(<CornerComparison {...props} />);
     expect(container.querySelector('.recharts-line path[stroke="#66c6ef"]')).toBeInTheDocument();
