@@ -71,6 +71,7 @@
 !/scripts/test_make_release_assets.py
 !/scripts/audit_git.py
 !/scripts/test_audit_git.py
+!/scripts/dev_lmu_layout_check.py
 /releases/*
 !/releases/[0-9]*.json
 !/releases/voice-[0-9]*.json
