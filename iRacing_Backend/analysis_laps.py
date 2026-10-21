@@ -14,9 +14,21 @@ from telemetry_channels import CORE_CHANNELS, FEATURE_CHANNELS
 from setup_analysis import extract_setup_summary
 from setup_profiles import vehicle_setup_capabilities
 from reference_conditions import telemetry_reference_conditions
+from corner_events import raw_lap
 
 
 class LapAnalysis:
+    def _raw_lap_for(self, grid):
+        number = grid.get('_lap_number')
+        registered = getattr(self, '_grid_ids', {}).get(id(grid))
+        if number is None or registered is None or registered[0] is not grid or registered[1][0] != 'lap':
+            return None
+        cache = self._raw_lap_cache
+        if number not in cache:
+            lap = next((lap for lap in self.telemetry.laps if lap.lap_number == number), None)
+            cache[number] = raw_lap(self, lap) if lap is not None else None
+        return cache[number]
+
     def _clean_context(self) -> dict[str, Any]:
         if not hasattr(self, "_clean_segment_context"):
             self._clean_segment_context = clean_segment_context(self.telemetry)
@@ -521,7 +533,7 @@ class LapAnalysis:
         distance = distance[unique]
         grid = np.linspace(0.0, 1.0, self.grid_points)
 
-        output: dict[str, np.ndarray[Any, Any]] = {"distance_pct": grid}
+        output: dict[str, np.ndarray[Any, Any]] = {"distance_pct": grid, "_lap_number": lap.lap_number}
         source_times = self.channels.get("SessionTime")
         sample_times = source_times[start : end + 1].astype(float)[order][unique] if source_times is not None else None
         channel_names = [

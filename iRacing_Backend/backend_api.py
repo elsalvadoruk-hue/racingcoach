@@ -1333,6 +1333,7 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
         self._grid_cache: dict[int, dict[str, np.ndarray[Any, Any]]] = cache["grids"]
         self._metric_cache: dict[tuple[Any, ...], dict[str, Any]] = cache["metrics"]
         self._grid_ids: dict[int, tuple[Any, tuple[Any, ...]]] = cache["ids"]
+        self._raw_lap_cache = shared.setdefault('raw_laps', {})
 
 
     def _name_corners(self, corners: list[dict[str, Any]], definitions: list[dict[str, Any]]) -> list[dict[str, Any]]:

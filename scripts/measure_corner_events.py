@@ -132,7 +132,7 @@ def summarize(rows):
     return result
 
 
-def measure_file(path, api):
+def measure_file(path, api, native_events=False):
     telemetry = api.repository.load(path)
     analyzer = api.TelemetryAnalyzer(telemetry)
     # Exercise the same analyzer entry point used by /api/analyze, without AI,
@@ -167,21 +167,39 @@ def measure_file(path, api):
             }
             windows["full_throttle"] = windows["throttle_first"]
             row = {"lap": lap.lap_number, "corner": corner["id"], "label": corner["label"]}
+            native = None
+            if native_events:
+                from corner_events import corner_events
+                recorded = analyzer._raw_lap_for(grid)
+                if recorded is None:
+                    raise ValueError('Native lap association unavailable')
+                native = corner_events(recorded, *(float(grid['distance_pct'][i]) for i in
+                                                   (entry, apex, exit_idx)))
             for name, (key, threshold, rising, first) in EVENTS.items():
                 event = sample_event(pct, times, raw[key], threshold, *windows[name],
                                      rising, first, 1. / telemetry.tick_rate, length)
+                if native is not None:
+                    event = native[name]
                 baseline = metrics.get(name + "_pct")
                 row[name] = {"grid_pct": baseline, "raw": event,
                              "source": event["source"] if event else None,
                              "delta": (baseline - event["pct"]) * length
                              if baseline is not None and event is not None else None}
+                row[name]['matches'] = bool((baseline is None and event is None) or
+                                            (baseline is not None and event is not None and baseline == event['pct']))
             share = abs_time_share(pct, times, raw["Brake"], raw["BrakeABSactive"],
                                    grid["distance_pct"][entry], grid["distance_pct"][apex],
                                    1. / telemetry.tick_rate, length)
             baseline = metrics.get("abs_duty_pct")
+            expected_share = share['pct'] if share is not None else None
+            if native is not None:
+                expected_share = native['abs_time_share']
+                expected_share = round(expected_share, 1) if expected_share is not None else None
+                share = {'pct': expected_share, 'observed_share': native['abs_observed_share']}
             row["abs_duty"] = {"grid_pct": baseline, "raw": share,
-                               "delta": baseline - share["pct"]
-                               if baseline is not None and share is not None else None}
+                               "delta": baseline - expected_share
+                               if baseline is not None and expected_share is not None else None,
+                               'matches': bool(baseline == expected_share)}
             rows.append(row)
     return {"file": path.name, "game": game,
             "sample_basis": "RESAMPLED" if game == "lmu" else "NATIVE",
@@ -208,6 +226,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("files", nargs="*", type=Path)
     parser.add_argument("--out", type=Path, default=ROOT / "logs/analysis-210/t0.json")
+    parser.add_argument('--native-events', action='store_true',
+                        help='Verify T2 recorded events against the connected analyzer output')
     args = parser.parse_args(argv)
     with tempfile.TemporaryDirectory(prefix="iracing-analysis-t0-") as temporary:
         isolate(Path(temporary))
@@ -226,7 +246,7 @@ def main(argv=None):
         for path in paths:
             print(f"Measuring {path.name}", flush=True)
             try:
-                report["files"].append(measure_file(path.resolve(), api))
+                report["files"].append(measure_file(path.resolve(), api, args.native_events))
             except Exception as exc:
                 report["errors"].append({"file": path.name, "type": type(exc).__name__, "error": str(exc)})
                 print(f"  {type(exc).__name__}: {exc}", flush=True)
@@ -244,6 +264,11 @@ def main(argv=None):
         proceed |= abs_median is not None and abs_median >= 3.
         report["t2_gate"] = {"proceed": proceed, "basis": "NATIVE",
                              "rule": "event absolute p95 >= 1 m OR ABS absolute median >= 3 percentage points"}
+        if args.native_events:
+            checks = [item for f in report['files'] for row in f['rows']
+                      for key, item in row.items() if key in (*EVENTS, 'abs_duty')]
+            report['native_verification'] = {'checked': len(checks),
+                                             'mismatches': sum(not item['matches'] for item in checks)}
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
         lines = ["file | basis | event | n | signed median | absolute median | absolute p95 | absolute max | unit"]
@@ -256,12 +281,13 @@ def main(argv=None):
                              f"{fmt(s['median'])} | {fmt(a['median'])} | {fmt(a['p95'])} | "
                              f"{fmt(a['max'])} | {'%p' if event == 'abs_duty' else 'm'}")
         lines.append("LMU: RESAMPLED = 재표본 기준. CLIPPED observations are excluded from the crossing gate.")
-        lines.append(f"T2 gate: {'PROCEED' if proceed else 'ASK USER'}")
+        lines.append(f"Native verification: {report['native_verification']}" if args.native_events else
+                     f"T2 gate: {'PROCEED' if proceed else 'ASK USER'}")
         table = "\n".join(lines) + "\n"
         args.out.with_suffix(".txt").write_text(table, encoding="utf-8")
         print(table)
         print(f"JSON: {args.out}")
-        return 1 if report["errors"] else 0
+        return 1 if report["errors"] or report.get('native_verification', {}).get('mismatches') else 0
 
 
 if __name__ == "__main__":

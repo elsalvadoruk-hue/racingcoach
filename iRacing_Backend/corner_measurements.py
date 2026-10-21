@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any, Optional
 import numpy as np
+from corner_events import corner_events
 
 def round_or_none(value: Optional[float], digits: int = 3) -> Optional[float]:
     if value is None or not math.isfinite(value):
@@ -23,6 +24,10 @@ def smooth(values: np.ndarray[Any, Any], window: int) -> np.ndarray[Any, Any]:
 
 
 class CornerMeasurements:
+    def _raw_lap_for(self, grid):
+        # Live practice has only a distance grid, with no file-lap association.
+        return None
+
     def _compute_corner_metrics(
         self,
         grid: dict[str, np.ndarray[Any, Any]],
@@ -30,6 +35,9 @@ class CornerMeasurements:
         apex: int,
         exit_idx: int,
     ) -> dict[str, Any]:
+        raw = self._raw_lap_for(grid)
+        events = corner_events(raw, *(float(grid['distance_pct'][i]) for i in
+                                     (entry, apex, exit_idx))) if raw is not None else None
         n = len(grid["distance_pct"])
         padding = max(1, int(round(75.0 / max(1.0, self.track_length_m) * (n - 1))))
         pre_entry = max(0, entry - padding)
@@ -100,7 +108,25 @@ class CornerMeasurements:
         def pct_at(index: Optional[int]) -> Optional[float]:
             return round(float(grid["distance_pct"][index]), 5) if index is not None else None
 
+        def event_index(key):
+            event = events[key]
+            return int(np.argmin(abs(grid['distance_pct'] - event['pct']))) if event else None
+
+        if events is not None:
+            brake_start, brake_release, full_throttle = (event_index(key) for key in
+                                                        ('brake_start', 'brake_release', 'full_throttle'))
         zones = self._brake_and_drive_zones(grid, channel, brake, throttle, speed, time_axis, brake_start, brake_release, full_throttle)
+
+        native = {}
+        event_names = ('brake_start', 'brake_release', 'throttle_first', 'full_throttle', 'min_speed')
+        if events is not None:
+            native = {key + '_pct': events[key]['pct'] if events[key] else None for key in event_names}
+            native.update(abs_duty_pct=round_or_none(events['abs_time_share'], 1),
+                          abs_observed_share=events['abs_observed_share'],
+                          coast_time_s=round_or_none(events['coast_time_s'], 3),
+                          throttle_relifts=events['relifts'],
+                          event_uncertainty_m={key: events[key]['uncertainty_m'] if events[key] else None
+                                               for key in event_names})
 
         return {
             **zones,
@@ -124,6 +150,12 @@ class CornerMeasurements:
             "steering_efficiency": round(steering_efficiency, 3) if steering_efficiency is not None else None,
             "throttle_relifts": throttle_relifts if np.all(np.isfinite(throttle[exit_slice])) else None,
             "steering_corrections": corrections if np.all(np.isfinite(steering_segment)) else None,
+            "event_source": raw.source if raw is not None else 'GRID',
+            "event_uncertainty_m": {key: None for key in event_names},
+            "abs_observed_share": None,
+            "min_speed_pct": float(grid['distance_pct'][entry + np.nanargmin(speed[corner_slice])])
+            if np.any(np.isfinite(speed[corner_slice])) else None,
+            **native,
         }
 
     SPEED_STEP_KPH = 5.0          # speed-to-time readings for "how long from one speed to another"
