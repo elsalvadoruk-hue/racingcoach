@@ -12,10 +12,25 @@ os.environ.setdefault('IRACING_TUNER_DB_PATH', str(Path(_runtime.name) / 'test.s
 
 import numpy as np
 
-from measure_corner_events import abs_time_share, isolate, sample_event, summarize
+from measure_corner_events import abs_time_share, isolate, sample_event, summarize, phase_summary, phase_gate
 
 
 class CornerEventMeasurementTests(unittest.TestCase):
+    def test_phase_gate_excludes_missing_boundaries_and_never_pools_files(self):
+        def row(value, complete=True):
+            return {'phases': {'braking': {'delta_s': 0.} if complete else None,
+                               'rotation': {'delta_s': 0.}, 'drive': {'delta_s': 0.},
+                               'unexplained_s': value}}
+        good = phase_summary([row(.0004)] * 1000 + [row(1., False)])
+        bad = phase_summary([row(-.006)] * 20)
+        self.assertEqual(good['absolute']['n'], 1000)
+        self.assertEqual(good['missing_boundary'], 1)
+        self.assertAlmostEqual(bad['absolute']['p95'], .006)
+        gate = phase_gate([{'file': 'good.ibt', 'sample_basis': 'NATIVE', 'phase_measurement': good},
+                           {'file': 'bad.ibt', 'sample_basis': 'NATIVE', 'phase_measurement': bad}])
+        self.assertTrue(gate['stop'])
+        self.assertEqual(gate['failed_files'], ['bad.ibt'])
+
     def test_isolation_overrides_inherited_store_locations(self):
         with patch.dict(os.environ, {'IRACING_DATA_DIR': 'existing-data',
                                      'IRACING_TUNER_DB_PATH': 'existing.sqlite3',

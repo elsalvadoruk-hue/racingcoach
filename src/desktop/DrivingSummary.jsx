@@ -9,6 +9,7 @@ import { cn } from '../lib/utils';
 import { TrackMap } from './Telemetry';
 import { cornerLabel, number, signed, length, data, labRequest, analysisOptions } from './sessionData';
 import { cornerAnnotations } from './cornerAnnotations';
+import { DeviationLine } from './CornerPhases';
 import { requestJson, API_BASE } from '../analysis/analysisClient';
 import PracticeCoach from '../components/PracticeCoach';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
@@ -69,6 +70,7 @@ export default function DrivingSummary({ comparison, names, onCorner, onCompare,
             {options.map((item, index) => <ToggleGroupItem className={cn('summary-issue', choice === index && 'is-focused')} key={item.focus.root_cause} value={String(index)} aria-label={`이번 연습: ${item.focus.root_cause_label}`} data-testid="summary-issue">
               <span className="summary-issue-heading"><span className="summary-rank numeric">{String(index + 1).padStart(2, '0')}</span><strong className="summary-issue-title">{item.focus.root_cause_label}</strong><strong className="summary-issue-loss numeric">+{number(item.focus.total_observed_loss_s, 3)}<small> s</small></strong><span className={badgeVariants({ variant: choice === index ? 'default' : 'outline' })}>{choice === index ? '집중 과제' : '이번에 연습'}</span></span>
               <span className="summary-issue-action">{item.focus.action}</span>
+              <DeviationLine deviation={item.focus.first_deviation || comparison.corners.find(c => c.id === item.focus.corner_id)?.first_deviation} />
               <span className="summary-issue-check"><span className="summary-issue-location"><MapPin aria-hidden="true" />{item.corner_ids.join(' · ') || '위치 확인 필요'}</span><span><Check aria-hidden="true" />{(item.focus.success_criteria || []).join(' · ')}</span></span>
             </ToggleGroupItem>)}
           </ToggleGroup> : <Empty><EmptyHeader><EmptyTitle>추천할 연습 과제가 없습니다</EmptyTitle><EmptyDescription>현재 비교에 뚜렷한 손실이 없거나 자료가 부족합니다. 다른 랩이나 기준을 선택해 확인하세요.</EmptyDescription></EmptyHeader><Button variant="outline" onClick={onCompare}>비교 변경</Button></Empty>}

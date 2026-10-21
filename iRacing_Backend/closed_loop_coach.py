@@ -256,6 +256,52 @@ def _metric_delta(target: dict[str, Any], reference: dict[str, Any], key: str) -
         return None
 
 
+EVENT_PHASES = {'brake_start': 'braking', 'brake_release': 'braking', 'min_speed': 'rotation',
+                'throttle_first': 'drive', 'full_throttle': 'drive'}
+EVENT_LABELS = {'brake_start': '제동 시작', 'brake_release': '브레이크 놓음',
+                'min_speed': '최저 속도 지점', 'throttle_first': '가속 시작', 'full_throttle': '풀스로틀'}
+
+
+def first_deviation(corner, track_length_m):
+    target, reference = corner.get('target') or {}, corner.get('reference') or {}
+    differences = []
+    for event, phase in EVENT_PHASES.items():
+        positions = [metrics.get(event + '_pct') for metrics in (target, reference)]
+        if any(value is None or not np.isfinite(value) for value in positions):
+            continue
+        uncertainties = []
+        for metrics in (target, reference):
+            value = (metrics.get('event_uncertainty_m') or {}).get(event)
+            if value is None:
+                value = metrics.get('distance_resolution_m')
+            uncertainties.append(value)
+        if any(value is None or not np.isfinite(value) or value < 0 for value in uncertainties):
+            continue
+        if corner.get('entry_pct') is not None and positions[1] < corner['entry_pct']:
+            phase = 'approach'
+        differences.append({'event': event, 'phase': phase,
+                            'delta_m': float((positions[0] - positions[1]) * track_length_m),
+                            'threshold_m': max(3., 2 * sum(uncertainties))})
+    phases = corner.get('phases') or {}
+    for index, item in enumerate(differences):
+        if abs(item['delta_m']) + 1e-9 < item['threshold_m']:
+            continue
+        phase = item['phase']
+        ordered = ('approach', 'braking', 'rotation', 'drive')
+        return {**item, 'phase_delta_s': (phases.get(phase) or {}).get('delta_s'),
+                'phase_deltas_s': {key: (phases.get(key) or {}).get('delta_s')
+                                   for key in ordered[ordered.index(phase):]},
+                'then': [{'event': later['event'], 'delta_m': later['delta_m'], 'threshold_m': later['threshold_m']}
+                         for later in differences[index + 1:]]}
+    return None
+
+
+def deviation_text(item):
+    event, delta = item['event'], item['delta_m']
+    direction = ('뒤' if delta >= 0 else '앞') if event == 'min_speed' else ('늦음' if delta >= 0 else '이름')
+    return f"{EVENT_LABELS[event]} {abs(delta):.0f} m {direction}"
+
+
 def detailed_corner_diagnosis(corner: dict[str, Any], track_length_m: float, source: str) -> dict[str, Any]:
     target = corner.get("target") or {}
     reference = corner.get("reference") or {}
@@ -310,6 +356,26 @@ def detailed_corner_diagnosis(corner: dict[str, Any], track_length_m: float, sou
         action = "미드코너에서 입력 공백을 줄이고 최저속도를 유지하는 데 집중하십시오."
         success = ["최저속도 +1 km/h 이상", "코스팅 감소", "탈출 스로틀 지연 없음"]
 
+    deviation = first_deviation(corner, track_length_m)
+    phases = corner.get('phases') or {}
+    rule_cause, cause_from_first = cause, False
+    braking_loss = (phases.get('braking') or {}).get('delta_s')
+    approach_loss = phases['approach'].get('delta_s') if phases.get('approach') is not None else 0.
+    drive_loss = (phases.get('drive') or {}).get('delta_s')
+    earlier_braking = (deviation is not None and deviation['event'] in ('brake_start', 'brake_release')
+                       and cause in ('THROTTLE_RETURN_LATE', 'EXIT_INSTABILITY')
+                       and braking_loss is not None and approach_loss is not None and drive_loss is not None
+                       and approach_loss + braking_loss >= drive_loss)
+    if earlier_braking:
+        distance = deviation['delta_m']
+        if deviation['event'] == 'brake_release' and distance > 0:
+            cause = 'BRAKE_RELEASE_LATE'
+            action = f"브레이킹 시작점은 유지하고 브레이크를 완전히 놓는 지점을 약 {min(10.0, max(3.0, distance * 0.65)):.0f} m 앞당기되 압력을 부드럽게 줄이십시오."
+        elif deviation['event'] == 'brake_start' and distance < 0:
+            cause = 'BRAKE_POINT_EARLY'
+            action = f"현재 피크 제동은 유지하면서 제동 시작점을 약 {min(8.0, max(3.0, abs(distance) * 0.55)):.0f} m 늦춰보십시오."
+        cause_from_first = cause != rule_cause
+
     consensus = corner.get("reference_consensus") or {}
     repeatability = float(consensus.get("loss_agreement_ratio") or 0.0) if source.startswith("GARAGE61") else 0.55
     data_confidence = 0.55
@@ -327,6 +393,10 @@ def detailed_corner_diagnosis(corner: dict[str, Any], track_length_m: float, sou
     recovery_low = max(0.01, delta_s * (0.25 + 0.15 * repeatability))
     recovery_high = max(recovery_low, delta_s * (0.55 + 0.15 * repeatability))
     evidence = list(corner.get("evidence") or [])[:5]
+    if deviation is not None:
+        evidence.insert(0, '처음 달라진 조작: ' + deviation_text(deviation))
+    if earlier_braking and deviation['event'] == 'brake_start' and deviation['delta_m'] > 0:
+        evidence.insert(1, f"제동 시작이 기준보다 {deviation['delta_m']:.0f} m 늦어 진입이 빨랐습니다.")
     if brake_release_m is not None and abs(brake_release_m) >= 3:
         evidence.append(f"브레이크 릴리즈 위치 {brake_release_m:+.0f} m")
     if exit_speed_delta is not None and abs(exit_speed_delta) >= 1.0:
@@ -341,6 +411,8 @@ def detailed_corner_diagnosis(corner: dict[str, Any], track_length_m: float, sou
         "priority_score": round(priority_score, 3),
         "estimated_recovery_s": [round(recovery_low, 3), round(recovery_high, 3)],
         "evidence": list(dict.fromkeys(evidence))[:7],
+        'first_deviation': deviation, 'phases': corner.get('phases'),
+        **({'cause_from_first_deviation': True, 'rule_cause': rule_cause} if cause_from_first else {}),
     }
 
 

@@ -779,3 +779,12 @@ body { min-width: 1100px; }
 .corner-lab[data-game=lmu] .lab-main > .wide-workspace:not(.lap-analysis):not(.expert-workspace) { overflow:auto; gap:18px; }
 .corner-lab[data-game=lmu] .lab-main > .wide-workspace:not(.lap-analysis):not(.expert-workspace) > * { flex-shrink:0; }
 .session-subtitle { color:hsl(var(--muted-foreground)); font-size:12px; display:flex; align-items:center; gap:8px; }
+.corner-phases { display:flex; flex-direction:column; gap:6px; flex-shrink:0; }
+.phase-bar { display:flex; gap:3px; margin:0; overflow-x:auto; }
+.phase-cell { flex:1 0 50px; min-width:0; border:1px solid hsl(var(--border)); border-radius:5px; padding:5px 3px; }
+.phase-cell dt { font-size:10px; color:hsl(var(--muted-foreground)); line-height:1.4; }
+.phase-cell dd { margin:3px 0 0; font-size:12px; white-space:nowrap; }
+.phase-outside { border-style:dashed; }
+.phase-note { color:hsl(var(--muted-foreground)); font-size:10px; }
+.first-deviation { display:block; font-size:11px; line-height:1.5; white-space:normal; }
+.coaching-panel .first-deviation { flex-shrink:0; }

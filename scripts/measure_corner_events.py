@@ -132,7 +132,60 @@ def summarize(rows):
     return result
 
 
-def measure_file(path, api, native_events=False):
+def phase_summary(rows):
+    complete, missing, unavailable = [], 0, 0
+    for row in rows:
+        phases = row.get('phases')
+        if phases is None:
+            unavailable += 1
+        elif any(phases.get(key) is None for key in ('braking', 'rotation', 'drive')):
+            missing += 1
+        else:
+            complete.append(phases.get('unexplained_s'))
+    return {'signed': distribution(complete),
+            'absolute': distribution([abs(value) for value in complete if value is not None]),
+            'missing_boundary': missing, 'unavailable': unavailable,
+            'changed_causes': sum(bool(row.get('cause_changed')) for row in rows)}
+
+
+def phase_gate(files):
+    native = [item for item in files if item['sample_basis'] == 'NATIVE']
+    failures = [item['file'] for item in native
+                if item['phase_measurement']['absolute']['p95'] is not None
+                and item['phase_measurement']['absolute']['p95'] > .005]
+    return {'stop': bool(failures), 'failed_files': failures,
+            'rule': 'Per NATIVE file: absolute unexplained_s p95 <= 0.005 s, all three corner phases observed'}
+
+
+def measure_phases(analyzer, api):
+    """Compare each other valid lap with the file's fastest valid lap.
+
+    The gate uses absolute residuals for complete three-phase corners per file.
+    Approach and straight losses are excluded from corner accounting.
+    """
+    if not analyzer.valid_laps:
+        return {'reference_lap': None, 'rows': [], **phase_summary([])}
+    best = min(analyzer.valid_laps, key=lambda lap: float(lap.lap_time_s or float('inf')))
+    reference = analyzer._lap_grid(best)
+    definitions = analyzer._detect_corners(reference)
+    rows = []
+    for lap in analyzer.valid_laps:
+        if lap.lap_number == best.lap_number:
+            continue
+        for corner in analyzer._corner_analysis(analyzer._lap_grid(lap), reference, definitions):
+            diagnosis = api.detailed_corner_diagnosis(corner, analyzer.track_length_m, 'LOCAL')
+            rows.append({'lap': lap.lap_number, 'corner': corner['id'],
+                         'entry_pct': corner['entry_pct'], 'exit_pct': corner['exit_pct'],
+                         'delta_s': corner['delta_s'], 'phases': corner['phases'],
+                         'first_deviation': corner['first_deviation'],
+                         'root_cause': diagnosis['root_cause'],
+                         'rule_cause': diagnosis.get('rule_cause'),
+                         'cause_changed': bool(diagnosis.get('cause_from_first_deviation'))})
+    return {'reference_lap': best.lap_number, 'comparison': 'other valid laps vs file-fastest valid lap',
+            'rows': rows, **phase_summary(rows)}
+
+
+def measure_file(path, api, native_events=False, phases=False):
     telemetry = api.repository.load(path)
     analyzer = api.TelemetryAnalyzer(telemetry)
     # Exercise the same analyzer entry point used by /api/analyze, without AI,
@@ -204,7 +257,8 @@ def measure_file(path, api, native_events=False):
     return {"file": path.name, "game": game,
             "sample_basis": "RESAMPLED" if game == "lmu" else "NATIVE",
             "track": telemetry.metadata.get("track_name"), "valid_laps": len(analyzer.valid_laps),
-            "summary": summarize(rows), "rows": rows}
+            "summary": summarize(rows), "rows": rows,
+            **({'phase_measurement': measure_phases(analyzer, api)} if phases else {})}
 
 
 def isolate(folder):
@@ -228,6 +282,8 @@ def main(argv=None):
     parser.add_argument("--out", type=Path, default=ROOT / "logs/analysis-210/t0.json")
     parser.add_argument('--native-events', action='store_true',
                         help='Verify T2 recorded events against the connected analyzer output')
+    parser.add_argument('--phases', action='store_true',
+                        help='Measure T3 phase residuals and diagnosis changes against file-best laps')
     args = parser.parse_args(argv)
     with tempfile.TemporaryDirectory(prefix="iracing-analysis-t0-") as temporary:
         isolate(Path(temporary))
@@ -246,7 +302,7 @@ def main(argv=None):
         for path in paths:
             print(f"Measuring {path.name}", flush=True)
             try:
-                report["files"].append(measure_file(path.resolve(), api, args.native_events))
+                report["files"].append(measure_file(path.resolve(), api, args.native_events, args.phases))
             except Exception as exc:
                 report["errors"].append({"file": path.name, "type": type(exc).__name__, "error": str(exc)})
                 print(f"  {type(exc).__name__}: {exc}", flush=True)
@@ -269,6 +325,8 @@ def main(argv=None):
                       for key, item in row.items() if key in (*EVENTS, 'abs_duty')]
             report['native_verification'] = {'checked': len(checks),
                                              'mismatches': sum(not item['matches'] for item in checks)}
+        if args.phases:
+            report['t3_gate'] = phase_gate(report['files'])
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
         lines = ["file | basis | event | n | signed median | absolute median | absolute p95 | absolute max | unit"]
@@ -283,11 +341,22 @@ def main(argv=None):
         lines.append("LMU: RESAMPLED = 재표본 기준. CLIPPED observations are excluded from the crossing gate.")
         lines.append(f"Native verification: {report['native_verification']}" if args.native_events else
                      f"T2 gate: {'PROCEED' if proceed else 'ASK USER'}")
+        if args.phases:
+            lines.append('T3 file | reference lap | complete n | missing boundary | unavailable | signed median / p95 (s) | absolute median / p95 (s) | changed causes')
+            for item in report['files']:
+                phases = item['phase_measurement']
+                signed, absolute = phases['signed'], phases['absolute']
+                lines.append(f"{item['file']} | {phases['reference_lap']} | {signed['n']} | "
+                             f"{phases['missing_boundary']} | {phases['unavailable']} | "
+                             f"{signed['median']} / {signed['p95']} | {absolute['median']} / {absolute['p95']} | "
+                             f"{phases['changed_causes']}")
+            lines.append(f"T3 gate: {report['t3_gate']}")
         table = "\n".join(lines) + "\n"
         args.out.with_suffix(".txt").write_text(table, encoding="utf-8")
         print(table)
         print(f"JSON: {args.out}")
-        return 1 if report["errors"] or report.get('native_verification', {}).get('mismatches') else 0
+        return 1 if (report["errors"] or report.get('native_verification', {}).get('mismatches')
+                     or report.get('t3_gate', {}).get('stop')) else 0
 
 
 if __name__ == "__main__":
