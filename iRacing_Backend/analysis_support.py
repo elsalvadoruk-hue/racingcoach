@@ -11,7 +11,7 @@ import numpy as np
 class FileMetadataIndex:
     """Signature-keyed metadata, separate from personal learning records."""
 
-    VERSION = 4  # 4: entries carry the session type and the suggested analysis mode.
+    VERSION = 5  # 5: iRacing laps are invalid on incidents, not on brief off-track samples (2026-10-21).
 
     def __init__(self, path):
         self.path = Path(path)

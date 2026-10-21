@@ -77,14 +77,15 @@ class LeftRight:
         self.occupied = set()
         self.tracks = {}
         self.closing = None       # m/s the slowest car beside us moves along our car; None when unknown
+        self.relative = None      # the same, signed: + that car pulls ahead of us, - we pass it
 
     def __call__(self, traffic):
         if not traffic or traffic.get('status') != 'AVAILABLE':
-            self.occupied, self.closing = set(), None
+            self.occupied, self.closing, self.relative = set(), None, None
             return None
         player = traffic['player']
         now = player.get('telemetry_et')
-        sides, occupied, tracks, closing = [[], []], set(), {}, None
+        sides, occupied, tracks, closing, relative = [[], []], set(), {}, None, None
         for row in traffic['vehicles']:
             x, y, z = _local(player, row)
             track = self.tracks.get(row['vehicle_id']) or deque()
@@ -98,16 +99,22 @@ class LeftRight:
                     or abs(z) > GEOMETRY['car_length_m'] + margin
                     or abs(x) > GEOMETRY['lateral_warning_distance_m'] + margin):
                 continue
-            if abs(x) < .5:
-                self.tracks, self.closing = tracks, None
+            if abs(x) < .5 and abs(z) < GEOMETRY['car_length_m'] / 2:
+                self.tracks, self.closing, self.relative = tracks, None, None
                 return None  # coincident centres give no side; never clear
+            if abs(x) < GEOMETRY['car_width_m'] * .7:
+                # In line ahead or behind (nose to tail in a tow, bumping): a car beside us cannot be
+                # this close sideways without touching. Called a side car before (2026-10-21).
+                continue
             sides[0 if x > 0 else 1].append(abs(x))
             occupied.add(row['vehicle_id'])
             past = next((p for p in reversed(track) if now - p[0] >= self.SPAN_S), None) if now is not None else None
             if past is not None:
-                speed = abs(z - past[1]) / (now - past[0])
-                closing = speed if closing is None else min(closing, speed)
-        self.occupied, self.tracks, self.closing = occupied, tracks, closing
+                # The car's local forward is -z: a car pulling ahead has a falling z.
+                signed = -(z - past[1]) / (now - past[0])
+                if closing is None or abs(signed) < closing:
+                    closing, relative = abs(signed), signed
+        self.occupied, self.tracks, self.closing, self.relative = occupied, tracks, closing, relative
         left, right = [2 if len(xs) > 1 and max(xs) - min(xs) >= GEOMETRY['car_width_m']
                        else 1 if xs else 0 for xs in sides]
         return 4 if left and right else 5 if left > 1 else 6 if right > 1 else 2 if left else 3 if right else 1
@@ -202,6 +209,9 @@ class LmuIrsdk:
         self.sessions = {}
         self.durations = {}
         self.steering_learned = set()
+        from lmu_lap_verdicts import LapVerdicts
+        self.lap_verdicts = LapVerdicts()
+        self.car_ids = {}            # (entry, model) -> (CarID, name)
         self.scoring = None          # last frame with aligned scoring, for short gaps
         self.state = 1
         self.left_right = LeftRight()
@@ -271,6 +281,10 @@ class LmuIrsdk:
         if not self.normalised:
             # Journal exactly what was read, with the traffic actually used.
             self.journal.write({**snapshot, 'traffic': traffic or {'status': 'UNAVAILABLE'}})
+            try:
+                self.lap_verdicts.observe(snapshot)   # LMU's own lap verdict, for the recording analysis
+            except Exception:
+                pass
         snapshot = self._hold_scoring(snapshot)
         self.snapshot = snapshot
         self._translate(snapshot, traffic)
@@ -342,6 +356,16 @@ class LmuIrsdk:
             self.state = PHASE_STATE[phase]
         return self.state  # paused (9) keeps the previous state
 
+    def _car(self, car, model):
+        """(CarID, name) of the model, as the recording analysis keys it (lmu_car_models)."""
+        cached = self.car_ids.get((car, model))
+        if cached is None:
+            from lmu_car_models import car_key, learn
+            if car and model:
+                learn(car, model=model)
+            cached = self.car_ids[(car, model)] = car_key(car, model)
+        return cached
+
     def _translate(self, s, traffic):
         length = s.get('track_length_m')
         track, car = s.get('track_name') or '', s.get('car_name') or ''
@@ -366,11 +390,12 @@ class LmuIrsdk:
                     and s.get('finish_status') in (0, 1, None))
         steering = s.get('steering_rad')
         ratio = s.get('steering_ratio')
+        car_id, car_label = self._car(car, s.get('vehicle_model'))
         if steering is not None and ratio is not None and abs(ratio) > .1 and car and car not in self.steering_learned:
             # rad = ratio * half range; remember the full range in degrees once per car and run.
             self.steering_learned.add(car)
             from lmu_steering import remember
-            remember(car, math.degrees(abs(steering / ratio)) * 2)
+            remember(car_label, math.degrees(abs(steering / ratio)) * 2)
         warnings = None
         if s.get('overheating') is not None or s.get('speed_limiter_active') is not None:
             warnings = ((0x1 if s.get('overheating') else 0) | (0x10 if s.get('speed_limiter_active') else 0)
@@ -400,6 +425,9 @@ class LmuIrsdk:
             'Clutch': s.get('clutch_ratio'),
             # rF2/LMU steering is positive to the right; iRacing positive to the left.
             'SteeringWheelAngle': None if steering is None else -steering,
+            # Not an iRacing variable: steering as a share of full lock, for the quiet-moment check
+            # when the wheel reports no range (and so no angle).
+            'SteeringLockRatio': None if ratio is None else -ratio,
             'Gear': s.get('gear'), 'RPM': s.get('engine_rpm'), 'FuelLevel': s.get('fuel_l'),
             'dcBrakeBias': s.get('brake_bias'), 'dcABS': s.get('abs_setting'),
             'dcTractionControl': s.get('tc_setting'),
@@ -409,6 +437,7 @@ class LmuIrsdk:
                              else self.left_right(traffic)),
             # Not an iRacing variable: how fast the car beside us passes, for the spotter (live_telemetry).
             'SideClosingMps': self.left_right.closing,
+            'SideRelativeMps': self.left_right.relative,
             # Not an iRacing variable either: LMU virtual energy left, in % (live_energy).
             'VirtualEnergyPct': virtual_energy_pct(s.get('virtual_energy_raw')),
             'PlayerTrackSurface': _surface(player_row, s) if player_row else None,
@@ -448,8 +477,7 @@ class LmuIrsdk:
         for d in drivers:
             if d['CarIdx'] == player_id:
                 # Same IDs as the recording analysis (lmu_ibt) so corners and practice match.
-                d.update(CarID=stable_id('car', car), CarPath=stable_id('car', car),
-                         CarScreenName=car, UserName='나')
+                d.update(CarID=car_id, CarPath=car_id, CarScreenName=car_label, UserName='나')
         pit = s.get('pit_box_lap_distance_m')
         tires = ([{'TireIndex': 0, 'TireCompoundType': 'Dry'}, {'TireIndex': 1, 'TireCompoundType': 'Wet'}]
                  if wet is not None else [])

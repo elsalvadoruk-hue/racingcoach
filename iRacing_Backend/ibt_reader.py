@@ -312,9 +312,18 @@ class IBTReader:
             pit_samples = int(np.count_nonzero(channels.get("OnPitRoad", np.zeros(len(lap_values), dtype=bool))[start : end + 1]))
             surface = channels.get("PlayerTrackSurface")
             if surface is not None:
-                on_track_ratio = float(np.mean(surface[start : end + 1] == 3))
+                lap_surface = surface[start : end + 1]
+                on_track_ratio = float(np.mean(lap_surface == 3))
+                # Approaching the pits (2) or in the stall (1): a pit lap, not an off.
+                pit_samples += int(np.count_nonzero((lap_surface == 1) | (lap_surface == 2)))
             else:
                 on_track_ratio = 1.0
+            # iRacing's own verdict on going off: an incident of 1x or more (the second byte of
+            # PlayerIncidents is the penalty: 1 = 0x, 2 = 1x ...). Kerbs and run-off without one
+            # count, as in the sim (2026-10-21, the driver's rule: a lap is off only with incidents).
+            incidents = channels.get("PlayerIncidents")
+            penalised = (bool(np.any((np.asarray(incidents[start : end + 1], dtype=np.int64) >> 8 & 0xFF) >= 2))
+                         if incidents is not None else None)
 
             official_time = self._completed_lap_time(
                 channels=channels,
@@ -336,7 +345,11 @@ class IBTReader:
             elif pit_samples:
                 status = "INVALID"
                 invalid_reason = "pit road samples present"
-            elif on_track_ratio < 0.995:
+            elif penalised:
+                status = "INVALID"
+                invalid_reason = "incident during the lap"
+            elif penalised is None and on_track_ratio < 0.995:
+                # Recordings without the incident log keep the surface rule.
                 status = "INVALID"
                 invalid_reason = "off-track samples present"
             elif official_time is None or official_time <= 0:

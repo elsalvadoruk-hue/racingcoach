@@ -480,6 +480,20 @@ int main() {
         const auto fullSnapshot=snapshot(fullSource.get(),tu,su);
         if(fullSnapshot.size()+1>262144)throw std::runtime_error("FULL_SNAPSHOT_BUFFER_OVERFLOW");
         std::cout<<"MEASURED_FULL_GRID:"<<fullSnapshot<<'\n';
+        // Scoring read on a frame without the scoring event (a skipped-frame
+        // reader can miss every flagged one) is adopted once it has moved on,
+        // but never right after a reset, where it may be the old player's.
+        auto aliased=std::make_unique<Source>();
+        p=frame();validate_and_copy(aliased.get(),*p,tu,su);
+        p=frame(true,false);p->scoring.scoringInfo.mCurrentET=25.1;
+        validate_and_copy(aliased.get(),*p,tu,su);
+        require(su && aliased->scoring && aliased->copy.scoring.scoringInfo.mCurrentET==25.1,"UNFLAGGED_NEW_SCORING_ADOPTED");
+        p=frame(true,false);p->scoring.scoringInfo.mCurrentET=25.1;
+        validate_and_copy(aliased.get(),*p,tu,su);
+        require(!su,"UNCHANGED_SCORING_NOT_UPDATED");
+        p=frame(true,false);p->telemetry.telemInfo[0].mID=88;p->scoring.scoringInfo.mCurrentET=25.3;
+        validate_and_copy(aliased.get(),*p,tu,su);
+        require(!su && !aliased->scoring,"RESET_KEEPS_UNFLAGGED_SCORING_OUT");
         return 0;
     } catch(const std::exception& e) { std::cerr<<e.what()<<'\n';return 1; }
 }
@@ -496,7 +510,7 @@ int main() {
         result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         cases = [line for line in result.stdout.splitlines() if ':' not in line]
-        self.assertEqual(len(cases), 19)
+        self.assertEqual(len(cases), 22)
         traffic = {line.split(':', 1)[0]: json.loads(line.split(':', 1)[1])
                    for line in result.stdout.splitlines() if line.startswith('TRAFFIC_') and ':' in line}
         self.assertEqual(len(traffic), 22)

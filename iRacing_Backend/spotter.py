@@ -70,6 +70,9 @@ class Spotter:
     HOLD_REPEATS = 2
     CORNER_SECONDS = 3.     # a repeat this close to the next braking or turning
     CORNER_REARM_S = 6.     # and the next corner counts once the road ahead is this long again
+    # 2026-10-21 (driver's decision, both games): a car we are passing is not called; it is called
+    # once it is no slower than us (it may stay beside us), and the pass ends with a clear only.
+    WE_PASS_MPS = .5        # slower than us by more than this: we are passing it (measurement noise below)
 
     def __init__(self):
         self.repeat_seconds, self.clear_delay = 3., .15
@@ -83,6 +86,7 @@ class Spotter:
         self.raw = self.confirmed = self.candidate = None
         self.candidate_since = self.last_sample = self.last_session = self.last_call = self.unknown_since = None
         self.holds, self.corner_armed = 0, True
+        self.passing = None     # side state of a car we are passing, never called
         self.events.clear()
 
     def ingest(self, sample, run_id, now):
@@ -107,7 +111,7 @@ class Spotter:
             self.raw = None
             self.unknown_since = self.unknown_since if self.unknown_since is not None else now
             if now - self.unknown_since > self.UNKNOWN_SECONDS:
-                self.confirmed = self.candidate = self.candidate_since = self.last_call = None
+                self.confirmed = self.candidate = self.candidate_since = self.last_call = self.passing = None
                 self.events.clear()
             return
         self.unknown_since = None
@@ -119,11 +123,23 @@ class Spotter:
         delay = self.ENTER_SECONDS if arriving else self.clear_delay if raw == 1 or raw != self.confirmed else .05
         if now - self.candidate_since + 1e-9 < delay:
             return
+        if raw == 1 and self.passing is not None and self.confirmed in (None, 1):
+            # The pass is done: only the clear is said.
+            key, self.passing, self.confirmed = self._transition(self.passing, 1), None, 1
+            if key:
+                self._emit(key, now)
+            return
         if raw != self.confirmed:
             closing = sample.get('side_closing_mps')
             if (arriving and type(closing) in (int, float) and closing == closing
                     and closing > self.PASSING_MPS):
                 return          # sweeping past; called if it settles beside us
+            relative = sample.get('side_relative_mps')
+            if (arriving and type(relative) in (int, float) and relative == relative
+                    and relative < -self.WE_PASS_MPS):
+                self.passing = raw
+                return          # we are passing it; called if it comes back to our speed
+            self.passing = None
             previous = self.confirmed
             self.confirmed = raw
             key = self._transition(previous, raw)
@@ -196,13 +212,14 @@ class AlongsideSpeed:
 
     def reset(self):
         self.tracks = {}
+        self.relative = None   # signed speed of that slowest car: + it pulls ahead, - we pass it
 
     def __call__(self, now, own_pct, cars, length_m):
         """cars: {car index: lap fraction} of the other cars on track. Metres per second, or None."""
         if type(own_pct) not in (int, float) or not 0 <= own_pct < 1 or type(length_m) not in (int, float) or not length_m > 100:
             self.reset()
             return None
-        tracks, slowest = {}, None
+        tracks, slowest, relative = {}, None, None
         for idx, pct in cars.items():
             if type(pct) not in (int, float) or not 0 <= pct < 1:
                 continue
@@ -217,9 +234,10 @@ class AlongsideSpeed:
             if abs(gap) <= self.WINDOW_M:
                 past = next((point for point in reversed(track) if now - point[0] >= self.SPAN_S), None)
                 if past is not None:
-                    speed = abs(gap - past[1]) / (now - past[0])
-                    slowest = speed if slowest is None else min(slowest, speed)
-        self.tracks = tracks
+                    signed = (gap - past[1]) / (now - past[0])
+                    if slowest is None or abs(signed) < slowest:
+                        slowest, relative = abs(signed), signed
+        self.tracks, self.relative = tracks, relative
         return slowest
 
 

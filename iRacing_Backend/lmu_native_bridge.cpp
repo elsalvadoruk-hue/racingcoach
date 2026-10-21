@@ -37,6 +37,10 @@ struct Source {
     SharedMemoryObjectOut copy{};
     bool telemetry = false, scoring = false;
     bool playerKnown = false;
+    // Scoring (session, ET) last seen in shared memory, flagged or not.
+    bool seenScoring = false;
+    long seenSession = 0;
+    double seenET = 0;
     long playerId = -1, gameVersion = 0;
     std::string playerModel;
     unsigned long long processIdentity = 0, epoch = 0;
@@ -68,7 +72,15 @@ void reset_cache(Source* s) {
 // Called only while holding the game-created lock. This is the same helper
 // exercised by the native fixture; lengths are checked before the SDK copy.
 bool validate_and_copy(Source* s, SharedMemoryObjectOut& src, bool& tu, bool& su) {
-    su=has(src.generic,SME_UPDATE_SCORING);tu=has(src.generic,SME_UPDATE_TELEMETRY);
+    const bool flagged=has(src.generic,SME_UPDATE_SCORING);tu=has(src.generic,SME_UPDATE_TELEMETRY);
+    // The scoring event is set only on the frame that carries a scoring update
+    // (~5 Hz); a reader that skips frames can miss every one of them for good
+    // (seen after returning to the garage: reading every other 50 Hz frame
+    // while scoring landed on the skipped ones). Scoring that moved on since
+    // the last look is new too, whichever frame it is read on.
+    const auto& memory=src.scoring.scoringInfo;
+    const bool moved=s->seenScoring && (memory.mSession!=s->seenSession || memory.mCurrentET!=s->seenET);
+    su=flagged || (moved && memory.mNumVehicles>0);
     if(src.generic.gameVersion<=0) { error="GAME_VERSION_INVALID";return false; }
     if(s->gameVersion && s->gameVersion!=src.generic.gameVersion) { error="GAME_VERSION_CHANGED";return false; }
     if ((su && (src.scoring.scoringInfo.mNumVehicles<0 || src.scoring.scoringInfo.mNumVehicles>104 || src.scoring.scoringStreamSize>=sizeof(src.scoring.scoringStream))) ||
@@ -92,7 +104,21 @@ bool validate_and_copy(Source* s, SharedMemoryObjectOut& src, bool& tu, bool& su
         } else reset=reset || s->playerKnown || s->telemetry;
     }
     if(reset) reset_cache(s);
+    // After a reset only a flagged update may bring scoring back: what was in
+    // memory may still describe the previous player or session.
+    if(reset && !flagged) su=false;
     CopySharedMemoryObj(s->copy,src);
+    if(su && !flagged) {   // the same copy the SDK makes for a flagged frame
+        auto& dst=s->copy.scoring;
+        memcpy(&dst.scoringInfo,&src.scoring.scoringInfo,sizeof(ScoringInfoV01));
+        memcpy(&dst.vehScoringInfo,&src.scoring.vehScoringInfo,src.scoring.scoringInfo.mNumVehicles*sizeof(VehicleScoringInfoV01));
+        memcpy(&dst.scoringStream,&src.scoring.scoringStream,src.scoring.scoringStreamSize);
+        dst.scoringStreamSize=src.scoring.scoringStreamSize;
+        dst.scoringStream[dst.scoringStreamSize]='\0';
+        dst.scoringInfo.mVehicle=&dst.vehScoringInfo[0];
+        dst.scoringInfo.mResultsStream=&dst.scoringStream[0];
+    }
+    s->seenScoring=true;s->seenSession=memory.mSession;s->seenET=memory.mCurrentET;
     if(tu) {
         s->telemetry=incoming!=nullptr;
         s->playerKnown=incoming!=nullptr;

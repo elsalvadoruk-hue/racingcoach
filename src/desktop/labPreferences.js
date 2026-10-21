@@ -20,6 +20,17 @@ export function timelineHeights(corners, maximum = 20) {
 }
 
 export const lapStatus = lap => ({ VALID: '유효', INVALID: '무효', OUT_LAP: '아웃랩', IN_LAP: '인랩', PARTIAL: '불완전' }[lap.status] || '확인 필요');
+// Why a lap is invalid, in the driver's words; an unknown reason is shown as it came.
+const LAP_REASONS = {
+  'incident during the lap': '인시던트(1x 이상) 발생',
+  'off-track samples present': '트랙 밖 주행',
+  'pit road samples present': '피트로드 포함',
+  'beyond the measured track edge': '트랙 경계 밖 주행',
+  'LMU invalidated the lap': '게임이 무효 처리(트랙 리밋)',
+  'LMU recorded no matching lap time': '게임 랩타임 없음',
+  'iRacing did not publish a valid completed lap time': '게임 랩타임 없음',
+};
+export const lapReason = reason => (reason ? LAP_REASONS[reason] || reason : '');
 export function isBestLap(lap, laps) {
   const best = Math.min(...laps.filter(l => l.status === 'VALID' && Number.isFinite(l.lap_time_s)).map(l => l.lap_time_s));
   return lap?.status === 'VALID' && Number.isFinite(lap.lap_time_s) && Math.abs(lap.lap_time_s - best) < .0001;

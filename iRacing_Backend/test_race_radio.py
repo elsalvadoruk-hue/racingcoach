@@ -53,6 +53,42 @@ class RaceRadioTests(unittest.TestCase):
         self.tick(session_flags=0)
         self.assertFalse(self.events())
 
+    def test_green_is_said_once_when_the_race_starts(self):
+        # The driver's decision: green starts the race and nothing else.
+        self.tick(session_state=3, session_flags=0)
+        self.radio.pending.clear()
+        self.tick(session_state=4, session_flags=0x4)
+        self.assertIn('green', self.keys())
+        self.radio.pending.clear()
+        self.tick(session_flags=0xC000)                 # caution, then the restart
+        self.wait(11)
+        self.tick(session_flags=0x4)
+        self.assertNotIn('green', self.keys())
+        self.radio.reset()                              # link drops mid-race (LMU keeps the bit up)
+        self.tick(session_flags=0x4)
+        self.wait(11)
+        self.assertNotIn('green', self.keys())
+
+    def test_no_green_outside_a_race_start(self):
+        self.meta['session_type'] = 'Practice'
+        self.radio.reset()
+        self.tick(session_state=3, session_flags=0)
+        self.tick(session_state=4, session_flags=0x4)
+        self.assertNotIn('green', self.keys())
+        self.meta['session_type'] = 'Race'
+        self.radio.reset()
+        self.tick(session_state=4, session_flags=0x4)  # joined after the start
+        self.assertNotIn('green', self.keys())
+
+    def test_the_leaders_chequered_flag_is_not_ours(self):
+        # The driver's decision: the checker is said when we cross the line, as the result.
+        self.tick(session_flags=0x1)
+        self.assertNotIn('finish', self.keys())
+        self.tick(session_flags=0x1, lap_completed=3, class_position=4)
+        self.wait(4)
+        result = next(e for e in self.events() if e['key'] == 'race_result')
+        self.assertEqual(result['priority'], 2)                # said through braking, not after it
+
     def test_caution_is_not_duplicated_as_local_yellow(self):
         self.tick(session_flags=0xC108)
         self.assertEqual(self.keys(), ['caution'])

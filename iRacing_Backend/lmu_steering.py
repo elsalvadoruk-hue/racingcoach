@@ -37,10 +37,11 @@ def _key(car):
     return ' '.join(str(car or '').split()).casefold()
 
 
-def half_range_rad(car):
-    """(half wheel range in radians, 'MEASURED' | 'NOMINAL')."""
+def half_range_rad(car, model=None):
+    """(half wheel range in radians, 'MEASURED' | 'NOMINAL'). The model's range serves every livery."""
     with _LOCK:
-        measured = _load(store_path()).get(_key(car))
+        data = _load(store_path())
+        measured = (data.get(_key(model)) if model else None) or data.get(_key(car))
     if isinstance(measured, (int, float)) and 90 <= measured <= 1440:
         return math.radians(measured / 2), 'MEASURED'
     return math.radians(NOMINAL_RANGE_DEG / 2), 'NOMINAL'

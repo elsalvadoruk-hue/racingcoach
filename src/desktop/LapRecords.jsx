@@ -2,7 +2,7 @@ import React, { useRef } from 'react';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead } from '../components/ui/table';
 import { Button } from '../components/ui/button';
 import { data, lapTime, number, signed, legacyLmu } from './sessionData';
-import { isBestLap, lapStatus } from './labPreferences';
+import { isBestLap, lapReason, lapStatus } from './labPreferences';
 import { lapReproducibilityLabel } from '../analysis/analysisShared';
 import LmuLapRecords from './LmuLapRecords';
 
@@ -17,7 +17,7 @@ export default function LapRecords() {
     <div className="record-list-heading"><span>전체 {data.laps.length}랩 · 목록을 스크롤해 비교하세요.</span>{best && <Button variant="outline" size="sm" onClick={() => bestRow.current?.scrollIntoView({ block: 'center' })}>★ 베스트 {best.lap_number}랩으로</Button>}</div>
     <div className="lap-records-table-scroll" role="region" aria-label="전체 랩 기록" tabIndex={0}><Table><TableHeader><TableRow>{['랩', '상태 / 제외 이유', '랩타임', '베스트 대비', '재현성', '연료 사용'].map(t => <TableHead key={t}>{t}</TableHead>)}</TableRow></TableHeader><TableBody>{data.laps.map((l, index) => {
       const isBest = isBestLap(l, data.laps);
-      return <TableRow key={`${l.lap_number}-${l.status}-${index}`} ref={isBest ? bestRow : undefined} className={isBest ? 'best-lap-row' : undefined}><TableCell>{l.lap_number}랩{isBest ? ' · ★ 베스트' : ''}</TableCell><TableCell>{lapStatus(l)}<small>{l.invalid_reason}</small></TableCell><TableCell>{lapTime(l.lap_time_s)}</TableCell><TableCell>{signed(l.delta_to_file_best_s)} s</TableCell><TableCell>{l.status === 'VALID' ? <>{lapReproducibilityLabel(l.reproducibility_status).label}<small>비슷한 랩 {l.reproducibility_support ?? 0}개 · RMS {number(l.reproducibility_trace_rms_s, 3)} s</small></> : '—'}</TableCell><TableCell>{number(l.fuel_used_l, 2)} L</TableCell></TableRow>;
+      return <TableRow key={`${l.lap_number}-${l.status}-${index}`} ref={isBest ? bestRow : undefined} className={isBest ? 'best-lap-row' : undefined}><TableCell>{l.lap_number}랩{isBest ? ' · ★ 베스트' : ''}</TableCell><TableCell>{lapStatus(l)}<small>{lapReason(l.invalid_reason)}</small></TableCell><TableCell>{lapTime(l.lap_time_s)}</TableCell><TableCell>{signed(l.delta_to_file_best_s)} s</TableCell><TableCell>{l.status === 'VALID' ? <>{lapReproducibilityLabel(l.reproducibility_status).label}<small>비슷한 랩 {l.reproducibility_support ?? 0}개 · RMS {number(l.reproducibility_trace_rms_s, 3)} s</small></> : '—'}</TableCell><TableCell>{number(l.fuel_used_l, 2)} L</TableCell></TableRow>;
     })}</TableBody></Table></div>
   </div>;
 }

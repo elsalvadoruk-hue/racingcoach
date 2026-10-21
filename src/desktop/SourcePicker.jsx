@@ -4,7 +4,7 @@ import { NativeSelect, NativeSelectOption } from '../components/ui/native-select
 import { Field, FieldGroup, FieldLabel } from '../components/ui/field';
 import { Badge } from '../components/ui/badge';
 import { data, labRequest, lapTime, analysisOptions, measurableLap } from './sessionData';
-import { fileLapLabel, lapCounts, lapStatus, isBestLap, lapIsComplete, sessionTypeLabel, sessionTypeTone } from './labPreferences';
+import { fileLapLabel, lapCounts, lapReason, lapStatus, isBestLap, lapIsComplete, sessionTypeLabel, sessionTypeTone } from './labPreferences';
 import ConnectionControls from './ConnectionControls';
 import { requestJson } from '../analysis/analysisClient';
 
@@ -186,7 +186,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   const ownLap = options.find(l => String(l.lap_number) === own && (measurableLap(l) || l.lap_number === session.defaultTarget));
   const best = options.find(l => isBestLap(l, options));
   const allowed = lap => (measurableLap(lap) || lap.lap_number === session.defaultTarget) && (session.kind === 'LIVE_LOCAL' || Boolean(session.comparisons?.[lap.lap_number]));
-  const label = lap => `${lap.lap_number}랩 · ${lapTime(lap.lap_time_s)} · ${lapStatus(lap)}${isBestLap(lap, options) ? ' · ★ 베스트' : ''}${lap.invalid_reason ? ` · ${lap.invalid_reason}` : ''}`;
+  const label = lap => `${lap.lap_number}랩 · ${lapTime(lap.lap_time_s)} · ${lapStatus(lap)}${isBestLap(lap, options) ? ' · ★ 베스트' : ''}${lap.invalid_reason ? ` · ${lapReason(lap.invalid_reason)}` : ''}`;
   const lapClass = lap => `${sessionTypeTone(session)}-lap-option${(!allowed(lap) || !lapIsComplete(lap)) ? ' lap-option-faint' : ''}${isBestLap(lap, options) ? ' best-lap-option' : ''}`;
   return <div className="source-picker">{lmu && <input ref={fileInput} type="file" accept=".duckdb" aria-label="열 DuckDB 파일" hidden onChange={importDuckdb} />}<FieldGroup>
     <Field><FieldLabel htmlFor="source-file">주행 파일 · {lmu ? 'LMU DuckDB' : 'IBT'}</FieldLabel><NativeSelect id="source-file" disabled={importBusy} value={file} onChange={e => { setImportError(''); setFile(e.target.value); setReferenceFile(e.target.value); setReferenceLaps([]); }}>

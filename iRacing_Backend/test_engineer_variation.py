@@ -317,14 +317,17 @@ class RadioCallTests(unittest.TestCase):
         self.assertEqual(len([e for e in self.radio.pending if e['key'] == 'quali_result']), 1)  # once per completed lap
         self.tick(session_flags=0x100000)
         self.assertIn('repair', self.events())
-        # Of the flags only green, white and the chequered flag matter on a lone lap.
+        # Of the flags only white and the chequered flag matter on a lone lap (green starts races only).
         self.radio.pending.clear()
         for bits in (0x8, 0x4000, 0x20, 0x40, 0x10):   # yellow, caution, blue, debris, red
             self.tick(session_flags=bits)
             self.tick(session_flags=0)
             self.wait(11)
         self.assertEqual(self.events(), {})
-        for bits, key in ((0x4, 'green'), (0x2, 'white'), (0x1, 'finish')):
+        self.tick(session_flags=0x4)
+        self.assertNotIn('green', self.events())
+        self.tick(session_flags=0)
+        for bits, key in ((0x2, 'white'), (0x1, 'finish')):
             self.tick(session_flags=bits)
             self.assertIn(key, self.events())
             self.tick(session_flags=0)

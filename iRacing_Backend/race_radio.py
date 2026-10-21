@@ -134,6 +134,7 @@ class RaceRadio:
         self.car_calls = {}
         self.laps = deque(maxlen=5)
         self.briefed = False
+        self.start_armed = False   # the race's grid/formation was seen; green is said once, at the start
         self.history.clear()
         self.tainted = False
         self.pending_lap = None
@@ -264,6 +265,8 @@ class RaceRadio:
                      (0x800, 'ten_laps', 1), (0x1000, 'five_laps', 1),
                      (0x20000000, 'start_ready', 1), (0x40000000, 'start_set', 2)]
             for bit, key, priority in table:
+                if bit == 0x1 and str(self.metadata.get('session_type', '')).lower() == 'race':
+                    continue    # the leader's chequered flag; ours is the result as we cross the line
                 if rising & bit:
                     # Every flag is the sim's own signal, debris included: while it lies there the sim
                     # raises the flag on each approach, and each time it is called (the driver's decision).
@@ -274,10 +277,18 @@ class RaceRadio:
                 self.emit('caution', now, priority=2, condition=('flag', caution_mask))
             elif int(flags) & yellow_mask and not int(old_flags or 0) & (yellow_mask | caution_mask):
                 self.emit('yellow', now, priority=2, condition=('flag', yellow_mask))
-            if rising & (0x4 | 0x80000000) and not int(flags) & (caution_mask | 0x10):
-                self.emit('green', now, priority=2, condition=('flag', 0x4 | 0x80000000), cooldown=10)
         state = num(sample.get('session_state'))
-        if str(self.metadata.get('session_type', '')).lower() == 'race' and state in (1, 2, 3) and not self.briefed:
+        is_race = str(self.metadata.get('session_type', '')).lower() == 'race'
+        # Green only starts the race (the driver's decision): never in practice or qualifying, never
+        # after a caution, and never again when the link resets mid-race. LMU keeps the green bit
+        # up for the whole green phase, so a reconnect would otherwise announce it again.
+        if is_race and state in (1, 2, 3):
+            self.start_armed = True
+        if (self.start_armed and state == 4 and flags is not None and int(flags) & (0x4 | 0x80000000)
+                and not int(flags) & (0xC000 | 0x10)):
+            self.start_armed = False
+            self.emit('green', now, priority=2, condition=('flag', 0x4 | 0x80000000), cooldown=10)
+        if is_race and state in (1, 2, 3) and not self.briefed:
             self.briefed = True
             self.emit('briefing', now, self.briefing(), ttl=120, condition=('pre_race', None), cooldown=3600)
         if state == 4 and previous.get('session_state') in (1, 2, 3) and flags is not None and not int(flags) & (0x4 | 0x80000000):
@@ -390,7 +401,7 @@ class RaceRadio:
             # Crossing the line under the chequered flag: the race is over for this car.
             self.result_called = True
             self.result = {'class_position': position, 'at': now}      # kept for the history of this track (live_formation)
-            self.say('race_result', now, {'pos': position}, ttl=40, delay=3, cooldown=3600)
+            self.say('race_result', now, {'pos': position}, ttl=40, delay=3, cooldown=3600, priority=2)
 
     def briefing(self):
         m, s = self.metadata, self.latest

@@ -25,6 +25,7 @@ import numpy as np
 from analysis_numeric import file_signature
 from ibt_reader import IBTReader
 from lmu_irsdk import stable_id
+from lmu_lap_verdicts import game_verdict
 from lmu_telemetry import LmuTelemetryFormatError, LmuTelemetryReader
 from telemetry_types import LapSegment, ParsedTelemetry
 
@@ -134,7 +135,9 @@ class LmuIbtReader:
         bias = step('Brake Bias Rear')
         channels['dcBrakeBias'] = np.where(np.isfinite(bias), 100. * (1. - bias), np.nan)
         from lmu_steering import half_range_rad
-        half_range, steering_scale = half_range_rad(summary.metadata.get('car_name'))
+        from lmu_car_models import model_for
+        half_range, steering_scale = half_range_rad(summary.metadata.get('car_name'),
+                                                    model_for(summary.metadata.get('car_name'), summary.metadata.get('car_model_key')))
         steer = at('Steering Pos', .01)
         if steer is not None:
             # LMU: positive steers right; iRacing: positive steers left.
@@ -161,7 +164,14 @@ class LmuIbtReader:
         best = step('Best LapTime', 0.)
         channels['LapBestLapTime'] = np.where(best > 0, best, 0.)
 
-        laps = self._laps(summary, time, channels, length, travelled)
+        from lmu_lap_verdicts import verdicts_for
+        try:
+            ended = self.path.stat().st_mtime
+        except OSError:
+            ended = None
+        meta = summary.metadata
+        verdicts = verdicts_for(meta.get('track_name'), meta.get('car_name'), meta.get('recording_time'), ended)
+        laps = self._laps(summary, time, channels, length, travelled, verdicts)
         lap_numbers = np.zeros(len(time))
         lap_start = np.full(len(time), np.nan)
         for lap in laps:
@@ -230,7 +240,7 @@ class LmuIbtReader:
         return result
 
     @staticmethod
-    def _laps(summary, time, channels, length, travelled):
+    def _laps(summary, time, channels, length, travelled, verdicts=None):
         # LMU's lap event and its distance reset can be up to a second apart.
         # Cut laps where the distance actually crosses the line (as an IBT does)
         # when that crossing is close to the event; keep the recorded lap time.
@@ -263,6 +273,9 @@ class LmuIbtReader:
                 status, reason = 'INVALID', 'pit road samples present'
             elif lap.status != 'VALIDITY_UNKNOWN':
                 status, reason = 'INVALID', 'LMU recorded no matching lap time'
+            elif (game := game_verdict(verdicts, lap.lap_number, lap.recorded_lap_time_s)) is not None:
+                # LMU's own verdict, seen live for this very lap (lmu_lap_verdicts), outranks the edge rule.
+                status, reason = ('INVALID', 'LMU invalidated the lap') if game else ('VALID', None)
             elif on_track < .995:
                 status, reason = 'INVALID', 'beyond the measured track edge'
             else:
@@ -284,14 +297,17 @@ class LmuIbtReader:
     def _session_info(metadata, length):
         track, car = metadata.get('track_name') or 'LMU', metadata.get('car_name') or 'LMU'
         layout = metadata.get('track_layout') or ''
+        # One car per model, whatever the livery (lmu_car_models); the live coach uses the same key.
+        from lmu_car_models import car_key, learn
+        learn(car, fingerprint=metadata.get('car_model_key'))
+        car_id, name = car_key(car, fingerprint=metadata.get('car_model_key'))
         return {
             'WeekendInfo': {'TrackDisplayName': track, 'TrackName': stable_id('track', track),
                             'TrackID': stable_id('track', track),
                             'TrackConfigName': '' if layout in ('', track) else layout,
                             'TrackLength': f'{length / 1000:.4f} km', 'EventType': metadata.get('session_type') or ''},
             'DriverInfo': {'DriverCarIdx': 0, 'DriverSetupName': 'LMU recording',
-                           'Drivers': [{'CarIdx': 0, 'CarScreenName': car, 'CarPath': stable_id('car', car),
-                                        'CarID': stable_id('car', car)}]},
+                           'Drivers': [{'CarIdx': 0, 'CarScreenName': name, 'CarPath': car_id, 'CarID': car_id}]},
             'SessionInfo': {'Sessions': [{'SessionNum': 0, 'SessionType': _session_type(metadata.get('session_type')),
                                           'SessionLaps': 'unlimited', 'SessionTime': 'unlimited'}]},
         }

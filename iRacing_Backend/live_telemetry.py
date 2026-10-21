@@ -63,7 +63,7 @@ def session_identity(weekend, driver_info):
 CHANNELS = {
     'session_time': 'SessionTime', 'session_num': 'SessionNum', 'lap_number': 'Lap',
     'distance_pct': 'LapDistPct', 'speed_mps': 'Speed', 'brake': 'Brake',
-    'throttle': 'Throttle', 'steering_rad': 'SteeringWheelAngle', 'gear': 'Gear',
+    'throttle': 'Throttle', 'steering_rad': 'SteeringWheelAngle', 'steering_lock_ratio': 'SteeringLockRatio', 'gear': 'Gear',
     'fuel_l': 'FuelLevel', 'virtual_energy_pct': 'VirtualEnergyPct', 'brake_bias': 'dcBrakeBias', 'abs_setting': 'dcABS',
     'tc_setting': 'dcTractionControl', 'on_track': 'IsOnTrack', 'on_pit_road': 'OnPitRoad',
     'is_replay': 'IsReplayPlaying', 'track_temp_c': 'TrackTempCrew',
@@ -146,6 +146,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self._tyres_fitted = None
         self.race_options = {'reserve_laps': .5, 'pit_loss_s': None, 'fuel_save_mode': 'finish'}
         self._logged_failure = -math.inf
+        self._link = None                     # last logged link state, so drops leave a trace
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -212,7 +213,13 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self._track_fuel(sample)
             self.energy.ingest(sample)
             sample['fuel_l_per_lap'] = max(self.fuel_history) if self.fuel_history else None
-            self.spotter.ingest(sample, self.run_id, now)
+            # No side calls in qualifying (a lone run in iRacing, a private one in LMU) or before a race
+            # starts: the grid and the double-file formation lap kept a car beside us the whole time.
+            session = str(self.radio.metadata.get('session_type') or '').lower()
+            if 'qual' in session or (session == 'race' and sample.get('session_state') in (1, 2, 3)):
+                self.spotter.reset()
+            else:
+                self.spotter.ingest(sample, self.run_id, now)
             self.radio.ingest(sample, self.run_id, now, race)
             self._coach_corners(identity, sample, now)
             try:
@@ -369,6 +376,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             if not sdk.startup():
                 return False
         if not sdk.is_connected:
+            self._note_link('DISCONNECTED', sdk)
             self._reset_live('DISCONNECTED')
             sdk.shutdown()
             self.state = 'WAITING'
@@ -382,6 +390,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self.game = getattr(sdk, 'game', 'iracing')
             # Replay/spectator data must never masquerade as the driver's current car.
             if sample.get('is_replay') or not sample.get('on_track'):
+                self._note_link('REPLAY' if sample.get('is_replay') else 'OFF_TRACK', sdk)
                 weekend = sdk['WeekendInfo'] or {}
                 self.prepare_overlay(session_identity(weekend, sdk['DriverInfo'] or {}), sample,
                                      parse_measure(weekend.get('TrackLength'), 'distance'))
@@ -394,10 +403,13 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.state = 'WAITING'
                 self.message = '실제 차량 탑승 대기 · 리플레이는 실시간 코칭에 사용하지 않습니다.'
             else:
+                self._note_link('DRIVING', sdk)
                 weekend, drivers = sdk['WeekendInfo'] or {}, sdk['DriverInfo'] or {}
                 identity = session_identity(weekend, drivers)
                 identity['game'] = self.game
                 sample['side_closing_mps'] = self._side_closing(sdk, names, sample, weekend, drivers)
+                sample['side_relative_mps'] = (number(sdk['SideRelativeMps']) if 'SideRelativeMps' in names
+                                               else self.alongside.relative if self.game == 'iracing' else None)
                 race = None
                 race_key = (identity.get('subsession_id'), sample.get('session_num'))
                 if self.clock() - self._race_read_at >= 1 or race_key != self._race_session:
@@ -407,6 +419,26 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         finally:
             sdk.unfreeze_var_buffer_latest()
         return True
+
+    def _note_link(self, link, sdk):
+        """Log each change between driving, off track, replay and disconnected.
+
+        Voice and overlay both stop on any of these, so a drive that flickers
+        needs the reason in the log; LMU adds the frame fields behind it."""
+        if link == self._link:
+            return
+        previous, self._link = self._link, link
+        detail = ''
+        if getattr(sdk, 'game', None) == 'lmu':
+            lmu = getattr(sdk, 'active', sdk)
+            frame = getattr(lmu, 'snapshot', None) or {}
+            received = getattr(lmu, 'received_at', None)
+            fields = {key: frame.get(key) for key in ('realtime', 'paused', 'control_code', 'in_garage_stall',
+                                                      'finish_status', 'in_pits', 'session_phase')}
+            detail = (f" unavailable={getattr(lmu, 'unavailable', None)}"
+                      f" frame_age={None if received is None else round(lmu.clock() - received, 2)}"
+                      f" fields={fields}")
+        logger.info('Live link %s -> %s (%s)%s', previous, link, getattr(sdk, 'game', None), detail)
 
     def _side_closing(self, sdk, names, sample, weekend, drivers):
         """How fast the car beside us passes along our car, for the spotter (None when unknown).
@@ -437,13 +469,18 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         except (ImportError, RuntimeError) as exc:
             self.state = 'UNAVAILABLE'
             self.message = str(exc) if isinstance(exc, RuntimeError) else '실시간 패키지 설치 필요 · 설치.bat를 실행하세요.'
+        last_read = None   # end of the last tick that read data; a long gap starves the 2 s LMU window
         while not self.stop_event.is_set():
             self._poll_hotkey()
             if sdk is None:
                 self.stop_event.wait(.05)
                 continue
             try:
+                started = time.monotonic()
+                if last_read is not None and started - last_read > 1.:
+                    logger.warning('Live loop stalled %.2f s between reads', started - last_read)
                 ticked = self._tick(sdk)
+                last_read = time.monotonic() if ticked else None
                 if ticked is False:
                     self.stop_event.wait(1)
                     continue
@@ -451,6 +488,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                     self.stop_event.wait(.5)
                     continue
             except Exception:
+                last_read = None
                 # A logic error here looks like a reconnect to the driver; keep the cause.
                 failure = time.monotonic()
                 if failure - self._logged_failure >= 10:

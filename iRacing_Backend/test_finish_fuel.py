@@ -56,6 +56,29 @@ class TimedFinishTests(unittest.TestCase):
         self.assertEqual((view['finish_own_margin_s'], view['finish_may_shorten'], view['finish_may_extend']), (5., True, False))
         self.assertEqual(view['finish_laps_to_go'], 11)
 
+    def test_a_leader_still_to_pit_finishes_later_by_our_pit_loss(self):
+        # 2026-10-21 (the driver's decision): the leader's stop after the fuel call moved the finish by
+        # a lap. With our car needing a stop and the leader seen from the start without one, the leader
+        # is taken to lose what our stop loses: here 40 s carries him past the clock by a lap more.
+        self.wall.auto_pit_loss_s = 40.
+        for car in self.race['cars']:                             # seen from the start, no stops yet
+            self.wall.stints[car['idx']] = {'since': 0, 'stops': 0}
+        view, _ = self.view(946., .20, .50, fuel=5.)
+        self.assertEqual(view['finish_leader_stop_s'], 40.)
+        self.assertEqual(view['finish_laps_to_go'], 11)              # 10 without the leader's stop
+        # Fuel to the finish: no stop of ours, so no stop assumed for the leader either.
+        view, _ = self.view(946., .20, .50, fuel=60.)
+        self.assertIsNone(view['finish_leader_stop_s'])
+        self.assertEqual(view['finish_laps_to_go'], 10)
+        # The leader in the pits now, or a leader whose stops are unknown: nothing assumed.
+        self.race['cars'][0]['on_pit_road'] = True
+        view, _ = self.view(946., .20, .50, fuel=5.)
+        self.assertIsNone(view['finish_leader_stop_s'])
+        self.race['cars'][0]['on_pit_road'] = False
+        self.wall.stints[self.race['cars'][0]['idx']]['stops'] = None
+        view, _ = self.view(946., .20, .50, fuel=5.)
+        self.assertIsNone(view['finish_leader_stop_s'])
+
     def reports(self, *args, **kwargs):
         view, s = self.view(*args, **kwargs)
         return {r['key']: r for r in self.wall.candidates(view, s, {})}, view

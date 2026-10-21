@@ -10,8 +10,16 @@ def quiet_window(sample, brief=False):
     speed, brake, steer, throttle = (number(k) for k in ('speed_mps', 'brake', 'steering_rad', 'throttle'))
     if sample.get('on_pit_road') is True or speed is not None and speed < 2:
         return True
-    if brake is None or steer is None or brake >= .05:
+    if brake is None or brake >= .05:
         return False
+    if steer is None:
+        # LMU gives the wheel angle only when the wheel reports its range; its share of
+        # full lock is always there. The limits are the angle limits at a narrow GT
+        # wheel (about 400 deg), so a wider wheel only makes them stricter.
+        lock = number('steering_lock_ratio')
+        if lock is None:
+            return False
+        return abs(lock) < .034 or (brief and throttle is not None and throttle >= .9 and abs(lock) < .085)
     return abs(steer) < .12 or (brief and throttle is not None and throttle >= .9 and abs(steer) < .30)
 
 

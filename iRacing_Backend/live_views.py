@@ -121,6 +121,7 @@ class LiveViews:
             if not self._briefed.get('pit_facts_failed'):
                 self._briefed['pit_facts_failed'] = True
                 logger.exception('Pit facts failed; continuing without them')
+        self.pit_wall.auto_pit_loss_s = facts.get('pit_loss_auto_s')
         if pit_loss_s is None and facts.get('pit_loss_auto_s'):
             view = self.pit_wall.view(snapshot, fuel_use, fuel_laps, reserve_laps, facts['pit_loss_auto_s'], fuel_save_mode)
         energy = self.energy.view(view) if self.game == 'lmu' else {}

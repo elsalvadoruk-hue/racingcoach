@@ -191,6 +191,8 @@ import session_log
 from overlay_control import OverlayController, routes as overlay_routes
 
 # The data folder and the settings entered on the screen, before anything reads its configuration.
+# A database path given from outside means a test or a tool, not the driver's install (lmu_car_models scan).
+_DATABASE_GIVEN = bool(os.getenv('IRACING_TUNER_DB_PATH', '').strip())
 app_settings.apply_environment()
 
 from garage61_collector_manager import Garage61CollectorManager
@@ -1110,14 +1112,23 @@ _FILE_VISIBILITY_CACHE: OrderedDict[tuple[str, int, int], dict[str, Any]] = Orde
 _FILE_METADATA_INDEX = FileMetadataIndex(Path(os.getenv("IRACING_FILE_INDEX_PATH", str(MEMORY_DB_PATH.parent / "telemetry-file-index.sqlite3"))))
 
 
+def _lmu_model_car(info: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Recordings indexed before a livery's model was known still carry the livery's key."""
+    if not info or not str(info.get('car_path') or '').startswith('lmu-car-') or not info.get('car_name'):
+        return info
+    from lmu_car_models import car_key
+    car_id, name = car_key(info['car_name'])
+    return {**info, 'car_path': car_id, 'car_name': name, **({'car_id': car_id} if 'car_id' in info else {})}
+
+
 def cached_file_visibility(path: Path) -> Optional[dict[str, Any]]:
     signature = file_signature(path)
     with _FILE_VISIBILITY_LOCK:
         cached = _FILE_VISIBILITY_CACHE.get(signature)
     if cached is not None:
-        return dict(cached)
+        return _lmu_model_car(dict(cached))
     try:
-        return _FILE_METADATA_INDEX.get(signature)
+        return _lmu_model_car(_FILE_METADATA_INDEX.get(signature))
     except (OSError, sqlite3.Error, ValueError):
         return None
 
@@ -3822,6 +3833,18 @@ async def app_lifespan(_app):
     # Sends finished drives only while the driver's consent is recorded (session_log_auto).
     from session_log_auto import AutoUploader
     uploader = AutoUploader(voice_note_store, APP_VERSION, current_run=lambda: live_telemetry.run_id)
+    # LMU: one car per model, whatever the livery. Before the live coach and the stores load.
+    # Tests run on a temporary database; they never read the driver's recordings unless given a folder.
+    scan = not _DATABASE_GIVEN or bool(os.getenv("LMU_TELEMETRY_DIRS"))
+    try:
+        import lmu_car_models
+        from lmu_telemetry import list_lmu_telemetry_files   # includes the imported recordings
+        moved = await asyncio.to_thread(lmu_car_models.prepare, MEMORY_DB_PATH.parent,
+                                        list_lmu_telemetry_files() if scan else [])
+        if moved:
+            logger.info('LMU saved data moved from livery to model keys: %s', moved)
+    except Exception:
+        logger.exception('LMU car models were not prepared; liveries stay separate this run')
     async with managed_lifespan(live_telemetry, overlay_controller, lambda: warm_background()):
         uploader.start()
         try:

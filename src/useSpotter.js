@@ -41,8 +41,9 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const overlapPending = useRef(null);
   const clips = useRef(null), epoch = useRef(0), mounted = useRef(true);
   const state = useRef({ active: false }), lastFrame = useRef(0), release = useRef(null);
-  const output = useRef({ play, muted, volume, busy, specialists, audioBusy, level, recordDelivery });
-  output.current = { play, muted, volume, busy, specialists, audioBusy, level, recordDelivery };
+  const standby = Boolean(audioOutput.standby);
+  const output = useRef({ play, muted, volume, busy, specialists, audioBusy, level, recordDelivery, standby });
+  output.current = { play, muted, volume, busy, specialists, audioBusy, level, recordDelivery, standby };
   const logEvent = useCallback((event, status, reason = '') => {
     const radio = state.current.radio || {};
     output.current.recordDelivery?.({ event_id: event.id, run_id: event.run_id || '', key: event.key,
@@ -197,6 +198,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   }, [announce]);
   const pumpRadio = useCallback(async () => {
     const settings = output.current, current = state.current;
+    // A standby tab neither renders nor acknowledges: the speaking tab owns every call.
+    if (settings.standby) return;
     if (!current.radio?.connected || current.occupied || Date.now() - lastFrame.current > 600) return;
     const events = [...radioQueue.current.values()].filter((event) => !heard.current.has(event.id)
       && !processing.current.has(event.id) && Date.now() < event.local_expires

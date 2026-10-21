@@ -95,6 +95,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const [wallPreferences, setWallPreferences, appliedWall] = useGameSettings(readWall, storeWall);
   const [wallView, setWallView] = useState(null);
   const audioOutput = useAudioOutput();
+  const standbyRef = useRef(false); standbyRef.current = Boolean(audioOutput.standby);
   const recordDelivery = useRadioDiagnostics(apiBase);
   const deliveryEvent = useCallback((note, spokenText) => ({ event_id: String(note.id), run_id: note.context?.snapshot?.run_id || '',
     key: note.context?.report_key || 'answer', engineer: note.context?.engineer || 'coach', text: spokenText || note.reply || '',
@@ -231,6 +232,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     let stopped = false, running = false, lastPoll = 0;
     const poll = async () => {
       if (running || Date.now() - lastPoll < 1800 || state.current.phase !== 'idle' || playing.current || isPriorityBlocked?.()) return;
+      if (standbyRef.current) return;   // the speaking tab takes the reports
       running = true;
       lastPoll = Date.now();
       const epoch = reportEpoch.current;

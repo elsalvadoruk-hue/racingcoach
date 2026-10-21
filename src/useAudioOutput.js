@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import useAudioHost, { STANDBY_MESSAGE } from './audioHost';
 import { useGame, useGameSettings } from './lib/gameContext';
 import { readGameItem, writeGameItem } from './lib/gameStorage';
 import * as radioEffect from './radioEffect';
@@ -68,6 +69,8 @@ const askDevicePermission = async () => {
 const clipSource = (clip, mime) => (String(clip).startsWith('data:') ? clip : `data:${mime};base64,${clip}`);
 
 export default function useAudioOutput() {
+  const host = useAudioHost();
+  const hostRef = useRef(host); hostRef.current = host;
   const { selectedGame, activeGame } = useGame();
   const supported = typeof HTMLMediaElement.prototype.setSinkId === 'function' && !!navigator.mediaDevices?.enumerateDevices;
   const [outputId, setOutputId, appliedOutput] = useGameSettings(savedOutput, storeOutput);
@@ -251,6 +254,7 @@ export default function useAudioOutput() {
     const multipart = Array.isArray(encoded) && encoded.length > 1;
     const speed = clampRate(rate ?? (multipart ? playbackSettings.current.rate
       : channel === 'spotter' ? playbackSettings.current.spotterRate : playbackSettings.current.pitwallRate));
+    if (!hostRef.current) return false;   // another tab is the one that speaks
     if (!valid() || (priority < 3 && priorityGate.current)
       || (player.current && ((!interrupt) || (priority > 0 && priority <= player.current._priority) || (priority === 0 && player.current._priority > 0)))) return false;
     stop('preempted'); setMessage('');
@@ -389,7 +393,8 @@ export default function useAudioOutput() {
       current._finish('failed', failure.name || 'playback_error'); stop();
     }
   }, [supported, stop]);
-  return { applied: { ...appliedPlayback, outputId: appliedOutput }, outputId, devices, supported, message, refresh, refreshing, changeOutput, play, stop, stopNormal,
+  return { applied: { ...appliedPlayback, outputId: appliedOutput }, outputId, devices, supported, standby: !host,
+    message: host ? message : STANDBY_MESSAGE, refresh, refreshing, changeOutput, play, stop, stopNormal,
     setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, isPlaying,
     volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, rate: playback.rate, changeRate,
     spotterRate: playback.spotterRate, changeSpotterRate, pitwallRate: playback.pitwallRate, changePitwallRate, effect, changeEffect };

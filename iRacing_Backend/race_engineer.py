@@ -138,6 +138,7 @@ def choose_role(text, history=()):
 
 class RaceEngineer:
     def __init__(self):
+        self.auto_pit_loss_s = None   # the measured pit loss (live_views), for the leader's pending stop
         self.reset()
 
     def reset(self):
@@ -246,6 +247,26 @@ class RaceEngineer:
     # A stop now that brings the car out within this many seconds of another car is a close call worth saying.
     REJOIN_CLOSE_S = 3.
 
+    def _leader_stop(self, leader, own, time_left, leader_pace, leader_pct, own_pace, own_pct, fuel, use, pit_loss_s):
+        """Seconds the overall leader will still lose in the pits, as far as it can be told.
+
+        2026-10-21 (the driver's decision): a 45-minute race tipped by a lap when the leader (another
+        class) pitted after the fuel call, and the fuel advised was a lap too much. In a race that
+        takes our car a stop, a leader seen from the start without a stop yet is taken to make one,
+        costing what ours costs. Unknown stops, a leader in the pits now, or no pit loss: nothing."""
+        loss = positive(pit_loss_s) or positive(self.auto_pit_loss_s)
+        if not leader or not own or not loss or leader.get('on_pit_road') is True or time_left <= loss:
+            return 0.
+        _, leader_stops = self.stint(leader)
+        _, own_stops = self.stint(own)
+        if leader_stops != 0:
+            return 0.
+        # Our race needs a stop: we made one, or our fuel does not reach the finish.
+        end_s = (math.floor(time_left / leader_pace + leader_pct) + 1 - leader_pct) * leader_pace
+        own_laps = math.ceil(end_s / own_pace + own_pct) - own_pct
+        needs_stop = bool(own_stops) or (fuel is not None and use is not None and fuel < own_laps * use)
+        return float(loss) if needs_stop else 0.
+
     def stint(self, car):
         """(laps since the car last left the pit road, stops so far): None where not known."""
         record = self.stints.get(car['idx']) if car else None
@@ -331,8 +352,10 @@ class RaceEngineer:
                     and leader_pct is not None and 0 <= leader_pct <= 1 and own_pct is not None):
                 # The leader's first crossing after the clock runs out ends the race; the player
                 # finishes at his own next crossing after that (checked against 29 timed races).
-                leader_at_zero = time_left / leader_pace + leader_pct
-                end_s = (math.floor(leader_at_zero) + 1 - leader_pct) * leader_pace
+                leader_stop = self._leader_stop(leader, own, time_left, leader_pace, leader_pct, own_pace, own_pct,
+                                                numeric(snapshot.get('fuel_l')), positive(fuel_use), pit_loss_s)
+                leader_at_zero = (time_left - leader_stop) / leader_pace + leader_pct
+                end_s = (math.floor(leader_at_zero) + 1 - leader_pct) * leader_pace + leader_stop
                 own_at_end = end_s / own_pace + own_pct
                 timed = max(0, math.ceil(own_at_end) - own_pct)
                 if remaining is None or timed < remaining:
@@ -345,6 +368,7 @@ class RaceEngineer:
                     own_after = (math.ceil(own_at_end) - own_at_end) * own_pace
                     leader_tolerance, own_tolerance = max(6., self.FINISH_DRIFT * time_left), max(8., self.FINISH_DRIFT * 1.5 * time_left)
                     finish = {'total_laps': round(own_progress + timed), 'leader_margin_s': round(min(leader_before, leader_after), 1),
+                              'leader_stop_s': round(leader_stop, 1) if leader_stop else None,
                               'own_margin_s': round(min(own_before, own_after), 1),
                               # A leader who crosses just after zero, or a player who just misses the flag, means a lap more.
                               'may_extend': leader_after < leader_tolerance or own_after < own_tolerance,
@@ -439,6 +463,7 @@ class RaceEngineer:
                 'finish_may_extend': bool(finish and finish['may_extend']), 'finish_may_shorten': bool(finish and finish['may_shorten']),
                 'finish_leader_margin_s': finish['leader_margin_s'] if finish else None,
                 'finish_own_margin_s': finish['own_margin_s'] if finish else None,
+                'finish_leader_stop_s': finish['leader_stop_s'] if finish else None,
                 'fuel_next_stop_full': bool(add is not None and room is not None and add >= room - 1 and add > .1),
                 'pit_loss_s': pit_loss_s, 'rejoin_class_position_estimate': rejoin, 'rejoin_close': rejoin_close,
                 'own_stint_laps': self.stint(own)[0] if own else None, 'own_stops': self.stint(own)[1] if own else None,
@@ -627,7 +652,8 @@ class RaceEngineer:
                 phrase=('ve_laps_left', {'laps': left}))
         if view.get('energy_limits_stint') and short:
             add('ve_limits_stint', 'strategy', priority=2, token=str(stint), cooldown=once, phrase=('ve_limits_stint', {}))
-        if pct <= 50 and laps >= 1:
+        if pct <= 50 and laps >= 1 and short:
+            # Only when energy decides the race: in a sprint with energy to spare it was a riddle.
             add('ve_half', 'strategy', token=str(stint), cooldown=once, phrase=('ve_half', {}))
         if short and target:
             # A cut within what lifting can do saves the stop; more than that needs one.

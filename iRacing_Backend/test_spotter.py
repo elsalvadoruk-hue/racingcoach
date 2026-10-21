@@ -39,6 +39,30 @@ class SpotterTests(unittest.TestCase):
         with patch.dict('os.environ', {'IRACING_TTS_SPOTTER_VOICE': ''}):
             self.assertEqual(role_voice('spotter'), 'ko-KR-Chirp3-HD-Fenrir')
 
+    def test_a_car_we_pass_is_not_called_and_its_pass_ends_with_a_clear(self):
+        # The driver's decision: passing a slower car needs no call, only the clear.
+        self.stable(1)
+        for _ in range(30):
+            self.tick(2, side_relative_mps=-3.)
+        self.assertEqual(self.keys(), [])
+        self.stable(1)
+        self.assertEqual(self.keys(), ['clear_left'])
+
+    def test_a_car_we_were_passing_is_called_once_it_matches_our_speed(self):
+        self.stable(1)
+        for _ in range(20):
+            self.tick(3, side_relative_mps=-2.)
+        self.assertEqual(self.keys(), [])
+        self.tick(3, side_relative_mps=.2)           # it is no slower than us now
+        self.assertEqual(self.keys(), ['right'])
+        self.stable(1)
+        self.assertEqual(self.keys(), ['right', 'clear_right'])
+
+    def test_a_car_beside_us_at_our_speed_is_still_called(self):
+        self.stable(1)
+        self.stable(2, side_relative_mps=-.3)          # within the measuring noise
+        self.assertEqual(self.keys(), ['left'])
+
     def test_initial_clear_and_off_never_announce_clear(self):
         # 0 is the sim's "off": everything starts over and nothing is called clear.
         self.stable(2)

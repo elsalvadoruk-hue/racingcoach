@@ -214,6 +214,82 @@ class LiveCoachTests(unittest.TestCase):
         self.assertEqual(live.identity['game'], 'lmu')
         self.assertEqual(live.radio.metadata.get('session_type'), 'Race')
 
+    def test_each_link_change_is_logged_with_the_frame_fields(self):
+        # Voice and overlay stop on every drop; the log must say which one it was.
+        from live_telemetry import LiveTelemetry
+        frames = [frame(100 + i / 30) for i in range(3)] + [frame(100.2, control_code=1), frame(100.25, control_code=1)]
+        sdk, now = adapter(frames)
+        live = LiveTelemetry(clock=lambda: now[0])
+        with self.assertLogs('iRacingLive', 'INFO') as logs:
+            for _ in frames:
+                now[0] += 1 / 30
+                live._tick(sdk)
+            now[0] += 3.                      # no new frame for longer than the 2 s window
+            live._tick(sdk)
+        lines = [line for line in logs.output if 'Live link' in line]
+        self.assertEqual(len(lines), 3)       # the second off-track frame is not logged again
+        self.assertIn('None -> DRIVING (lmu)', lines[0])
+        self.assertIn('DRIVING -> OFF_TRACK', lines[1])
+        self.assertIn("'control_code': 1", lines[1])
+        self.assertIn('OFF_TRACK -> DISCONNECTED', lines[2])
+        self.assertIn('frame_age=3.0', lines[2])
+
+
+class QuietMomentTests(unittest.TestCase):
+    def test_a_wheel_without_a_reported_range_still_has_quiet_moments(self):
+        # Seen in qualifying: LMU sent no wheel angle, so no call ever found a quiet moment
+        # outside the pit lane and the lap time expired unsaid.
+        from radio_policy import quiet_window
+        sdk = read_all(*adapter([frame(steering=.01, steering_rad=None)]), 1)
+        self.assertIsNone(sdk['SteeringWheelAngle'])
+        sample = {'speed_mps': 70., 'brake': 0., 'throttle': 1., 'steering_rad': sdk['SteeringWheelAngle'],
+                  'steering_lock_ratio': sdk['SteeringLockRatio'], 'on_pit_road': False}
+        self.assertTrue(quiet_window(sample))
+        self.assertFalse(quiet_window({**sample, 'steering_lock_ratio': .2}))   # turning
+        self.assertFalse(quiet_window({**sample, 'brake': .3}))
+        self.assertFalse(quiet_window({**sample, 'steering_lock_ratio': None}))  # nothing known: busy
+
+
+class SpotterSessionTests(unittest.TestCase):
+    def drive(self, **options):
+        from live_telemetry import LiveTelemetry
+        frames = [frame(100 + i / 30, distance=1000 + i, others=[(3, [3., 0., 1.], 0)] if i >= 40 else [], **options)
+                  for i in range(120)]
+        sdk, now = adapter(frames)
+        now[0] = 1000.
+        live = LiveTelemetry(clock=lambda: now[0])
+        keys = []
+        for _ in frames:
+            now[0] += 1 / 30
+            live._tick(sdk)
+            keys += [event['key'] for event in live.spotter_status()['events']]
+        return keys
+
+    def test_a_car_nose_to_tail_in_front_is_not_beside_us(self):
+        # Bumping the car ahead in a tow called "left" (2026-10-21): it is in line, not alongside.
+        def drive(position):
+            from live_telemetry import LiveTelemetry
+            frames = [frame(100 + i / 30, distance=1000 + i, others=[(3, position, 0)] if i >= 40 else [])
+                      for i in range(120)]
+            sdk, now = adapter(frames)
+            now[0] = 1000.
+            live = LiveTelemetry(clock=lambda: now[0])
+            keys = []
+            for _ in frames:
+                now[0] += 1 / 30
+                live._tick(sdk)
+                keys += [event['key'] for event in live.spotter_status()['events']]
+            return keys
+        self.assertEqual(drive([1.0, 0., -4.9]), [])        # just ahead, a metre to the side
+        self.assertEqual(drive([-1.2, 0., 4.9]), [])        # just behind
+        self.assertIn('left', drive([2.1, 0., -1.0]))        # door to door
+
+    def test_no_side_calls_in_qualifying_or_on_the_formation_lap(self):
+        # Both games: a lone (iRacing) or private (LMU) qualifying run, and the double-file formation.
+        self.assertIn('left', self.drive())                    # racing: called
+        self.assertNotIn('left', self.drive(session=5))        # qualifying
+        self.assertNotIn('left', self.drive(phase=4))          # formation lap
+
 
 class JournalTests(unittest.TestCase):
     def test_live_frames_are_journalled_with_the_traffic_used_and_replay(self):
