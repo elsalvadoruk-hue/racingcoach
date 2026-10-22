@@ -3,7 +3,12 @@ import { Badge } from '../components/ui/badge';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/card';
 
 const phaseNames = { braking: '제동', rotation: '회전', drive: '가속' };
-const kindNames = { understeer: '평소보다 회전 적음', oversteer: '평소보다 회전 많음', countersteer: '반대 조향 관측' };
+const shortNames = { understeer: '덜 돌아감', oversteer: '더 돌아감', countersteer: '반대 조향' };
+const meanings = {
+  understeer: '비슷한 속도·조향·페달 조건에서 내 다른 랩보다 차의 회전 반응이 작았습니다.',
+  oversteer: '비슷한 속도·조향·페달 조건에서 내 다른 랩보다 차의 회전 반응이 컸습니다.',
+  countersteer: '차가 도는 방향과 반대로 핸들을 돌린 상태가 관측됐습니다. 개인 기준과 별개입니다.',
+};
 const withNames = { braking: '제동 중', lift: '스로틀을 뗀 직후', power: '가속 중' };
 
 function costText(value) {
@@ -13,8 +18,10 @@ function costText(value) {
 }
 
 export function HandlingBadges({ items = [] }) {
-  return <span className="handling-badges">{[...new Set(orderHandling(items).map(item => item.kind))].map(kind =>
-    <Badge key={kind} variant={kind === 'countersteer' ? 'outline' : kind === 'understeer' ? 'handling-under' : 'handling-over'}>{kind === 'countersteer' ? '반대 조향' : kindNames[kind]}</Badge>)}</span>;
+  const kinds = ['understeer', 'oversteer', 'countersteer'].filter(kind => items.some(item => item.kind === kind));
+  if (!kinds.length) return null;
+  return <span className="handling-badges" aria-label="내 다른 랩 대비 차 거동">{kinds.map(kind =>
+    <Badge key={kind} data-kind={kind} title={meanings[kind]} variant={kind === 'countersteer' ? 'outline' : kind === 'understeer' ? 'handling-under' : 'handling-over'}>{shortNames[kind]}</Badge>)}</span>;
 }
 
 function orderHandling(items) {
@@ -23,19 +30,32 @@ function orderHandling(items) {
 }
 
 function HandlingObservation({ item }) {
-  return <><span>{phaseNames[item.phase]} 중 {kindNames[item.kind]}{withNames[item.with] && ` (${withNames[item.with]})`} · {item.of_laps}랩 중 {item.laps}랩 · {costText(item.time_cost_s)}</span>
-    {item.observed_laps != null && item.observed_laps < item.of_laps && <small>{item.kind === 'countersteer' ? '반대 조향 관측 가능' : '전 구간 비교 가능'} {item.observed_laps}랩 · 일부 구간의 관측도 포함합니다.</small>}
-    {item.approximate && <small>참고용(LMU는 회전량을 GPS로 추정)</small>}</>;
+  return <article className="handling-observation" data-handling-item aria-label={`${phaseNames[item.phase]} · ${shortNames[item.kind]}`}>
+    <div className="handling-observation-heading"><Badge variant={item.kind === 'countersteer' ? 'outline' : item.kind === 'understeer' ? 'handling-under' : 'handling-over'}>{shortNames[item.kind]}</Badge><strong>{phaseNames[item.phase]} 구간</strong></div>
+    <dl className="handling-facts"><div><dt>관측된 랩</dt><dd>{item.of_laps}랩 중 {item.laps}랩</dd></div><div><dt>코너 시간 차이</dt><dd>{costText(item.time_cost_s)}</dd></div></dl>
+    {withNames[item.with] && <small>함께 관측된 조작: {withNames[item.with]}</small>}
+    {item.observed_laps != null && item.observed_laps < item.of_laps && <small>{item.kind === 'countersteer' ? '반대 조향 관측 가능' : '전 구간 비교 가능'} {item.observed_laps}랩 · 부분 구간에서 관측한 결과도 포함합니다.</small>}
+    {item.kind === 'countersteer' && <small>개인 기준과 별개로 관측했습니다.</small>}
+    {item.approximate && <small>참고용(LMU는 회전량을 GPS로 추정)</small>}</article>;
 }
 
 export function HandlingDetail({ items = [], coverage = [] }) {
   if (!items.length && !coverage.length) return null;
   const known = coverage.reduce((sum, item) => sum + item.classifiable, 0);
   const unknown = coverage.reduce((sum, item) => sum + item.unknown, 0);
-  return <section className="handling-detail" aria-label="차 거동"><h4>차 거동</h4><small>문턱은 검증 전 초기값입니다. 개인 기준과의 차이이며 절대적인 언더·오버 판정이 아닙니다.</small>
-    {coverage.length > 0 && <small>{known + unknown > 0 ? `개인 기준 전 구간 비교 ${known}/${known + unknown}회${unknown > 0 ? ` · ${unknown}회 확인 필요` : ''}` : '비교 대상 단계가 없습니다.'}</small>}
-    {orderHandling(items).map((item, i) => <p key={`${item.kind}-${item.phase}-${i}`}><HandlingObservation item={item} />
-      {item.kind === 'countersteer' && <small>개인 기준과 별개로 관측했습니다.</small>}</p>)}</section>;
+  return <section className="handling-detail" aria-label="차 거동"><h4>차 거동 · 내 다른 랩과 비교</h4>
+    <p className="handling-basis">핸들을 꺾은 정도에 비해 차가 덜 또는 더 돌아간 랩을 표시합니다. 같은 기록의 다른 유효 랩과 비교합니다.</p>
+    <small>위에서 선택한 기준 랩·Garage61 비교와는 별개입니다.</small>
+    <small>검증 전 초기값 · 체감 대조 전입니다.</small>
+    {coverage.length > 0 && <p className="handling-coverage">{known + unknown > 0 ? `개인 기준 전 구간 비교 ${known}/${known + unknown}회${unknown > 0 ? ` · ${unknown}회 확인 필요` : ''}` : '비교 대상 단계가 없습니다.'}</p>}
+    <details className="handling-help"><summary>표시 뜻과 비교 범위</summary>
+      <dl>{['understeer', 'oversteer', 'countersteer'].map(kind => <div key={kind}><dt>{shortNames[kind]}</dt><dd>{meanings[kind]}</dd></div>)}</dl>
+      <p>같은 코너·같은 단계에서 비교합니다. 서로 다른 랩이나 단계에서 두 표시가 함께 나올 수 있습니다.</p>
+      <p>비교 횟수는 랩별 제동·회전·가속 단계를 각각 셉니다. 자료가 부족한 구간은 확인 필요로 남깁니다.</p>
+      <p>문턱은 검증 전 초기값입니다. 절대적인 언더·오버 판정이나 원인·셋업 효과를 확정하지 않습니다.</p>
+    </details>
+    {orderHandling(items).map((item, i) => <HandlingObservation key={`${item.kind}-${item.phase}-${i}`} item={item} />)}
+  </section>;
 }
 
 export function HandlingRepeats({ items = [] }) {

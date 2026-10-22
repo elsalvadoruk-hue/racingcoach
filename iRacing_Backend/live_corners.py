@@ -11,6 +11,9 @@ import math
 BRAKE_ON, THROTTLE_ON, THROTTLE_FULL = .08, .20, .95
 MIN_LOSS_S = .10
 SPEED_NOTE_KPH, DISTANCE_NOTE_M = 3., 8.
+# Conservative observation filter, not an over/understeer threshold or an
+# inference about intent: the 2026-10-22 race has a 6.27s wait below 2m/s.
+PAUSE_SPEED_MPS, PAUSE_SECONDS = 2., 2.
 
 def finite(value):
     return float(value) if type(value) in (int, float) and math.isfinite(value) else None
@@ -66,10 +69,13 @@ class LiveCornerCoach:
         self.lookup = lookup  # identity -> saved corner definitions, or None
         self.best = {}        # (car, track, layout) -> {corner id: reference pass}
         self.key = None
+        self.geometry = {}    # same ids may refer to different physical segments after file analysis
+        self.revision = 0
         self.reset()
 
     def reset(self):
         """Forget the lap in progress. References for this car and layout are kept."""
+        self.revision += 1
         self.previous = None
         self.active = None
         self.lap = {}
@@ -78,6 +84,8 @@ class LiveCornerCoach:
         self.last_pass = None
         self.last_measurement = None
         self.focus = None
+        self.pause_since = None
+        self.paused_lap = None
 
     def _definitions(self, identity, now):
         key = (identity.get('car_id') or identity.get('car_path'), identity.get('track_id') or identity.get('track_path'),
@@ -89,8 +97,16 @@ class LiveCornerCoach:
         if self.lookup and now - self.checked_at >= (5 if not self.definitions else 30):
             self.checked_at = now
             found = self.lookup(identity) or self.definitions
-            self.definitions = sorted((d for d in found if all(finite(d.get(k)) is not None for k in ('entry_pct', 'apex_pct', 'exit_pct'))
-                                       and d['entry_pct'] < d['apex_pct'] < d['exit_pct']), key=lambda d: d['entry_pct'])
+            definitions = sorted((dict(d) for d in found if all(finite(d.get(k)) is not None for k in ('entry_pct', 'apex_pct', 'exit_pct'))
+                                  and d['entry_pct'] < d['apex_pct'] < d['exit_pct']), key=lambda d: d['entry_pct'])
+            geometry = tuple((d['id'], d['entry_pct'], d['apex_pct'], d['exit_pct']) for d in definitions)
+            if key in self.geometry and geometry != self.geometry[key]:
+                # A corner number alone is not a reference identity. Drop all shifted ids,
+                # including the partial lap and advice based on the former geometry.
+                self.best.pop(key, None)
+                self.reset()
+            self.geometry[key] = geometry
+            self.definitions = definitions
         return self.definitions
 
     def ingest(self, sample, identity, now, track_length_m=None):
@@ -101,7 +117,10 @@ class LiveCornerCoach:
                  and type(lap) in (int, float) and sample.get('on_track') is True
                  and sample.get('is_replay') is False and sample.get('on_pit_road') is False)
         previous, self.previous = self.previous, ({**sample, 'distance_pct': pct, 'session_time': at, 'speed_mps': speed} if valid else None)
+        if valid and self.paused_lap is not None and lap != self.paused_lap:
+            self.paused_lap = None
         if not valid or previous is None:
+            self.pause_since = at if valid and 0 <= speed < PAUSE_SPEED_MPS else None
             self.active, self.brake_onset = None, None
             self.last_measurement = None
             return
@@ -109,8 +128,25 @@ class LiveCornerCoach:
         rollover = lap == previous['lap_number'] + 1 and previous['distance_pct'] > .9 and pct < .1
         step = pct - previous['distance_pct'] + (1 if rollover else 0)
         if not 0 < dt <= .5 or not 0 <= step < .05 or (lap != previous['lap_number'] and not rollover):
+            self.pause_since = at if 0 <= speed < PAUSE_SPEED_MPS else None
             self.active, self.brake_onset = None, None
             self.last_measurement = None
+            return
+        if 0 <= speed < PAUSE_SPEED_MPS:
+            if self.pause_since is None:
+                self.pause_since = at
+            if at - self.pause_since >= PAUSE_SECONDS and self.paused_lap != lap:
+                # Discard this lap, including passes before the wait. Recovery
+                # from a stop is not a comparable corner-driving exercise.
+                # Retain earlier references; revoke already queued coaching.
+                self.revision += 1
+                self.paused_lap = lap
+                self.active, self.brake_onset = None, None
+                self.lap = {}
+                self.review = self.last_pass = self.last_measurement = self.focus = None
+        else:
+            self.pause_since = None
+        if self.paused_lap == lap:
             return
         start, end = previous['distance_pct'], previous['distance_pct'] + step  # end may pass 1.0 at the line
 
@@ -221,6 +257,8 @@ class LiveCornerCoach:
                 'reason': None if definitions else '이 차량·트랙의 구간 정의가 없습니다. 주행 파일을 한 번 분석하면 다음 주행부터 구간별로 비교합니다.',
                 'corner_count': len(definitions), 'reference_corners': len(best),
                 'reference_basis': '이번 실행 중 깨끗하게 통과한 구간 최고 기록',
+                'comparison_skipped_reason': ('이번 랩은 트랙 위 저속 정차가 관측돼 코너 비교와 개선 안내에서 제외합니다. 다음 랩부터 다시 비교합니다.'
+                                              if self.paused_lap is not None else None),
                 'last_lap': self.review, 'last_corner': self.last_pass,
                 'focus': {k: v for k, v in self.focus.items() if k != 'announced'} if self.focus else None}
 
@@ -233,6 +271,8 @@ def call_seconds(text):
 def lap_answer(view):
     if not view or not view.get('available'):
         return None
+    if view.get('comparison_skipped_reason'):
+        return view['comparison_skipped_reason']
     review = view.get('last_lap')
     if not review:
         return '아직 구간별로 비교할 완료 랩이 없습니다. 깨끗하게 통과한 기록이 구간마다 한 번 쌓인 뒤 다음 랩부터 비교합니다.'
@@ -253,6 +293,8 @@ def lap_answer(view):
 def corner_answer(view):
     if not view or not view.get('available'):
         return None
+    if view.get('comparison_skipped_reason'):
+        return view['comparison_skipped_reason']
     last = view.get('last_corner')
     if not last:
         return '아직 깨끗하게 통과한 구간 기록이 없습니다.'

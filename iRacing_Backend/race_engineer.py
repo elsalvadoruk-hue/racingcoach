@@ -68,7 +68,7 @@ def read_race(sdk, names, session_num):
     sessions = metadata('SessionInfo').get('Sessions') or []
     session = next((s for s in sessions if s.get('SessionNum') == session_num), {})
     data = {key: numeric(sdk[name]) if name in names else None for key, name in SCALARS.items()}
-    data.update(session_type=session.get('SessionType'), total_laps=limit_value(session.get('SessionLaps')),
+    data.update(game=getattr(sdk, 'game', 'iracing'), session_type=session.get('SessionType'), total_laps=limit_value(session.get('SessionLaps')),
                 player_idx=info.get('DriverCarIdx'), tank_capacity_l=tank_capacity(info))
     weekend = metadata('WeekendInfo')
     options = weekend.get('WeekendOptions') or metadata('WeekendOptions')
@@ -91,6 +91,7 @@ def read_race(sdk, names, session_num):
         if not isinstance(idx, int) or idx < 0 or driver.get('IsSpectator'):
             continue
         car = {'idx': idx, 'name': driver.get('UserName') or f'차량 {idx}', 'class_id': driver.get('CarClassID'),
+               'is_pace_car': bool(driver.get('CarIsPaceCar')),
                'class_name': driver.get('CarClassShortName') or driver.get('CarClassName'),
                'class_est_lap_s': positive(driver.get('CarClassEstLapTime')),
                # The pace car is listed among the drivers with no rating of its own.

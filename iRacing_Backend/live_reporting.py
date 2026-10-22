@@ -143,11 +143,13 @@ class LiveReporting:
             if any(event['key'] != 'briefing' and self.radio.valid(event, now) for event in self.radio.pending):
                 return                                   # a flag or the start procedure comes first
             race = self.pit_wall.race or {}
-            own = next((car for car in race.get('cars') or [] if car.get('idx') == race.get('player_idx')), {})
-            classes = {car.get('class_id') for car in race.get('cars') or [] if car.get('class_id') is not None}
-            mates = [car for car in race.get('cars') or [] if car.get('class_id') == own.get('class_id')] if own else []
+            # The pace car can have its own class ID; it does not make the race multiclass.
+            field = [car for car in race.get('cars') or [] if not car.get('is_pace_car')]
+            own = next((car for car in field if car.get('idx') == race.get('player_idx')), {})
+            classes = {car.get('class_id') for car in field if car.get('class_id') is not None}
+            mates = [car for car in field if car.get('class_id') == own.get('class_id')] if own else []
             # A car not in the world (-1) never joined the race: it is not part of the field.
-            joined = [car for car in race.get('cars') or [] if car.get('track_surface') != -1]
+            joined = [car for car in field if car.get('track_surface') != -1]
             rank, target = rating_goal(own.get('irating'), [car.get('irating') for car in joined if car in mates and car is not own])
             laps, seconds = metadata.get('total_laps'), metadata.get('session_duration_s')
             wetness, declared = sample.get('track_wetness'), sample.get('declared_wet')
@@ -156,6 +158,7 @@ class LiveReporting:
                 'race_laps': laps if type(laps) in (int, float) and 0 < laps < 1000 else None,
                 'race_min': round(seconds / 60) if type(seconds) in (int, float) and 0 < seconds < 100000 and not (type(laps) in (int, float) and 0 < laps < 1000) else None,
                 'class_position': position if type(position) in (int, float) and position > 0 else None,
+                'grid_position': sample.get('position'),
                 'class_cars': len(mates) if len(mates) >= 2 else None,
                 'fuel_l': sample.get('fuel_l') if type(sample.get('fuel_l')) in (int, float) and sample['fuel_l'] >= 1 else None,
                 'pit_speed_kph': metadata.get('pit_speed_limit_kph'),

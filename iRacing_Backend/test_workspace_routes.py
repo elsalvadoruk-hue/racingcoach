@@ -124,12 +124,23 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
         self.assertGreater(len(result['distance_pct']), 100)
         self.assertGreaterEqual(min(result['distance_pct']), .1)
 
+    def test_catalog_best_uses_valid_complete_laps_only(self):
+        telemetry = self.sources['baseline.ibt']
+        telemetry.laps[0].valid = False
+        telemetry.laps[0].lap_time_s = 5.
+        telemetry.laps[1].lap_time_s = 99.123
+        telemetry.laps[2].lap_time_s = 70.
+        telemetry.laps[2].complete = False
+        result = api.telemetry_file_visibility(telemetry.path, telemetry)
+        self.assertEqual(result['best_lap_s'], 99.123)
+
     def test_catalog_and_references_use_actual_services(self):
         with patch.object(api, 'list_ibt_files', return_value=[self.sources['baseline.ibt'].path]), patch.object(api, 'quick_file_visibility', return_value={
-                'car_name': 'Test', 'session_type': 'Practice', 'valid_laps': 3, 'detected_laps': 3, 'analyzable': True}):
+                'car_name': 'Test', 'session_type': 'Practice', 'valid_laps': 3, 'detected_laps': 3, 'analyzable': True, 'best_lap_s': 99.123}):
             response = self.post('files', {})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['files'][0]['valid_laps'], 3)
+        self.assertEqual(response.json()['files'][0]['best_lap_s'], 99.123)
         with patch.object(api, 'list_external_reference_metadata', return_value={'files': [{'name': 'actual.csv', 'usable': True, 'compatible': True}]}):
             response = self.post('references')
         self.assertEqual(response.status_code, 200)

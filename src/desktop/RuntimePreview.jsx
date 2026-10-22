@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChevronDown, CloudUpload, Headphones, Layers3, Radio, RefreshCw, Volume2 } from 'lucide-react';
+import { ChevronDown, CloudUpload, Headphones, Layers3, Mic, Radio, RefreshCw, Volume2 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/card';
@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import VoiceVolumeSlider from '../components/VoiceVolumeSlider';
 import { ConsentDialog, useSessionLogAuto } from '../components/SessionLogAutoSend';
+import { useGame, GameSettingsNotice } from '../lib/gameContext';
 export { DesktopRuntimeProvider, useLabControls } from './DesktopRuntime';
 
 function DeviceOptions({ devices, kind, selected }) {
@@ -38,6 +39,14 @@ export function RuntimeControls({ runtime }) {
   const { controls, change, host } = runtime;
   const audio = host.audioOutput;
   const [deviceDialog, setDeviceDialog] = useState(false);
+  const [inputDialog, setInputDialog] = useState(false);
+  const { selectedGame, activeGame } = useGame();
+  const inputDevices = runtime.devices || [];
+  const selectedInput = inputDevices.find(d => d.kind === 'audioinput' && d.deviceId === controls.microphone);
+  const connectedInput = host.activeMicrophone;
+  const inputLabel = selectedGame === activeGame && connectedInput?.label ? connectedInput.label
+    : controls.microphone === 'default' ? '시스템 기본 장치' : selectedInput?.label || '저장한 장치 · 확인 필요';
+  const microphoneBusy = host.phase !== 'idle';
   const selectedDevice = audio.devices.find(d => d.deviceId === controls.output);
   const outputLabel = controls.output === 'default' ? '시스템 기본 장치' : selectedDevice?.label || '저장한 장치 · 확인 필요';
   return <div className="runtime-controls" aria-label="빠른 조작">
@@ -49,6 +58,18 @@ export function RuntimeControls({ runtime }) {
       </Field>)}
       <LogSendSwitch apiBase={host.apiBase ?? ''} />
     </FieldGroup>
+    {runtime.speech?.available && <>
+    <Field orientation="horizontal" className="runtime-input"><FieldLabel htmlFor="input-device-trigger"><Mic aria-hidden="true" /><span>입력장치</span></FieldLabel><Button id="input-device-trigger" variant="outline" aria-label="입력장치 선택" aria-haspopup="dialog" aria-expanded={inputDialog} title={inputLabel} onClick={() => { setInputDialog(true); runtime.refreshDevices?.(); }}><span className="truncate">{inputLabel}</span><ChevronDown data-icon="inline-end" /></Button></Field>
+    <Dialog open={inputDialog} onOpenChange={setInputDialog}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>마이크 입력장치</DialogTitle><DialogDescription>F8 음성을 받을 마이크를 선택하세요. 앱의 선택은 Chrome 기본 마이크 설정과 별개이며 게임별로 저장됩니다.</DialogDescription></DialogHeader>
+      <GameSettingsNotice />
+      <FieldGroup><Field><FieldLabel htmlFor="quick-input">마이크 입력장치</FieldLabel><NativeSelect id="quick-input" value={controls.microphone} disabled={microphoneBusy} onChange={event => change('microphone', event.target.value)}><DeviceOptions devices={inputDevices} kind="audioinput" selected={controls.microphone} /></NativeSelect></Field>
+        <FieldDescription role="status">{host.armed ? `현재 연결: ${connectedInput?.label || '장치 이름 확인 필요'}${selectedGame !== activeGame ? ` (${activeGame === 'lmu' ? 'LMU' : 'iRacing'})` : ''}` : '마이크 대기 중 · 선택 후 마이크 준비를 누르세요.'}</FieldDescription>
+        <FieldDescription>장치를 바꾸면 기존 마이크가 꺼집니다. 다시 준비하면 선택한 장치로 연결합니다. 준비만으로 음성 인식 요청을 보내지 않습니다.</FieldDescription>
+      </FieldGroup>
+      {host.error && <p role="alert">{host.error}</p>}
+      <div className="flex flex-wrap justify-between gap-3"><Button variant="outline" disabled={runtime.deviceBusy} onClick={() => runtime.refreshDevices?.({ ask: true })}><RefreshCw data-icon="inline-start" />{runtime.deviceBusy ? '목록 확인 중' : '마이크 접근 허용·목록 갱신'}</Button><Button disabled={microphoneBusy || !runtime.speech?.available} onClick={() => change('armed', !controls.armed)}>{controls.armed ? '마이크 끄기' : '마이크 준비'}</Button><Button variant="outline" onClick={() => setInputDialog(false)}>선택 완료</Button></div>
+      {runtime.message && <p role="status">{runtime.message}</p>}
+    </DialogContent></Dialog></>}
     <Field orientation="horizontal" className="runtime-input"><FieldLabel htmlFor="output-device-trigger"><Volume2 aria-hidden="true" /><span>출력장치</span></FieldLabel><Button id="output-device-trigger" variant="outline" aria-label="출력장치 선택" aria-haspopup="dialog" aria-expanded={deviceDialog} title={outputLabel} onClick={() => { setDeviceDialog(true); audio.refresh({ ask: true }); }}><span className="truncate">{outputLabel}</span><ChevronDown data-icon="inline-end" /></Button></Field>
     <Dialog open={deviceDialog} onOpenChange={setDeviceDialog}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>오디오 출력장치</DialogTitle><DialogDescription>스포터·엔지니어·질문 답변을 들을 헤드셋이나 스피커를 선택하세요. 목록이 안 보이면 마이크 접근을 허용해 주세요. 확인용 마이크는 바로 종료하며 녹음하지 않습니다.</DialogDescription></DialogHeader>
       <FieldGroup><Field data-disabled={!audio.supported}><FieldLabel htmlFor="quick-output">출력장치 선택</FieldLabel><NativeSelect id="quick-output" value={controls.output} disabled={!audio.supported} onChange={event => change('output', event.target.value)}><DeviceOptions devices={audio.devices} kind="audiooutput" selected={controls.output} /></NativeSelect></Field><FieldDescription role="status">{!audio.supported ? '이 브라우저는 출력장치 선택을 지원하지 않아 시스템 기본 장치로 재생합니다. 최신 Chrome 또는 Edge에서 선택할 수 있습니다.' : audio.message || (audio.refreshing ? '장치 목록과 마이크 접근 권한을 확인하고 있습니다.' : '선택은 자동 저장됩니다. 장치를 바꾸면 재생 중인 음성이 중단됩니다.')}</FieldDescription></FieldGroup>

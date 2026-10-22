@@ -216,7 +216,8 @@ html { scroll-behavior: auto; }
 @media (max-width:1400px) {
   .runtime-controls { gap:12px; }.runtime-switches { gap:12px; }
   .runtime-switch label span,.runtime-input label span { display:none; }
-  .runtime-input select { width:155px; }
+  .runtime-input select,.runtime-input > button { width:140px; }
+  .runtime-controls { gap:8px; }
   .lab-header { padding:0 16px; gap:12px; }
 }
 body { min-width: 1100px; }
@@ -788,8 +789,35 @@ body { min-width: 1100px; }
 .phase-note { color:hsl(var(--muted-foreground)); font-size:10px; }
 .first-deviation { display:block; font-size:11px; line-height:1.5; white-space:normal; }
 .coaching-panel .first-deviation { flex-shrink:0; }
-.handling-badges { display:flex; flex-wrap:wrap; gap:3px; }
-.insight-sidebar { overflow-y:auto; }
+.corner-handling-caption { margin-top:8px; color:hsl(var(--muted-foreground)); font-size:10px; }
+.corner-list .corner-item { grid-template-columns:24px minmax(0,1fr) 48px; row-gap:5px; }
+/* The old short-window fallback expanded the entire desk to its contents,
+   leaving no height constraint for the sidebar's scrollbar. */
+.corner-lab:has(.workspace-grid) { height:100dvh; min-height:0; }
+/* Preserve readable chart rows when a short window needs center scrolling. */
+.analysis-desk { overflow-y:auto; scrollbar-width:thin; scrollbar-gutter:stable; }
+.analysis-desk > .selection-heading,.analysis-desk > .metrics-strip { flex-shrink:0; }
+.analysis-tabs:has(.telemetry-panel[data-state=active]) { flex:1 0 auto; }
+.telemetry-panel[data-state=active] { flex:1 0 auto; }
+.telemetry-panel .chart-stack { flex:1 0 auto; }
+.telemetry-panel .telemetry-row { flex:1 0 62px; min-height:62px; }
+.telemetry-panel .telemetry-row.speed-row { flex-grow:1.32; }
+.handling-badges { grid-column:1/-1; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; }
+.handling-badges > * { min-width:0; justify-content:center; border-radius:4px; padding:3px 4px; font-size:10px; line-height:1.35; white-space:nowrap; }
+.handling-badges > [data-kind=understeer] { grid-column:1; }
+.handling-badges > [data-kind=oversteer] { grid-column:2; }
+.handling-badges > [data-kind=countersteer] { grid-column:1/-1; }
+/* Keep one bounded scroll area below the map. Nested flex scrollers used to
+   shrink the graph notes to zero height once phases and handling were shown. */
+.insight-sidebar { overflow:hidden; }
+.insight-sidebar > .map-panel { flex:0 0 clamp(180px,35%,290px); min-height:0; }
+.insight-detail-scroll { flex:1; min-height:0; min-width:0; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-gutter:stable; padding-right:5px; scroll-padding:8px; }
+.insight-detail-scroll:focus-visible { outline:1px solid hsl(var(--primary)); outline-offset:-1px; }
+.insight-detail-scroll .coaching-panel { flex:none; overflow:visible; gap:14px; }
+.insight-detail-scroll .coaching-panel .numbered-insights { flex:none; overflow:visible; padding:0; }
+.insight-detail-scroll .coaching-panel > button { margin-top:0; }
+.comparison-facts { display:flex; flex-direction:column; gap:8px; padding-bottom:12px; border-bottom:1px solid hsl(var(--border)); }
+.comparison-facts h3,.insight-summary h3 { font-size:12px; font-weight:600; }
 .corner-note { flex-shrink:0; display:flex; flex-direction:column; gap:8px; border-top:1px solid hsl(var(--border)); padding:12px 0; font-size:12px; }
 .corner-note h3 { font-size:13px; font-weight:600; }
 .corner-note textarea { width:100%; resize:vertical; border:1px solid hsl(var(--input)); border-radius:6px; padding:8px; background:hsl(var(--background)); color:hsl(var(--foreground)); }
@@ -798,10 +826,34 @@ body { min-width: 1100px; }
 .corner-note-actions,.corner-note-index { display:flex; flex-wrap:wrap; gap:6px; }
 .corner-note-index { max-height:76px; overflow-y:auto; }
 .handling-badges:empty { display:none; }
-.handling-detail { flex-shrink:0; max-height:140px; overflow-y:auto; }
+.handling-detail { flex-shrink:0; display:flex; flex-direction:column; gap:8px; }
 .handling-detail h4 { font-size:12px; font-weight:600; margin:0 0 4px; }
-.handling-detail p { font-size:11px; line-height:1.5; margin:3px 0; }
+.handling-detail p { font-size:11px; line-height:1.65; margin:0; }
+.handling-basis,.handling-coverage { color:hsl(var(--muted-foreground)); }
+.handling-help { font-size:11px; line-height:1.65; }
+.handling-help summary { cursor:pointer; color:hsl(var(--primary)); padding:2px 0; }
+.handling-help dl { display:flex; flex-direction:column; gap:7px; margin:8px 0; }
+.handling-help dt { font-weight:600; }
+.handling-help dd { margin:2px 0 0; color:hsl(var(--muted-foreground)); }
+.handling-help p { margin:6px 0; color:hsl(var(--muted-foreground)); }
+.handling-observation { border:1px solid hsl(var(--border)); border-radius:6px; padding:9px; display:flex; flex-direction:column; gap:6px; min-width:0; }
+.handling-observation-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.handling-observation-heading strong { font-size:11px; font-weight:500; }
+.handling-facts { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.4fr); gap:8px; margin:0; }
+.handling-facts dt { font-size:10px; color:hsl(var(--muted-foreground)); }
+.handling-facts dd { margin:3px 0 0; font-size:12px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.handling-observation small { font-size:10px; line-height:1.6; }
 .handling-detail small,.handling-repeat-card small { display:block; color:hsl(var(--muted-foreground)); }
 .handling-repeat-card ul { display:flex; flex-direction:column; gap:10px; }
 .handling-repeat-card li { display:flex; flex-direction:column; gap:4px; font-size:12px; }
-.driving-summary:has(.handling-repeat-card) { overflow-y:auto; grid-template-rows:30px minmax(420px,1fr) minmax(154px,auto) auto; }
+/* Additional findings grow the page; the map/evidence row must retain room for its header,
+   values and footer even in a short window. Implicit auto rows squeezed it to 154px. */
+.corner-lab:has(.driving-summary) { height:100dvh; min-height:0; }
+.driving-summary { overflow-y:auto; align-content:start; grid-template-rows:38px minmax(420px,1fr) minmax(240px,auto); grid-auto-rows:auto; }
+.driving-summary:has(.handling-repeat-card) { grid-template-rows:38px minmax(420px,auto) minmax(240px,auto) auto; }
+.driving-summary:has(.handling-repeat-card) > .summary-context { min-height:240px; }
+.driving-summary:has(.handling-repeat-card) > .handling-repeat-card { min-width:0; }
+@media (max-width:1100px) {
+  .driving-summary:has(.handling-repeat-card) { grid-template-rows:auto auto auto auto; }
+  .driving-summary:has(.handling-repeat-card) > .summary-priorities { min-height:420px; }
+}

@@ -234,6 +234,31 @@ class HandlingTests(unittest.TestCase):
         self.assertEqual(coverage['unknown_fraction'], 1.)
         self.assertEqual(coverage['applicable'] + coverage['not_applicable'], coverage['total_slots'])
 
+    def test_unknown_reasons_distinguish_lap_sample_and_input_shortages(self):
+        few = measure(self.neutral, .2, .25, references=[lap_wave()] * 2)
+        self.assertIn('reference_laps_shortage', few['unknown_reasons'])
+        short = measure(self.neutral, .2, .21)
+        self.assertIn('reference_samples_shortage', short['unknown_reasons'])
+        changed = lap_wave()
+        changed.channels['Throttle'][1500:1800] = 1.
+        unmatched = measure(changed, .25, .5)
+        self.assertIn('inputs_not_comparable', unmatched['unknown_reasons'])
+        self.assertFalse(unmatched['observed'])
+        self.assertEqual(measure(self.neutral, .2, .25)['unknown_reasons'], [])
+
+    def test_per_lap_release_observations_are_explicit_and_preserve_detection(self):
+        subject = analyzer(['understeer'] + [None] * 3)
+        ordinary = analyze_handling(subject, [CORNER])
+        detailed = analyze_handling(subject, [CORNER], include_observations=True)
+        self.assertNotIn('observations', ordinary)
+        observations = detailed.pop('observations')
+        self.assertEqual(ordinary, detailed)
+        self.assertTrue(any(row['lap'] == 1 and row['phase'] == 'rotation' and
+                            any(e['kind'] == 'understeer' for e in row['events']) for row in observations))
+        missing = analyze_handling(analyzer([None] * 2), [CORNER])
+        self.assertGreater(missing['unknown_reasons']['reference_laps_shortage'], 0)
+        self.assertTrue(any(row['unknown_reasons'] for row in missing['phase_coverage']))
+
 
 if __name__ == '__main__':
     unittest.main()

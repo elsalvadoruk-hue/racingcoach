@@ -48,6 +48,49 @@ export function fileLapLabel(file) {
     ? `기록 ${file.detected_laps}랩 · 유효 ${file.valid_laps} · 비유효 ${file.detected_laps - file.valid_laps}` : '랩 수 확인 전';
 }
 
+export function fileBestLap(laps = []) {
+  const times = laps.filter(lap => (lap.status === 'VALID' ||
+    (lap.measurement_eligible === true && lap.complete !== false && lap.status !== 'INVALID')) &&
+    Number.isFinite(lap.lap_time_s) && lap.lap_time_s > 0).map(lap => lap.lap_time_s);
+  return times.length ? Math.min(...times) : null;
+}
+
+export function fileRecordedLabel(file) {
+  // Recording wall time, never file mtime (copying a recording changes mtime).
+  const candidates = [file.recording_time, file.file_name, file.display_name, file.name];
+  for (const value of candidates) {
+    const raw = String(value || '');
+    const match = raw.match(/(20\d{2})[-_/.](\d{2})[-_/.](\d{2})[T _-](\d{2})[:_-](\d{2})(?!\d)/);
+    if (!match) continue;
+    const [, year, month, day, hour, minute] = match;
+    const date = new Date(Date.UTC(+year, +month - 1, +day));
+    if (date.getUTCFullYear() === +year && date.getUTCMonth() === +month - 1 &&
+        date.getUTCDate() === +day && +hour < 24 && +minute < 60) {
+      // LMU writes UTC RecordingTime such as 2026-10-20T10_00_00Z.
+      // Explicit zones are shown in the browser's local time, like IBT names.
+      const zone = raw.slice(match.index + match[0].length).match(/^(?:[:_-]\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:?\d{2})(?:$|\b)/i);
+      if (zone) {
+        const local = new Date(`${year}-${month}-${day}T${hour}:${minute}:00${zone[1]}`);
+        if (!Number.isNaN(local.getTime())) {
+          const two = n => String(n).padStart(2, '0');
+          return `${two(local.getFullYear() % 100)}-${two(local.getMonth() + 1)}-${two(local.getDate())} ${two(local.getHours())}:${two(local.getMinutes())}`;
+        }
+      }
+      return `${year.slice(-2)}-${month}-${day} ${hour}:${minute}`;
+    }
+  }
+  return '시간 확인 전';
+}
+
+export function fileChoiceLabel(file) {
+  const seconds = file.best_lap_s;
+  const milliseconds = Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null;
+  const best = milliseconds == null ? '베랩 확인 전'
+    : `베랩 ${Math.floor(milliseconds / 60000)}:${String(Math.floor(milliseconds / 1000) % 60).padStart(2, '0')}.${String(milliseconds % 1000).padStart(3, '0')}`;
+  return [fileRecordedLabel(file), file.track_name || '트랙 확인 전', best,
+    fileLapLabel(file), sessionTypeLabel(file), file.car_name].filter(Boolean).join(' · ');
+}
+
 export function sessionTypeLabel(value) {
   const metadata = value?.session || value;
   const mode = String(metadata?.suggested_session_mode || '').toLowerCase();

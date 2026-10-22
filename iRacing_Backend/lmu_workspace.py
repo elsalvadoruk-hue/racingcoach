@@ -231,6 +231,7 @@ class LmuWorkspace:
                         row.update(summary.metadata, analyzable=bool(count), metadata_pending=False,
                                    status='MEASUREMENT_ONLY', detected_laps=len(summary.laps),
                                    complete_laps=count, measurement_laps=count,
+                                   best_lap_s=min((lap.recorded_lap_time_s for lap in summary.laps if _eligible(lap)), default=None),
                                    track_config=summary.metadata.get('track_layout'))
                     except ValueError:
                         row.update(status='UNAVAILABLE', reason='LMU 기록의 형식 또는 시간·거리 축을 확인하세요.')

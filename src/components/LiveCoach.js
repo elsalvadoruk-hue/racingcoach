@@ -81,6 +81,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const [status, setStatus] = useState(null);
   const [notes, setNotes] = useState([]);
   const [armed, setArmed] = useState(false);
+  const [openedMicrophone, setOpenedMicrophone] = useState(null);
   const [inputDevice, setInputDevice, appliedInput] = useGameSettings(readInput, storeInput);
   const [phase, setPhase] = useState('idle');
   const [mode, setMode] = useState('measured');
@@ -333,8 +334,9 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     changePhase('arming');
     try {
       const capture = new VoiceRecorder(); recorder.current = capture;
-      await capture.open(appliedInput);
+      const opened = await capture.open(appliedInput);
       if (!mounted.current || microphoneTicket !== microphoneEpoch.current || recorder.current !== capture) { capture.close(); return; }
+      setOpenedMicrophone(opened || null);
       state.current.armed = true; setArmed(true); changePhase('idle');
     } catch (failure) { if (microphoneTicket === microphoneEpoch.current && mounted.current) { setError(errorMessage(failure)); recorder.current?.close(); recorder.current = null; changePhase('idle'); } }
   };
@@ -374,7 +376,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const active = phase === 'recording' || phase === 'starting';
   // The desktop surface reuses this host so audio priorities, expiry and F8 have one owner.
   if (typeof children === 'function') return children({ apiBase, status, notes, armed, phase, mode, speak, error, socketReady,
-    inputDevice, changeInputDevice, audioOutput, spotter, wallEnabled, wallPreferences, wallView,
+    inputDevice, activeMicrophone: armed ? openedMicrophone : null, changeInputDevice, audioOutput, spotter, wallEnabled, wallPreferences, wallView,
     prepare, start: () => start(), finish, setMode, setSpeak: (value) => { setSpeak(value); if (!value) stopSpeaking(); },
     toggleWall, changeWallPreferences, testVoice, testOutput, stopSpeaking,
     refreshNotes: async () => { const data = await request('/notes'); if (mounted.current) setNotes(data.notes || []); },

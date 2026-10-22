@@ -200,6 +200,222 @@ class LiveCornerTests(unittest.TestCase):
             self.assertIsNone(store.find('', '9', ''))
 
 
+class CornerPauseTests(unittest.TestCase):
+    def replay(self, pause_pct, seconds=2.2, *, gap=False, speed=0.):
+        coach = LiveCornerCoach(lambda identity: [CORNER])
+        recorded = []
+        run = Session(recorded.append)
+        for _ in range(5):
+            run.lap(extra_seconds=.4 if run.lap_number == 2 else 0.)
+        offset, inserted = 0., False
+        skipped_view = None
+        completed = []
+        best_before = None
+        revision_before = None
+        for original in recorded:
+            sample = {**original, 'session_time': original['session_time'] + offset}
+            if sample['lap_number'] == 3 and sample['distance_pct'] >= pause_pct and not inserted:
+                inserted = True
+                best_before = dict(coach.best[coach.key]['C1'])
+                revision_before = coach.revision
+                coach.ingest(sample, IDENTITY, sample['session_time'], LENGTH)
+                steps = [seconds] if gap else [i / 30 for i in range(1, int(seconds * 30) + 1)]
+                for elapsed in steps:
+                    paused = {**sample, 'session_time': sample['session_time'] + elapsed, 'speed_mps': speed}
+                    coach.ingest(paused, IDENTITY, paused['session_time'], LENGTH)
+                offset += seconds
+                continue
+            if sample['lap_number'] == 4 and skipped_view is None:
+                skipped_view = coach.view()
+            coach.ingest(sample, IDENTITY, sample['session_time'], LENGTH)
+            item = coach.last_measurement
+            if item is not None and (not completed or item is not completed[-1]):
+                completed.append(item)
+        return coach, skipped_view, completed, best_before, revision_before
+
+    def test_wait_before_during_or_after_corner_discards_lap_and_resumes_next_lap(self):
+        for pct in (.25, .35, .45):
+            with self.subTest(pct=pct):
+                coach, skipped, completed, best, revision = self.replay(pct)
+                self.assertIsNone(skipped['last_lap'])
+                self.assertIsNone(skipped['last_corner'])
+                self.assertIsNone(skipped['focus'])
+                self.assertIn('정차', lap_answer(skipped))
+                self.assertIn('정차', corner_answer(skipped))
+                self.assertGreater(coach.revision, revision)
+                self.assertEqual(coach.best[coach.key]['C1'], best)
+                self.assertEqual(coach.review['lap'], 4)
+                self.assertIsNone(coach.view()['comparison_skipped_reason'])
+                self.assertEqual(coach.review['losses'], [])
+                if pct < CORNER['exit_pct']:
+                    self.assertNotIn(3, [item['lap'] for item in completed])
+
+    def test_brief_pause_or_a_slow_corner_keeps_real_corner_difference(self):
+        for seconds, speed in ((.5, 0.), (2.2, 3.)):
+            with self.subTest(seconds=seconds, speed=speed):
+                _, skipped, completed, _, _ = self.replay(.35, seconds, speed=speed)
+                self.assertIsNone(skipped['comparison_skipped_reason'])
+                self.assertIn(3, [item['lap'] for item in completed])
+                self.assertIsNotNone(skipped['last_corner']['delta_s'])
+
+    def test_unobserved_gap_cannot_establish_a_stop(self):
+        _, skipped, completed, _, _ = self.replay(.25, gap=True)
+        self.assertIsNone(skipped['comparison_skipped_reason'])
+        self.assertIn(3, [item['lap'] for item in completed])
+
+    def test_stop_revokes_pending_corner_speech_through_live_wiring(self):
+        live = LiveTelemetry()
+        live.corners.lookup = lambda identity: [CORNER]
+        run = Session(lambda sample: live.ingest(
+            IDENTITY, {**sample, 'session_num': 0, 'session_state': 4, 'steering_rad': 0.}))
+        run.lap(); run.lap(); run.lap(.4)
+        sample = {'session_time': run.clock, 'distance_pct': .25, 'lap_number': 4,
+                  'on_track': True, 'on_pit_road': False, 'is_replay': False,
+                  'speed_mps': 0., 'brake': 1., 'throttle': 0., 'incidents': 0,
+                  'session_num': 0, 'session_state': 4, 'session_flags': 0, 'steering_rad': 0.}
+        live.radio.corner_revision = live.corners.revision
+        # Use the same condition as actual queued corner speech, with plenty
+        # of lifetime left after the stop so expiry alone cannot pass the test.
+        event = {'condition': ('corner_ahead', (.31, .01, live.corners.revision)),
+                 'expires_at': run.clock + 20, 'not_before': 0, 'session_num': 0,
+                 'run_id': live.run_id, 'key': 'corner_focus'}
+        live.radio.latest, live.radio.last_sample = sample, run.clock
+        self.assertTrue(live.radio.valid(event, run.clock))
+        for i in range(68):
+            current = {**sample, 'session_time': run.clock + i / 30}
+            live.radio.latest, live.radio.last_sample = current, current['session_time']
+            live._coach_corners(IDENTITY, current, current['session_time'])
+        self.assertIsNone(live._corner_call[0])
+        self.assertFalse(live.radio.valid(event, run.clock + 2.3))
+        # It would still play with the current revision: only revocation blocks it.
+        event['condition'] = ('corner_ahead', (.31, .01, live.corners.revision))
+        self.assertTrue(live.radio.valid(event, run.clock + 2.3))
+
+
+class CornerGeometryTests(unittest.TestCase):
+    def baseline(self):
+        self.definitions = [dict(CORNER)]
+        coach = LiveCornerCoach(lambda identity: self.definitions)
+        run = session(coach)
+        run.lap(); run.lap(); run.lap(.4); run.lap()
+        self.assertIsNotNone(coach.review)
+        self.assertIsNotNone(coach.focus)
+        return coach, run
+
+    def refresh(self, coach, run, identity=IDENTITY):
+        coach.checked_at = -math.inf
+        coach._definitions(identity, run.clock)
+
+    def test_changed_bounds_clear_references_partial_lap_and_advice(self):
+        for field, value in [('entry_pct', .29), ('apex_pct', .36), ('exit_pct', .41)]:
+            with self.subTest(field=field):
+                coach, run = self.baseline()
+                # Mutating the lookup's own object must not hide a geometry change.
+                self.definitions[0][field] = value
+                old_revision = coach.revision
+                self.refresh(coach, run)
+                self.assertGreater(coach.revision, old_revision)
+                self.assertEqual(coach.best.get(coach.key, {}), {})
+                self.assertEqual(coach.lap, {})
+                for name in ('previous', 'active', 'brake_onset', 'review', 'last_pass', 'last_measurement', 'focus'):
+                    self.assertIsNone(getattr(coach, name), name)
+                self.assertIsNone(coach.reminder({'distance_pct': .2}, 80.))
+
+    def test_renumbered_added_or_removed_segments_invalidate_the_whole_baseline(self):
+        for definitions in ([{**CORNER, 'id': 'C2'}],
+                            [CORNER, {'id': 'C2', 'entry_pct': .6, 'apex_pct': .65, 'exit_pct': .7}],
+                            [{'id': 'C2', 'entry_pct': .6, 'apex_pct': .65, 'exit_pct': .7}]):
+            with self.subTest(definitions=definitions):
+                coach, run = self.baseline()
+                self.definitions = definitions
+                self.refresh(coach, run)
+                self.assertEqual(coach.view()['reference_corners'], 0)
+                self.assertIsNone(coach.view()['last_lap'])
+
+    def test_labels_preserve_measured_references(self):
+        coach, run = self.baseline()
+        baseline, revision = coach.best[coach.key], coach.revision
+        self.definitions = [{**CORNER, 'call': '1번 코너', 'name': 'New confirmed label'}]
+        self.refresh(coach, run)
+        self.assertIs(coach.best[coach.key], baseline)
+        self.assertEqual(coach.revision, revision)
+
+    def test_geometry_change_inside_a_corner_discards_the_unfinished_crossing(self):
+        definitions = [dict(CORNER)]
+        coach = LiveCornerCoach(lambda identity: definitions)
+        changed = [False]
+
+        def feed(sample):
+            coach.ingest(sample, IDENTITY, sample['session_time'], LENGTH)
+            if coach.active and not changed[0] and sample['distance_pct'] > .32:
+                definitions[0]['exit_pct'] = .42
+                coach.checked_at = -math.inf
+                changed[0] = True
+        run = Session(feed)
+        run.lap()
+        self.assertTrue(changed[0])
+        self.assertIsNone(coach.last_measurement)
+        self.assertEqual(coach.lap, {})
+        run.lap()
+        self.assertIsNone(coach.last_pass['delta_s'])
+        self.assertAlmostEqual(coach.last_measurement['duration_s'], 9.6, delta=.02)
+
+    def test_switching_away_and_back_still_checks_the_saved_geometry(self):
+        coach, run = self.baseline()
+        original_key = coach.key
+        self.refresh(coach, run, {**IDENTITY, 'car_id': 'other'})
+        self.assertIn(original_key, coach.best)
+        self.definitions = [{**CORNER, 'exit_pct': .42}]
+        self.refresh(coach, run)
+        self.assertNotIn(original_key, coach.best)
+
+    def test_different_corners_with_same_id_never_produce_a_phantom_five_second_loss(self):
+        self.definitions = [{'id': 'C1', 'entry_pct': .59, 'apex_pct': .62, 'exit_pct': .65}]
+        coach = LiveCornerCoach(lambda identity: self.definitions)
+        run = session(coach)
+        run.lap(); run.lap()
+        old_duration = coach.best[coach.key]['C1']['duration_s']
+        self.definitions = [{'id': 'C1', 'entry_pct': .42, 'apex_pct': .46, 'exit_pct': .54}]
+        coach.checked_at = -math.inf
+        run.lap()
+        self.assertGreater(coach.last_measurement['duration_s'] - old_duration, 4.)
+        self.assertIsNone(coach.last_pass['delta_s'])
+        run.lap(); run.lap()
+        self.assertAlmostEqual(coach.last_pass['delta_s'], 0., delta=.01)
+        self.assertFalse(coach.review['losses'])
+
+    def test_geometry_change_withdraws_an_already_delivered_event(self):
+        clock = [0.]
+        live = LiveTelemetry(clock=lambda: clock[0])
+        definitions = [dict(CORNER)]
+        live.corners.lookup = lambda identity: definitions
+        delivered = []
+        changed = [False]
+
+        def feed(sample):
+            clock[0] = sample['session_time']
+            live.ingest(IDENTITY, {**sample, 'session_num': 0, 'session_state': 4, 'steering_rad': 0.})
+            events = [e for e in live.radio.view(clock[0])['events'] if e['key'] == 'corner_focus']
+            if events and not delivered:
+                delivered.append(next(e for e in live.radio.pending if e['id'] == events[0]['id']))
+                self.assertTrue(live.radio.valid(delivered[0], clock[0]))
+                definitions[0]['exit_pct'] = .41
+                live.corners.checked_at = -math.inf
+            elif delivered and not changed[0]:
+                # Still on the same straight and inside the old event's time window.
+                event = delivered[0]
+                self.assertLess(clock[0], event['expires_at'])
+                until, margin = event['condition'][1][:2]
+                self.assertTrue(margin < (until - sample['distance_pct']) % 1 < .25)
+                self.assertFalse(live.radio.valid(event, clock[0]))
+                self.assertEqual(events, [])
+                self.assertIsNone(live._corner_call[0])
+                changed[0] = True
+        run = Session(feed)
+        run.lap(); run.lap(); run.lap(.4, corner_speed=27.); run.lap()
+        self.assertTrue(changed[0])
+
+
 class ReviewAnswerTests(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.TemporaryDirectory()

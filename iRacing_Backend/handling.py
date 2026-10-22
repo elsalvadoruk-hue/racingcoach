@@ -156,7 +156,8 @@ def classify_phase(phase, references, model):
     not per interpolated point. Each point also needs three independent laps.
     These reference matching guards, like the detection limits, are unvalidated.
     """
-    unknown = {'observed': False, 'counter_observed': False, 'b_median': None, 'events': [], 'known_fraction': 0.}
+    unknown = {'observed': False, 'counter_observed': False, 'b_median': None, 'events': [], 'known_fraction': 0.,
+               'unknown_reasons': ['phase_unavailable']}
     if phase is None:
         return unknown
     local, raw = phase['local'], phase['raw']
@@ -164,11 +165,13 @@ def classify_phase(phase, references, model):
     eligible, durations = phase['eligible'], phase['durations']
     predictions = []
     support = np.zeros(5, dtype=int)
+    available = np.zeros(len(speed), dtype=int)
     for reference in references:
         if reference is None or reference is phase:
             continue
         support += reference['support']
         q, rspeed, rsteer, rbrake, rthrottle = _reference_at(reference, local.pct)
+        available += np.isfinite(q)
         comparable = ((np.searchsorted(model['edges_mps'], rspeed, side='right') == phase['bands'])
                       & (abs(rspeed - speed) <= MAX_SPEED_DIFFERENCE)
                       & (abs(rbrake - brake) <= MAX_PEDAL_DIFFERENCE)
@@ -177,9 +180,11 @@ def classify_phase(phase, references, model):
                       & (abs(steer) <= MAX_STEER_RATIO * abs(rsteer)))
         predictions.append(np.where(comparable, q, np.nan))
     baseline = np.full(len(speed), np.nan)
+    matched = np.zeros(len(speed), dtype=int)
     if predictions and np.all(np.isfinite(model['edges_mps'])):
         matrix = np.asarray(predictions)
-        good = (np.sum(np.isfinite(matrix), axis=0) >= MIN_REFERENCE_LAPS) & (support[phase['bands']] >= MIN_BAND_SAMPLES)
+        matched = np.sum(np.isfinite(matrix), axis=0)
+        good = (matched >= MIN_REFERENCE_LAPS) & (support[phase['bands']] >= MIN_BAND_SAMPLES)
         baseline[good] = np.nanmedian(matrix[:, good], axis=0)
     ratio = np.full(len(speed), np.nan)
     np.divide(phase['q'], baseline, out=ratio,
@@ -197,13 +202,31 @@ def classify_phase(phase, references, model):
     required = phase['inside'] & eligible & (durations > 0)
     known = required & np.isfinite(ratio)
     observed = bool(np.any(required) and np.all(np.isfinite(ratio[required])) and phase['complete'])
+    # Explain missing evidence without relaxing the personal reference or detection limits.
+    # Several reasons may apply to the same phase; these are not disjoint percentages.
+    reasons = []
+    if not phase['complete']:
+        reasons.append('phase_incomplete')
+    if not np.any(required):
+        reasons.append('no_eligible_samples')
+    elif not observed:
+        if not np.all(np.isfinite(model['edges_mps'])):
+            reasons.append('speed_bands_unavailable')
+        if np.any(required & (available < MIN_REFERENCE_LAPS)):
+            reasons.append('reference_laps_shortage')
+        if np.any(required & (support[phase['bands']] < MIN_BAND_SAMPLES)):
+            reasons.append('reference_samples_shortage')
+        if np.all(np.isfinite(model['edges_mps'])) and np.any(required & (available >= MIN_REFERENCE_LAPS) & (matched < MIN_REFERENCE_LAPS)):
+            reasons.append('inputs_not_comparable')
+        if np.any(required & (steer * yaw <= 0)):
+            reasons.append('rotation_direction_not_comparable')
     return {'observed': observed, 'counter_observed': bool(np.any(required) and phase['complete']),
             'b_median': float(np.median(ratio[known])) if np.any(known) else None,
             'known_fraction': float(np.sum(durations[known]) / np.sum(durations[required])) if np.any(required) else 0.,
-            'events': events}
+            'events': events, 'unknown_reasons': reasons}
 
 
-def analyze_handling(analyzer, corners):
+def analyze_handling(analyzer, corners, *, include_observations=False):
     """Summarize valid recorded laps without persisting or changing diagnoses."""
     metadata = analyzer.telemetry.metadata
     approximate = metadata.get('game') == 'lmu'
@@ -225,8 +248,12 @@ def analyze_handling(analyzer, corners):
                        unknown=(len(analyzer.valid_laps) - len(laps)) * len(corners) * len(PHASES))
     applicable_keys = {(corner['id'], phase) for corner in corners for phase in PHASES} if coverage['unknown'] else set()
     phase_counts = defaultdict(Counter)
+    unknown_reasons = Counter()
+    phase_reasons = defaultdict(Counter)
     for key in applicable_keys:
         phase_counts[key]['unknown'] = len(analyzer.valid_laps) - len(laps)
+        phase_reasons[key]['raw_lap_unavailable'] = len(analyzer.valid_laps) - len(laps)
+        unknown_reasons['raw_lap_unavailable'] += len(analyzer.valid_laps) - len(laps)
     for lap, grid, raw in laps:
         for corner in corners:
             entry, apex, exit_pct = (corner[key] for key in ('entry_pct', 'apex_pct', 'exit_pct'))
@@ -245,6 +272,8 @@ def analyze_handling(analyzer, corners):
                     applicable_keys.add((corner['id'], phase))
                     coverage['unknown'] += 1
                     phase_counts[(corner['id'], phase)]['unknown'] += 1
+                    phase_reasons[(corner['id'], phase)]['phase_unavailable'] += 1
+                    unknown_reasons['phase_unavailable'] += 1
                     continue
                 if bounds['start_pct'] == bounds['end_pct']:
                     coverage['not_applicable'] += 1
@@ -260,6 +289,8 @@ def analyze_handling(analyzer, corners):
             coverage['classifiable' if measured['observed'] else 'unknown'] += 1
             phase_counts[key]['classifiable' if measured['observed'] else 'unknown'] += 1
             coverage['partial'] += bool(0 < measured['known_fraction'] < 1)
+            unknown_reasons.update(measured['unknown_reasons'])
+            phase_reasons[key].update(measured['unknown_reasons'])
             observations[key].append({'lap': row['lap'], 'time_s': row['time_s'], **measured})
     summaries = []
     for corner in corners:
@@ -289,15 +320,22 @@ def analyze_handling(analyzer, corners):
                     result_items=len(summaries), time_cost_items=sum(item['time_cost_s'] is not None for item in summaries))
     coverage['unknown_fraction'] = coverage['unknown'] / applicable if applicable else None
     summaries.sort(key=lambda item: (item['time_cost_s'] is None, -(item['time_cost_s'] or 0), -item['laps']))
-    return {'source': 'approximate' if approximate else 'measured', 'approximate': approximate,
+    result = {'source': 'approximate' if approximate else 'measured', 'approximate': approximate,
             'corners': summaries, 'k_bands': model['bands'],
             'valid_laps': len(analyzer.valid_laps), 'thresholds_validated': False, 'method': METHOD,
             'phase_coverage': [{'corner_id': key[0], 'phase': key[1], 'classifiable': counts['classifiable'],
-                                'unknown': counts['unknown'], 'not_applicable': counts['not_applicable']}
+                                'unknown': counts['unknown'], 'not_applicable': counts['not_applicable'],
+                                'unknown_reasons': dict(phase_reasons[key])}
                                for key, counts in phase_counts.items()],
+            'unknown_reasons': dict(unknown_reasons),
             'coverage': dict(coverage), 'reference_rules': {'other_laps': MIN_REFERENCE_LAPS,
                 'samples_per_corner_phase_speed_band': MIN_BAND_SAMPLES, 'max_speed_difference_mps': MAX_SPEED_DIFFERENCE,
                 'max_pedal_difference': MAX_PEDAL_DIFFERENCE, 'max_steer_ratio': MAX_STEER_RATIO}}
+    if include_observations:
+        # Only the offline release audit asks for per-lap facts; ordinary API payloads stay compact.
+        result['observations'] = [{'corner_id': key[0], 'phase': key[1], **row}
+                                  for key, rows in observations.items() for row in rows]
+    return result
 
 
 class HandlingHistory:

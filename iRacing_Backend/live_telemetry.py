@@ -18,6 +18,7 @@ import uuid
 from race_engineer import RaceEngineer, read_race, parse_measure
 from spotter import AlongsideSpeed, Spotter
 from race_radio import RaceRadio
+from qualifying_traffic import is_open_qualifying
 from radio_policy import TrackSpeechWindows, HOLD_DEFAULT_S
 import radio_phrases
 from live_corners import LiveCornerCoach, call_seconds, CALL_EARLY_S
@@ -216,10 +217,11 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self._track_fuel(sample)
             self.energy.ingest(sample)
             sample['fuel_l_per_lap'] = max(self.fuel_history) if self.fuel_history else None
-            # No side calls in qualifying (a lone run in iRacing, a private one in LMU) or before a race
-            # starts: the grid and the double-file formation lap kept a car beside us the whole time.
-            session = str(self.radio.metadata.get('session_type') or '').lower()
-            if 'qual' in session or (session == 'race' and sample.get('session_state') in (1, 2, 3)):
+            # Only explicitly open qualifying has shared-track side calls. Lone/unknown qualifying
+            # keeps its existing silence. Use this tick's metadata, including the first session sample.
+            session_metadata = race if race is not None else self.radio.metadata
+            session = str(session_metadata.get('session_type') or '').strip().lower()
+            if ('qual' in session and not is_open_qualifying(session_metadata)) or (session == 'race' and sample.get('session_state') in (1, 2, 3)):
                 self.spotter.reset()
             else:
                 self.spotter.ingest(sample, self.run_id, now)
@@ -266,7 +268,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                       'rejoin': 180., 'stint_ahead': 300., 'stint_behind': 300.}
     STINT_DIFFERENT_LAPS = 3     # a stint this many laps longer or shorter than ours is worth saying
     REJOIN_FUEL_LAPS = 6         # where a stop now comes out is said from this many laps of fuel left
-    QUALI_BRIEFS = ('corner', 'delta', 'theoretical')   # what helps a qualifying lap; other cars are never mentioned
+    QUALI_BRIEFS = ('corner', 'delta', 'theoretical')   # existing lap coaching in both kinds; open traffic has a separate measured advisor
 
 
     def spotter_status(self, after=0):

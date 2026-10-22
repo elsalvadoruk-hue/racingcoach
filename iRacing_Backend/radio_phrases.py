@@ -88,6 +88,7 @@ PREPARED = {
     'brief_corner_loss': {'turn': [f'{n}번 코너' for n in range(1, 31)], 'loss': tenths(.1, 1.0)},
     # The second sentence of the same line: said right after 'brief_corner_loss' as one call.
     'brief_corner_also': {'turn': [f'{n}번 코너' for n in range(1, 31)], 'loss': tenths(.1, 1.0)},
+    'quali_gap_window': None,  # observed pair of gaps; no combinatorial pre-generation
     'pit_fuel_full': None,
     # Per-lap fuel around GT3 use; other cars are synthesized on first use.
     'fuel_lap': {'fuel': tenths(1.5, 4.5), 'target': tenths(1.5, 4.5)},
@@ -97,6 +98,21 @@ PREPARED = {
 }
 
 PHRASES = {
+    'quali_gap_window': ('spotter', [
+        '최근 구간 페이스로 추정한 출발선 목표입니다. 앞차 약 {gap}. 뒤차 약 {loss}.',
+        '최근 페이스 기준 출발선 목표 간격입니다. 앞차 약 {gap}. 뒤차 약 {loss}.',
+        '최근 관측으로 추정한 출발선 간격입니다. 앞차 약 {gap}. 뒤차 약 {loss}.',
+    ]),
+    'quali_gap_unknown': ('spotter', [
+        '오픈 퀄리파잉입니다. 주변 차량의 구간 기록이 부족해 출발 간격은 아직 계산할 수 없습니다.',
+        '다른 차와 함께하는 퀄리입니다. 관측 페이스가 부족해 목표 간격은 확인이 필요합니다.',
+        '오픈 퀄리입니다. 앞뒤 차량의 기록을 더 관측한 뒤 출발 간격을 추정하겠습니다.',
+    ]),
+    'quali_gap_blocked': ('spotter', [
+        '최근 구간 페이스로는 가까운 출발 여유를 찾지 못했습니다. 뒤차를 확인하고 무리하게 간격을 만들지 마세요.',
+        '앞뒤 차량 페이스상 여유 있는 출발 간격이 부족합니다. 급감속 없이 주변을 확인하세요.',
+        '현재 관측으로는 출발 간격을 권하기 어렵습니다. 뒤차를 확인하고 공간을 무리하게 만들지 마세요.',
+    ]),
     # Race picture: only gaps that are shrinking are worth the driver's attention.
     'gap_ahead_closing': ('race', [
         '앞차 {gap}. 줄고 있습니다.',
@@ -280,6 +296,33 @@ PHRASES.update({
     'form_hello': ('race', ['무전 연결됐습니다. [pause short] 포메이션 랩 동안 오늘 경기를 정리해 드리겠습니다.',
                             '포메이션 랩입니다. [pause short] 출발 전에 오늘 경기를 짚어 드리겠습니다.',
                             '출발 전 브리핑입니다. [pause short] 포메이션 랩 동안 천천히 들으세요.']),
+    'form_pole': ('race', ['폴포지션입니다. 포메이션 동안 출발 준비를 정리하겠습니다.',
+                            '폴포지션에서 출발합니다. 출발 신호와 게임 지시를 확인하세요.',
+                            '오늘은 폴포지션입니다. 첫 코너까지 차분하게 준비하세요.']),
+    'form_front_row': ('race', ['프런트 로우에서 출발합니다. 포메이션 동안 출발 준비를 정리하겠습니다.',
+                                 '프런트 로우입니다. 옆 차량과 출발 신호를 확인하세요.',
+                                 '오늘은 프런트 로우입니다. 첫 코너 공간을 준비하세요.']),
+    'form_class_pole': ('race', ['클래스 폴포지션입니다. 포메이션 동안 출발 준비를 정리하겠습니다.',
+                                  '클래스 폴포지션에서 출발합니다. 출발 신호와 게임 지시를 확인하세요.',
+                                  '오늘은 클래스 폴포지션입니다. 첫 코너까지 차분하게 준비하세요.']),
+    'form_class_front_row': ('race', ['클래스 프런트 로우에서 출발합니다. 포메이션 동안 출발 준비를 정리하겠습니다.',
+                                       '클래스 프런트 로우입니다. 주변 차량과 출발 신호를 확인하세요.',
+                                       '오늘은 클래스 프런트 로우입니다. 첫 코너 공간을 준비하세요.']),
+    'form_front_rolling': ('spotter', ['롤링 스타트입니다. 출발 신호와 게임의 대열 지시를 확인하세요.',
+                                      '그린 플래그 전입니다. 지정된 출발 자리를 지키세요.',
+                                      '출발 신호 전에는 순서를 유지하세요. 게임 지시를 확인하세요.']),
+    'form_pole_station': ('spotter', ['선두 자리와 게임의 대열 지시를 지키세요. 가속 시점은 출발 신호와 규정을 확인하세요.',
+                                      '폴포지션입니다. 대열 속도와 게임 지시를 확인하면서 출발을 준비하세요.',
+                                      '폴포지션입니다. 지정된 대열을 유지하고 출발 신호를 확인하세요.']),
+    'form_front_station': ('spotter', ['옆 선두 차량과 대열을 맞추세요. 출발 신호 전에는 자리를 지키세요.',
+                                       '프런트 로우입니다. 옆 차량 위치와 출발 신호를 확인하세요.',
+                                       '앞줄 자리와 게임 지시를 지키세요. 옆 차량에 공간을 남겨 두세요.']),
+    'form_class_pole_station': ('spotter', ['클래스 폴포지션입니다. 지정된 대열과 게임 지시를 지키세요.',
+                                            '클래스 선두입니다. 주변 차량과 대열 속도를 확인하면서 출발을 준비하세요.',
+                                            '클래스 폴포지션입니다. 출발 신호 전에는 지정된 자리를 유지하세요.']),
+    'form_class_front_station': ('spotter', ['클래스 프런트 로우입니다. 주변 차량과 지정된 대열을 확인하세요.',
+                                             '클래스 프런트 로우입니다. 출발 신호 전에는 자리를 지키세요.',
+                                             '클래스 앞줄에서 출발합니다. 주변 차량에 공간을 남기고 게임 지시를 확인하세요.']),
     'form_length_min': ('race', ['오늘 경기는 {min}입니다.', '{min} 경기입니다.', '경기 시간은 {min}입니다.']),
     'form_length_laps': ('race', ['오늘 경기는 {laps}입니다.', '{laps} 경기입니다.', '경기 거리는 {laps}입니다.']),
     'form_grid': ('race', ['클래스 {pos}에서 출발합니다.', '출발 순위는 클래스 {pos}입니다.', '그리드는 클래스 {pos}입니다.']),

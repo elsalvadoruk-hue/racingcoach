@@ -185,7 +185,7 @@ def register_routes(app, services: WorkspaceRoutesServices):
                     paths = await asyncio.to_thread(services.list_ibt_files, 250)
                     fields = ('car_name', 'car_path', 'track_name', 'track_path', 'track_config', 'track_platform_id', 'analyzable', 'reason',
                               'detected_laps', 'complete_laps', 'valid_laps', 'metadata_pending', 'status', 'retryable',
-                              'session_type', 'session_duration_s', 'suggested_session_mode')
+                              'session_type', 'session_duration_s', 'suggested_session_mode', 'best_lap_s', 'recording_time')
                     files = []
                     for path in paths:
                         visibility = await asyncio.to_thread(services.quick_file_visibility, path)

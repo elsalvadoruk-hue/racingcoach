@@ -89,6 +89,8 @@ def register_routes(app, services: AnalysisRoutesServices):
                     "modified_at": path.stat().st_mtime,
                     **{key: visibility.get(key) for key in ("eligible", "analyzable", "comparison_ready", "coaching_ready", "clean_segment_count", "metadata_pending", "status", "reason", "error", "retryable")},
                     "lap_count": visibility.get("detected_laps", 0),
+                    "best_lap_s": visibility.get("best_lap_s"),
+                    "recording_time": visibility.get("recording_time"),
                     "complete_laps": visibility.get("complete_laps", 0),
                     "valid_laps": visibility.get("valid_laps", 0),
                     "car_name": visibility.get("car_name") or "Unknown Car",

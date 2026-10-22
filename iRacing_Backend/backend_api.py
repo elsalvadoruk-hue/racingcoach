@@ -1204,6 +1204,11 @@ def telemetry_file_visibility(path: Path, telemetry: Optional[ParsedTelemetry] =
             "detected_laps": detected_laps,
             "complete_laps": complete_laps,
             "valid_laps": valid_laps,
+            "best_lap_s": min((value for lap in telemetry.laps if lap.valid and lap.complete
+                               for value in (getattr(lap, "lap_time_s", None),)
+                               if isinstance(value, (int, float)) and not isinstance(value, bool)
+                               and math.isfinite(value) and value > 0), default=None),
+            "recording_time": metadata.get("recording_time"),
             "minimum_required_laps": MIN_DISPLAY_LAPS,
             "minimum_required_valid_laps": MIN_DISPLAY_VALID_LAPS,
             "car_name": metadata.get("car_name") or "Unknown Car",

@@ -135,7 +135,9 @@ class TrafficLogTests(unittest.TestCase):
             with self.assertLogs('iRacingLive', level='ERROR') as messages:
                 log.record(self.snapshot(), 'run', 1.)
                 log.flush()
-                self.wait_for(lambda: log.failed)
+                # The writer marks failed before formatting/logging the exception.
+                # Wait for the completed log entry too, keeping assertLogs attached.
+                self.wait_for(lambda: log.failed and len(messages.output) >= 1)
                 log.record(self.snapshot(), 'run', 2.)
                 log.flush()
             self.assertEqual(len(messages.output), 1)

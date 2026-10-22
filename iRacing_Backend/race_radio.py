@@ -7,6 +7,7 @@ from spotter_context import TrafficApproach, PitBoxGuide, HazardWatch, progress
 from radio_audio import speech_fields
 import radio_phrases
 import radio_variations
+from qualifying_traffic import QualifyingTraffic, is_open_qualifying
 
 
 STATIC_CALLS = {
@@ -123,6 +124,7 @@ class RaceRadio:
 
     def reset(self):
         self.run_id = None
+        self.corner_revision = None
         self.fuel_low_stage = 0
         self.blue_since, self.blue_called = None, False
         self.latest, self.metadata = {}, {}
@@ -145,6 +147,9 @@ class RaceRadio:
         self.lap_position = None
         self.quali_lap = None
         self.qualifying = False
+        self.open_qualifying = False
+        self.quali_traffic = QualifyingTraffic()
+        self.quali_traffic_lap = None
         self.lap_done_at = None
         self.quali_called = None
         self.result_called = False
@@ -157,9 +162,10 @@ class RaceRadio:
 
     def emit(self, key, now, text=None, role='spotter', priority=1, ttl=18, condition=None, cooldown=30, group=None, delay=0, speech_key=None, speech_text=None,
              speech_parts=None):
-        # Qualifying is driven alone: only what helps the lap (lap time, result, corner coaching)
-        # and real warnings. Other cars are on their own laps and are never called.
-        if self.qualifying and (key.startswith(QUALI_SILENT) or key in QUALI_SILENT_FLAGS
+        # Lone/unknown qualifying retains its original filter. Shared-track warnings and
+        # the measured gap advisor are enabled ONLY for an explicitly Open Qualify session.
+        silent_flags = ('one_to_green', 'start_ready', 'start_set') if self.open_qualifying else QUALI_SILENT_FLAGS
+        if self.qualifying and ((not self.open_qualifying and key.startswith(QUALI_SILENT)) or key in silent_flags
                                 or (priority < 2 and not key.startswith('quali_') and key not in QUALI_KEYS)):
             return
         if now - self.sent.get(key, -math.inf) < cooldown:
@@ -211,6 +217,8 @@ class RaceRadio:
             self.metadata = dict(metadata)
             self.metadata_at = now
             self.qualifying = 'qual' in str(metadata.get('session_type') or '').lower()
+            self.open_qualifying = is_open_qualifying(metadata)
+            self.quali_traffic.ingest(metadata, sample, now)
         previous = self.latest
         self.latest, self.last_sample = dict(sample), now
         if sample.get('is_replay') is not False or sample.get('on_track') is not True:
@@ -227,6 +235,7 @@ class RaceRadio:
                 self.traffic.reset()
         if sample.get('on_pit_road') is not False or sample.get('session_state') != 4 or int(sample.get('session_flags') or 0) & 0xC119:
             self.traffic.reset()
+        self._qualifying_gap(sample, now)
         if self.traffic_enabled:
             for car in self.traffic.view(now)['nearby']:
                 # One call for one approach. It starts again once the car got past or dropped back.
@@ -617,6 +626,21 @@ class RaceRadio:
             self.blue_called = True
             self.emit('blue', now, priority=2, condition=('blue', self.blue_since), cooldown=10)
 
+    def _qualifying_gap(self, sample, now):
+        if (not self.open_qualifying or not self.traffic_enabled
+                or self.quali_traffic_lap == sample.get('lap_number')
+                or not self.quali_traffic.current(sample, now)):
+            return
+        if any(e['group'] == 'quali_traffic' and self.valid(e, now) for e in self.pending):
+            return
+        result = self.quali_traffic.result
+        status = result['status']
+        values = {'gap': result['front_s'], 'loss': result['rear_s']} if status == 'window' else {}
+        # Numbers describe the proposed gap AT THE LINE, not a command to stop or
+        # wait at the line. More than one car can rule out the proposed window.
+        self.say('quali_gap_' + status, now, values, ttl=8, cooldown=4, group='quali_traffic',
+                 condition=('quali_traffic', (sample.get('lap_number'), dict(result))))
+
     def valid(self, event, now):
         if (self.last_sample is None or not 0 <= now - self.last_sample < .5 or
                 self.latest.get('on_track') is not True or self.latest.get('is_replay') is not False
@@ -624,6 +648,14 @@ class RaceRadio:
             return False
         s = self.latest
         kind, value = event.get('condition') or (None, None)
+        if kind == 'quali_traffic':
+            if (not self.open_qualifying or not self.traffic_enabled or s.get('lap_number') != value[0]
+                    or not self.quali_traffic.current(s, now)):
+                return False
+            current, told = self.quali_traffic.result, value[1]
+            return current['status'] == told['status'] and all(
+                abs(current.get(key, 0) - told.get(key, 0)) <= 1.
+                for key in ('front_s', 'rear_s', 'delay_s'))
         if kind == 'traffic':
             return self.traffic_enabled and any(c['idx'] == value[0] and c['call_key'] == value[1]
                                                for c in self.traffic.view(now)['nearby'])
@@ -641,7 +673,9 @@ class RaceRadio:
             return any((h['idx'], h['kind']) == value for h in self.hazard.view(now))
         if kind == 'corner_ahead':
             pct = num(s.get('distance_pct'))
-            return pct is not None and value[1] < (value[0] - pct) % 1 < .25
+            # The browser may already hold this event when new geometry clears the coach.
+            return (pct is not None and value[1] < (value[0] - pct) % 1 < .25
+                    and (len(value) == 2 or value[2] == self.corner_revision))
         if kind == 'pit_box':
             box = self.pit_box.view()
             return (self.pit_box_enabled and s.get('on_pit_road') is True and box['ready']
@@ -684,6 +718,8 @@ class RaceRadio:
     def ack(self, identifier, now):
         event = self.get(identifier, now)
         if event:
+            if event.get('group') == 'quali_traffic':
+                self.quali_traffic_lap = self.latest.get('lap_number')
             if event.get('car'):
                 # Heard to the end: this car is not called again for a while.
                 self.car_calls[tuple(event['car'])] = now
