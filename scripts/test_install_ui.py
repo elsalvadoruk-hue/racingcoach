@@ -1,11 +1,24 @@
 """Source installation checks never install packages or access personal data."""
 import unittest
+from pathlib import Path
+import tempfile
 from unittest.mock import Mock, call, patch
 
 import install_ui
 
 
 class InstallScreenTests(unittest.TestCase):
+    def test_included_build_without_dev_tools_needs_no_node_even_with_newer_sources(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'build').mkdir()
+            (root / 'build/index.html').write_text('<html>included</html>')
+            with patch.object(install_ui, 'ROOT', root), patch.object(install_ui, 'build_is_current', return_value=False), \
+                    patch.object(install_ui.shutil, 'which') as which, patch.object(install_ui.subprocess, 'run') as run:
+                self.assertEqual(install_ui.install(), 0)
+                which.assert_not_called()
+                run.assert_not_called()
+
     def test_existing_current_build_needs_no_node(self):
         with patch.object(install_ui, 'build_is_current', return_value=True), \
                 patch.object(install_ui.shutil, 'which') as which, \

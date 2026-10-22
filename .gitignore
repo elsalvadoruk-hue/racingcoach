@@ -71,6 +71,7 @@
 !/scripts/overlay_commands.py
 !/scripts/test_make_patch.py
 !/scripts/make_release_assets.py
+!/scripts/python_runtime.json
 !/scripts/prepare_lmu_bridge.py
 !/scripts/test_prepare_lmu_bridge.py
 !/scripts/test_make_release_assets.py
@@ -85,6 +86,7 @@
 !/releases/voice-[0-9]*.json
 
 # Never commit credentials, recordings, telemetry, caches or local settings.
+/runtime/
 **/node_modules/
 **/__pycache__/
 **/.venv/

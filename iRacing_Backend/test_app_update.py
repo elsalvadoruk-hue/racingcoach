@@ -71,6 +71,22 @@ class DownloadTests(unittest.TestCase):
 
 
 class StageAndApplyTests(unittest.TestCase):
+    def test_runtime_is_preserved_even_when_an_update_contains_case_variant_paths(self):
+        self.assertIn('runtime/', app_update.KEEP)
+        runtime = self.root / 'runtime/python'
+        runtime.mkdir(parents=True)
+        interpreter = runtime / 'python.exe'
+        interpreter.write_bytes(b'keep the running interpreter')
+        before = interpreter.stat()
+        self.stage(program('1.5.0', **{'runtime/python/python.exe':'replace',
+                                      'Runtime/Python/python.exe':'case variant',
+                                      'runtime/python/new.dll':'must not be added'}))
+        app_update.apply_staged(self.root, log=lambda _: None)
+        self.assertEqual(interpreter.read_bytes(), b'keep the running interpreter')
+        self.assertEqual(interpreter.stat().st_mtime_ns, before.st_mtime_ns)
+        self.assertFalse((runtime / 'new.dll').exists())
+        self.assertEqual(app_update.version_in(self.root), '1.5.0')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
