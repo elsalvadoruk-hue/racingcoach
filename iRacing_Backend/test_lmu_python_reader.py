@@ -412,6 +412,31 @@ class PythonReaderTests(unittest.TestCase):
 
 
 class ReaderPureTests(unittest.TestCase):
+    def test_adapter_allowance_is_only_for_four_approved_variable_paths(self):
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+        from dev_lmu_oracle import difference
+        for name in ('Speed','LapDist','LapDistPct','CarIdxLapDistPct'):
+            def state(value):
+                return {'vars':{name:[value] if name=='CarIdxLapDistPct' else value}}
+            with self.subTest(name=name):
+                self.assertIsNone(difference(state(3.),state(3.+1e-13),adapter=True))
+                self.assertIsNotNone(difference(state(3.),state(3.+1e-10),adapter=True))
+                self.assertIsNotNone(difference(state(0.),state(1e-15),adapter=True))
+                self.assertIsNotNone(difference(state(True),state(1.),adapter=True))
+                self.assertIsNotNone(difference(state(None),state(0.),adapter=True))
+                self.assertIsNotNone(difference(state(3.),state(3.+1e-13)))
+                self.assertIsNotNone(difference({'info':state(3.)['vars']},
+                                               {'info':state(3.+1e-13)['vars']},adapter=True))
+        self.assertIsNotNone(difference({'vars':{'FuelLevel':3.}}, {'vars':{'FuelLevel':3.+1e-13}},adapter=True))
+        self.assertIsNotNone(difference({'vars':{'nested':{'Speed':3.}}},
+                                       {'vars':{'nested':{'Speed':3.+1e-13}}},adapter=True))
+        self.assertIsNotNone(difference({'vars':{'CarIdxLapDistPct':3.}},
+                                       {'vars':{'CarIdxLapDistPct':3.+1e-13}},adapter=True))
+        self.assertIsNotNone(difference({'snapshot':{'speed_mps':3.}},
+                                       {'snapshot':{'speed_mps':3.+1e-13}},adapter=True))
+        self.assertIsNotNone(difference({'vars':{'CarIdxLapDistPct':[3.]}},
+                                       {'vars':{'CarIdxLapDistPct':[3.,3.]}},adapter=True))
+
     def test_reader_selection_requires_exact_opt_in_and_preserves_source_override(self):
         from lmu_irsdk import LmuIrsdk,shared_memory_source_factory
         from lmu_shared_memory import SharedMemorySource

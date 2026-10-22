@@ -28,25 +28,34 @@ from test_lmu_python_reader import FrameBuilder, base_frame
 
 BRIDGE=ROOT/'iRacing_Backend/lmu_native_bridge.cpp'
 SEEDS=tuple(2026102200+i for i in range(20))
+ADAPTER_COMPARISON = {
+    'relative_tolerance': 1e-12, 'absolute_tolerance': 0,
+    'allowed_paths': ['vars.Speed', 'vars.LapDist', 'vars.LapDistPct', 'vars.CarIdxLapDistPct[]'],
+}
 
 
-def difference(a,b,path=()):
+def difference(a,b,path=(),*,adapter=False):
     if isinstance(a,dict) and isinstance(b,dict):
         if set(a)!=set(b): return '.'.join(map(str,path))+':keys'
         for key in a:
-            mismatch=difference(a[key],b[key],path+(key,))
+            mismatch=difference(a[key],b[key],path+(key,),adapter=adapter)
             if mismatch: return mismatch
         return None
     if isinstance(a,list) and isinstance(b,list):
         if len(a)!=len(b): return '.'.join(map(str,path))+':length'
         for index,(x,y) in enumerate(zip(a,b)):
-            mismatch=difference(x,y,path+(index,))
+            mismatch=difference(x,y,path+(index,),adapter=adapter)
             if mismatch: return mismatch
         return None
     if isinstance(a,bool)!=isinstance(b,bool): return '.'.join(map(str,path))+':type'
     if a==b: return None
-    field_path=path[1:] if path[:1]==('snapshot',) else path
-    allowed=(field_path==('speed_mps',) or (len(field_path)==3 and field_path[0]=='scoring_cars' and field_path[2]=='speed_mps'))
+    if adapter:
+        # User-approved 2026-10-22: only these four translated variables.
+        allowed=(path in (('vars','Speed'),('vars','LapDist'),('vars','LapDistPct'))
+                 or (len(path)==3 and path[:2]==('vars','CarIdxLapDistPct') and type(path[2]) is int))
+    else:
+        field_path=path[1:] if path[:1]==('snapshot',) else path
+        allowed=(field_path==('speed_mps',) or (len(field_path)==3 and field_path[0]=='scoring_cars' and field_path[2]=='speed_mps'))
     if allowed and isinstance(a,(int,float)) and isinstance(b,(int,float)) and math.isclose(a,b,rel_tol=1e-12,abs_tol=0): return None
     return '.'.join(map(str,path))+':value'
 
@@ -91,8 +100,7 @@ class AdapterParity:
             states.append({'vars': sdk.vars, 'info': sdk.info,
                            'connected': sdk.is_connected, 'error': sdk.unavailable})
         self.frames += 1
-        # Exact comparison here: no extra tolerance for translated variables.
-        mismatch = difference(*states)
+        mismatch = difference(*states,adapter=True)
         for sdk in self.adapters:
             if not sdk.is_connected:
                 sdk.shutdown()
@@ -201,6 +209,7 @@ int main(int argc,char** argv) {
     return {'frames':frames,'busy_calls':sum(row['result']==0 for row in parity),
             'outputs':outputs,'assertions':assertions,'differences':differences,
             'adapter_frames':frames if adapters else 0,'adapter_differences':adapter_differences,
+            'adapter_comparison':ADAPTER_COMPARISON if adapters else None,
             'traffic_outputs':sum(n.startswith('TRAFFIC_') for n in outputs),
             'measured_outputs':sum(n.startswith('MEASURED_') for n in outputs)}
 
@@ -354,6 +363,7 @@ def run_capture(path,exe,layout,*,adapters=False):
                         if len(adapter_differences)<10: adapter_differences.append({'frame':frames,'path':mismatch})
     return {'frames':frames,'difference_count':mismatch_count,'differences':differences,
             'adapter_frames':adapter.frames if adapter else 0,'adapter_difference_count':adapter_count,
+            'adapter_comparison':ADAPTER_COMPARISON if adapters else None,
             'adapter_differences':adapter_differences,'passed':frames>0 and mismatch_count==0 and adapter_count==0}
 
 
@@ -361,7 +371,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sdk-dir',type=Path)
     parser.add_argument('--capture',type=Path,help='compare an existing local capture; never uploads raw frames')
-    parser.add_argument('--adapter',action='store_true',help='also compare translated SDK variables and session information exactly')
+    parser.add_argument('--adapter',action='store_true',help='also compare SDK variables and session information with the approved four-variable tolerance')
     args=parser.parse_args()
     sdk=resolve_sdk_dir(args.sdk_dir); layout=load_layout(sdk)
     if args.capture:
