@@ -148,7 +148,7 @@ class TranslationTests(unittest.TestCase):
                 raise error
         sdk = LmuIrsdk(source_factory=Missing)
         self.assertFalse(sdk.startup())
-        self.assertIn('빌드', sdk.status_message())
+        self.assertIn('자동으로 준비', sdk.status_message())
 
 
 class SideBySideTests(unittest.TestCase):

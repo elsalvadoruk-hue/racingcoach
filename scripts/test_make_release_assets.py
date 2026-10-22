@@ -1,9 +1,12 @@
 """Release files for the in-app updater, made from temporary clips and a temporary repository."""
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -54,6 +57,50 @@ class VoicePieceTests(unittest.TestCase):
 
 
 class AppAssetTests(unittest.TestCase):
+    def test_app_zip_validates_and_includes_the_prebuilt_bridge(self):
+        import lmu_shared_memory
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            backend = root / "iRacing_Backend"
+            backend.mkdir()
+            (backend / "backend_api.py").write_text('APP_VERSION = "2.0.1"\n', encoding="utf-8")
+            (backend / "lmu_shared_memory.py").write_text("# bundle support\n", encoding="utf-8")
+            from test_make_patch import lock_fixture
+            lock_fixture(root)
+            source = lmu_shared_memory.bridge_source_bytes()
+            (backend / "lmu_native_bridge.cpp").write_bytes(source)
+            fingerprint = "a" * 64
+            identity = hashlib.sha256(source + fingerprint.encode("ascii")).hexdigest()[:24]
+            bundle = backend / "lmu_bridges" / ("bridge-" + identity)
+            bundle.mkdir(parents=True)
+            dll = bytearray(128)
+            dll[:2] = b"MZ"
+            struct.pack_into("<I", dll, 0x3c, 64)
+            dll[64:68] = b"PE\0\0"
+            struct.pack_into("<H", dll, 68, 0x8664)
+            (bundle / "lmu_native_bridge.dll").write_bytes(dll)
+            (bundle / "manifest.json").write_text(json.dumps({
+                "header_fingerprint": fingerprint, "source_sha256": hashlib.sha256(source).hexdigest(),
+                "dll_sha256": hashlib.sha256(dll).hexdigest(), "bridge_version": 1, "runtime": "STATIC_MSVC",
+            }), encoding="utf-8")
+            (root / "package.json").write_text('{"version":"2.0.1"}', encoding="utf-8")
+            (root / "build").mkdir()
+            (root / "build" / "index.html").write_text("<html>", encoding="utf-8")
+            run = lambda *args: subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+            run("init", "-q")
+            run("add", "iRacing_Backend", "package.json")
+            run("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "x")
+            with patch("launch_app.build_is_current", return_value=True):
+                target = make_release_assets.make_app(root, root / "out")
+                with zipfile.ZipFile(target) as archive:
+                    member = "racingcoach-2.0.1/" + (bundle / "lmu_native_bridge.dll").relative_to(root).as_posix()
+                    self.assertEqual(archive.read(member), dll)
+                    self.assertIn('racingcoach-2.0.1/iRacing_Backend/lmu_lock/lmu_lock.dll', archive.namelist())
+                (bundle / "lmu_native_bridge.dll").write_bytes(b"damaged")
+                with self.assertRaisesRegex(ValueError, "LMU"):
+                    make_release_assets.make_app(root, root / "bad", allow_dirty=True)
+                self.assertFalse((root / "bad").exists())
+
     def test_app_zip_holds_committed_files_and_the_built_screen(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -80,6 +127,84 @@ class AppAssetTests(unittest.TestCase):
                 (root / "package.json").write_text('{"version": "1.5.0" }', encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "커밋"):
                     make_release_assets.make_app(root, root / "out")
+
+
+class RuntimeAssetTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.names = ['python/python.exe', 'python/DLLs/_tkinter.pyd', 'python/DLLs/_ssl.pyd',
+                      'python/DLLs/_sqlite3.pyd', 'python/DLLs/_ctypes.pyd', 'python/LICENSE.txt',
+                      'python/Lib/site-packages/pip/__init__.py', 'python/tcl/tk8.6/license.terms']
+
+    def archive(self, extra=()):
+        path = self.root / 'test.tar.gz'
+        with tarfile.open(path, 'w:gz') as archive:
+            for name in self.names:
+                entry = tarfile.TarInfo(name)
+                entry.size = 1
+                archive.addfile(entry, io.BytesIO(b'x'))
+            for entry in extra:
+                archive.addfile(entry, io.BytesIO(b''))
+        return path
+
+    def test_runtime_paths_links_windows_aliases_and_case_collisions_are_rejected_before_writing(self):
+        for name in ('../escape', '/absolute', 'python/../escape', 'python/C:/escape',
+                     'python\\escape', 'python/NUL.txt', 'python/name.', 'python//empty', 'Python/python.exe',
+                     'python/PYTHON.exe'):
+            with self.subTest(name=name):
+                entry = tarfile.TarInfo(name)
+                packed = self.archive([entry])
+                with self.assertRaises(ValueError):
+                    make_release_assets.extract_runtime(packed, self.root/'out', {'extracted_bytes': len(self.names)})
+                self.assertFalse((self.root/'out').exists())
+        for kind in (tarfile.SYMTYPE, tarfile.LNKTYPE):
+            entry = tarfile.TarInfo('python/link')
+            entry.type, entry.linkname = kind, '../escape'
+            with self.assertRaises(ValueError):
+                make_release_assets.extract_runtime(self.archive([entry]), self.root/'out', {'extracted_bytes': len(self.names)})
+
+    def test_setup_includes_entire_runtime_and_licenses_but_app_zip_omits_runtime(self):
+        archive = self.archive()
+        spec = {'extracted_bytes': len(self.names)}
+        (self.root/'iRacing_Backend').mkdir()
+        (self.root/'iRacing_Backend/backend_api.py').write_text('APP_VERSION = "2.0.3"\n')
+        (self.root/'package.json').write_text('{"version":"2.0.3"}')
+        (self.root/'build').mkdir()
+        (self.root/'build/index.html').write_text('<html>')
+        (self.root/'runtime').mkdir()
+        (self.root/'runtime/local.exe').write_bytes(b'never update this')
+        for args in (('init','-q'), ('add','.'), ('-c','user.name=test','-c','user.email=test@example.com','commit','-qm','fixture')):
+            subprocess.run(['git',*args],cwd=self.root,capture_output=True,check=True)
+        with patch('launch_app.build_is_current', return_value=True), \
+                patch.object(make_release_assets,'runtime_archive',return_value=(archive,spec)):
+            setup = make_release_assets.make_setup(self.root,self.root/'out')
+        with zipfile.ZipFile(self.root/'out/racingcoach-app-2.0.3.zip') as app:
+            self.assertFalse(any('/runtime/' in n.lower() for n in app.namelist()))
+            app_names = app.namelist()
+        with zipfile.ZipFile(setup) as packed:
+            for name in self.names:
+                self.assertEqual(packed.read('racingcoach-2.0.3/runtime/'+name), b'x')
+            self.assertTrue(set(app_names) <= set(packed.namelist()))
+
+    def test_cached_runtime_is_size_and_hash_checked_on_every_use(self):
+        version, release = '3.12.15','20261021'
+        name = f'cpython-{version}+{release}-x86_64-pc-windows-msvc-install_only.tar.gz'
+        spec = {'version': version, 'release': release,
+                'url': 'https://github.com/astral-sh/python-build-standalone/releases/download/'+release+'/'+name,
+                'bytes': 4, 'sha256': hashlib.sha256(b'good').hexdigest()}
+        (self.root/'scripts').mkdir()
+        (self.root/'scripts/python_runtime.json').write_text(json.dumps(spec))
+        cache = self.root/'share/python-runtime'
+        cache.mkdir(parents=True)
+        path = cache/name
+        path.write_bytes(b'good')
+        with patch('urllib.request.urlopen',side_effect=AssertionError('must use cache')):
+            self.assertEqual(make_release_assets.runtime_archive(self.root)[0],path)
+            path.write_bytes(b'evil')
+            with self.assertRaisesRegex(ValueError,'hash/size'):
+                make_release_assets.runtime_archive(self.root)
 
 
 if __name__ == "__main__":

@@ -18,11 +18,13 @@ from __future__ import annotations
 import argparse
 import ast
 import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +46,51 @@ REQUIRED_OVERLAY_SCRIPTS = ("overlay_sample.py", "overlay_trace.py", "overlay_ce
                             "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py")
 DATA_FILES = ("corner-definitions.json", "pit-knowledge.json")
 TEXT_SUFFIXES = {".py", ".js", ".json", ".md", ".txt", ".bat", ".ps1", ".html", ".css", ".map", ".svg", ".yml", ".yaml", ".cfg", ".ini"}
+
+
+def bundled_bridge_files(root: Path) -> list[str]:
+    """Validate production bundles and list only their redistributable files."""
+    backend = root / "iRacing_Backend"
+    if not (backend / "lmu_shared_memory.py").is_file():
+        return []
+    lock = backend / 'lmu_lock'
+    source = backend / 'lmu_lock.c'
+    try:
+        manifest = json.loads((lock / 'manifest.json').read_text(encoding='utf-8'))
+        dll = (lock / 'lmu_lock.dll').read_bytes()
+        pe = struct.unpack_from('<I', dll, 0x3c)[0]
+        valid = (manifest.get('lock_version') == 1 and manifest.get('runtime') == 'STATIC_MSVC'
+                 and manifest.get('source_sha256') == hashlib.sha256(source.read_bytes().replace(b'\r\n', b'\n')).hexdigest()
+                 and manifest.get('dll_sha256') == hashlib.sha256(dll).hexdigest()
+                 and dll[:2] == b'MZ' and dll[pe:pe+4] == b'PE\0\0'
+                 and struct.unpack_from('<H', dll, pe+4)[0] == 0x8664
+                 and {p.name for p in lock.iterdir()} == {'manifest.json', 'lmu_lock.dll'})
+        if not valid:
+            raise ValueError('invalid lock manifest')
+    except (OSError, ValueError, TypeError, AttributeError, struct.error) as exc:
+        raise ValueError('LMU 잠금 DLL·소스·매니페스트 확인 실패') from exc
+    from lmu_shared_memory import validate_bundled_bridges
+    bundles = validate_bundled_bridges(backend / "lmu_bridges")
+    if not bundles:
+        raise ValueError("LMU 사전 빌드 브리지가 없습니다. 먼저 prepare_lmu_bridge.py를 실행하세요.")
+    return [path.relative_to(root).as_posix() for path in (source, lock / 'lmu_lock.dll', lock / 'manifest.json')] + [path.relative_to(root).as_posix()
+            for bundle in bundles
+            for path in (bundle / "manifest.json", bundle / "lmu_native_bridge.dll")]
+
+
+def copy_backend(root: Path, out: Path) -> None:
+    """Copy backend sources and verified bundles without build logs or object files."""
+    bridges = bundled_bridge_files(root)
+    backend = root / "iRacing_Backend"
+    (out / "iRacing_Backend").mkdir(parents=True, exist_ok=True)
+    for path in sorted(backend.iterdir()):
+        if path.is_file() and path.name not in BACKEND_SKIP and (
+                path.suffix == ".py" or path.name.startswith("requirements") or path.name == "lmu_native_bridge.cpp"):
+            shutil.copy2(path, out / "iRacing_Backend" / path.name)
+    for name in bridges:
+        destination = out / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / name, destination)
 
 FIRST_RUN = """iRacing 주행 코치 {version} - 처음 실행
 
@@ -273,7 +320,8 @@ def main() -> int:
         return 1
     try:
         validate_share_inputs()
-    except RuntimeError as error:
+        bundled_bridge_files(ROOT)
+    except (RuntimeError, ValueError) as error:
         print(f"공유본을 만들 수 없습니다: {error}")
         return 1
     out.mkdir(parents=True, exist_ok=True)
@@ -283,11 +331,7 @@ def main() -> int:
     for name in ROOT_FOLDERS:
         print(f"{name}/ 복사 중...", flush=True)
         copy_tree(ROOT / name, out / name)
-    backend = ROOT / "iRacing_Backend"
-    (out / "iRacing_Backend").mkdir()
-    for path in sorted(backend.iterdir()):
-        if path.is_file() and path.name not in BACKEND_SKIP and (path.suffix == ".py" or path.name.startswith("requirements")):
-            shutil.copy2(path, out / "iRacing_Backend" / path.name)
+    copy_backend(ROOT, out)
     (out / "scripts").mkdir()
     for name in SCRIPTS:
         shutil.copy2(ROOT / "scripts" / name, out / "scripts" / name)

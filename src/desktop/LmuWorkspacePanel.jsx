@@ -26,9 +26,15 @@ export default function LmuWorkspacePanel(props) {
 
 const BRIDGE_STATES = {
   READY: ['준비됨', 'secondary'],
-  NATIVE_NOT_BUILT: ['빌드 필요', 'destructive'],
-  ABI_MISMATCH: ['다시 빌드 필요', 'destructive'],
-  SDK_UNAVAILABLE: ['LMU SDK 없음', 'outline'],
+  NATIVE_NOT_BUILT: ['연결 준비', 'outline'],
+  ABI_MISMATCH: ['연결 준비', 'outline'],
+  CONNECTION_NEEDED: ['연결 준비', 'outline'],
+  CONNECTION_PREPARING: ['연결 준비 중', 'secondary'],
+  CONNECTION_UPDATE_PENDING: ['호환 연결 파일 준비 중', 'outline'],
+  CONNECTION_DOWNLOAD_FAILED: ['연결 파일 받기 실패', 'destructive'],
+  SDK_UNAVAILABLE: ['LMU 설치 확인 필요', 'outline'],
+  CONNECTION_SDK_UNSUPPORTED: ['앱 업데이트 필요', 'destructive'],
+  GAME_NOT_RUNNING: ['LMU 실행 필요', 'outline'],
   UNSUPPORTED_PLATFORM: ['지원하지 않는 환경', 'outline'],
 };
 
@@ -39,9 +45,15 @@ export function LmuBridgePanel() {
     catch (e) { if (!signal?.aborted) setError(e.message); }
   }, []);
   useEffect(() => { const controller = new AbortController(); refresh(controller.signal); return () => controller.abort(); }, [refresh]);
-  const build = async () => {
+  useEffect(() => {
+    if (bridge?.state !== 'CONNECTION_PREPARING') return undefined;
+    const controller = new AbortController();
+    const timer = setInterval(() => refresh(controller.signal), 1500);
+    return () => { clearInterval(timer); controller.abort(); };
+  }, [bridge?.state, refresh]);
+  const connect = async () => {
     setBusy(true); setError('');
-    try { setBridge(await requestJson('/api/lmu/live/bridge/build', { method: 'POST', timeoutMs: 180000 })); }
+    try { setBridge(await requestJson('/api/lmu/live/connect', { method: 'POST' })); }
     catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
@@ -50,11 +62,15 @@ export function LmuBridgePanel() {
     <CardDescription>스포터·피트월·F8 질문·오버레이는 iRacing과 같은 기능을 그대로 씁니다. LMU를 실행하고 차에 타면 자동으로 LMU에 연결됩니다.</CardDescription></CardHeader>
     <CardContent className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2"><Badge variant={variant}>{label}</Badge><span>{bridge?.message}</span></div>
-      {bridge?.buildable && <p>LMU 공유 메모리를 읽는 작은 프로그램(브리지)을 이 PC에 맞춰 한 번 빌드해야 합니다. Visual Studio C++ 빌드 도구가 필요하고 1분 정도 걸립니다. LMU가 업데이트되면 다시 빌드하라는 안내가 나옵니다.</p>}
+      {bridge?.state === 'READY' && <p>실시간 연결 준비가 끝났습니다. LMU를 실행하고 차에 탄 뒤 음성 코치에서 스포터나 피트월을 켜세요.</p>}
+      {bridge?.reader === 'bridge'
+        ? <p>연결에 필요한 파일은 앱이 자동으로 준비합니다. 처음 연결할 때 추가 파일이 필요하면 인터넷에서 받습니다.</p>
+        : <p>실시간 연결은 자동입니다. LMU가 일반 데이터 구조를 바꾸면 앱이 설치 파일을 읽어 맞춥니다. 연결 방식 자체가 바뀌면 앱 업데이트가 필요합니다.</p>}
       {error && <p role="alert">{error}</p>}
       <div className="flex flex-wrap gap-2">
-        {bridge?.buildable && <Button disabled={busy} onClick={build}>{busy ? '빌드 중…' : '실시간 브리지 빌드'}</Button>}
+        {bridge && !['READY', 'SDK_UNAVAILABLE', 'UNSUPPORTED_PLATFORM', 'CONNECTION_SDK_UNSUPPORTED'].includes(bridge.state) && <Button disabled={busy || bridge.state === 'CONNECTION_PREPARING'} onClick={connect}>{busy || bridge.state === 'CONNECTION_PREPARING' ? '연결 준비 중…' : '실시간 연결'}</Button>}
         <Button variant="outline" disabled={busy} onClick={() => refresh()}>상태 새로고침</Button>
+        <Button variant="outline" asChild><a href="/lmu-bridge-guide.html" target="_blank" rel="noreferrer">연결 도움말</a></Button>
       </div>
     </CardContent></Card>;
 }

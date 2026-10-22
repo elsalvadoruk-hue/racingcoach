@@ -1,0 +1,10 @@
+{
+  "version": "3.12.15",
+  "release": "20261021",
+  "release_url": "https://github.com/astral-sh/python-build-standalone/releases/tag/20261021",
+  "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/cpython-3.12.15%2B20261021-x86_64-pc-windows-msvc-install_only.tar.gz",
+  "sha256sums_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261021/SHA256SUMS",
+  "sha256": "be7f14464d1d66f84429ad27e01f6d1482963afff64a2fb5256b2a51c7b5d398",
+  "bytes": 46388793,
+  "extracted_bytes": 149850603
+}

@@ -32,6 +32,17 @@
 !/iRacing_Backend/test_lmu_replay_ui.js
 !/iRacing_Backend/test_lmu_setup_ui.js
 !/iRacing_Backend/lmu_native_bridge.cpp
+!/iRacing_Backend/lmu_lock.c
+!/iRacing_Backend/lmu_lock/
+/iRacing_Backend/lmu_lock/*
+!/iRacing_Backend/lmu_lock/lmu_lock.dll
+!/iRacing_Backend/lmu_lock/manifest.json
+!/iRacing_Backend/lmu_bridges/
+/iRacing_Backend/lmu_bridges/*
+!/iRacing_Backend/lmu_bridges/bridge-*/
+/iRacing_Backend/lmu_bridges/bridge-*/*
+!/iRacing_Backend/lmu_bridges/bridge-*/manifest.json
+!/iRacing_Backend/lmu_bridges/bridge-*/lmu_native_bridge.dll
 !/iRacing_Backend/requirements*.txt
 /scripts/*
 !/scripts/launch_app.py
@@ -62,16 +73,24 @@
 !/scripts/overlay_commands.py
 !/scripts/test_make_patch.py
 !/scripts/make_release_assets.py
+!/scripts/python_runtime.json
+!/scripts/prepare_lmu_bridge.py
+!/scripts/test_prepare_lmu_bridge.py
 !/scripts/test_make_release_assets.py
 !/scripts/measure_corner_events.py
 !/scripts/test_measure_corner_events.py
 !/scripts/audit_git.py
 !/scripts/test_audit_git.py
+!/scripts/dev_lmu_layout_check.py
+!/scripts/build_lmu_lock.py
+!/scripts/dev_lmu_oracle.py
+!/scripts/capture_lmu_raw.py
 /releases/*
 !/releases/[0-9]*.json
 !/releases/voice-[0-9]*.json
 
 # Never commit credentials, recordings, telemetry, caches or local settings.
+/runtime/
 **/node_modules/
 **/__pycache__/
 **/.venv/

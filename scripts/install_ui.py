@@ -9,6 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def install() -> int:
+    if not (ROOT / 'node_modules' / 'react-scripts').is_dir() and (ROOT / 'build' / 'index.html').is_file():
+        print("Using the included screen. Node.js is not required.", flush=True)
+        return 0
     if build_is_current():
         print("The screen build is already up to date.", flush=True)
         return 0

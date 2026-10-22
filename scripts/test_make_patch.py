@@ -1,5 +1,8 @@
 """The update patch: the program always, large parts only when new, the receiver's data never."""
 import io
+import hashlib
+import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -17,6 +20,22 @@ def write(folder, files):
         path = folder / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(text if isinstance(text, bytes) else text.encode("utf-8"))
+
+
+def lock_fixture(root):
+    """Synthetic PE used only to exercise packaging, never loaded as code."""
+    dll = bytearray(128)
+    dll[:2] = b'MZ'
+    struct.pack_into('<I', dll, 0x3c, 64)
+    dll[64:68] = b'PE\0\0'
+    struct.pack_into('<H', dll, 68, 0x8664)
+    source = b'/* synthetic lock source */\n'
+    write(root, {'iRacing_Backend/lmu_lock.c': source,
+                 'iRacing_Backend/lmu_lock/lmu_lock.dll': bytes(dll),
+                 'iRacing_Backend/lmu_lock/manifest.json': json.dumps({
+                     'lock_version': 1, 'runtime': 'STATIC_MSVC',
+                     'source_sha256': hashlib.sha256(source).hexdigest(),
+                     'dll_sha256': hashlib.sha256(dll).hexdigest()})})
 
 
 def copy(version, **changes):
@@ -121,6 +140,49 @@ class PatchTests(unittest.TestCase):
 
 
 class ShareManifestTests(unittest.TestCase):
+    def test_lock_files_are_required_and_each_hash_is_checked_before_copy(self):
+        for name in ('lmu_lock.c', 'lmu_lock/lmu_lock.dll', 'lmu_lock/manifest.json'):
+            for missing in (True, False):
+                with self.subTest(name=name, missing=missing), tempfile.TemporaryDirectory() as folder:
+                    root = Path(folder)
+                    write(root, {'iRacing_Backend/lmu_shared_memory.py': '# source'})
+                    lock_fixture(root)
+                    path = root / 'iRacing_Backend' / name
+                    if missing:
+                        path.unlink()
+                    else:
+                        path.write_bytes(b'changed')
+                    with self.assertRaisesRegex(ValueError, 'LMU'), patch('lmu_shared_memory.validate_bundled_bridges') as old:
+                        make_share_copy.copy_backend(root, root / 'out')
+                    old.assert_not_called()
+                    self.assertFalse((root / 'out').exists())
+
+    def test_backend_share_holds_bridge_source_and_only_verified_bundle_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root, out = Path(folder) / "source", Path(folder) / "share"
+            bundle = root / "iRacing_Backend" / "lmu_bridges" / ("bridge-" + "a" * 24)
+            relative = bundle.relative_to(root).as_posix()
+            write(root, {
+                "iRacing_Backend/lmu_native_bridge.cpp": "// redistributable source",
+                "iRacing_Backend/lmu_shared_memory.py": "# transport",
+                "iRacing_Backend/gcp-key.json": "private key",
+                relative + "/manifest.json": "{}",
+                relative + "/lmu_native_bridge.dll": b"MZprebuilt",
+                "logs/lmu-native/build.log": "private compiler paths",
+            })
+            lock_fixture(root)
+            with patch("lmu_shared_memory.validate_bundled_bridges", return_value=[bundle]):
+                make_share_copy.copy_backend(root, out)
+            self.assertEqual(sorted(p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()), sorted([
+                "iRacing_Backend/lmu_native_bridge.cpp", "iRacing_Backend/lmu_shared_memory.py",
+                relative + "/manifest.json", relative + "/lmu_native_bridge.dll",
+                "iRacing_Backend/lmu_lock.c", "iRacing_Backend/lmu_lock/lmu_lock.dll", "iRacing_Backend/lmu_lock/manifest.json",
+            ]))
+            with patch("lmu_shared_memory.validate_bundled_bridges", side_effect=ValueError("invalid bundle")):
+                with self.assertRaisesRegex(ValueError, "invalid bundle"):
+                    make_share_copy.copy_backend(root, Path(folder) / "invalid")
+            self.assertFalse((Path(folder) / "invalid").exists())
+
     def test_a_new_overlay_import_cannot_be_left_out_of_the_share(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

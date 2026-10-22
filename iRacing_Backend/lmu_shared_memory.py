@@ -18,6 +18,7 @@ import uuid
 
 SDK_DIR = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Le Mans Ultimate\Support\SharedMemoryInterface")
 BUILD_DIR = Path(__file__).resolve().parents[1] / "logs" / "lmu-native"
+BUNDLED_DIR = Path(__file__).with_name("lmu_bridges")
 HEADERS = ("SharedMemoryInterface.hpp", "InternalsPlugin.hpp", "PluginObjects.hpp")
 BRIDGE_SOURCE = Path(__file__).with_name("lmu_native_bridge.cpp")
 
@@ -34,9 +35,13 @@ def _unavailable(code):
         "MULTIPLE_GAME_PROCESSES": "LMU 프로세스가 여러 개여서 연결 대상을 확인할 수 없습니다.",
         "GAME_EXITED": "LMU가 종료되어 실시간 연결을 해제했습니다.",
         "NOT_OPEN": "실시간 연결을 먼저 시작해야 합니다.",
-        "ABI_MISMATCH": "설치된 LMU SDK와 실시간 브리지의 ABI가 일치하지 않습니다. 브리지를 다시 빌드해야 합니다.",
-        "NATIVE_NOT_BUILT": "설치된 LMU SDK에 맞춘 실시간 브리지를 먼저 빌드해야 합니다.",
-        "SDK_UNAVAILABLE": "설치된 LMU 공식 SDK 헤더를 찾을 수 없습니다. LMU_SDK_DIR의 Support/SharedMemoryInterface 경로를 확인해 주세요.",
+        "ABI_MISMATCH": "LMU 버전에 맞는 실시간 연결 파일을 확인하고 있습니다.",
+        "NATIVE_NOT_BUILT": "LMU 실시간 연결 파일을 자동으로 준비합니다.",
+        "SDK_UNAVAILABLE": "LMU 설치 파일을 확인할 수 없습니다. Steam에서 LMU 설치와 파일 무결성을 확인해 주세요.",
+        "CONNECTION_NEEDED": "LMU 실시간 연결을 켜면 필요한 파일을 자동으로 준비합니다.",
+        "CONNECTION_PREPARING": "LMU 버전에 맞는 연결 파일을 자동으로 받는 중입니다.",
+        "CONNECTION_UPDATE_PENDING": "현재 LMU 버전용 연결 파일을 준비 중입니다. 준비되면 자동으로 다시 연결합니다.",
+        "CONNECTION_DOWNLOAD_FAILED": "LMU 연결 파일을 받지 못했습니다. 인터넷 연결을 확인하고 다시 연결해 주세요.",
         "UNSUPPORTED_PLATFORM": "LMU 실시간 연결은 64비트 Windows Python에서 지원합니다.",
         "COMPILER_UNAVAILABLE": "Visual Studio C++ 빌드 도구를 찾을 수 없습니다.",
         "BUILD_FAILED": "LMU 실시간 브리지 빌드에 실패했습니다. 빌드 로그를 확인해 주세요.",
@@ -84,8 +89,48 @@ def _platform_check():
 def build_artifact_dir(sdk_dir=None):
     """Content-addressed native output; never overwrite a previous loaded DLL."""
     fingerprint = header_fingerprint(sdk_dir)
-    identity = hashlib.sha256(BRIDGE_SOURCE.read_bytes() + fingerprint.encode('ascii')).hexdigest()[:24]
+    identity = hashlib.sha256(bridge_source_bytes() + fingerprint.encode('ascii')).hexdigest()[:24]
     return BUILD_DIR / ('bridge-' + identity)
+
+
+def downloaded_bridge_dir(sdk_dir=None):
+    return BUILD_DIR / 'downloads' / build_artifact_dir(sdk_dir).name
+
+
+def bridge_source_bytes():
+    # Git source ZIPs use LF; Windows checkouts may use CRLF. C++ translation
+    # treats those identically, so the identity must not depend on installation.
+    return BRIDGE_SOURCE.read_bytes().replace(b'\r\n', b'\n')
+
+
+def validate_bundled_bridges(folder=None):
+    """Check redistributable artifacts without loading native code or reading game data."""
+    folder = Path(folder) if folder is not None else BUNDLED_DIR
+    artifacts = sorted(folder.glob('bridge-*'))
+    if not artifacts:
+        raise ValueError('배포할 LMU 브리지가 없습니다. python scripts/prepare_lmu_bridge.py를 실행하세요.')
+    source_hash = hashlib.sha256(bridge_source_bytes()).hexdigest()
+    for artifact in artifacts:
+        try:
+            manifest = json.loads((artifact / 'manifest.json').read_text(encoding='utf-8'))
+            dll = (artifact / 'lmu_native_bridge.dll').read_bytes()
+            fingerprint = manifest['header_fingerprint']
+            identity = hashlib.sha256(bridge_source_bytes() + fingerprint.encode('ascii')).hexdigest()[:24]
+            pe = struct.unpack_from('<I', dll, 0x3c)[0]
+            valid = (isinstance(fingerprint, str) and len(fingerprint) == 64 and
+                     all(c in '0123456789abcdef' for c in fingerprint) and
+                     artifact.name == 'bridge-' + identity and manifest.get('bridge_version') == 1 and
+                     manifest.get('source_sha256') == source_hash and
+                     manifest.get('dll_sha256') == hashlib.sha256(dll).hexdigest() and
+                     manifest.get('runtime') == 'STATIC_MSVC' and
+                     dll[:2] == b'MZ' and dll[pe:pe + 4] == b'PE\0\0' and
+                     struct.unpack_from('<H', dll, pe + 4)[0] == 0x8664 and
+                     {p.name for p in artifact.iterdir()} == {'manifest.json', 'lmu_native_bridge.dll'})
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, struct.error) as exc:
+            raise ValueError(f'LMU 배포 브리지 확인 실패: {artifact.name}') from exc
+        if not valid:
+            raise ValueError(f'LMU 배포 브리지 확인 실패: {artifact.name}')
+    return artifacts
 
 
 def build_native_bridge(sdk_dir=None, build_dir=None):
@@ -97,7 +142,15 @@ def build_native_bridge(sdk_dir=None, build_dir=None):
     if source._build_dir_override is None and (build_dir / 'manifest.json').is_file():
         # A verified immutable artifact can already be mapped by another app.
         # Reuse it without invoking the linker or touching any existing file.
-        return source.probe()
+        try:
+            return source.probe()
+        except LmuLiveUnavailable:
+            if build_dir.parent != BUNDLED_DIR:
+                raise
+            # Repair a damaged shipped pair locally, never overwrite a bundle
+            # which may already be loaded by another running app.
+            source = SharedMemorySource(sdk_dir=sdk_dir, build_dir=build_artifact_dir(sdk_dir))
+            build_dir = source.build_dir
     vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Microsoft Visual Studio/Installer/vswhere.exe"
     try:
         installations = subprocess.run(
@@ -122,7 +175,7 @@ def build_native_bridge(sdk_dir=None, build_dir=None):
         return f'"{text}"'
     script.write_text(
         f"@echo off\r\nset \"PATH={vswhere.parent};%PATH%\"\r\ncall {q(vcvars)} >nul\r\nif errorlevel 1 exit /b 1\r\n"
-        f"cl /nologo /std:c++17 /EHsc /LD /O2 /I{q(sdk_dir)} /FI{q(preinclude)} "
+        f"cl /nologo /std:c++17 /EHsc /LD /MT /O2 /I{q(sdk_dir)} /FI{q(preinclude)} "
         f"/Fo{q(build_dir / 'lmu_native_bridge.obj')} /Fe{q(dll_path)} {q(BRIDGE_SOURCE)} "
         f"/link /IMPLIB:{q(build_dir / 'lmu_native_bridge.lib')}\r\n",
         encoding="utf-8",
@@ -135,8 +188,9 @@ def build_native_bridge(sdk_dir=None, build_dir=None):
     manifest = {
         "bridge_version": 1,
         "header_fingerprint": fingerprint,
-        "source_sha256": hashlib.sha256(BRIDGE_SOURCE.read_bytes()).hexdigest(),
+        "source_sha256": hashlib.sha256(bridge_source_bytes()).hexdigest(),
         "dll_sha256": hashlib.sha256(dll_path.read_bytes()).hexdigest(),
+        "runtime": "STATIC_MSVC",
     }
     (build_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return source.probe()
@@ -163,7 +217,12 @@ class SharedMemorySource:
         if self._build_dir_override is not None:
             return self._build_dir_override
         if self._artifact_dir is None:
-            self._artifact_dir = build_artifact_dir(self.sdk_dir)
+            local = build_artifact_dir(self.sdk_dir)
+            downloaded = downloaded_bridge_dir(self.sdk_dir)
+            bundled = BUNDLED_DIR / local.name
+            self._artifact_dir = (downloaded if (downloaded / 'manifest.json').is_file() else
+                                  local if (local / 'manifest.json').is_file() else
+                                  bundled if (bundled / 'manifest.json').is_file() else local)
         return self._artifact_dir
 
     def configuration(self):
@@ -178,8 +237,10 @@ class SharedMemorySource:
             dll_hash = hashlib.sha256(dll_path.read_bytes()).hexdigest()
         except (OSError, ValueError) as exc:
             raise _unavailable("NATIVE_NOT_BUILT") from exc
+        if not isinstance(manifest, dict):
+            raise _unavailable("ABI_MISMATCH")
         if (manifest.get("header_fingerprint") != fingerprint or
-            manifest.get("source_sha256") != hashlib.sha256(BRIDGE_SOURCE.read_bytes()).hexdigest() or
+            manifest.get("source_sha256") != hashlib.sha256(bridge_source_bytes()).hexdigest() or
             manifest.get("dll_sha256") != dll_hash):
             raise _unavailable("ABI_MISMATCH")
         if self._dll is None:
@@ -201,7 +262,7 @@ class SharedMemorySource:
             abi = json.loads(buffer.value)
         except ValueError as exc:
             raise _unavailable("ABI_MISMATCH") from exc
-        if abi.get("pointer_size") != 8 or abi.get("bridge_version") != 1 or abi.get("header_fingerprint") != fingerprint:
+        if not isinstance(abi, dict) or abi.get("pointer_size") != 8 or abi.get("bridge_version") != 1 or abi.get("header_fingerprint") != fingerprint:
             raise _unavailable("ABI_MISMATCH")
         self._fingerprint = fingerprint
         return abi
@@ -216,13 +277,31 @@ class SharedMemorySource:
 
     def open(self):
         with self._guard:
-            diagnostics = self.probe()
+            diagnostics = self.prepare()
             if not self._handle:
                 self._handle = self._dll.lmu_open()
                 if not self._handle:
                     raise _unavailable(self._dll.lmu_error().decode("ascii", "replace"))
                 self._connection_id = uuid.uuid4().hex
             return {**diagnostics, "state": "CONNECTED", "attached": True}
+
+    def prepare(self, *, retry=False):
+        """Use a shipped reader, or request its precompiled replacement in a worker."""
+        if self._dll is None and self._build_dir_override is None:
+            self._artifact_dir = None
+        try:
+            return self.probe()
+        except LmuLiveUnavailable as exc:
+            if self._build_dir_override is not None or exc.code not in ('NATIVE_NOT_BUILT', 'ABI_MISMATCH'):
+                raise
+            self.close()
+            self._dll = None
+            from lmu_bridge_downloads import downloads
+            result = downloads.request(self.sdk_dir, retry=retry)
+            if result['state'] == 'READY':
+                self._artifact_dir = None
+                return self.probe()
+            raise _unavailable(result['state']) from exc
 
     def read(self, timeout_ms=200):
         if isinstance(timeout_ms, bool) or not isinstance(timeout_ms, int) or not 0 <= timeout_ms <= 1000:

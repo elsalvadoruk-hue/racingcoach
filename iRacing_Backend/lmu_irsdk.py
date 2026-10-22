@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import deque
 import math
+import os
 import re
 import time
 
@@ -192,6 +193,15 @@ def _wetness(ratio):
     return 7
 
 
+def shared_memory_source_factory():
+    """Use the Python reader; keep an explicit 2.0.3 rollback for live issues."""
+    if os.environ.get('IRACING_LMU_READER') == 'bridge':
+        from lmu_shared_memory import SharedMemorySource
+        return SharedMemorySource
+    from lmu_python_reader import PythonSharedMemorySource
+    return PythonSharedMemorySource
+
+
 class LmuIrsdk:
     """pyirsdk ``IRSDK`` lookalike over the LMU shared-memory bridge."""
 
@@ -228,8 +238,7 @@ class LmuIrsdk:
                 if self._candidate is None:
                     factory = self.source_factory
                     if factory is None:
-                        from lmu_shared_memory import SharedMemorySource
-                        factory = SharedMemorySource
+                        factory = shared_memory_source_factory()
                     self._candidate = factory()
                 opened = getattr(self._candidate, 'open', None)
                 if opened:
@@ -510,8 +519,11 @@ class LmuIrsdk:
 
     def status_message(self):
         messages = {
-            'NATIVE_NOT_BUILT': 'LMU 실시간 브리지가 아직 빌드되지 않았습니다. 설정 → LMU에서 빌드하세요.',
-            'ABI_MISMATCH': 'LMU가 업데이트되어 실시간 브리지를 다시 빌드해야 합니다. 설정 → LMU에서 빌드하세요.',
+            'NATIVE_NOT_BUILT': 'LMU 실시간 연결 파일을 자동으로 준비합니다.',
+            'ABI_MISMATCH': 'LMU 버전에 맞는 연결 파일을 확인 중입니다.',
+            'CONNECTION_PREPARING': 'LMU 실시간 연결 파일을 자동으로 받는 중입니다.',
+            'CONNECTION_UPDATE_PENDING': '현재 LMU 버전용 연결 파일을 준비 중입니다. 준비되면 자동으로 다시 연결합니다.',
+            'CONNECTION_DOWNLOAD_FAILED': '인터넷 연결을 확인하고 LMU 실시간 연결을 다시 켜 주세요.',
         }
         return messages.get(self.unavailable)
 

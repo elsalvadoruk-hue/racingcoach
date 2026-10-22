@@ -6,6 +6,13 @@ if errorlevel 1 goto folder_error
 
 call "scripts\find_python.bat"
 if not defined COACH_PYTHON goto no_python
+if defined COACH_PY_BUNDLED (
+  set "PYTHONHOME="
+  set "PYTHONPATH="
+  set "PYTHONSTARTUP="
+  set "PYTHONNOUSERSITE=1"
+  echo Bundled Python is included. No Python installation is required.
+)
 echo Using Python %COACH_PY_VERSION% ^(%COACH_PYTHON%^)
 if defined COACH_PY_NEW (
   echo This Python is newer than the tested 3.12 and 3.13. Trying it anyway.
@@ -54,6 +61,9 @@ exit /b 1
 :no_python
 echo.
 echo Python 3.10 or later was not found.
+echo Download racingcoach-setup-2.0.3.zip from the latest GitHub Releases page.
+echo It includes Python and the screen. Extract it and run its installer.
+echo For a source installation instead:
 echo Install Python 3.12 and run this again.
 echo   - With the Python install manager, open a command window and run:  py install 3.12
 echo   - Or download Python 3.12 from python.org and check "Add Python to PATH".

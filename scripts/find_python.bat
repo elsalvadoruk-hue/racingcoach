@@ -10,6 +10,14 @@ rem stdin comes from nul so a launcher that offers to install a missing version 
 set "COACH_PYTHON="
 set "COACH_PY_VERSION="
 set "COACH_PY_NEW="
+set "COACH_PY_BUNDLED="
+
+rem Ignore other Python settings even during the bundled interpreter's version probe.
+call :probe 10 99 runtime\python\python.exe -E -s
+if defined COACH_PYTHON (
+  set "COACH_PY_BUNDLED=1"
+  goto picked
+)
 
 rem A virtual environment the user set up comes first.
 rem (No quotes: a quoted program inside for /f gets its quotes stripped by cmd.)

@@ -47,7 +47,7 @@ RESTART_EXIT = 75
 # Set by the launcher for the backend it supervises: only then is there someone to restart it.
 RESTART_ENV = "COACH_LAUNCHER_RESTART"
 # Never replaced from a download: the receiver's records, and what a developer checkout keeps.
-KEEP = ("data/", ".git/", ".update/", "node_modules/", "logs/")
+KEEP = ("data/", ".git/", ".update/", "node_modules/", "logs/", "runtime/")
 CHECK_EVERY = 6 * 3600
 
 
@@ -213,6 +213,9 @@ def stage_app(release: dict, root: Path = ROOT, progress: Callable[[int], None] 
 
 
 def _kept(relative: str) -> bool:
+    # ZIP paths are case-sensitive, but the installed Windows filesystem is not.
+    if relative.replace('\\', '/').casefold() == 'runtime' or relative.replace('\\', '/').casefold().startswith('runtime/'):
+        return True
     return relative.startswith(KEEP) or "__pycache__" in relative.split("/")
 
 

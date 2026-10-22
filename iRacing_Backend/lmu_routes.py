@@ -112,16 +112,31 @@ def register_routes(app, services: LmuRoutesServices = LmuRoutesServices()):
     if services.corner_names_store is None:
         services = replace(services, corner_names_store=LmuCornerNamesStore())
     practice_store = services.practice_store if services.practice_store is not None else LmuPracticeStore()
-    def bridge_status():
-        from lmu_shared_memory import LmuLiveUnavailable, SharedMemorySource
-        source = SharedMemorySource()
+    def bridge_status(*, prepare=False):
+        from lmu_shared_memory import LmuLiveUnavailable, SharedMemorySource, _unavailable
+        from lmu_irsdk import shared_memory_source_factory
+        source_factory = shared_memory_source_factory()
+        reader = 'bridge' if source_factory is SharedMemorySource else 'python'
+        source = source_factory()
         try:
-            source.probe()
+            if prepare:
+                source.prepare(retry=True)
+            else:
+                source.probe()
             return {'state': 'READY', 'message': 'LMU 실시간 연결 준비됨 · LMU를 실행하고 차에 타면 자동으로 연결됩니다.',
-                    'sdk_dir': str(source.sdk_dir)}
+                    'sdk_dir': str(source.sdk_dir), 'reader': reader}
         except LmuLiveUnavailable as exc:
-            return {'state': exc.code, 'message': exc.message, 'sdk_dir': str(source.sdk_dir),
-                    'buildable': exc.code in ('NATIVE_NOT_BUILT', 'ABI_MISMATCH')}
+            if source_factory is SharedMemorySource and exc.code in ('NATIVE_NOT_BUILT', 'ABI_MISMATCH'):
+                from lmu_bridge_downloads import downloads
+                state = downloads.status(source.sdk_dir)['state']
+                if state == 'READY':
+                    state = 'CONNECTION_DOWNLOAD_FAILED'
+                exc = _unavailable(state)
+            message = exc.message
+            if reader == 'python' and exc.code in ('ABI_MISMATCH', 'NATIVE_NOT_BUILT'):
+                message = 'LMU 연결 구성 파일을 확인할 수 없습니다. 앱을 다시 설치해 주세요.'
+            return {'state': exc.code, 'message': message, 'sdk_dir': str(source.sdk_dir),
+                    'buildable': False, 'reader': reader}
         finally:
             source.close()
 
@@ -252,16 +267,15 @@ def register_routes(app, services: LmuRoutesServices = LmuRoutesServices()):
     async def get_lmu_bridge():
         return await asyncio.to_thread(bridge_status)
 
+    @app.post('/api/lmu/live/connect')
+    async def connect_lmu_live():
+        return await asyncio.to_thread(lambda: bridge_status(prepare=True))
+
     @app.post('/api/lmu/live/bridge/build')
-    async def build_lmu_bridge():
-        def build():
-            from lmu_shared_memory import LmuLiveUnavailable, build_native_bridge
-            try:
-                build_native_bridge()
-            except LmuLiveUnavailable as exc:
-                raise HTTPException(status_code=409, detail=exc.message) from exc
-            return bridge_status()
-        return await asyncio.to_thread(build)
+    async def legacy_build_lmu_bridge():
+        # Older cached screens may still send this request. Prepare a prebuilt
+        # reader for them too; an application route must never invoke a compiler.
+        return await asyncio.to_thread(lambda: bridge_status(prepare=True))
 
     def journal():
         from lmu_irsdk import shared
