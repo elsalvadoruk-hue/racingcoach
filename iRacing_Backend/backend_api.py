@@ -11,6 +11,8 @@ from reference_routes import ReferenceRoutesServices, register_routes as registe
 from settings_routes import SettingsRoutesServices, register_routes as register_settings_routes
 from practice_routes import PracticeRoutesServices, register_routes as register_practice_routes
 from memory_routes import MemoryRoutesServices, register_routes as register_memory_routes
+from corner_notes import CornerNotesStore
+from corner_notes_routes import CornerNotesRoutesServices, register_routes as register_corner_notes_routes
 from workspace_routes import WorkspaceRoutesServices, register_routes as register_workspace_routes
 from update_routes import UpdateRoutesServices, register_routes as register_update_routes
 import app_update
@@ -4280,6 +4282,20 @@ practice_drills = _handlers.practice_drills
 close_practice = _handlers.close_practice
 get_corner_names = _handlers.get_corner_names
 put_corner_names = _handlers.put_corner_names
+
+
+_CORNER_NOTE_STORES = {}
+
+
+def _corner_note_store():
+    path = Path(os.getenv('IRACING_CORNER_NOTES_PATH') or app_settings.data_dir() / 'corner-notes.json').resolve()
+    return _CORNER_NOTE_STORES.setdefault(path, CornerNotesStore(path))
+
+
+register_corner_notes_routes(app, CornerNotesRoutesServices(
+    get_store=_corner_note_store,
+    get_corner_definition_store=lambda: _CORNER_DEFINITION_STORE,
+))
 
 
 _handlers = register_memory_routes(app, MemoryRoutesServices(

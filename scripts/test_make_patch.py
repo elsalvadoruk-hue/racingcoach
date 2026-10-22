@@ -87,6 +87,12 @@ class PatchTests(unittest.TestCase):
         self.assertEqual((used / "data/radio_audio/aaa.mp3").read_bytes(), b"old clip")
         self.assertEqual((used / "data/radio_audio/ccc.mp3").read_bytes(), b"new clip")
 
+    def test_private_corner_notes_are_excluded_from_patch_and_share_data(self):
+        self.assertNotIn('corner-notes.json', make_share_copy.DATA_FILES)
+        code, archive, _ = self.make(**{'data/corner-notes.json': '{"text": "private corner note"}'})
+        self.assertEqual(code, 0)
+        self.assertNotIn('data/corner-notes.json', archive.namelist())
+
     def test_changed_packages_and_removed_files_are_pointed_out(self):
         code, archive, printed = self.make(**{"iRacing_Backend/requirements_core.txt": "fastapi\nnewpackage\n", "실행.bat": None})
         self.assertEqual(code, 0)
