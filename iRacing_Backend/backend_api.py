@@ -2388,6 +2388,10 @@ def _on_distance_axis(grid: dict[str, Any], distance: np.ndarray) -> dict[str, n
     span = np.maximum(source[right] - source[left], 1e-12)
     weight = np.clip((distance - source[left]) / span, 0.0, 1.0)
     moved: dict[str, np.ndarray] = {"distance_pct": distance}
+    # Preserve recording identity for geographic comparisons after resampling.
+    for key in ("_game", "_source_file"):
+        if key in grid:
+            moved[key] = grid[key]
     for key, values in grid.items():
         if key == "distance_pct" or key.startswith("_") or not isinstance(values, np.ndarray) or len(values) != len(source):
             continue

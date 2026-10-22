@@ -12,6 +12,7 @@ from reference_conditions import telemetry_reference_conditions
 from practice_metrics import KEPT_METRICS
 from closed_loop_coach import first_deviation
 from handling import analyze_handling
+from racing_line import racing_line_context, racing_line_offsets
 
 
 class CornerAnalysis:
@@ -301,10 +302,14 @@ class CornerAnalysis:
             results.append(result)
 
         ordered = sorted(results, key=lambda item: item['entry_pct'])
+        line_context = racing_line_context(target, reference, self.track_length_m,
+                                          [(item['entry_pct'], item['exit_pct']) for item in ordered])
         for index, corner in enumerate(ordered):
             next_corner = ordered[index + 1] if index + 1 < len(ordered) else None
             corner['phases'] = self._corner_phases(target, reference, corner, next_corner)
             corner['first_deviation'] = first_deviation(corner, self.track_length_m)
+            corner['line'] = racing_line_offsets(target, reference, corner, self.track_length_m,
+                                                 _context=line_context)
 
         handling = self._handling_analysis(ordered)
         for corner in ordered:

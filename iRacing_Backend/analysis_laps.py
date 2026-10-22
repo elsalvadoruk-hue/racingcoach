@@ -533,7 +533,12 @@ class LapAnalysis:
         distance = distance[unique]
         grid = np.linspace(0.0, 1.0, self.grid_points)
 
-        output: dict[str, np.ndarray[Any, Any]] = {"distance_pct": grid, "_lap_number": lap.lap_number}
+        source_path = getattr(self.telemetry, "path", None)
+        output: dict[str, np.ndarray[Any, Any]] = {
+            "distance_pct": grid, "_lap_number": lap.lap_number,
+            "_game": self.telemetry.metadata.get("game") or "iracing",
+            "_source_file": str(source_path.resolve()) if source_path is not None else None,
+        }
         source_times = self.channels.get("SessionTime")
         sample_times = source_times[start : end + 1].astype(float)[order][unique] if source_times is not None else None
         channel_names = [
