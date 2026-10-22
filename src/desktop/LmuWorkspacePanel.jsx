@@ -33,6 +33,8 @@ const BRIDGE_STATES = {
   CONNECTION_UPDATE_PENDING: ['호환 연결 파일 준비 중', 'outline'],
   CONNECTION_DOWNLOAD_FAILED: ['연결 파일 받기 실패', 'destructive'],
   SDK_UNAVAILABLE: ['LMU 설치 확인 필요', 'outline'],
+  CONNECTION_SDK_UNSUPPORTED: ['앱 업데이트 필요', 'destructive'],
+  GAME_NOT_RUNNING: ['LMU 실행 필요', 'outline'],
   UNSUPPORTED_PLATFORM: ['지원하지 않는 환경', 'outline'],
 };
 
@@ -61,10 +63,12 @@ export function LmuBridgePanel() {
     <CardContent className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2"><Badge variant={variant}>{label}</Badge><span>{bridge?.message}</span></div>
       {bridge?.state === 'READY' && <p>실시간 연결 준비가 끝났습니다. LMU를 실행하고 차에 탄 뒤 음성 코치에서 스포터나 피트월을 켜세요.</p>}
-      <p>연결에 필요한 파일은 앱이 자동으로 준비합니다. 처음 연결할 때 추가 파일이 필요하면 인터넷에서 받습니다.</p>
+      {bridge?.reader === 'bridge'
+        ? <p>연결에 필요한 파일은 앱이 자동으로 준비합니다. 처음 연결할 때 추가 파일이 필요하면 인터넷에서 받습니다.</p>
+        : <p>실시간 연결은 자동입니다. LMU가 일반 데이터 구조를 바꾸면 앱이 설치 파일을 읽어 맞춥니다. 연결 방식 자체가 바뀌면 앱 업데이트가 필요합니다.</p>}
       {error && <p role="alert">{error}</p>}
       <div className="flex flex-wrap gap-2">
-        {bridge && !['READY', 'SDK_UNAVAILABLE', 'UNSUPPORTED_PLATFORM'].includes(bridge.state) && <Button disabled={busy || bridge.state === 'CONNECTION_PREPARING'} onClick={connect}>{busy || bridge.state === 'CONNECTION_PREPARING' ? '연결 준비 중…' : '실시간 연결'}</Button>}
+        {bridge && !['READY', 'SDK_UNAVAILABLE', 'UNSUPPORTED_PLATFORM', 'CONNECTION_SDK_UNSUPPORTED'].includes(bridge.state) && <Button disabled={busy || bridge.state === 'CONNECTION_PREPARING'} onClick={connect}>{busy || bridge.state === 'CONNECTION_PREPARING' ? '연결 준비 중…' : '실시간 연결'}</Button>}
         <Button variant="outline" disabled={busy} onClick={() => refresh()}>상태 새로고침</Button>
         <Button variant="outline" asChild><a href="/lmu-bridge-guide.html" target="_blank" rel="noreferrer">연결 도움말</a></Button>
       </div>

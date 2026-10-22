@@ -42,7 +42,7 @@ class LmuMainIntegrationTests(unittest.TestCase):
             source = root / 'recording.duckdb'
             source.write_bytes(b'not opened without optional dependency')
             store = root / 'lmu-practice.sqlite3'
-            with (patch.dict(os.environ, {'LMU_TELEMETRY_DIRS': str(root)}),
+            with (patch.dict(os.environ, {'LMU_TELEMETRY_DIRS': str(root), 'IRACING_LMU_READER': 'bridge'}),
                   patch('builtins.__import__', side_effect=without_duckdb),
                   patch.object(LmuPracticeStore, '__init__', lambda self: setattr(self, 'path', store)),
                   patch.object(SharedMemorySource, 'probe', not_built),

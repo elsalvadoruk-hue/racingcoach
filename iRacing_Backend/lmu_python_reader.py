@@ -22,7 +22,7 @@ LOCK_SOURCE = Path(__file__).with_name('lmu_lock.c')
 
 def _unsupported_sdk():
     return LmuLiveUnavailable('CONNECTION_SDK_UNSUPPORTED',
-                              '설치된 LMU SDK의 연결 규약이나 필드를 지원하지 않습니다. 앱 업데이트가 필요합니다.')
+                              'LMU가 연결 방식을 바꿨습니다. 앱 업데이트가 필요합니다.')
 
 
 def load_lock_dll(folder=None, *, source=None, existing=None):
@@ -44,7 +44,7 @@ def load_lock_dll(folder=None, *, source=None, existing=None):
         if not valid:
             raise ValueError('lock DLL manifest mismatch')
     except (OSError, ValueError, TypeError, AttributeError, struct.error) as exc:
-        raise _unavailable('ABI_MISMATCH') from exc
+        raise LmuLiveUnavailable('ABI_MISMATCH', 'LMU 연결 구성 파일을 확인할 수 없습니다. 앱을 다시 설치해 주세요.') from exc
     try:
         dll = existing if existing is not None else ctypes.CDLL(str(path.resolve()))
         dll.lmu_lock_version.argtypes, dll.lmu_lock_version.restype = [], ctypes.c_int
@@ -55,7 +55,7 @@ def load_lock_dll(folder=None, *, source=None, existing=None):
             raise ValueError('unsupported lock DLL version')
         return dll
     except (OSError, AttributeError, ValueError) as exc:
-        raise _unavailable('ABI_MISMATCH') from exc
+        raise LmuLiveUnavailable('ABI_MISMATCH', 'LMU 연결 구성 파일을 확인할 수 없습니다. 앱을 다시 설치해 주세요.') from exc
 
 
 class _Decoder:

@@ -19,7 +19,7 @@ test('a ready bundled bridge guides the driver to connect without offering a bui
 });
 
 test('a missing connection file is prepared with one connect action and no build', async () => {
-  requestJson.mockResolvedValueOnce({ state: 'ABI_MISMATCH', buildable: true, message: 'SDK 변경' });
+  requestJson.mockResolvedValueOnce({ state: 'ABI_MISMATCH', reader: 'bridge', buildable: true, message: 'SDK 변경' });
   requestJson.mockResolvedValueOnce({ state: 'READY', buildable: false, message: '빌드 완료' });
   render(<LmuBridgePanel />);
   const connect = await screen.findByRole('button', { name: '실시간 연결' });
@@ -44,4 +44,21 @@ test('a missing SDK does not offer a build or claim the bridge is usable', async
   expect(await screen.findByText('LMU 설치를 확인하세요')).toBeVisible();
   expect(screen.queryByRole('button', { name: '실시간 브리지 빌드' })).not.toBeInTheDocument();
   expect(screen.queryByText(/브리지를 사용할 수 있습니다/)).not.toBeInTheDocument();
+});
+
+test('the default reader explains automatic connection without a download step', async () => {
+  requestJson.mockResolvedValue({ state: 'READY', reader: 'python', message: '준비 완료' });
+  render(<LmuBridgePanel />);
+  expect(await screen.findByText(/실시간 연결은 자동입니다/)).toBeVisible();
+  expect(screen.queryByText(/인터넷에서 받습니다/)).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '실시간 연결' })).not.toBeInTheDocument();
+});
+
+test('a changed protocol asks for an app update without offering preparation', async () => {
+  requestJson.mockResolvedValue({ state: 'CONNECTION_SDK_UNSUPPORTED', reader: 'python',
+    message: 'LMU가 연결 방식을 바꿨습니다. 앱 업데이트가 필요합니다.' });
+  render(<LmuBridgePanel />);
+  expect(await screen.findByText('앱 업데이트 필요')).toBeVisible();
+  expect(screen.queryByRole('button', { name: '실시간 연결' })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Visual Studio|파일을 받는 중/)).not.toBeInTheDocument();
 });

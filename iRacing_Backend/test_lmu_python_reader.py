@@ -347,12 +347,14 @@ class PythonReaderTests(unittest.TestCase):
         from lmu_irsdk import LmuIrsdk
         api=FakeWindows(self.layout,base_frame(self.layout).data)
         sdk=LmuIrsdk(clock=lambda: 0.)
-        with (patch.dict(os.environ,{'IRACING_LMU_READER':'python'}),
+        with (patch.dict(os.environ,{'IRACING_LMU_READER':''}),
               patch.dict(sys.modules,{'lmu_bridge_downloads':None}),
               patch('lmu_python_reader._Windows',return_value=api),
               patch('subprocess.run',side_effect=AssertionError('no compiler')),
               patch('subprocess.Popen',side_effect=AssertionError('no child process')),
               patch('urllib.request.urlopen',side_effect=AssertionError('no download')),
+              patch('lmu_shared_memory.build_artifact_dir',side_effect=AssertionError('no old bundle')),
+              patch('lmu_shared_memory.downloaded_bridge_dir',side_effect=AssertionError('no old cache')),
               patch('lmu_shared_memory.build_native_bridge',side_effect=AssertionError('no build'))):
             try:
                 self.assertTrue(sdk.startup())
@@ -373,7 +375,7 @@ class PythonReaderTests(unittest.TestCase):
         app=FastAPI()
         register_routes(app,LmuRoutesServices(discover_dirs=lambda: (),list_files=lambda _: [],
                         dependency_check=lambda: None,practice_store=Mock(),corner_names_store=Mock()))
-        with (patch.dict(os.environ,{'IRACING_LMU_READER':'python'}),
+        with (patch.dict(os.environ,{'IRACING_LMU_READER':''}),
               patch.dict(sys.modules,{'lmu_bridge_downloads':None}),
               patch('lmu_python_reader._Windows',side_effect=AssertionError('no game API')),
               patch('subprocess.run',side_effect=AssertionError('no compiler')),
@@ -437,16 +439,16 @@ class ReaderPureTests(unittest.TestCase):
         self.assertIsNotNone(difference({'vars':{'CarIdxLapDistPct':[3.]}},
                                        {'vars':{'CarIdxLapDistPct':[3.,3.]}},adapter=True))
 
-    def test_reader_selection_requires_exact_opt_in_and_preserves_source_override(self):
+    def test_reader_selection_defaults_to_python_and_preserves_explicit_bridge_and_source_override(self):
         from lmu_irsdk import LmuIrsdk,shared_memory_source_factory
         from lmu_shared_memory import SharedMemorySource
-        for value in ('','native','PYTHON','invalid'):
+        for value in ('','python','native','PYTHON','invalid'):
             with self.subTest(value=value),patch.dict(os.environ,{'IRACING_LMU_READER':value}):
-                self.assertIs(shared_memory_source_factory(),SharedMemorySource)
+                self.assertIs(shared_memory_source_factory(),PythonSharedMemorySource)
         with patch.dict(os.environ,{},clear=True):
-            self.assertIs(shared_memory_source_factory(),SharedMemorySource)
-        with patch.dict(os.environ,{'IRACING_LMU_READER':'python'}):
             self.assertIs(shared_memory_source_factory(),PythonSharedMemorySource)
+        with patch.dict(os.environ,{'IRACING_LMU_READER':'bridge'}):
+            self.assertIs(shared_memory_source_factory(),SharedMemorySource)
             source=Mock()
             sdk=LmuIrsdk(source_factory=lambda: source)
             try:

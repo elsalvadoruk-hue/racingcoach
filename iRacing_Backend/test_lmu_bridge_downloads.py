@@ -2,6 +2,7 @@
 import io
 import json
 import hashlib
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -164,7 +165,7 @@ class BridgeDownloadTests(unittest.TestCase):
         from lmu_routes import LmuRoutesServices, register_routes
         app = FastAPI()
         register_routes(app, LmuRoutesServices(practice_store=Mock(), corner_names_store=Mock()))
-        with TestClient(app) as client, patch.object(sm, 'SharedMemorySource') as source_type, \
+        with patch.dict(os.environ, {'IRACING_LMU_READER': 'bridge'}), TestClient(app) as client, patch.object(sm, 'SharedMemorySource') as source_type, \
                 patch.object(sm, 'build_native_bridge') as compiler:
             source = source_type.return_value
             source.sdk_dir = self.sdk

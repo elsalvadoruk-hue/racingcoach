@@ -63,6 +63,8 @@ class AppAssetTests(unittest.TestCase):
             backend.mkdir()
             (backend / "backend_api.py").write_text('APP_VERSION = "2.0.1"\n', encoding="utf-8")
             (backend / "lmu_shared_memory.py").write_text("# bundle support\n", encoding="utf-8")
+            from test_make_patch import lock_fixture
+            lock_fixture(root)
             source = lmu_shared_memory.bridge_source_bytes()
             (backend / "lmu_native_bridge.cpp").write_bytes(source)
             fingerprint = "a" * 64
@@ -91,6 +93,7 @@ class AppAssetTests(unittest.TestCase):
                 with zipfile.ZipFile(target) as archive:
                     member = "racingcoach-2.0.1/" + (bundle / "lmu_native_bridge.dll").relative_to(root).as_posix()
                     self.assertEqual(archive.read(member), dll)
+                    self.assertIn('racingcoach-2.0.1/iRacing_Backend/lmu_lock/lmu_lock.dll', archive.namelist())
                 (bundle / "lmu_native_bridge.dll").write_bytes(b"damaged")
                 with self.assertRaisesRegex(ValueError, "LMU"):
                     make_release_assets.make_app(root, root / "bad", allow_dirty=True)
