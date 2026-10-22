@@ -65,7 +65,7 @@ test('energy explains the pit-wall values and that its voice is still off, witho
 test('the default iRacing manual retains its heading, twenty chapters and empty hint', () => {
   render(<UserManual onNavigate={jest.fn()} />);
   expect(screen.getByRole('heading', { name: '기능별 사용법' })).toBeVisible();
-  expect(screen.getByText(/2.0.2 데스크톱 화면 기준입니다/)).toBeVisible();
+  expect(screen.getByText(/2.0.3 데스크톱 화면 기준입니다/)).toBeVisible();
   expect(screen.getByText(/기능을 사용하려면 IBT 파일을 선택하세요/)).toBeVisible();
   expect(within(screen.getByRole('navigation', { name: '매뉴얼 목차' })).getAllByRole('link')).toHaveLength(20);
   expect(screen.getByRole('heading', { name: '20. 실시간 오버레이: 게임 위 페달 그래프' })).toBeVisible();
