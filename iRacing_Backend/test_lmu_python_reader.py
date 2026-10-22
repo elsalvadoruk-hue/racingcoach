@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from lmu_python_reader import PythonSharedMemorySource, FrameProcessor, class_key, tyre_wet
 from lmu_sdk_layout import load_layout
@@ -343,8 +343,94 @@ class PythonReaderTests(unittest.TestCase):
         self.assertEqual(result['measured_outputs'],5)
         self.assertIn('UNFLAGGED_NEW_SCORING_ADOPTED',result['assertions'])
 
+    def test_selected_app_reader_opens_and_reads_without_build_or_download(self):
+        from lmu_irsdk import LmuIrsdk
+        api=FakeWindows(self.layout,base_frame(self.layout).data)
+        sdk=LmuIrsdk(clock=lambda: 0.)
+        with (patch.dict(os.environ,{'IRACING_LMU_READER':'python'}),
+              patch.dict(sys.modules,{'lmu_bridge_downloads':None}),
+              patch('lmu_python_reader._Windows',return_value=api),
+              patch('subprocess.run',side_effect=AssertionError('no compiler')),
+              patch('subprocess.Popen',side_effect=AssertionError('no child process')),
+              patch('urllib.request.urlopen',side_effect=AssertionError('no download')),
+              patch('lmu_shared_memory.build_native_bridge',side_effect=AssertionError('no build'))):
+            try:
+                self.assertTrue(sdk.startup())
+                self.assertIsInstance(sdk.source,PythonSharedMemorySource)
+                sdk.freeze_var_buffer_latest()
+                self.assertEqual(sdk.vars['Speed'],5.)
+                self.assertTrue(sdk.is_connected)
+                self.assertTrue(sdk.info)
+            finally:
+                sdk.shutdown()
+        self.assertTrue(api.unmapped)
+        self.assertEqual(len(api.closed),6)
+
+    def test_selected_setup_routes_probe_prepare_and_fail_without_download_fallback(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from lmu_routes import LmuRoutesServices,register_routes
+        app=FastAPI()
+        register_routes(app,LmuRoutesServices(discover_dirs=lambda: (),list_files=lambda _: [],
+                        dependency_check=lambda: None,practice_store=Mock(),corner_names_store=Mock()))
+        with (patch.dict(os.environ,{'IRACING_LMU_READER':'python'}),
+              patch.dict(sys.modules,{'lmu_bridge_downloads':None}),
+              patch('lmu_python_reader._Windows',side_effect=AssertionError('no game API')),
+              patch('subprocess.run',side_effect=AssertionError('no compiler')),
+              patch('subprocess.Popen',side_effect=AssertionError('no child process')),
+              patch('urllib.request.urlopen',side_effect=AssertionError('no download')),
+              patch('lmu_shared_memory.build_native_bridge',side_effect=AssertionError('no build')),
+              patch('lmu_irsdk.shared',return_value=Mock()),TestClient(app) as client):
+            for method,path in (('GET','/api/lmu/live/bridge'),('POST','/api/lmu/live/connect'),
+                                ('POST','/api/lmu/live/bridge/build')):
+                result=client.request(method,path)
+                self.assertEqual(result.status_code,200)
+                self.assertEqual(result.json()['state'],'READY')
+                for code in ('ABI_MISMATCH','NATIVE_NOT_BUILT','SDK_UNAVAILABLE','CONNECTION_SDK_UNSUPPORTED'):
+                    with self.subTest(path=path,code=code),patch.object(
+                            PythonSharedMemorySource,'_load',side_effect=LmuLiveUnavailable(code,'test unavailable')):
+                        result=client.request(method,path)
+                        self.assertEqual(result.status_code,200)
+                        self.assertEqual(result.json()['state'],code)
+                        self.assertFalse(result.json()['buildable'])
+            # The settings page embeds the same selected-reader status.
+            with patch('lmu_irsdk.shared',return_value=Mock(journal=Mock(status=lambda: {}))):
+                self.assertEqual(client.get('/api/lmu/status').json()['bridge']['state'],'READY')
+
+    def test_released_oracle_outputs_translate_to_identical_sdk_variables_and_sessions(self):
+        sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
+        from dev_lmu_oracle import run_fixture
+        from dev_lmu_layout_check import find_msvc
+        try: find_msvc()
+        except (OSError,RuntimeError): self.skipTest('MSVC developer tools unavailable')
+        with patch('lmu_lap_verdicts.LapVerdicts.observe',side_effect=AssertionError('no user history')) as observer:
+            result=run_fixture(adapters=True)
+        observer.assert_not_called()
+        self.assertEqual(result['differences'],[])
+        self.assertEqual(result['adapter_frames'],45)
+        self.assertEqual(result['adapter_differences'],[])
+
 
 class ReaderPureTests(unittest.TestCase):
+    def test_reader_selection_requires_exact_opt_in_and_preserves_source_override(self):
+        from lmu_irsdk import LmuIrsdk,shared_memory_source_factory
+        from lmu_shared_memory import SharedMemorySource
+        for value in ('','native','PYTHON','invalid'):
+            with self.subTest(value=value),patch.dict(os.environ,{'IRACING_LMU_READER':value}):
+                self.assertIs(shared_memory_source_factory(),SharedMemorySource)
+        with patch.dict(os.environ,{},clear=True):
+            self.assertIs(shared_memory_source_factory(),SharedMemorySource)
+        with patch.dict(os.environ,{'IRACING_LMU_READER':'python'}):
+            self.assertIs(shared_memory_source_factory(),PythonSharedMemorySource)
+            source=Mock()
+            sdk=LmuIrsdk(source_factory=lambda: source)
+            try:
+                self.assertTrue(sdk.startup())
+                self.assertIs(sdk.source,source)
+                source.open.assert_called_once_with()
+            finally:
+                sdk.shutdown()
+
     def test_class_hash_and_compound_bytes(self):
         self.assertEqual(class_key(b''),0)
         self.assertEqual(class_key(b'GT3\0ignored'),class_key(b'GT3'))

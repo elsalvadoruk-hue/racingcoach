@@ -114,7 +114,9 @@ def register_routes(app, services: LmuRoutesServices = LmuRoutesServices()):
     practice_store = services.practice_store if services.practice_store is not None else LmuPracticeStore()
     def bridge_status(*, prepare=False):
         from lmu_shared_memory import LmuLiveUnavailable, SharedMemorySource, _unavailable
-        source = SharedMemorySource()
+        from lmu_irsdk import shared_memory_source_factory
+        source_factory = shared_memory_source_factory()
+        source = source_factory()
         try:
             if prepare:
                 source.prepare(retry=True)
@@ -123,7 +125,7 @@ def register_routes(app, services: LmuRoutesServices = LmuRoutesServices()):
             return {'state': 'READY', 'message': 'LMU 실시간 연결 준비됨 · LMU를 실행하고 차에 타면 자동으로 연결됩니다.',
                     'sdk_dir': str(source.sdk_dir)}
         except LmuLiveUnavailable as exc:
-            if exc.code in ('NATIVE_NOT_BUILT', 'ABI_MISMATCH'):
+            if source_factory is SharedMemorySource and exc.code in ('NATIVE_NOT_BUILT', 'ABI_MISMATCH'):
                 from lmu_bridge_downloads import downloads
                 state = downloads.status(source.sdk_dir)['state']
                 if state == 'READY':

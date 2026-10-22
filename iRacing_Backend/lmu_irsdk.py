@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import deque
 import math
+import os
 import re
 import time
 
@@ -188,6 +189,15 @@ def _wetness(ratio):
     return 7
 
 
+def shared_memory_source_factory():
+    """Select the opt-in reader at connection time, including setup probes."""
+    if os.environ.get('IRACING_LMU_READER') == 'python':
+        from lmu_python_reader import PythonSharedMemorySource
+        return PythonSharedMemorySource
+    from lmu_shared_memory import SharedMemorySource
+    return SharedMemorySource
+
+
 class LmuIrsdk:
     """pyirsdk ``IRSDK`` lookalike over the LMU shared-memory bridge."""
 
@@ -224,8 +234,7 @@ class LmuIrsdk:
                 if self._candidate is None:
                     factory = self.source_factory
                     if factory is None:
-                        from lmu_shared_memory import SharedMemorySource
-                        factory = SharedMemorySource
+                        factory = shared_memory_source_factory()
                     self._candidate = factory()
                 opened = getattr(self._candidate, 'open', None)
                 if opened:

@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 
 from dev_lmu_layout_check import ROOT, compile_cpp
 from lmu_python_reader import FrameProcessor
@@ -59,6 +60,45 @@ def python_result(processor,raw):
         return {'error':'SHARED_LAYOUT_INVALID'}
 
 
+class AdapterParity:
+    """Feed both results through the unchanged SDK adapter; retain no values."""
+    def __init__(self):
+        from lmu_irsdk import LmuIrsdk
+        self.now = 0.
+        self.sources = [self.Feed(), self.Feed()]
+        self.adapters = [LmuIrsdk(source_factory=lambda source=source: source,
+                                  clock=lambda: self.now) for source in self.sources]
+        for sdk in self.adapters:
+            # Offline comparison must not write replayed laps to user history.
+            sdk.lap_verdicts = SimpleNamespace(observe=lambda _snapshot: None)
+        self.frames = 0
+
+    class Feed:
+        def open(self): pass
+        def close(self): pass
+        def read(self, timeout_ms=0):
+            if 'error' in self.result:
+                raise LmuLiveUnavailable(self.result['error'], 'offline frame error')
+            return self.result['snapshot']
+
+    def frame(self, expected, actual):
+        self.now += 1 / 90
+        states = []
+        for sdk, source, result in zip(self.adapters, self.sources, (expected, actual)):
+            source.result = result
+            sdk.startup()
+            sdk.freeze_var_buffer_latest()
+            states.append({'vars': sdk.vars, 'info': sdk.info,
+                           'connected': sdk.is_connected, 'error': sdk.unavailable})
+        self.frames += 1
+        # Exact comparison here: no extra tolerance for translated variables.
+        mismatch = difference(*states)
+        for sdk in self.adapters:
+            if not sdk.is_connected:
+                sdk.shutdown()
+        return mismatch
+
+
 def bridge_include():
     # The branch must still use exactly the released main bridge as its oracle.
     main_source=subprocess.check_output(['git','show','main:iRacing_Backend/lmu_native_bridge.cpp'],cwd=ROOT)
@@ -78,7 +118,7 @@ def fixture_code():
     raise RuntimeError('released native fixture not found')
 
 
-def run_fixture(sdk_dir=None):
+def run_fixture(sdk_dir=None, *, adapters=False):
     sdk_dir=resolve_sdk_dir(sdk_dir)
     layout=load_layout(sdk_dir)
     original=fixture_code()
@@ -131,7 +171,7 @@ int main(int argc,char** argv) {
             raise RuntimeError('released fixture failed; refusing parity verification')
         lines=result.stdout.decode('utf-8').splitlines()
         parity=[json.loads(line.split('PARITY:',1)[1]) for line in lines if 'PARITY:' in line]
-        processors={}; differences=[]; frames=0
+        processors={}; differences=[]; frames=0; adapter_states={}; adapter_differences=[]
         with raw_path.open('rb') as stream:
             for expected in parity:
                 state=struct.unpack('<I',stream.read(4))[0]
@@ -146,6 +186,10 @@ int main(int argc,char** argv) {
                 wanted={key:expected[key] for key in ('snapshot','error') if key in expected}
                 mismatch=difference(wanted,actual)
                 if mismatch: differences.append({'frame':frames,'path':mismatch})
+                if adapters:
+                    if state not in adapter_states: adapter_states[state]=AdapterParity()
+                    mismatch=adapter_states[state].frame(wanted,actual)
+                    if mismatch: adapter_differences.append({'frame':frames,'path':mismatch})
             if stream.read(1): raise RuntimeError('extra fixture trace frames')
     # Collect only scenario labels; never persist snapshot values.
     outputs=sorted(set(line.split(':',1)[0] for line in lines if line.startswith(('TRAFFIC_','MEASURED_')) and ':' in line))
@@ -156,6 +200,7 @@ int main(int argc,char** argv) {
         raise RuntimeError('released fixture scenario coverage is incomplete')
     return {'frames':frames,'busy_calls':sum(row['result']==0 for row in parity),
             'outputs':outputs,'assertions':assertions,'differences':differences,
+            'adapter_frames':frames if adapters else 0,'adapter_differences':adapter_differences,
             'traffic_outputs':sum(n.startswith('TRAFFIC_') for n in outputs),
             'measured_outputs':sum(n.startswith('MEASURED_') for n in outputs)}
 
@@ -281,9 +326,11 @@ def save_report(result):
     return path
 
 
-def run_capture(path,exe,layout):
+def run_capture(path,exe,layout,*,adapters=False):
     from capture_lmu_raw import read_header,iter_frames
     frames=0; differences=[]; mismatch_count=0
+    adapter=AdapterParity() if adapters else None
+    adapter_count=0; adapter_differences=[]
     with Path(path).open('rb') as stream:
         header=read_header(stream)
         if (header['header_fingerprint']!=layout.fingerprint or header['protocol_fingerprint']!=layout.protocol_fingerprint
@@ -300,30 +347,40 @@ def run_capture(path,exe,layout):
                 if mismatch:
                     mismatch_count+=1
                     if len(differences)<10: differences.append({'frame':frames,'path':mismatch})
-    return {'frames':frames,'difference_count':mismatch_count,'differences':differences,'passed':frames>0 and mismatch_count==0}
+                if adapter:
+                    mismatch=adapter.frame(wanted,actual)
+                    if mismatch:
+                        adapter_count+=1
+                        if len(adapter_differences)<10: adapter_differences.append({'frame':frames,'path':mismatch})
+    return {'frames':frames,'difference_count':mismatch_count,'differences':differences,
+            'adapter_frames':adapter.frames if adapter else 0,'adapter_difference_count':adapter_count,
+            'adapter_differences':adapter_differences,'passed':frames>0 and mismatch_count==0 and adapter_count==0}
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sdk-dir',type=Path)
     parser.add_argument('--capture',type=Path,help='compare an existing local capture; never uploads raw frames')
+    parser.add_argument('--adapter',action='store_true',help='also compare translated SDK variables and session information exactly')
     args=parser.parse_args()
     sdk=resolve_sdk_dir(args.sdk_dir); layout=load_layout(sdk)
     if args.capture:
         with tempfile.TemporaryDirectory(prefix='lmu-capture-oracle-') as temp:
-            result={'capture':run_capture(args.capture,build_stream_oracle(temp,sdk),layout)}
+            result={'capture':run_capture(args.capture,build_stream_oracle(temp,sdk),layout,adapters=args.adapter)}
         result['passed']=result['capture']['passed']
         path=save_report(result)
         print(json.dumps({'passed':result['passed'],'frames':result['capture']['frames'],
-                          'difference_count':result['capture']['difference_count'],'report':str(path)}))
+                          'difference_count':result['capture']['difference_count'],
+                          'adapter_frames':result['capture']['adapter_frames'],
+                          'adapter_difference_count':result['capture']['adapter_difference_count'],'report':str(path)}))
         return 0 if result['passed'] else 1
-    result={'fixture':run_fixture(sdk),'header_fingerprint':layout.fingerprint,
+    result={'fixture':run_fixture(sdk,adapters=args.adapter),'header_fingerprint':layout.fingerprint,
             'oracle_sha256':hashlib.sha256(BRIDGE.read_bytes().replace(b'\r\n',b'\n')).hexdigest()}
     if not result['fixture']['differences']:
         with tempfile.TemporaryDirectory(prefix='lmu-oracle-') as temp:
             exe=build_stream_oracle(temp,sdk)
             result['random']=run_random(exe,layout)
-    result['passed']=not result['fixture']['differences'] and 'random' in result and not result['random']['differences']
+    result['passed']=not result['fixture']['differences'] and not result['fixture']['adapter_differences'] and 'random' in result and not result['random']['differences']
     path=save_report(result)
     print(json.dumps({'passed':result['passed'],'fixture_frames':result['fixture']['frames'],
                       'random_frames':result.get('random',{}).get('frames',0),'report':str(path)}))
