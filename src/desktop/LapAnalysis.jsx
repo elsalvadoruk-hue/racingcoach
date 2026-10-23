@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import LapRangeFilter, { lapsInRange } from '../components/LapRangeFilter';
 import LapRecords from './LapRecords';
-import LapTimeUse from '../components/LapTimeUse';
+import { DeferredLapTimeUse as LapTimeUse } from '../components/DeferredCharts';
 import { summarize } from '../components/CornerConsistency';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';

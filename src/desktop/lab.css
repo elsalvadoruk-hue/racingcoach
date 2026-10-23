@@ -438,7 +438,7 @@ body { min-width: 1100px; }
 .insight-actions button:disabled { opacity:.55; cursor:default; }
 .insight-actions button > span { display:flex; align-items:center; gap:8px; }
 .insight-actions b { font-weight:500; font-size:13px; }
-.insight-actions strong { margin-left:auto; font-family:Consolas,monospace; font-size:16px; }
+.insight-actions strong { margin-left:auto; font-family:inherit; font-variant-numeric:tabular-nums; font-size:16px; }
 .insight-actions small { display:block; margin-top:3px; color:hsl(var(--muted-foreground)); font-size:11px; }
 .coaching-panel .practice-note { margin:0; padding:10px; }
 .coaching-panel .practice-note p { font-size:12px; line-height:1.55; }
@@ -789,11 +789,11 @@ body { min-width: 1100px; }
 .corner-lab[data-game=lmu] .lab-main > .wide-workspace:not(.lap-analysis):not(.expert-workspace) > * { flex-shrink:0; }
 .session-subtitle { color:hsl(var(--muted-foreground)); font-size:12px; display:flex; align-items:center; gap:8px; }
 .corner-phases { display:flex; flex-direction:column; gap:6px; flex-shrink:0; }
-.phase-bar { display:flex; gap:3px; margin:0; overflow-x:auto; }
-.phase-cell { flex:1 0 50px; min-width:0; border:1px solid hsl(var(--border)); border-radius:5px; padding:5px 3px; }
+.phase-bar { display:flex; gap:5px; margin:0; overflow-x:auto; }
+.phase-cell { flex:1 0 50px; min-width:0; border:1px solid hsl(var(--border)); border-radius:5px; padding:7px 4px; background:hsl(var(--muted) / .25); }
 .phase-cell dt { font-size:10px; color:hsl(var(--muted-foreground)); line-height:1.4; }
-.phase-cell dd { margin:3px 0 0; font-size:12px; white-space:nowrap; }
-.phase-outside { border-style:dashed; }
+.phase-cell dd { margin:4px 0 0; font-family:inherit; font-variant-numeric:tabular-nums; font-size:14px; font-weight:600; white-space:nowrap; }
+.phase-outside { border-style:dashed; background:transparent; }
 .phase-note { color:hsl(var(--muted-foreground)); font-size:10px; }
 .first-deviation { display:block; font-size:11px; line-height:1.5; white-space:normal; }
 .coaching-panel .first-deviation { flex-shrink:0; }
@@ -811,7 +811,7 @@ body { min-width: 1100px; }
 .telemetry-panel .telemetry-row { flex:1 0 62px; min-height:62px; }
 .telemetry-panel .telemetry-row.speed-row { flex-grow:1.32; }
 .handling-badges { grid-column:1/-1; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; }
-.handling-badges > * { min-width:0; justify-content:center; border-radius:4px; padding:3px 4px; font-size:10px; line-height:1.35; white-space:nowrap; }
+.handling-badges > * { min-width:0; justify-content:center; border-radius:4px; padding:3px 4px; font-size:10px; line-height:1.35; white-space:normal; text-align:center; }
 .handling-badges > [data-kind=understeer] { grid-column:1; }
 .handling-badges > [data-kind=oversteer] { grid-column:2; }
 .handling-badges > [data-kind=countersteer] { grid-column:1/-1; }
@@ -1026,6 +1026,10 @@ body { min-width: 1100px; }
   .summary-points ul { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 @media (max-height:820px) {
+  /* Leave room for both metric rows inside the short context strip. */
+  .summary-evidence .summary-context-header { padding-top:2px; }
+  .summary-evidence .summary-context-header button,.summary-evidence .summary-save-status button { min-height:24px; height:24px; }
+  .summary-evidence .summary-save-status { padding-top:2px; padding-bottom:2px; }
   .summary-column.is-open .summary-issue:not(.is-focused) .first-deviation { display:none; }
   .summary-next.is-open .summary-action { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
   .summary-next.is-open .summary-plan-meta { display:none; }
@@ -1057,3 +1061,44 @@ body { min-width: 1100px; }
 .analysis-progress-waiting { width:30%; animation:analysis-progress-waiting 1.2s ease-in-out infinite alternate; }
 @keyframes analysis-progress-waiting { to { transform:translateX(230%); } }
 @media (prefers-reduced-motion:reduce) { .analysis-progress-fill { transition:none; } .analysis-progress-waiting { animation:none; } }
+
+/* Startup preparation stays inside the analysis area, leaving live controls available. */
+.lab-main.empty-main .startup-loading { width:min(620px,100%); margin:auto; flex-shrink:0; }
+.startup-loading > :first-child { gap:12px; padding:32px 32px 24px; text-align:center; align-items:center; }
+.startup-loading [role=heading] { font-size:26px; line-height:1.4; }
+.startup-symbol { display:grid; place-items:center; width:56px; height:56px; border-radius:50%; background:hsl(var(--primary) / .1); color:hsl(var(--primary)); }
+.startup-symbol svg { width:28px; height:28px; }
+.startup-loading > :nth-child(2) { padding:0 32px 24px; }
+.startup-loading > :last-child { justify-content:center; gap:8px; flex-wrap:wrap; }
+.startup-loading .analysis-progress { margin:0; }
+.startup-loading .analysis-progress-label { font-size:15px; gap:10px; flex-wrap:wrap; }
+.startup-loading .analysis-progress-label .numeric { font-family:inherit; font-variant-numeric:tabular-nums; }
+.startup-loading .analysis-progress-track { height:10px; margin:12px 0; }
+.startup-description { margin:20px 0 0; font-size:14px; line-height:1.7; color:hsl(var(--muted-foreground)); }
+.startup-error { overflow-wrap:anywhere; line-height:1.7; }
+/* Keep measurement text in the app typeface and separate the label from its value. */
+.coaching-panel .numbered-insights { gap:8px; }
+.coaching-panel .numbered-insights button { padding:8px 10px; align-items:flex-start; }
+.coaching-panel .numbered-insights button > span { grid-template-columns:minmax(0,1fr); gap:3px; }
+.coaching-panel .numbered-insights b { font-weight:500; color:hsl(var(--muted-foreground)); }
+.coaching-panel .numbered-insights strong { margin:0; text-align:left; font-family:inherit; font-variant-numeric:tabular-nums; font-size:15px; line-height:1.45; overflow-wrap:anywhere; }
+.coaching-panel .numbered-insights small { margin-top:3px; line-height:1.6; }
+.coaching-panel .insight-number { font-family:inherit; margin-top:1px; }
+.coaching-panel .numbered-insights button > svg { margin-top:4px; flex-shrink:0; }
+.coaching-panel.is-compact .numbered-insights { gap:6px; }
+.insight-detail-scroll .coaching-panel.is-compact { gap:6px; }
+.coaching-panel.is-compact .comparison-facts { padding-bottom:6px; }
+.insight-sidebar:has(.insight-detail-scroll.is-compact) > .map-panel { flex:1 1 0; min-height:130px; }
+.insight-detail-scroll.is-compact { flex:0 0 auto; }
+.coaching-panel.is-compact .numbered-insights button { padding:5px 8px; }
+.coaching-panel.is-compact .numbered-insights button > span { grid-template-columns:minmax(0,1fr) auto; gap:4px 8px; align-items:center; }
+.coaching-panel.is-compact .numbered-insights strong { font-size:13px; line-height:1.4; }
+.workspace-grid.insight-wide .coaching-panel .numbered-insights strong { font-size:17px; line-height:1.5; }
+@media (max-height:820px) {
+  .insight-sidebar:has(.insight-detail-scroll.is-compact) > .map-panel :is(.map-caption,.loss-legend) { display:none; }
+}
+@media (max-width:700px) {
+  .startup-loading [role=heading] { font-size:22px; }
+  .startup-loading > :first-child { padding:24px 20px 20px; }
+  .startup-loading > :nth-child(2) { padding:0 20px 20px; }
+}

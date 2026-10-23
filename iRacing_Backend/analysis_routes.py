@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 import asyncio
 import json
 from analysis_models import AnalyzeRequest, ComparisonDetailRequest, LapOverlayRequest
+import analysis_progress
 
 logger = logging.getLogger("iRacingSetupTuner")
 
@@ -202,7 +203,14 @@ def register_routes(app, services: AnalysisRoutesServices):
 
     @app.post("/api/analyze")
     async def analyze_telemetry(payload: AnalyzeRequest = Body(default=AnalyzeRequest())) -> dict[str, Any]:
-        return await services.load_analysis(payload)
+        token = analysis_progress.start(payload.progress_id)
+        success = False
+        try:
+            result = await services.load_analysis(payload)
+            success = True
+            return result
+        finally:
+            analysis_progress.finish(token, success=success)
 
     @app.post("/api/lap-overlay")
     async def get_lap_overlay(payload: LapOverlayRequest) -> dict[str, Any]:

@@ -9,7 +9,7 @@ import { ClassificationPanel, RideAeroPanel, TirePanel } from '../analysis/Vehic
 import { SetupRecommendation } from '../analysis/SetupPanels';
 import { BriefingViewer } from '../analysis/AiPanels';
 import { QualityBanner } from '../analysis/LapPanels';
-import DamperHistogram from '../components/DamperHistogram';
+import { DeferredDamperHistogram as DamperHistogram } from '../components/DeferredCharts';
 import GGDiagram from '../components/GGDiagram';
 import ConnectionControls from './ConnectionControls';
 

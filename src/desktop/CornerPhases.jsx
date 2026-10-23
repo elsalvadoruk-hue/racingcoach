@@ -32,7 +32,7 @@ export default function CornerPhases({ corner }) {
           {Number.isFinite(value) ? `${value < 0 ? '−' : '+'}${Math.abs(value).toFixed(2)}초` : '—'}</dd>
       </div>;
     })}</dl>
-    <small className="phase-note">진입 전 제동·탈출 뒤 직선은 코너 합계에는 포함하지 않음</small>
+    <small className="phase-note">+ 느림 / − 빠름 · 진입 전 제동·탈출 뒤 직선은 코너 합계에 미포함</small>
     <DeviationLine deviation={corner.first_deviation} />
   </section>;
 }

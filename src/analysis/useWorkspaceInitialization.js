@@ -3,6 +3,7 @@ import { initialModeForFile } from './analysisShared';
 import { readDesktopLaps } from './desktopSelection';
 
 export function useWorkspaceInitialization({
+  initializationAttempt = 0,
   loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus,
   maybeStartGarage61Collection, restoreFileDraft, runAnalysisRef, selectedFileRef, setError,
   setInitialLoading, setPitRule, setSelectedFile, setSessionMode, activeTrialRef, setTargetLapManual, setReferenceLapManual
@@ -82,7 +83,7 @@ export function useWorkspaceInitialization({
     return () => {
       cancelled = true;
     };
-  }, [loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus, maybeStartGarage61Collection, restoreFileDraft,
+  }, [initializationAttempt, loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus, maybeStartGarage61Collection, restoreFileDraft,
     runAnalysisRef, selectedFileRef, setError, setInitialLoading, setPitRule, setSelectedFile, setSessionMode,
     activeTrialRef, setTargetLapManual, setReferenceLapManual]);
 }

@@ -3,7 +3,7 @@ import { Badge } from '../components/ui/badge';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/card';
 
 const phaseNames = { braking: '제동', rotation: '회전', drive: '가속' };
-const shortNames = { understeer: '덜 돌아감', oversteer: '더 돌아감', countersteer: '반대 조향' };
+const shortNames = { understeer: '회전 반응 작음', oversteer: '회전 반응 큼', countersteer: '반대 방향 조향' };
 const meanings = {
   understeer: '비슷한 속도·횡가속도·페달 조건에서 내 다른 랩보다 차의 회전 반응이 작았습니다.',
   oversteer: '비슷한 속도·횡가속도·페달 조건에서 내 다른 랩보다 차의 회전 반응이 컸습니다.',
@@ -17,9 +17,9 @@ const referenceNote = '참고 표시 · 이 종류는 아직 근거가 약해서
 
 // What happened, in one plain sentence per kind.
 const happened = {
-  understeer: '이 구간에서 평소의 내 랩보다 차가 덜 돌았습니다.',
-  oversteer: '이 구간에서 평소의 내 랩보다 차가 더 돌았습니다.',
-  countersteer: '차가 도는 반대쪽으로 핸들을 돌린 순간이 있었습니다. 뒤가 미끄러질 때 잡으면서 주로 생깁니다.',
+  understeer: '이 구간에서 비슷한 조건으로 지난 내 다른 랩보다 차체가 방향을 바꾸는 반응이 작았습니다.',
+  oversteer: '이 구간에서 비슷한 조건으로 지난 내 다른 랩보다 차체가 방향을 바꾸는 반응이 컸습니다.',
+  countersteer: '차가 도는 반대쪽으로 핸들을 돌린 순간이 있었습니다. 이 관측만으로 뒤 타이어가 미끄러졌다고 확정하지 않습니다.',
 };
 
 function costText(value) {
@@ -42,7 +42,7 @@ export function HandlingBadges({ items = [] }) {
   if (!kinds.length) return null;
   return <span className="handling-badges" aria-label="내 다른 랩 대비 차 거동">{kinds.map(kind =>
     <Badge key={kind} data-kind={kind} data-evidence={evidenceByKind[kind]} title={evidenceByKind[kind] === 'reference' ? `${meanings[kind]} ${referenceNote}` : meanings[kind]}
-      variant={kind === 'countersteer' ? 'outline' : kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[kind]}</Badge>)}</span>;
+      variant={kind === 'countersteer' ? 'outline' : kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[kind]}{evidenceByKind[kind] === 'reference' ? ' · 참고' : ''}</Badge>)}</span>;
 }
 
 function orderHandling(items) {
@@ -79,7 +79,8 @@ export function HandlingDetail({ items = [], coverage = [] }) {
   const known = coverage.reduce((sum, item) => sum + item.classifiable, 0);
   const unknown = coverage.reduce((sum, item) => sum + item.unknown, 0);
   return <section className="handling-detail" aria-label="차 거동"><h4>차 거동 · 내 다른 랩과 비교</h4>
-    <p className="handling-basis">같은 기록의 내 다른 랩과 비교해, 평소와 다르게 차가 움직인 순간을 보여 줍니다. 잘했다·못했다를 판정하는 표시가 아닙니다. 여러 랩에서 반복되고 그 랩이 느렸다면 살펴볼 만합니다.</p>
+    <p className="handling-basis">같은 기록의 내 다른 랩과 비슷한 조건에서 차체가 방향을 바꾸는 반응을 비교합니다. 회전 반응이 작으면 평소보다 덜, 크면 더 방향을 바꾼 것입니다. 회전 반경이나 뒤 타이어의 미끄러짐을 확정하는 표시는 아닙니다.</p>
+    <small>잘했다·못했다를 판정하지 않습니다. 여러 랩에서 반복되고 그 랩이 느렸다면 살펴볼 만합니다.</small>
     <small>위에서 선택한 기준 랩·Garage61 비교와는 별개입니다. 아직 다듬는 중인 분석이라 참고용으로 보세요.</small>
     {coverage.length > 0 && <p className="handling-coverage">{coverageText(known, unknown)}</p>}
     {unknown > 0 && <small>랩마다 속도·페달·공략이 조금씩 달라서 흔히 생깁니다. 문제가 있다는 뜻도, 없다는 뜻도 아닙니다.</small>}
@@ -87,7 +88,7 @@ export function HandlingDetail({ items = [], coverage = [] }) {
       <dl>{['understeer', 'oversteer', 'countersteer'].map(kind => <div key={kind}><dt>{shortNames[kind]}</dt><dd>{meanings[kind]}</dd></div>)}</dl>
       <p>같은 코너·같은 단계에서 비교합니다. 서로 다른 랩이나 단계에서 두 표시가 함께 나올 수 있습니다.</p>
       <p>비교 횟수는 랩별 제동·회전·가속 단계를 각각 셉니다. 단계 시간의 90% 이상을 다른 랩과 비교했으면 비교한 단계로 셉니다. 그보다 적으면 확인 필요로 남깁니다.</p>
-      <p>더 돌아감은 참고로 표시합니다. 기록 5개로 평가했을 때 덜 돌아감보다 근거가 약했습니다.</p>
+      <p>회전 반응 큼은 참고로 표시합니다. 기록 5개로 평가했을 때 회전 반응 작음보다 근거가 약했습니다.</p>
       <p>시간 연결은 랩 전체의 느려짐과 단계 시작 속도 영향을 보정해 확인합니다. 위의 초 단위 시간 차이는 보정 전 관측값입니다. 시간 연결도 원인을 확정하지 않습니다.</p>
       <p>문턱은 검증 전 초기값입니다. 절대적인 언더·오버 판정이나 원인·셋업 효과를 확정하지 않습니다.</p>
     </details>

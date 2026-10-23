@@ -41,7 +41,7 @@ test('LMU corner practice opens the actual history destination and explains the 
   expect(requestJson.mock.calls.every(([path]) => !path.includes('/practice/tasks'))).toBe(true);
 });
 
-test('LMU consistency and records hide filters that do not apply, while time distribution keeps them', () => {
+test('LMU consistency and records hide filters that do not apply, while time distribution keeps them', async () => {
   const props = { target: '2', names: {}, chosen: ['1', '2'], range: {}, onRange: jest.fn(), onChosen: jest.fn(), onTab: jest.fn(), onCorner: jest.fn() };
   const view = render(<LapAnalysis {...props} tab="consistency" />);
   expect(screen.queryByLabelText('분석할 랩')).not.toBeInTheDocument();
@@ -51,6 +51,7 @@ test('LMU consistency and records hide filters that do not apply, while time dis
   view.rerender(<LapAnalysis {...props} tab="time" />);
   expect(screen.getByLabelText('분석할 랩')).toBeInTheDocument();
   expect(screen.getByTestId('lap-range-filter')).toBeInTheDocument();
+  expect(await screen.findByText('시간 쓰임새')).toBeInTheDocument();
   view.rerender(<LapAnalysis {...props} tab="records" />);
   expect(screen.queryByLabelText('분석할 랩')).not.toBeInTheDocument();
   expect(screen.queryByTestId('lap-range-filter')).not.toBeInTheDocument();

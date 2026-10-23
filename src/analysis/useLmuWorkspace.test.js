@@ -24,6 +24,19 @@ beforeEach(() => {
 
 afterEach(() => { selectGame('iracing'); });
 
+test('startup failure can be retried immediately without waiting for the catalog timer', async () => {
+  labRequest.mockRejectedValueOnce(unavailable(503));
+  const { result } = renderHook(useLmuWorkspace);
+  await waitFor(() => expect(result.current.initialLoading).toBe(false));
+  expect(result.current.error).toContain('503');
+  labRequest.mockResolvedValueOnce({ files: [file('recovered')] }).mockResolvedValueOnce(session('recovered'));
+  act(() => result.current.retryInitialization());
+  await waitFor(() => expect(result.current.selectedFile).toBe('recovered'));
+  expect(result.current.error).toBe('');
+  expect(result.current.initialLoading).toBe(false);
+  expect(labRequest.mock.calls[2][1].progress_id).toEqual(expect.any(String));
+});
+
 test('opens the newest measurable recording ahead of an older saved file and skips unavailable entries', async () => {
   localStorage.setItem(LMU_SESSION_KEY, JSON.stringify({ filename: 'old', target_lap: 9 }));
   localStorage.setItem(LAST_SESSION_KEY, 'preserved iRacing selection');
@@ -34,7 +47,7 @@ test('opens the newest measurable recording ahead of an older saved file and ski
   const { result } = renderHook(useLmuWorkspace);
   await waitFor(() => expect(result.current.initialLoading).toBe(false));
   expect(labRequest.mock.calls.map(([route, body]) => [route, body])).toEqual([
-    ['files', {}], ['session', { filename: 'new', reference_selection: 'AUTO' }],
+    ['files', {}], ['session', { filename: 'new', reference_selection: 'AUTO', progress_id: expect.any(String) }],
   ]);
   expect(result.current.selectedFile).toBe('new');
   expect(workspaceData().filename).toBe('new');
@@ -48,7 +61,7 @@ test('restores chosen laps for the latest file', async () => {
   labRequest.mockResolvedValueOnce({ files: [file('latest')] }).mockResolvedValueOnce(session('latest', 2, 3));
   const { result } = renderHook(useLmuWorkspace);
   await waitFor(() => expect(result.current.selectedFile).toBe('latest'));
-  expect(labRequest).toHaveBeenLastCalledWith('session', { ...saved, reference_selection: 'AUTO' }, expect.any(AbortSignal));
+  expect(labRequest).toHaveBeenLastCalledWith('session', { ...saved, reference_selection: 'AUTO', progress_id: expect.any(String) }, expect.any(AbortSignal));
   expect(workspaceData().defaultTarget).toBe(2);
 });
 
@@ -58,7 +71,7 @@ test('retries default laps when saved lap numbers are no longer usable', async (
     .mockRejectedValueOnce(unavailable(422)).mockResolvedValueOnce(session('latest'));
   const { result } = renderHook(useLmuWorkspace);
   await waitFor(() => expect(result.current.initialLoading).toBe(false));
-  expect(labRequest).toHaveBeenLastCalledWith('session', { filename: 'latest', reference_selection: 'AUTO' }, expect.any(AbortSignal));
+  expect(labRequest).toHaveBeenLastCalledWith('session', { filename: 'latest', reference_selection: 'AUTO', progress_id: expect.any(String) }, expect.any(AbortSignal));
   expect(result.current.selectedFile).toBe('latest');
   expect(result.current.error).toBe('');
 });
@@ -184,7 +197,7 @@ describe('recordings arriving while the LMU screen stays open', () => {
     catalog = [recording('old', 2)];
     await tick(); await tick();
     expect(result.current.revision).toBe(2);
-    expect(opened()[1]).toEqual({ filename: 'old', reference_selection: 'AUTO' });
+    expect(opened()[1]).toEqual({ filename: 'old', reference_selection: 'AUTO', progress_id: expect.any(String) });
   });
 
   test('starts empty and automatically opens the first completed recording', async () => {

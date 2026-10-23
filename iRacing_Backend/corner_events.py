@@ -18,7 +18,7 @@ class RawLap:
     _zones: dict = field(default_factory=dict, compare=False, repr=False)
 
 
-def raw_lap(analyzer, lap) -> RawLap | None:
+def raw_lap(analyzer, lap, *, requested=None) -> RawLap | None:
     channels = analyzer.channels
     if 'SessionTime' not in channels or 'LapDistPct' not in channels:
         return None
@@ -28,7 +28,8 @@ def raw_lap(analyzer, lap) -> RawLap | None:
     tick_rate = analyzer.telemetry.tick_rate
     if len(times) < 2 or tick_rate <= 0 or len(times) != len(pct):
         return None
-    return RawLap(times, pct, {k: np.asarray(v[span], dtype=float) for k, v in channels.items()
+    selected = channels if requested is None else {key: channels[key] for key in requested if key in channels}
+    return RawLap(times, pct, {k: np.asarray(v[span], dtype=float) for k, v in selected.items()
                              if v is not None and np.ndim(v) == 1 and len(v) == len(channels['SessionTime'])},
                   1. / tick_rate, analyzer.track_length_m,
                   'RESAMPLED' if analyzer.telemetry.metadata.get('game') == 'lmu' else 'NATIVE')

@@ -337,7 +337,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             previous['at'] = sample['session_time']
 
     def status(self, after=0):
-        context = self.context()
+        context = self.context(include_recent=False)
         with self.lock:
             return {**{k: v for k, v in context.items() if k != 'recent'},
                     'state': self.state if context['connected'] else ('STALE' if self.state == 'CONNECTED' else self.state),

@@ -47,7 +47,7 @@ export function cornerAnnotations(corner, rows, trackLength, controls = {}) {
     const a = target[key] * scale, b = reference[key] * scale;
     if (!inputs || !finite(target[key]) || !finite(reference[key]) || Math.abs(a - b) < threshold) return;
     add({ key, label, channel, at, refAt, difference: a - b, score: Math.abs(a - b) / threshold,
-      value: `${Math.abs(a - b).toFixed(digits)} ${unit} ${a > b ? '많음' : '적음'}`,
+      value: unit === '초' ? `${Math.abs(a - b).toFixed(digits)}초 더 ${a > b ? '김' : '짧음'}` : `${Math.abs(a - b).toFixed(digits)} ${unit} ${a > b ? '많음' : '적음'}`,
       text: `내 랩 ${a.toFixed(digits)} / 기준 ${b.toFixed(digits)} ${unit === '%p' ? '%' : unit} · 구간 지표`, hint });
   };
   const entryRows = scoped.filter(row => row.distance_pct <= corner.apex_pct);
@@ -95,7 +95,7 @@ export function cornerAnnotations(corner, rows, trackLength, controls = {}) {
     const full = scoped.filter(row => row.distance_pct >= from && row.distance_pct <= to);
     if (!measured || !finite(a) || !finite(b) || Math.abs(b - a) < .08 || full.some((row, i) => !finite(row.delta) || (i && (row.distance_pct - full[i - 1].distance_pct) * trackLength > 25))) continue;
     add({ key, label, channel: 'delta', at: to, refAt: null, range: { from, to, type: 'interval' }, difference: b - a, score: Math.abs(b - a) / .08,
-      value: `${Math.abs(b - a).toFixed(3)} s ${b > a ? '손실' : '이득'}`,
+      value: `${Math.abs(b - a).toFixed(3)}초 ${b > a ? '손실' : '이득'}`,
       text: `${Math.round(from * trackLength).toLocaleString()}–${Math.round(to * trackLength).toLocaleString()}m에서 생긴 차이`,
       hint: '구간 시작 이전의 누적 차이를 뺀 값입니다. 이 범위의 페달과 속도 변화를 먼저 비교하세요.' });
   }

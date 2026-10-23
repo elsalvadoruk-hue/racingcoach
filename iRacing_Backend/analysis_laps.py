@@ -17,6 +17,11 @@ from reference_conditions import telemetry_reference_conditions
 from corner_events import raw_lap
 
 
+# Only these native channels feed corner events and handling comparisons.
+# Other callers of raw_lap still receive every eligible channel by default.
+_CORNER_RAW_CHANNELS = ('Speed', 'SteeringWheelAngle', 'YawRate', 'LatAccel', 'Brake', 'Throttle', 'BrakeABSactive')
+
+
 class LapAnalysis:
     def _raw_lap_for(self, grid):
         number = grid.get('_lap_number')
@@ -26,7 +31,7 @@ class LapAnalysis:
         cache = self._raw_lap_cache
         if number not in cache:
             lap = next((lap for lap in self.telemetry.laps if lap.lap_number == number), None)
-            cache[number] = raw_lap(self, lap) if lap is not None else None
+            cache[number] = raw_lap(self, lap, requested=_CORNER_RAW_CHANNELS) if lap is not None else None
         return cache[number]
 
     def _clean_context(self) -> dict[str, Any]:

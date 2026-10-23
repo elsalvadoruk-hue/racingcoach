@@ -7,6 +7,7 @@ import { analysisContextKey, assignedModeForFile, comparisonContext, formatSetup
 import { useWorkspaceInitialization } from './useWorkspaceInitialization';
 import { useTelemetryEvents } from './useTelemetryEvents';
 import { useCollectorPolling } from './useCollectorPolling';
+import { useAnalysisProgress } from '../desktop/AnalysisProgress';
 
 export function useAnalysisWorkspace() {
   const workspaceMounted = useRef(true);
@@ -47,6 +48,11 @@ export function useAnalysisWorkspace() {
   const [userFeedback, setUserFeedback] = useState(bootDraft.current.userFeedback || '');
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [initializationAttempt, setInitializationAttempt] = useState(0);
+  const retryInitialization = useCallback(() => {
+    setError(''); setInitialLoading(true); setInitializationAttempt(value => value + 1);
+  }, []);
+  const { view: analysisProgress, begin: beginProgress, end: endProgress } = useAnalysisProgress();
   const [error, setError] = useState('');
   const [memoryStatus, setMemoryStatus] = useState(null);
   const [memorySessions, setMemorySessions] = useState([]);
@@ -365,6 +371,7 @@ export function useAnalysisWorkspace() {
       const isCurrent = () => !controller.signal.aborted && analysisRequestRef.current.id === requestId && selectedFileRef.current === effectiveFilename;
       if (!quiet) setLoading(true);
       setError('');
+      const progressId = beginProgress();
       try {
         const fileDraft = forceAutoLaps && filename ? readDraft(effectiveFilename) : null;
         const effectiveFeedback = fileDraft ? {
@@ -405,6 +412,7 @@ export function useAnalysisWorkspace() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            progress_id: progressId,
             session_mode: effectiveSessionMode,
             pit_rule: effectivePitRule,
             user_feedback: effectiveFeedback.userFeedback,
@@ -452,10 +460,11 @@ export function useAnalysisWorkspace() {
         if (isCurrent() && requestError.name !== 'AbortError') { setError(requestError.message); onFailure?.(requestError); }
         return null;
       } finally {
+        endProgress(progressId);
         if (isCurrent()) setLoading(false);
       }
     },
-    [analysisSnapshot, feedbackPhase, feedbackSpeed, feedbackSymptom, setupMode, loadFiles, loadMemory, pitRule, readDraft, referenceLap, referenceLapManual, selectedExternalReferences, sessionMode, targetLap, targetLapManual, userFeedback]
+    [analysisSnapshot, beginProgress, endProgress, feedbackPhase, feedbackSpeed, feedbackSymptom, setupMode, loadFiles, loadMemory, pitRule, readDraft, referenceLap, referenceLapManual, selectedExternalReferences, sessionMode, targetLap, targetLapManual, userFeedback]
   );
 
   const handleExperimentStored = useCallback(async () => {
@@ -463,7 +472,7 @@ export function useAnalysisWorkspace() {
     await runAnalysis({ includeAI: false, quiet: true });
   }, [loadMemory, runAnalysis]);
 
-  useWorkspaceInitialization({ loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus, maybeStartGarage61Collection, restoreFileDraft, runAnalysisRef, selectedFileRef, setError, setInitialLoading, setPitRule, setSelectedFile, setSessionMode, activeTrialRef, setTargetLapManual, setReferenceLapManual });
+  useWorkspaceInitialization({ initializationAttempt, loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus, maybeStartGarage61Collection, restoreFileDraft, runAnalysisRef, selectedFileRef, setError, setInitialLoading, setPitRule, setSelectedFile, setSessionMode, activeTrialRef, setTargetLapManual, setReferenceLapManual });
 
   useEffect(() => {
     runAnalysisRef.current = runAnalysis;
@@ -777,6 +786,7 @@ export function useAnalysisWorkspace() {
   };
 
     return {
+      analysisProgress, retryInitialization,
       adoptDesktopAnalysis,
       activeTab, activeTrial, analysis, analysisIsCurrent, analysisSnapshot, applyExternalReferences,
       beginTrial, canAttachTrial, canStartTrial, cancelGarage61Collection, classification,

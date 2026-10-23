@@ -118,10 +118,11 @@ def select_personal_reference(services, telemetry, target_lap=None):
         return known.get(Path(name).name)
     paths = {str(path): path for path in known.values()}
     paths.update({str(path): path for path in index.previous_analysis_paths()})
+    indexed = index.current_recordings(game, known.values(), INDEX_VERSION[game])
     for path in paths.values():
         try:
             resolved = resolve(path.name)
-            if resolved is None or Path(resolved).resolve() != Path(path).resolve() or index.has_recording(game, path, INDEX_VERSION[game]):
+            if resolved is None or Path(resolved).resolve() != Path(path).resolve() or str(path.resolve()) in indexed:
                 continue
             # The quick header read is IBT-only; LMU recordings use the cached full parse.
             metadata = (services.telemetry_file_visibility if game == 'LMU' else services.quick_file_visibility)(path)

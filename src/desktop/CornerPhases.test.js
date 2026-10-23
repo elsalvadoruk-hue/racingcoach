@@ -20,7 +20,7 @@ test('phase bar distinguishes outside intervals, signs, gain and loss', () => {
   expect(container.querySelector('[data-phase=approach]')).toHaveClass('phase-outside');
   expect(container.querySelector('[data-phase=straight_after]')).toHaveClass('phase-outside');
   expect(container.querySelector('[data-phase=braking]')).not.toHaveClass('phase-outside');
-  expect(screen.getByText(/코너 합계에는 포함하지 않음/)).toBeInTheDocument();
+  expect(screen.getByText(/코너 합계에 미포함/)).toHaveTextContent('+ 느림 / − 빠름');
   expect(screen.getByRole('alert')).toHaveTextContent('탈출 속도 차이가 직선에서 더 크게 이어졌습니다.');
   expect(screen.getByText(/처음 달라진 조작:/)).toHaveTextContent('브레이크 놓음 9 m 늦음 · 그 뒤 가속 시작 7 m 늦음');
   expect(screen.queryByText(/최저 속도 지점/)).not.toBeInTheDocument();
