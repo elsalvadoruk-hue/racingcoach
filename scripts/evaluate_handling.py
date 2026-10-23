@@ -165,6 +165,8 @@ def parser():
     p.add_argument('--resume', action='store_true', help='원본·방식·옵션 해시가 같은 파일별 결과만 재사용')
     p.add_argument('--diagnose-matching', action='store_true',
                    help='v3 비교 조건별 탈락만 진단합니다. 판정 변경·귀무 재평가 없음')
+    p.add_argument('--diagnose-braking', action='store_true',
+                   help='v3 제동 구간·위치 오차·같은 페달의 종G 차이를 진단합니다')
     return p
 
 
@@ -308,7 +310,7 @@ def matched_matrix(module, phase, references, model):
     return np.array(predictions), support
 
 
-def point_values(module, phase, references, model):
+def point_values(module, phase, references, model, *, stride=3, include_position=False):
     if phase is None or not np.all(np.isfinite(model['edges_mps'])):
         return []
     matrix, support = matched_matrix(module, phase, references, model)
@@ -319,7 +321,7 @@ def point_values(module, phase, references, model):
     count = np.isfinite(matrix).sum(axis=0)
     selected = phase['eligible'] & (steer * c['YawRate'] > 0) & phase['inside'] & (phase['durations'] > 0)
     # Exactly the original audit stride, including the absence of its 200-sample guard.
-    indices = np.flatnonzero(selected & (count >= module.MIN_REFERENCE_LAPS))[::3]
+    indices = np.flatnonzero(selected & (count >= module.MIN_REFERENCE_LAPS))[::stride]
     result = []
     rate = np.full(len(steer), np.nan)
     edge = module._edges(phase['local'])
@@ -351,7 +353,162 @@ def point_values(module, phase, references, model):
                 used_spread[i] == 0 or abs(delta) > module.Z_LIMIT * used_spread[i])
         result.append([float(spread), float(delta), bool(outside), bool(effective),
                        float(rate[i]) if np.isfinite(rate[i]) else None])
+        if include_position:
+            result[-1].append(float((phase['local'].pct[i] - phase['start']) / (phase['end'] - phase['start'])))
     return result
+
+
+def phase_channel(phase, key):
+    """Optional native channel, without changing the product's REQUIRED list."""
+    raw = phase['raw']
+    values = raw.channels.get(key)
+    if values is None or len(values) != len(raw.time_s):
+        return np.full(len(phase['local'].pct), np.nan)
+    start = phase['offset']
+    return np.asarray(values[start:start + len(phase['local'].pct)], dtype=float)
+
+
+def reference_channel_at(reference, pct, key):
+    """Use the product's q-valid spans, also splitting missing optional values."""
+    result = np.full(len(pct), np.nan)
+    seen = np.zeros(len(pct), dtype=int)
+    values = phase_channel(reference, key)
+    for span in reference['segments']:
+        axis = reference['local'].pct[span]
+        data = values[span]
+        connected = np.isfinite(data[:-1]) & np.isfinite(data[1:])
+        changes = np.diff(np.r_[False, connected, False].astype(int))
+        for a, b in zip(np.flatnonzero(changes == 1), np.flatnonzero(changes == -1)):
+            x, y = axis[a:b + 1], data[a:b + 1]
+            keep = ((pct >= max(x[0], reference['start'])) & (pct <= min(x[-1], reference['end'])))
+            result[keep] = np.interp(pct[keep], x, y)
+            seen[keep] += 1
+    result[seen != 1] = np.nan
+    return result
+
+
+def empty_braking_data():
+    return dict(phase_counts={name: dict(defined=0, eligible=0, required=0, three_references=0) for name in PHASES},
+                points=[], shifts={str(m): [] for m in (-2., -1., -.5, .5, 1., 2.)},
+                long_differences=dict(brake=[], both_pedals=[]), long_target_samples=0)
+
+
+def braking_diagnosis(module, captures, rows):
+    """Native sample diagnosis only; hold reference membership fixed for shifts."""
+    result = empty_braking_data()
+    for (phase, references, model), row in zip(captures, rows):
+        if phase is None:
+            continue
+        c = phase['local'].channels
+        inside = phase['inside'] & (phase['durations'] > 0)
+        eligible = inside & phase['eligible']
+        required = inside & phase.get('q_ready', phase['eligible'])
+        matrix, _ = matched_matrix(module, phase, references, model)
+        counts = result['phase_counts'][row['phase']]
+        counts['defined'] += int(inside.sum())
+        counts['eligible'] += int(eligible.sum())
+        counts['required'] += int(required.sum())
+        if len(matrix):
+            counts['three_references'] += int(np.sum(required & (np.isfinite(matrix).sum(axis=0) >= module.MIN_REFERENCE_LAPS)))
+        if row['phase'] != 'braking':
+            continue
+        result['points'].extend(point_values(module, phase, references, model, stride=1, include_position=True))
+        other = [p for p in references if p is not None and p is not phase]
+        own_long = phase_channel(phase, 'LongAccel')
+        result['long_target_samples'] += int(np.sum(required & np.isfinite(own_long)))
+        for reference in other:
+            values = module._reference_at(reference, phase['local'].pct)
+            ref_long = reference_channel_at(reference, phase['local'].pct, 'LongAccel')
+            base = required & np.isfinite(own_long) & np.isfinite(ref_long) & np.isfinite(values[0]) & (values[0] > 0)
+            same_brake = abs(values[3] - c['Brake']) <= module.MAX_PEDAL_DIFFERENCE
+            same_throttle = abs(values[4] - c['Throttle']) <= module.MAX_PEDAL_DIFFERENCE
+            difference = abs(ref_long - own_long)
+            result['long_differences']['brake'].append(difference[base & same_brake])
+            result['long_differences']['both_pedals'].append(difference[base & same_brake & same_throttle])
+        if not len(matrix):
+            continue
+        selected = (eligible & (phase.get('q_steer', c['SteeringWheelAngle']) * c['YawRate'] > 0)
+                    & np.isfinite(phase['q']) & (phase['q'] > 0))
+        for distance, batches in result['shifts'].items():
+            axis = phase['local'].pct + float(distance) / phase['local'].track_length_m
+            shifted = np.array([module._reference_at(ref, axis)[0] for ref in other])
+            common = np.isfinite(matrix) & (matrix > 0) & np.isfinite(shifted) & (shifted > 0)
+            keep = selected & (common.sum(axis=0) >= module.MIN_REFERENCE_LAPS)
+            if not np.any(keep):
+                continue
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', RuntimeWarning)
+                before = np.nanmedian(np.log(np.where(common[:, keep], matrix[:, keep], np.nan)), axis=0)
+                after = np.nanmedian(np.log(np.where(common[:, keep], shifted[:, keep], np.nan)), axis=0)
+            batches.append(np.expm1(before - after) * 100)
+    return result
+
+
+def merge_braking_data(values):
+    result = empty_braking_data()
+    for value in values:
+        for phase in PHASES:
+            for key in result['phase_counts'][phase]:
+                result['phase_counts'][phase][key] += value['phase_counts'][phase][key]
+        result['points'].extend(value['points'])
+        for key in result['shifts']:
+            result['shifts'][key].extend(value['shifts'][key])
+        for key in result['long_differences']:
+            result['long_differences'][key].extend(value['long_differences'][key])
+        result['long_target_samples'] += value['long_target_samples']
+    return result
+
+
+def braking_summary(data):
+    def summary(batches, signed=False):
+        values = np.concatenate(batches) if batches else np.array([])
+        values = values[np.isfinite(values)]
+        result = dict(n=len(values), median=float(np.median(values)) if len(values) else None,
+                      p90=float(np.percentile(values, 90)) if len(values) else None)
+        if signed:
+            result.update(median_abs=float(np.median(abs(values))) if len(values) else None,
+                          p90_abs=float(np.percentile(abs(values), 90)) if len(values) else None)
+        return result
+
+    points = data['points']
+    thirds = {}
+    for i, label in enumerate(('first', 'middle', 'last')):
+        selected = [('braking', r[:5]) for r in points if min(2, int(r[5] * 3)) == i]
+        thirds[label] = point_summary(selected)['braking']
+    counts = data['phase_counts']
+    short = [name for name in ('rotation', 'drive') if counts['braking']['required'] * 2 < counts[name]['required']]
+    return dict(phase_counts=counts, thirds=thirds,
+                shifts={key: summary(value, signed=True) for key, value in data['shifts'].items()},
+                long_differences={key: summary(value) for key, value in data['long_differences'].items()},
+                long_target_samples=data['long_target_samples'], stop_before_candidate=bool(short),
+                less_than_half_of=short,
+                definition_also_short=[name for name in short if counts['braking']['defined'] * 2 < counts[name]['defined']])
+
+
+def braking_text_report(report):
+    lines = ['N3 제동 구간 진단 (제품 v3 유지, 종G 후보 미실행)',
+             '상대 위치는 단계의 거리 범위를 3등분합니다. 지점 진단은 간추림 없이 같은 위치 3랩 이상이며 200표본 조건 전입니다.',
+             '흩어짐은 log q의 1.4826 MAD를 비율로 환산합니다. 실제 기준 초과는 200표본·흩어짐·조향 변화 조건도 적용하되 지속 시간 전입니다.',
+             '위치 이동은 원래 조건에 맞은 비교 랩을 고정하고 참조 q만 이동합니다. 이동 전후 모두 관측된 공통3랩 이상에서 같은 집단의 log 중앙값을 비교합니다.',
+             'q 비율 변화(%) = 100 × (이동 후 q/기준 ÷ 이동 전 q/기준 − 1). 비교 상대 재선택 효과는 포함하지 않습니다.',
+             '종G 차이는 m/s²이며 다른 랩의 같은 위치·q 관측 쌍에서 브레이크 ±0.2만/두 페달 모두 ±0.2를 나눠 셉니다.',
+             '같은 파일 여러 표본/랩 쌍이 포함됩니다. 독립 실주행 검증이나 원인 확정은 아닙니다.', '']
+    groups = [('전체 6파일', report['braking_diagnosis']), ('원래 5파일', report['baseline_five_braking'])]
+    groups += [(f['file'], f['braking_diagnosis']) for f in report['files']]
+    for label, value in groups:
+        lines.extend([label, '단계 | 정의된 표본 | 입력/채널 적격 | 판정 대상 | 비교 조건 후 3랩 확보'])
+        for name, counts in value['phase_counts'].items():
+            lines.append(name + ' | ' + ' | '.join(str(n) for n in counts.values()))
+        lines.append('상대 위치 | 지점 수 | 흩어짐% | ±15% 초과% | 실제 기준 초과%')
+        for name, counts in value['thirds'].items():
+            lines.append(name + ' | ' + ' | '.join(str(counts.get(k)) for k in ('points', 'scatter_pct', 'outside_pct', 'effective_outside_pct')))
+        lines.append('위치 이동m | 관측 수 | 부호 포함 중앙% | 절댓값 중앙% | 절댓값90백분위%')
+        for name, counts in value['shifts'].items():
+            lines.append(name + ' | ' + ' | '.join(str(counts[k]) for k in ('n', 'median', 'median_abs', 'p90_abs')))
+        lines.append('같은 페달 안 종G 절대 차이: ' + json.dumps(value['long_differences'], ensure_ascii=False))
+        lines.append('후보 전 중단 조건: ' + json.dumps({k: value[k] for k in ('stop_before_candidate', 'less_than_half_of', 'definition_also_short')}, ensure_ascii=False))
+        lines.append('')
+    return '\n'.join(lines)
 
 
 def point_summary(values):
@@ -1001,8 +1158,10 @@ def text_report(report):
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    if args.diagnose_matching and args.method != 'v3':
+    if (args.diagnose_matching or args.diagnose_braking) and args.method != 'v3':
         raise ValueError('비교 조건 진단은 --method v3로 실행하세요.')
+    if args.diagnose_braking and (args.resume or args.diagnose_matching):
+        raise ValueError('제동 진단은 --resume 또는 --diagnose-matching과 함께 실행하지 않습니다.')
     if not (args.permutations > 0 and 0 < args.grid_hz <= 60):
         raise ValueError('섞기 횟수는 양수이고 grid-hz는 0~60이어야 합니다.')
     inputs = [path.resolve(strict=True) for path in (args.files or default_inputs())]
@@ -1010,7 +1169,7 @@ def main(argv=None):
         raise ValueError('평가 입력은 IBT 주행 기록이어야 합니다.')
     if len(set(inputs)) != len(inputs):
         raise ValueError('같은 입력 기록을 두 번 평가할 수 없습니다.')
-    default_name = 'n2-diagnosis' if args.diagnose_matching else args.method
+    default_name = 'n3-diagnosis' if args.diagnose_braking else 'n2-diagnosis' if args.diagnose_matching else args.method
     out = args.out or ROOT / f'logs/analysis-210/handling-{default_name}.json'
     json_path, txt_path = output_paths(out, inputs)
     cache_folder = json_path.with_suffix('.files')
@@ -1022,7 +1181,10 @@ def main(argv=None):
     options = dict(seed=args.seed, permutations=args.permutations, grid_hz=args.grid_hz, skip_null=args.skip_null)
     if args.diagnose_matching:
         options['diagnose_matching'] = True
+    if args.diagnose_braking:
+        options['diagnose_braking'] = True
     files = []
+    braking_values = []
     with tempfile.TemporaryDirectory(prefix='handling-evaluation-') as folder:
         sys.path.insert(0, str(ROOT / 'scripts'))
         from measure_corner_events import isolate
@@ -1050,15 +1212,15 @@ def main(argv=None):
             corners = [{key: corner[key] for key in ('id', 'label', 'entry_pct', 'apex_pct', 'exit_pct')}
                        for corner in analyzed['performance']['corners']]
             native, captures, points = native_evaluation(module, analyzer, corners,
-                                                       collect_points=not args.diagnose_matching)
+                                                       collect_points=not (args.diagnose_matching or args.diagnose_braking))
             rows = native['observations']
-            if args.skip_null or args.diagnose_matching:
+            if args.skip_null or args.diagnose_matching or args.diagnose_braking:
                 null = {}
             else:
                 null = null_function(module, captures, rows, permutations=args.permutations,
                                      seed=args.seed + index, grid_hz=args.grid_hz)
                 null['summary'] = summarize_nulls([null])
-            split = {} if args.diagnose_matching else split_half_cells(module, analyzer, corners)
+            split = {} if args.diagnose_matching or args.diagnose_braking else split_half_cells(module, analyzer, corners)
             metadata = telemetry.metadata
             context = [metadata.get('game', 'iracing'), metadata.get('car_path') or metadata.get('car_model_key'),
                        metadata.get('track_platform_id') or metadata.get('track_path'),
@@ -1079,6 +1241,10 @@ def main(argv=None):
                           steer_lag_s=native.get('steer_lag_s'), fast_steer_rate_rad_s=native.get('fast_steer_rate_rad_s'))
             if args.diagnose_matching:
                 result['matching_diagnosis'] = matching_by_phase(module, captures, rows)
+            if args.diagnose_braking:
+                data = braking_diagnosis(module, captures, rows)
+                result['braking_diagnosis'] = braking_summary(data)
+                braking_values.append((source.name, data))
             cache_path.write_text(json.dumps(dict(identity=identity, result=result), ensure_ascii=False, allow_nan=False), encoding='utf-8')
             files.append(result)
             print(f"완료: 판정 가능 {native['coverage']['classifiable']}/{native['coverage']['applicable']}", flush=True)
@@ -1088,14 +1254,19 @@ def main(argv=None):
     baseline = [file for file in files if file['file'] in DEFAULT_NAMES[:5]]
     report = dict(method=args.method, provenance=provenance, evaluator_sha256=evaluator_sha, options=options,
                   files=files, aggregate=aggregate(files), baseline_five=aggregate(baseline),
-                  replication={} if args.diagnose_matching else repeated_files(files, permutations=args.permutations, seed=args.seed),
-                  split_half={} if args.diagnose_matching else split_half_summary(files, permutations=args.permutations, seed=args.seed))
+                  replication={} if args.diagnose_matching or args.diagnose_braking else repeated_files(files, permutations=args.permutations, seed=args.seed),
+                  split_half={} if args.diagnose_matching or args.diagnose_braking else split_half_summary(files, permutations=args.permutations, seed=args.seed))
     if args.diagnose_matching:
         for key, selected in [('matching_diagnosis', files), ('baseline_five_matching', baseline)]:
             report[key] = {phase: merge_matching_counts(file['matching_diagnosis'][phase] for file in selected)
                            for phase in ('ALL', *PHASES)}
+    if args.diagnose_braking:
+        report['braking_diagnosis'] = braking_summary(merge_braking_data(data for _, data in braking_values))
+        report['baseline_five_braking'] = braking_summary(merge_braking_data(
+            data for name, data in braking_values if name in DEFAULT_NAMES[:5]))
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=1, allow_nan=False), encoding='utf-8')
-    txt_path.write_text(matching_text_report(report) if args.diagnose_matching else text_report(report), encoding='utf-8')
+    render = braking_text_report if args.diagnose_braking else matching_text_report if args.diagnose_matching else text_report
+    txt_path.write_text(render(report), encoding='utf-8')
     print(f'평가 보고서 저장: {json_path.name}, {txt_path.name}', flush=True)
     return 0
 

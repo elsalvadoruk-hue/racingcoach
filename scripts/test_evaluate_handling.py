@@ -401,6 +401,71 @@ class HandlingEvaluationTests(unittest.TestCase):
             fingerprint.assert_not_called()
         self.assertTrue(evaluation.parser().parse_args(['--method', 'v3', '--diagnose-matching']).diagnose_matching)
 
+    def test_braking_diagnosis_splits_native_points_and_measures_fixed_reference_shift(self):
+        module, model, phases = self._v3_phases(0)
+        for index, phase in enumerate(phases):
+            phase['q'] = .02 * (1 + phase['local'].pct)
+            phase['raw'].channels['LongAccel'] = np.full(len(phase['raw'].time_s), -2. - index)
+        before = module.classify_phase(phases[0], phases, model)
+        data = evaluation.braking_diagnosis(module, [(phases[0], phases, model)], [dict(phase='braking')])
+        result = evaluation.braking_summary(data)
+        self.assertEqual(before, module.classify_phase(phases[0], phases, model))
+        self.assertTrue(all(value['points'] > 0 for value in result['thirds'].values()))
+        self.assertTrue(all(value['outside_pct'] == 0 for value in result['thirds'].values()))
+        for distance, value in result['shifts'].items():
+            self.assertGreater(value['n'], 0)
+            self.assertLess(value['median'] * float(distance), 0)
+            self.assertGreater(value['p90_abs'], 0)
+        for value in result['long_differences'].values():
+            self.assertEqual(value['median'], 4.)
+            self.assertEqual(value['p90'], 7.)
+        merged = evaluation.braking_summary(evaluation.merge_braking_data([data, data]))
+        self.assertEqual(merged['long_differences']['brake']['n'], result['long_differences']['brake']['n'] * 2)
+        self.assertEqual(merged['long_differences']['brake']['median'], 4.)
+        json.dumps(result, allow_nan=False)
+
+    def test_optional_long_accel_interpolation_never_bridges_missing_or_duplicate_time(self):
+        module, model, phases = self._v3_phases(0)
+        raw = phases[0]['raw']
+        raw.channels['LongAccel'] = -np.ones(len(raw.time_s))
+        raw.channels['LongAccel'][210] = np.nan
+        raw.time_s[200] = raw.time_s[199]
+        reference = module.prepare_phase(raw, .05, .45, model)
+        query = np.array([raw.pct[190], (raw.pct[199] + raw.pct[200]) / 2, raw.pct[210]])
+        result = evaluation.reference_channel_at(reference, query, 'LongAccel')
+        self.assertEqual(result[0], -1.)
+        self.assertTrue(np.all(np.isnan(result[1:])))
+        del raw.channels['LongAccel']
+        self.assertTrue(np.all(np.isnan(evaluation.reference_channel_at(reference, query, 'LongAccel'))))
+
+    def test_braking_shortage_gate_separates_phase_definition_from_matching_loss(self):
+        module, model, phases = self._v3_phases(0)
+        raws = [phase['raw'] for phase in phases]
+        groups = [[module.prepare_phase(raw, low, high, model) for raw in raws]
+                  for low, high in ((.05, .1), (.1, .2), (.2, .45))]
+        captures = [(group[0], group, model) for group in groups]
+        rows = [dict(phase=name) for name in evaluation.PHASES]
+        initial = evaluation.braking_summary(evaluation.braking_diagnosis(module, captures, rows))
+        for group in groups:
+            for phase in group[1:]:
+                phase['local'].channels['Throttle'][:] = .9
+        restricted = evaluation.braking_summary(evaluation.braking_diagnosis(module, captures, rows))
+        self.assertTrue(initial['stop_before_candidate'])
+        self.assertIn('drive', initial['less_than_half_of'])
+        self.assertIn('drive', initial['definition_also_short'])
+        for phase in evaluation.PHASES:
+            self.assertEqual(initial['phase_counts'][phase]['required'], restricted['phase_counts'][phase]['required'])
+            self.assertEqual(restricted['phase_counts'][phase]['three_references'], 0)
+        self.assertEqual(initial['definition_also_short'], restricted['definition_also_short'])
+
+    def test_braking_diagnosis_cli_rejects_incompatible_modes_before_opening_inputs(self):
+        with patch.object(evaluation, 'fingerprint') as fingerprint:
+            for args in (['--diagnose-braking'], ['--method', 'v3', '--diagnose-braking', '--resume'],
+                         ['--method', 'v3', '--diagnose-braking', '--diagnose-matching']):
+                with self.subTest(args=args), self.assertRaises(ValueError):
+                    evaluation.main(args)
+            fingerprint.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()
