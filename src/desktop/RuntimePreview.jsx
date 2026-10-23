@@ -29,7 +29,7 @@ export function LogSendSwitch({ apiBase }) {
     <Button size="sm" variant={on ? 'default' : 'outline'} aria-pressed={on} aria-label="로그 자동 보내기" disabled={auto.busy}
       className={`log-send-toggle${on ? ' log-send-on' : ''}`} onClick={() => auto.toggle(!on)}
       title={on ? '주행이 끝나면 세션 로그를 자동으로 보냅니다 (iRacing·LMU)' : '세션 로그 자동 보내기 꺼짐'}>
-      <CloudUpload data-icon="inline-start" />로그 보내기 {on ? 'ON' : 'OFF'}
+      <CloudUpload data-icon="inline-start" /><span className="log-send-label">로그 보내기</span>
     </Button>
     <ConsentDialog auto={auto} />
   </>;
@@ -50,12 +50,17 @@ export function RuntimeControls({ runtime }) {
   const selectedDevice = audio.devices.find(d => d.deviceId === controls.output);
   const outputLabel = controls.output === 'default' ? '시스템 기본 장치' : selectedDevice?.label || '저장한 장치 · 확인 필요';
   return <div className="runtime-controls" aria-label="빠른 조작">
-    <Tooltip><TooltipTrigger asChild><Badge variant="outline" tabIndex={0}>{runtime.host?.status?.connected ? '주행 연결됨' : '차량 연결 대기'}</Badge></TooltipTrigger><TooltipContent>실제 앱의 오버레이 자동 표시·스포터·피트월을 제어합니다.</TooltipContent></Tooltip>
+    <Tooltip><TooltipTrigger asChild><Badge variant="outline" className="runtime-status" tabIndex={0}>{runtime.host?.status?.connected ? '주행 연결됨' : '차량 연결 대기'}</Badge></TooltipTrigger><TooltipContent>실제 앱의 오버레이 자동 표시·스포터·피트월을 제어합니다.</TooltipContent></Tooltip>
     <FieldGroup className="runtime-switches">
-      {[[Layers3, 'overlay', '오버레이'], [Headphones, 'spotter', '스포터'], [Radio, 'pitwall', '피트월']].map(([Icon, key, label]) => <Field key={key} orientation="horizontal" className="runtime-switch">
-        <FieldLabel htmlFor={`quick-${key}`}><Icon aria-hidden="true" />{label}<span>{runtime.capability?.[key] === false ? '미지원' : controls[key] ? '켜짐' : '꺼짐'}</span></FieldLabel>
-        <Switch id={`quick-${key}`} aria-label={label} checked={controls[key]} disabled={runtime.capability?.[key] === false || (key === 'overlay' ? runtime.overlayBusy || !runtime.overlay?.supported : key === 'spotter' ? runtime.host?.spotter?.preparing : false)} onCheckedChange={value => change(key, value)} />
-      </Field>)}
+      {/* Same boxed look as the log button: lit means on, so no on/off words. */}
+      {[[Layers3, 'overlay', '오버레이'], [Headphones, 'spotter', '스포터'], [Radio, 'pitwall', '피트월']].map(([Icon, key, label]) => {
+        const unsupported = runtime.capability?.[key] === false;
+        const on = Boolean(controls[key]);
+        return <Button key={key} id={`quick-${key}`} size="sm" variant={on ? 'default' : 'outline'} aria-pressed={on} aria-label={label}
+          className={`runtime-toggle${on ? ' runtime-toggle-on' : ''}`} title={unsupported ? `${label} · 미지원` : `${label} ${on ? '켜짐' : '꺼짐'}`}
+          disabled={unsupported || (key === 'overlay' ? runtime.overlayBusy || !runtime.overlay?.supported : key === 'spotter' ? runtime.host?.spotter?.preparing : false)}
+          onClick={() => change(key, !on)}><Icon data-icon="inline-start" aria-hidden="true" />{label}</Button>;
+      })}
       <LogSendSwitch apiBase={host.apiBase ?? ''} />
     </FieldGroup>
     {runtime.speech?.available && <>

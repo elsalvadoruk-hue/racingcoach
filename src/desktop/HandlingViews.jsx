@@ -58,8 +58,12 @@ export function HandlingDetail({ items = [], coverage = [] }) {
   </section>;
 }
 
+export function repeatedHandling(items = []) {
+  return orderHandling((items || []).filter(item => item.files >= 2)).slice(0, 3);
+}
+
 export function HandlingRepeats({ items = [] }) {
-  const repeated = orderHandling(items.filter(item => item.files >= 2)).slice(0, 3);
+  const repeated = repeatedHandling(items);
   if (!repeated.length) return null;
   return <Card className="handling-repeat-card"><CardHeader><CardTitle>반복되는 거동</CardTitle><CardDescription>같은 차량·트랙의 여러 주행에서 관측했습니다.</CardDescription></CardHeader>
     <CardContent><ul>{repeated.map((item, i) => <li key={`${item.corner_id}-${item.kind}-${item.phase}-${i}`}><strong>{item.label} · 지난 {item.files}개 주행에서 반복</strong><HandlingObservation item={item} /></li>)}</ul></CardContent>

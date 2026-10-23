@@ -92,3 +92,33 @@ test('iRacing retains its original valid-lap labels and practice start API/dialo
   expect(await screen.findByRole('dialog')).toBeInTheDocument();
   expect(PracticeCoach).toHaveBeenCalled();
 });
+
+test('three summary columns sit side by side and the clicked one widens while the others shrink', () => {
+  const repeated = [{ corner_id: 'geometry-1', label: '구간 1', kind: 'oversteer', phase: 'drive', files: 2, laps: 3, of_laps: 8, time_cost_s: .05 }];
+  render(<DrivingSummary {...props()} comparison={{ ...comparison, handling: { repeated } }} />);
+  const section = screen.getByRole('region', { name: '주행 요약' });
+  const column = id => section.querySelector(`[data-column="${id}"]`);
+  expect(section).toHaveAttribute('data-expanded', 'tasks');
+  expect(column('tasks')).toHaveAttribute('data-open', 'true');
+  // Narrow columns keep a short summary only.
+  expect(screen.getByText('유지할 것 1개 · 확인 기준 1개')).toBeInTheDocument();
+  expect(screen.queryByText('선택한 두 랩 비교')).not.toBeInTheDocument();
+  expect(screen.getByText(/그래프 비교 포인트 \d+개 · 반복되는 거동 1개/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '다음 주행에서 할 일 넓게 보기' }));
+  expect(section).toHaveAttribute('data-expanded', 'next');
+  expect(column('tasks')).toHaveAttribute('data-open', 'false');
+  expect(screen.getByText('유지할 것')).toBeInTheDocument();
+  expect(screen.getByText('차량과 트랙 유지')).toBeInTheDocument();
+  // A click anywhere inside a narrow column widens it.
+  fireEvent.click(column('analysis').querySelector('.summary-column-content'));
+  expect(section).toHaveAttribute('data-expanded', 'analysis');
+  expect(screen.getByText('선택한 두 랩 비교')).toBeInTheDocument();
+  expect(screen.getByText('구간 1 · 지난 2개 주행에서 반복')).toBeInTheDocument();
+  expect(screen.queryByText('차량과 트랙 유지')).not.toBeInTheDocument();
+  // Choosing a task from the narrow task column widens it as well.
+  fireEvent.click(screen.getByRole('radio', { name: '이번 연습: 구간 2 · 관측 시간 차이' }));
+  expect(section).toHaveAttribute('data-expanded', 'tasks');
+  // An action button inside a narrow column keeps its own job and does not widen it.
+  fireEvent.click(screen.getByRole('button', { name: '기록에서 연습 기준 준비' }));
+  expect(section).toHaveAttribute('data-expanded', 'tasks');
+});

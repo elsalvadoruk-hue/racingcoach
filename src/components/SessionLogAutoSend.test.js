@@ -47,16 +47,15 @@ test('turning it off needs no confirmation', async () => {
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
 
-test('the top-bar toggle is a boxed ON/OFF button that asks before turning on', async () => {
+test('the top-bar toggle is a boxed button that lights up when on and asks before turning on', async () => {
   const { LogSendSwitch } = require('../desktop/RuntimePreview');
   render(<LogSendSwitch apiBase="" />);
   const toggle = await screen.findByRole('button', { name: '로그 자동 보내기' });
   expect(toggle).toHaveAttribute('aria-pressed', 'false');
-  expect(toggle).toHaveTextContent('로그 보내기 OFF');
+  expect(toggle).toHaveTextContent('로그 보내기'); expect(toggle).not.toHaveClass('log-send-on');
   fireEvent.click(toggle);
   fireEvent.click(screen.getByRole('checkbox'));
   fireEvent.click(screen.getByRole('button', { name: '동의하고 켜기' }));
   await waitFor(() => expect(screen.getByRole('button', { name: '로그 자동 보내기' })).toHaveAttribute('aria-pressed', 'true'));
-  expect(screen.getByRole('button', { name: '로그 자동 보내기' })).toHaveTextContent('로그 보내기 ON');
   expect(screen.getByRole('button', { name: '로그 자동 보내기' })).toHaveClass('log-send-on');
 });
