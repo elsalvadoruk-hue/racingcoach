@@ -466,6 +466,68 @@ class HandlingEvaluationTests(unittest.TestCase):
                     evaluation.main(args)
             fingerprint.assert_not_called()
 
+    def test_population_time_and_exclusions_partition_without_changing_required_mask(self):
+        module, model, phases = self._v3_phases(0)
+        raw = phases[0]['raw']
+        raw.channels['Speed'][100:150] = module.MIN_SPEED
+        raw.channels['SteeringWheelAngle'][200:300] = module.MIN_STEER
+        raw.channels['YawRate'][350] = np.nan
+        aligned = raw.channels['SteeringWheelAngle'].copy()
+        aligned[380:400] = 0.
+        model['_aligned_steer'] = {id(raw): aligned}
+        target = module.prepare_phase(raw, .05, .45, model)
+        before = module.classify_phase(target, [target, *phases[1:]], model)
+        data = evaluation.population_diagnosis(module, [(target, phases, model)], [dict(phase='braking')])
+        result = evaluation.population_summary(data)['braking']
+        self.assertEqual(before, module.classify_phase(target, [target, *phases[1:]], model))
+        self.assertEqual(result['phase_samples'], 400)
+        self.assertAlmostEqual(result['phase_seconds'], 4.)
+        self.assertEqual(result['required_samples'], 228)
+        self.assertAlmostEqual(result['required_seconds'], 2.28)
+        self.assertAlmostEqual(result['required_time_fraction'], .57)
+        for key, count in [('missing_required_interval', 2), ('speed_below_minimum', 50),
+                           ('steer_below_minimum', 100), ('aligned_steer_below_minimum', 20)]:
+            self.assertEqual(result['reasons'][key]['samples'], count)
+        self.assertAlmostEqual(result['low_steer_independent']['phase_time_fraction'], .25)
+        excluded = sum(v['seconds'] for v in result['reasons'].values())
+        self.assertAlmostEqual(excluded + result['required_seconds'], result['phase_seconds'])
+        merged = evaluation.population_summary(evaluation.merge_population([data, data]))
+        self.assertAlmostEqual(merged['braking']['phase_seconds'], 8.)
+        self.assertAlmostEqual(merged['braking']['required_time_fraction'], .57)
+        json.dumps(merged, allow_nan=False)
+
+    def test_population_accounts_boundary_time_and_unavailable_phases(self):
+        module, model, phases = self._v3_phases(0)
+        phase = module.prepare_phase(phases[0]['raw'], .0555, .4505, model)
+        data = evaluation.population_diagnosis(module, [(phase, [], model), (None, [], model)],
+                                              [dict(phase='braking'), dict(phase='drive')])
+        result = evaluation.population_summary(data)
+        self.assertAlmostEqual(result['braking']['phase_seconds'], 3.95)
+        self.assertAlmostEqual(result['braking']['reasons']['boundary_interval']['seconds'], .005)
+        self.assertEqual(result['braking']['reasons']['boundary_interval']['samples'], 0)
+        self.assertEqual(result['drive']['unavailable_instances'], 1)
+        self.assertIsNone(result['drive']['required_time_fraction'])
+        self.assertEqual(module.METHOD, 'personal_corner_phase_v3')
+
+    def test_v4_cli_and_population_flag_keep_diagnosis_gates_explicit(self):
+        args = evaluation.parser().parse_args(['--method', 'v4', '--include-population-diagnosis'])
+        self.assertEqual(args.method, 'v4')
+        self.assertTrue(args.include_population_diagnosis)
+        with patch.object(evaluation, 'fingerprint') as fingerprint:
+            with self.assertRaisesRegex(ValueError, 'v3 또는 v4'):
+                evaluation.main(['--include-population-diagnosis'])
+            fingerprint.assert_not_called()
+
+    def test_population_includes_undefined_phases_that_are_not_in_classify_captures(self):
+        module, _, _ = self._v3_phases(0)
+        native = dict(phase_coverage=[dict(phase='braking', unknown_reasons={'phase_unavailable': 3}),
+                                      dict(phase='braking', unknown_reasons={'raw_lap_unavailable': 2}),
+                                      dict(phase='drive', unknown_reasons={'inputs_not_comparable': 8})])
+        result = evaluation.population_diagnosis(module, [], [], native=native)
+        self.assertEqual(result['braking']['unavailable_instances'], 5)
+        self.assertEqual(result['drive']['unavailable_instances'], 0)
+        self.assertEqual(result['braking']['phase_seconds'], 0.)
+
 
 if __name__ == '__main__':
     unittest.main()

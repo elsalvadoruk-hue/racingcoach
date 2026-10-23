@@ -154,7 +154,7 @@ def adjusted_auc(rows, corners):
 def parser():
     p = argparse.ArgumentParser(description='개인 저장소를 격리하여 차 거동 지표 6개를 평가합니다.')
     p.add_argument('files', nargs='*', type=Path)
-    p.add_argument('--method', choices=('v1', 'v2', 'v3'), default='v1')
+    p.add_argument('--method', choices=('v1', 'v2', 'v3', 'v4'), default='v1')
     p.add_argument('--candidate', type=Path, help='평가만 할 로컬 후보 모듈')
     p.add_argument('--permutations', type=int, default=200)
     p.add_argument('--skip-null', action='store_true',
@@ -167,6 +167,8 @@ def parser():
                    help='v3 비교 조건별 탈락만 진단합니다. 판정 변경·귀무 재평가 없음')
     p.add_argument('--diagnose-braking', action='store_true',
                    help='v3 제동 구간·위치 오차·같은 페달의 종G 차이를 진단합니다')
+    p.add_argument('--include-population-diagnosis', action='store_true',
+                   help='단계 시간 대비 판정 대상 비율과 제외 이유를 추가 집계합니다. 판정 변경 없음')
     return p
 
 
@@ -306,6 +308,8 @@ def matched_matrix(module, phase, references, model):
         else:
             ok &= (abs(rv - speed) <= module.MAX_SPEED_DIFFERENCE)
             ok &= (abs(rs) <= module.MAX_STEER_RATIO * abs(steer)) & (abs(steer) <= module.MAX_STEER_RATIO * abs(rs))
+        if phase.get('long_accel_matching', False):
+            ok &= module._long_accel_matches(phase['long_accel'], module._long_accel_at(reference, phase['local'].pct))
         predictions.append(np.where(ok, q, np.nan))
     return np.array(predictions), support
 
@@ -526,6 +530,130 @@ def point_summary(values):
     return out
 
 
+POPULATION_REASONS = ('boundary_interval', 'missing_required_interval', 'speed_below_minimum',
+                      'steer_below_minimum', 'aligned_steer_below_minimum', 'other_excluded')
+
+
+def empty_population():
+    return {name: dict(instances=0, unavailable_instances=0, phase_samples=0, phase_seconds=0.,
+                       required_samples=0, required_seconds=0.,
+                       reasons={key: dict(samples=0, seconds=0.) for key in POPULATION_REASONS},
+                       low_steer_independent=dict(samples=0, seconds=0.)) for name in PHASES}
+
+
+def population_diagnosis(module, captures, rows, *, native=None):
+    """Separate phase duration from target eligibility; never alter a mask."""
+    if len(captures) != len(rows):
+        raise ValueError('진단 캡처와 관측 수가 다릅니다.')
+    result = empty_population()
+    for (phase, _, _), row in zip(captures, rows):
+        out = result[row['phase']]
+        if phase is None:
+            out['unavailable_instances'] += 1
+            continue
+        out['instances'] += 1
+        local = phase['local']
+        dp = np.diff(local.pct)
+        a, b = np.zeros(len(dp)), np.ones(len(dp))
+        np.divide(phase['start'] - local.pct[:-1], dp, out=a, where=dp > 0)
+        np.divide(phase['end'] - local.pct[:-1], dp, out=b, where=dp > 0)
+        duration = np.zeros(len(local.pct))
+        duration[:-1] = np.where(module._edges(local) & (dp > 0),
+                                np.maximum(0., np.minimum(1., b) - np.maximum(0., a)) * np.diff(local.time_s), 0.)
+        base = duration > 0
+        inside = phase['inside']
+        out['phase_samples'] += int(np.sum(base & inside))
+        out['phase_seconds'] += float(duration.sum())
+        required = inside & phase.get('q_ready', phase['eligible']) & (phase['durations'] > 0)
+        out['required_samples'] += int(required.sum())
+        out['required_seconds'] += float(phase['durations'][required].sum())
+        c = local.channels
+        finite = np.ones(len(base), dtype=bool)
+        for key in module.REQUIRED:
+            values = c[key]
+            finite &= np.isfinite(values) & np.r_[np.isfinite(values[1:]), False]
+        steer_low = np.isfinite(c['SteeringWheelAngle']) & (abs(c['SteeringWheelAngle']) <= module.MIN_STEER)
+        qsteer = phase.get('q_steer', c['SteeringWheelAngle'])
+        masks = (~inside, ~finite, c['Speed'] <= module.MIN_SPEED, steer_low,
+                 np.isfinite(qsteer) & (abs(qsteer) <= module.MIN_STEER), ~required)
+        remaining = base.copy()
+        for key, mask in zip(POPULATION_REASONS, masks):
+            selected = remaining & mask
+            out['reasons'][key]['samples'] += int(np.sum(selected & inside))
+            out['reasons'][key]['seconds'] += float(duration[selected].sum())
+            remaining &= ~mask
+        if not np.array_equal(remaining, required):
+            raise RuntimeError('진단의 판정 대상 마스크가 제품과 다릅니다.')
+        independent = base & inside & steer_low
+        out['low_steer_independent']['samples'] += int(independent.sum())
+        out['low_steer_independent']['seconds'] += float(duration[independent].sum())
+    if native is not None:
+        # Undefined phases are counted in coverage but never sent to classify().
+        unavailable = Counter()
+        for entry in native.get('phase_coverage', []):
+            reasons = entry.get('unknown_reasons', {})
+            unavailable[entry['phase']] += reasons.get('phase_unavailable', 0) + reasons.get('raw_lap_unavailable', 0)
+        for phase, count in unavailable.items():
+            result[phase]['unavailable_instances'] = max(result[phase]['unavailable_instances'], count)
+    return result
+
+
+def merge_population(values):
+    result = empty_population()
+    for value in values:
+        for phase, out in result.items():
+            for key in ('instances', 'unavailable_instances', 'phase_samples', 'phase_seconds', 'required_samples', 'required_seconds'):
+                out[key] += value[phase][key]
+            for key in POPULATION_REASONS:
+                for metric in ('samples', 'seconds'):
+                    out['reasons'][key][metric] += value[phase]['reasons'][key][metric]
+            for metric in ('samples', 'seconds'):
+                out['low_steer_independent'][metric] += value[phase]['low_steer_independent'][metric]
+    return result
+
+
+def population_summary(value):
+    result = json.loads(json.dumps(value))
+    total = sum(p['phase_seconds'] for p in result.values())
+    def fraction(n, d):
+        return n / d if d else None
+    for phase in result.values():
+        phase['mean_phase_seconds'] = fraction(phase['phase_seconds'], phase['instances'])
+        phase['phase_time_share'] = fraction(phase['phase_seconds'], total)
+        phase['required_time_fraction'] = fraction(phase['required_seconds'], phase['phase_seconds'])
+        phase['required_sample_fraction'] = fraction(phase['required_samples'], phase['phase_samples'])
+        excluded_samples = phase['phase_samples'] - phase['required_samples']
+        excluded_seconds = phase['phase_seconds'] - phase['required_seconds']
+        for reason in [*phase['reasons'].values(), phase['low_steer_independent']]:
+            reason['phase_sample_fraction'] = fraction(reason['samples'], phase['phase_samples'])
+            reason['phase_time_fraction'] = fraction(reason['seconds'], phase['phase_seconds'])
+            reason['excluded_sample_fraction'] = fraction(reason['samples'], excluded_samples)
+            reason['excluded_time_fraction'] = fraction(reason['seconds'], excluded_seconds)
+    return result
+
+
+def population_text_report(report):
+    lines = ['추가 진단: (a) 단계 길이/판정 대상 시간 (b) 제외 이유',
+             '시간 분모는 단계 경계로 자른 관측된 전진 구간 시간입니다. 단절 시간은 추정하지 않습니다.',
+             '단계 미정의/원시 자료 없음은 unavailable_instances로 분리하고 시간 분모에 넣지 않습니다.',
+             '표본 수는 단계 안 구간 왼쪽 표본만 셉니다. 경계 직전 표본의 잘린 시간은 boundary_interval로 별도 집계합니다.',
+             '제외 이유는 경계→필수 채널 결측→속도≤15m/s→현재 핸들각≤0.03rad→보정 핸들각≤0.03rad 순서의 배타적 집계입니다.',
+             'low_steer_independent는 다른 제외 이유와 겹칠 수 있는 현재 핸들각 최소값 이하 전체입니다. 제동 단계에서 직선 제동의 진단용 대리값이며 실제 주행선의 직선 판정은 아닙니다.',
+             '판정 대상 마스크는 기존 v3와 동일합니다. 비교 상대 조건에 의한 탈락은 이 표의 제외 이유가 아닙니다.', '']
+    groups = [('전체6파일', report['population_diagnosis']), ('원래5파일', report['baseline_five_population'])]
+    groups += [(file['file'], file['population_diagnosis']) for file in report['files']]
+    for label, data in groups:
+        lines += [label, '단계 | 관측 시간s | 평균 단계 시간s | 단계 시간 비중 | 대상 시간s | 대상/단계 시간 | 대상 표본/단계 표본']
+        for phase, value in data.items():
+            lines.append(phase + ' | ' + ' | '.join(str(value[k]) for k in ('phase_seconds', 'mean_phase_seconds', 'phase_time_share', 'required_seconds', 'required_time_fraction'))
+                         + f" | {value['required_samples']}/{value['phase_samples']}")
+            lines.append('제외 이유 | 표본 수 | 시간s | 단계 시간 비율 | 제외 시간 중 비율')
+            for key, reason in [*value['reasons'].items(), ('low_steer_independent (중복 가능)', value['low_steer_independent'])]:
+                lines.append(key + ' | ' + ' | '.join(str(reason[k]) for k in ('samples', 'seconds', 'phase_time_fraction', 'excluded_time_fraction')))
+        lines.append('')
+    return '\n'.join(lines)
+
+
 def native_evaluation(module, analyzer, corners, *, collect_points=True):
     """Instrument the selected implementation without changing its decisions."""
     original_prepare, original_classify = module.prepare_phase, module.classify_phase
@@ -619,6 +747,10 @@ def _phase_grid(module, phases, model, hz):
         reference = module._reference_at(p, axis[:-1])
         if reference.shape[0] == 5:
             reference = np.vstack([reference, _interp(p, axis[:-1], c['LatAccel'])])
+        if hasattr(module, 'MAX_LONG_ACCEL_ABS'):
+            target = np.vstack([target, _interp(p, axis[:-1], p['long_accel']),
+                                np.full(bins, p['long_accel_matching'], dtype=float)])
+            reference = np.vstack([reference, module._long_accel_at(p, axis[:-1])])
         targets.append(target)
         refs.append(reference)
         durations.append(dt)
@@ -647,8 +779,8 @@ def _sustained_any(mask, duration, seconds):
 
 def _classify(module, grid, references, model):
     target, _, duration, steady, complete, support, bins = grid
-    q, v, steer, brake, throttle, ay, yaw, qsteer = target.transpose(1, 0, 2)
-    rq, rv, rs, rb, rt, ra = references.transpose(1, 0, 2)
+    q, v, steer, brake, throttle, ay, yaw, qsteer = target[:, :8].transpose(1, 0, 2)
+    rq, rv, rs, rb, rt, ra = references[:, :6].transpose(1, 0, 2)
     band = np.searchsorted(model['edges_mps'], v, side='right')
     ok = ((np.searchsorted(model['edges_mps'], rv, side='right')[None] == band[:, None])
           & (abs(rb[None] - brake[:, None]) <= module.MAX_PEDAL_DIFFERENCE)
@@ -662,6 +794,9 @@ def _classify(module, grid, references, model):
         ok &= abs(rv[None] - v[:, None]) <= module.MAX_SPEED_DIFFERENCE
         ok &= ((abs(rs[None]) <= module.MAX_STEER_RATIO * abs(steer[:, None]))
                & (abs(steer[:, None]) <= module.MAX_STEER_RATIO * abs(rs[None])))
+    if hasattr(module, 'MAX_LONG_ACCEL_ABS'):
+        long_ok = module._long_accel_matches(target[:, 8, None, :], references[None, :, 6, :])
+        ok &= (target[:, 9, None, :] == 0) | long_ok
     ok[np.arange(len(q)), np.arange(len(q))] = False
     matrix = np.where(ok & (rq[None] > 0), rq[None], np.nan)
     matched = np.isfinite(matrix).sum(axis=1)
@@ -1162,6 +1297,8 @@ def main(argv=None):
         raise ValueError('비교 조건 진단은 --method v3로 실행하세요.')
     if args.diagnose_braking and (args.resume or args.diagnose_matching):
         raise ValueError('제동 진단은 --resume 또는 --diagnose-matching과 함께 실행하지 않습니다.')
+    if args.include_population_diagnosis and args.method not in ('v3', 'v4'):
+        raise ValueError('대상 표본 진단은 --method v3 또는 v4로 실행하세요.')
     if not (args.permutations > 0 and 0 < args.grid_hz <= 60):
         raise ValueError('섞기 횟수는 양수이고 grid-hz는 0~60이어야 합니다.')
     inputs = [path.resolve(strict=True) for path in (args.files or default_inputs())]
@@ -1183,6 +1320,8 @@ def main(argv=None):
         options['diagnose_matching'] = True
     if args.diagnose_braking:
         options['diagnose_braking'] = True
+    if args.include_population_diagnosis:
+        options['include_population_diagnosis'] = True
     files = []
     braking_values = []
     with tempfile.TemporaryDirectory(prefix='handling-evaluation-') as folder:
@@ -1245,6 +1384,10 @@ def main(argv=None):
                 data = braking_diagnosis(module, captures, rows)
                 result['braking_diagnosis'] = braking_summary(data)
                 braking_values.append((source.name, data))
+            if args.include_population_diagnosis:
+                result['population_diagnosis'] = population_summary(population_diagnosis(module, captures, rows, native=native))
+            if hasattr(module, 'MAX_LONG_ACCEL_ABS'):
+                result['long_accel_matching'] = native['long_accel_matching']
             cache_path.write_text(json.dumps(dict(identity=identity, result=result), ensure_ascii=False, allow_nan=False), encoding='utf-8')
             files.append(result)
             print(f"완료: 판정 가능 {native['coverage']['classifiable']}/{native['coverage']['applicable']}", flush=True)
@@ -1264,9 +1407,12 @@ def main(argv=None):
         report['braking_diagnosis'] = braking_summary(merge_braking_data(data for _, data in braking_values))
         report['baseline_five_braking'] = braking_summary(merge_braking_data(
             data for name, data in braking_values if name in DEFAULT_NAMES[:5]))
+    if args.include_population_diagnosis:
+        report['population_diagnosis'] = population_summary(merge_population(file['population_diagnosis'] for file in files))
+        report['baseline_five_population'] = population_summary(merge_population(file['population_diagnosis'] for file in baseline))
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=1, allow_nan=False), encoding='utf-8')
     render = braking_text_report if args.diagnose_braking else matching_text_report if args.diagnose_matching else text_report
-    txt_path.write_text(render(report), encoding='utf-8')
+    txt_path.write_text(render(report) + ('\n\n' + population_text_report(report) if args.include_population_diagnosis else ''), encoding='utf-8')
     print(f'평가 보고서 저장: {json_path.name}, {txt_path.name}', flush=True)
     return 0
 
