@@ -27,7 +27,8 @@ import session_log
 logger = logging.getLogger(__name__)
 
 # Raise when what the consent text says changes: the driver is then asked again.
-CONSENT_VERSION = 1
+# 3 (2026-10-23): selected corner traces in spare space, without nearby-car files.
+CONSENT_VERSION = 3
 FINISHED_AFTER_S = 600       # a drive with no new radio event for 10 minutes has ended
 MIN_CALLS, MIN_MINUTES = 10, 2.  # too little to learn anything from
 MAX_ATTEMPTS, RETRY_AFTER_S = 3, 1800
@@ -87,8 +88,9 @@ def status():
 
 
 class AutoUploader:
-    def __init__(self, store, app_version, current_run=lambda: None, send=session_log.send, clock=time.time):
+    def __init__(self, store, app_version, current_run=lambda: None, send=session_log.send, clock=time.time, extras=()):
         self.store, self.app_version, self.current_run = store, app_version, current_run
+        self.extras = extras
         self.send_file, self.clock = send, clock
         self.stopping = threading.Event()
         self.thread = None
@@ -128,10 +130,19 @@ class AutoUploader:
                         or entry.get('attempts', 0) >= MAX_ATTEMPTS
                         or now - entry.get('tried_at', 0) < RETRY_AFTER_S or sent_today >= DAILY_LIMIT):
                     continue
+                found = error = None
+                try:
+                    found = session_log.export(self.store, run['run_id'], self.app_version, include_questions=False,
+                                               extras=self.extras, limit=session_log.SEND_LIMIT)
+                except session_log.Deferred:
+                    continue      # an extra waits until the driver is off track; not a failed attempt
+                except ValueError as exc:
+                    error = exc
                 entry = {**entry, 'track': run.get('track'), 'car': run.get('car'), 'ended_at': run['ended_at'],
                          'attempts': entry.get('attempts', 0) + 1, 'tried_at': now}
                 try:
-                    found = session_log.export(self.store, run['run_id'], self.app_version, include_questions=False)
+                    if error is not None:
+                        raise error
                     if not found:
                         continue
                     self.send_file(url, found[0], found[1], '자동 보내기', self.app_version)

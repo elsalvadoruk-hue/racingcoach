@@ -38,5 +38,13 @@ class DrillStartRequest(BaseModel):
     warmup: bool = True
 
 
+class CornerNoteRequest(BaseModel):
+    game: Literal['iracing', 'lmu']
+    track_id: str = Field(min_length=1, max_length=160, pattern=r'\S')
+    track_config: str = Field(default='', max_length=160)
+    pct: float = Field(ge=0, le=1, allow_inf_nan=False)
+    text: str = Field(max_length=300)
+
+
 class PracticeCloseRequest(BaseModel):
     status: Literal["DONE", "DROPPED"]

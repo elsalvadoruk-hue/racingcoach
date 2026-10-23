@@ -55,6 +55,19 @@ def finite(value):
     return float(value) if type(value) in (int, float) and math.isfinite(value) else None
 
 
+def grid_topics(position, *, multiclass=False):
+    """Front-row calls for the overall grid, or the own class in a multiclass race."""
+    if position not in (1, 2):
+        return TOPICS
+    prefix = 'form_class_' if multiclass else 'form_'
+    greeting = prefix + ('pole' if position == 1 else 'front_row')
+    station = prefix + ('pole_station' if position == 1 else 'front_station')
+    return [(name, role, [(greeting if key == 'form_hello' else
+                          station if key == 'form_hold_station' else
+                          'form_front_rolling' if key == 'form_rolling' else key, need)
+                         for key, need in sentences]) for name, role, sentences in TOPICS]
+
+
 def usable(topic, known):
     """The sentences of a topic that can be said with what is known, or [] when it is not worth a call."""
     name, role, sentences = topic
@@ -213,15 +226,18 @@ class FormationBrief:
     def planned(self, known, run_id):
         """This lap's calls: the race first, the send-off last, the rest drawn anew for each race."""
         count = max(0, min(MAX_CALLS, int(self.calls)))
-        ready = [topic for topic in TOPICS if usable(topic, known)]
+        multiclass = bool(known.get('multiclass'))
+        position = known.get('class_position' if multiclass else 'grid_position')
+        ready = [topic for topic in grid_topics(position, multiclass=multiclass) if usable(topic, known)]
         if count <= 0:
             return []
         if count == 1:
             return ready[:1] or [CLOSING]
         first, others = ready[:1], ready[1:]
         room = max(0, count - 1 - len(first))
-        kept = [topic for topic in others if topic[0] in ALWAYS][:room]
-        others = [topic for topic in others if topic[0] not in ALWAYS]
+        required = (*ALWAYS, 'start') if position in (1, 2) else ALWAYS
+        kept = [topic for topic in others if topic[0] in required][:room]
+        others = [topic for topic in others if topic not in kept]
         wanted = room - len(kept)
         picked = set(random.Random(str(run_id)).sample(range(len(others)), min(wanted, len(others))))
         return first + kept + [topic for index, topic in enumerate(others) if index in picked] + [CLOSING]

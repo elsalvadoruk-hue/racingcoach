@@ -56,6 +56,7 @@ def session_policy(mode: SessionMode) -> dict[str, Any]:
 
 
 class AnalyzeRequest(BaseModel):
+    progress_id: Optional[str] = Field(default=None, max_length=64)
     session_mode: SessionMode = SessionMode.BASELINE_3LAP
     pit_rule: PitRule = PitRule.NOT_APPLICABLE
     user_feedback: str = Field(default="", max_length=2000)

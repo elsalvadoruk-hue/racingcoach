@@ -50,7 +50,7 @@ def files_payload(visibility, limit=250):
     imported = import_dir().resolve()
     fields = ('car_name', 'car_path', 'track_name', 'track_path', 'track_config', 'track_platform_id', 'analyzable',
               'reason', 'detected_laps', 'complete_laps', 'valid_laps', 'metadata_pending', 'status', 'retryable',
-              'session_type', 'session_duration_s', 'suggested_session_mode')
+              'session_type', 'session_duration_s', 'suggested_session_mode', 'best_lap_s', 'recording_time')
     rows = []
     for path in recordings(limit):
         stat = path.stat()

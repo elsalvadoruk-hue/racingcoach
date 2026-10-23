@@ -9,8 +9,12 @@ from application_runtime import (DEFAULT_CORS_ORIGINS, telemetry_file_busy_respo
 from analysis_routes import AnalysisRoutesServices, register_routes as register_analysis_routes
 from reference_routes import ReferenceRoutesServices, register_routes as register_reference_routes
 from settings_routes import SettingsRoutesServices, register_routes as register_settings_routes
+import analysis_progress
+from setup_influence import setup_influence_notice
 from practice_routes import PracticeRoutesServices, register_routes as register_practice_routes
 from memory_routes import MemoryRoutesServices, register_routes as register_memory_routes
+from corner_notes import CornerNotesStore
+from corner_notes_routes import CornerNotesRoutesServices, register_routes as register_corner_notes_routes
 from workspace_routes import WorkspaceRoutesServices, register_routes as register_workspace_routes
 from update_routes import UpdateRoutesServices, register_routes as register_update_routes
 import app_update
@@ -26,6 +30,7 @@ from analysis_external import ExternalAnalysis
 from analysis_setup import SetupAnalysis
 from analysis_vehicle import VehicleAnalysis
 from analysis_corners import CornerAnalysis
+from handling import HandlingHistory
 from analysis_laps import LapAnalysis
 from racing_geometry import gps_path
 from closed_loop_coach import (
@@ -210,6 +215,7 @@ from live_telemetry import LiveTelemetry
 from live_pit import PitKnowledge
 from live_formation import RaceHistory
 from timing_log import TimingLog
+from traffic_log import TrafficLog
 from practice import PracticeStore
 from practice_metrics import KEPT_METRICS, success_criteria
 from corner_measurements import CornerMeasurements
@@ -293,7 +299,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "2.0.3"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "2.1.0"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -1200,6 +1206,11 @@ def telemetry_file_visibility(path: Path, telemetry: Optional[ParsedTelemetry] =
             "detected_laps": detected_laps,
             "complete_laps": complete_laps,
             "valid_laps": valid_laps,
+            "best_lap_s": min((value for lap in telemetry.laps if lap.valid and lap.complete
+                               for value in (getattr(lap, "lap_time_s", None),)
+                               if isinstance(value, (int, float)) and not isinstance(value, bool)
+                               and math.isfinite(value) and value > 0), default=None),
+            "recording_time": metadata.get("recording_time"),
             "minimum_required_laps": MIN_DISPLAY_LAPS,
             "minimum_required_valid_laps": MIN_DISPLAY_VALID_LAPS,
             "car_name": metadata.get("car_name") or "Unknown Car",
@@ -1332,6 +1343,8 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
         self._grid_cache: dict[int, dict[str, np.ndarray[Any, Any]]] = cache["grids"]
         self._metric_cache: dict[tuple[Any, ...], dict[str, Any]] = cache["metrics"]
         self._grid_ids: dict[int, tuple[Any, tuple[Any, ...]]] = cache["ids"]
+        self._raw_lap_cache = shared.setdefault('raw_laps', {})
+        self._handling_cache = shared.setdefault('handling', {})
 
 
     def _name_corners(self, corners: list[dict[str, Any]], definitions: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1349,6 +1362,7 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
         request = request_with_structured_feedback(request)
         policy = session_policy(request.session_mode)
         data_quality = self._data_quality(request.session_mode)
+        analysis_progress.stage('laps', laps=len(self.valid_laps))
         target, reference, lap_selection = self._select_laps(request.target_lap, request.reference_lap)
         lap_table = self._lap_table(lap_selection)
 
@@ -1372,9 +1386,11 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                 "reference_lap": None, "total_delta_s": None, "gap_to_session_best_s": None,
                 "scope": "CLEAN_SEGMENTS_ONLY", "reason": self._clean_context()["reason"],
             }
+            analysis_progress.stage('corners')
             corners = self._corner_analysis(target_grid, reference_grid, corner_defs)
             confirmed_names = _CORNER_DEFINITION_STORE.names_for(
                 corner_defs, self.telemetry.metadata.get("track_platform_id"), self.telemetry.metadata.get("track_config"))
+            analysis_progress.stage('repetition')
             repetition = self._repetition_analysis(corner_defs, request.session_mode)
             visualizations = self._visualizations(target_grid, reference_grid, corners)
             for lap in sorted((lap for lap in self.telemetry.laps if lap.lap_number in self._clean_context()["lap_windows"]),
@@ -1385,6 +1401,7 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                         clean_corners.append({**corner, "source": "CLEAN_SEGMENT", "scope": "COACHING_ONLY",
                                               "lap_number": lap.lap_number, "official_valid_lap": False})
 
+        analysis_progress.stage('summary')
         external_reference = self._external_reference_analysis(
             target,
             request.external_reference_files,
@@ -1497,6 +1514,14 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                 corner.update(official_turn_number=named.get("number"), turn_name=named.get("name"), label=call)
         result["performance"]["corner_names_confirmed"] = bool(confirmed_names)
         result["performance"]["corner_consistency"] = self._corner_consistency(corners, (lap_selection or {}).get("target_lap"))
+        result['handling'] = self._handling_analysis(corners)
+        if result['handling'] is not None:
+            try:
+                history = HandlingHistory(os.getenv('IRACING_HANDLING_HISTORY_PATH') or app_settings.data_dir() / 'handling-history.json')
+                result['handling']['repeated'] = history.update(self.telemetry.metadata, self.telemetry.signature, result['handling'])
+            except (OSError, ValueError, TypeError, KeyError):
+                logger.warning('Could not save handling history', exc_info=True)
+                result['handling']['repeated'] = []
         return json_safe(result)
 
 
@@ -2214,6 +2239,11 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                 "line_comparison": line_comparison,
                 "performance_diagnostics": {
                     "straight_line": straight_performance,
+                    "setup_influence": setup_influence_notice(
+                        target_grid, aggregate_grid, aggregate_corners, straight_performance,
+                        pace_eligible=bool(target.valid), lap_delta_s=gap_to_reference,
+                        current_conditions=current_conditions,
+                        reference_conditions=pool_rows),
                 },
                 "visualizations": {"trace": trace,
                                    "track_path": gps_path(target_grid),
@@ -2376,6 +2406,10 @@ def _on_distance_axis(grid: dict[str, Any], distance: np.ndarray) -> dict[str, n
     span = np.maximum(source[right] - source[left], 1e-12)
     weight = np.clip((distance - source[left]) / span, 0.0, 1.0)
     moved: dict[str, np.ndarray] = {"distance_pct": distance}
+    # Preserve recording identity for geographic comparisons after resampling.
+    for key in ("_game", "_source_file"):
+        if key in grid:
+            moved[key] = grid[key]
     for key, values in grid.items():
         if key == "distance_pct" or key.startswith("_") or not isinstance(values, np.ndarray) or len(values) != len(source):
             continue
@@ -3679,6 +3713,7 @@ live_telemetry = LiveTelemetry(sdk_factory=default_game_sdk if os.name == 'nt' e
 live_telemetry.pit_knowledge = PitKnowledge(os.getenv("IRACING_PIT_KNOWLEDGE_PATH") or MEMORY_DB_PATH.parent / "pit-knowledge.json")
 live_telemetry.race_history = RaceHistory(os.getenv("IRACING_RACE_HISTORY_PATH") or MEMORY_DB_PATH.parent / "race-history.json")
 live_telemetry.timing_log = TimingLog(os.getenv("IRACING_TIMING_LOG_DIR") or MEMORY_DB_PATH.parent / "timing-logs")
+live_telemetry.traffic_log = TrafficLog(os.getenv("IRACING_TRAFFIC_LOG_DIR") or MEMORY_DB_PATH.parent / "traffic-logs")
 # One driving focus at a time, checked on the next run of the same car/track/layout (practice.py).
 practice_store = PracticeStore(os.getenv("IRACING_PRACTICE_PATH") or MEMORY_DB_PATH.parent / "practice-tasks.json")
 live_telemetry.drill.history = DrillHistory(os.getenv('IRACING_DRILL_HISTORY_PATH') or MEMORY_DB_PATH.parent / 'practice-drills.jsonl')
@@ -3828,11 +3863,59 @@ overlay_controller = OverlayController(reference=OverlayReference(
     EXTERNAL_REFERENCE_DIR, lambda path: Garage61ReferenceReader(path).parse(), pinned_loader=load_task_overlay_reference))
 
 
+def session_log_extras(defer: bool = False):
+    """Extra parts for a session log (session_log_extras): nearby cars in races, the own drive measured.
+
+    The own drive is the run's recordings analysed like opening them, without handling history
+    or long-term memory writes. With ``defer`` it waits while the driver is on track."""
+    import session_log_extras as extras
+
+    def candidates():
+        files = list(_list_raw_ibt_files(40))
+        try:
+            from lmu_telemetry import list_lmu_telemetry_files
+            files += list_lmu_telemetry_files()
+        except Exception:
+            logger.debug("LMU recordings were not listed for a session log", exc_info=True)
+        return files
+
+    def metadata_of(path):
+        path = Path(path)
+        if path.suffix.casefold() == ".duckdb":
+            return cached_file_visibility(path) or {}   # never index an LMU file as a broken IBT
+        try:
+            return quick_file_visibility(path)
+        except Exception:
+            return {}
+
+    def analyze(path):
+        import handling
+        path = Path(path)
+        telemetry = repository.load(path)
+        analyzer = TelemetryAnalyzer(telemetry)
+        analyzer._handling_analysis = lambda corners: None   # no handling-history write from an upload
+        result = analyzer.analyze(AnalyzeRequest(filename=path.name, include_ai=False, persist_memory=False))
+        corners = [{key: corner[key] for key in ("id", "label", "entry_pct", "apex_pct", "exit_pct")}
+                   for corner in (result.get("performance") or {}).get("corners") or []]
+        measured = handling.analyze_handling(analyzer, corners, include_observations=True) if corners else None
+        return result, dict(telemetry.metadata or {}), measured
+
+    def trace_groups(path, summary, seed):
+        import handling_traces
+        analyzer = TelemetryAnalyzer(repository.load(Path(path)))
+        yield from handling_traces.groups(analyzer, summary, seed)
+
+    return (extras.nearby_cars(live_telemetry.traffic_log.folder, live_telemetry.timing_log.folder),
+            extras.own_drive(candidates, metadata_of, analyze, driving=lambda: getattr(live_telemetry, "_link", None) == "DRIVING",
+                             defer=defer, app_version=APP_VERSION, traces=trace_groups))
+
+
 @asynccontextmanager
 async def app_lifespan(_app):
     # Sends finished drives only while the driver's consent is recorded (session_log_auto).
     from session_log_auto import AutoUploader
-    uploader = AutoUploader(voice_note_store, APP_VERSION, current_run=lambda: live_telemetry.run_id)
+    uploader = AutoUploader(voice_note_store, APP_VERSION, current_run=lambda: live_telemetry.run_id,
+                            extras=session_log_extras(defer=True))
     # LMU: one car per model, whatever the livery. Before the live coach and the stores load.
     # Tests run on a temporary database; they never read the driver's recordings unless given a folder.
     scan = not _DATABASE_GIVEN or bool(os.getenv("LMU_TELEMETRY_DIRS"))
@@ -3857,7 +3940,8 @@ app = create_application(APP_VERSION, app_lifespan, overlay_controller)
 register_voice_routes(app, voice_coach, resolve_telemetry_file, repository, TelemetryAnalyzer, AnalyzeRequest)
 
 
-async def load_analysis(request: AnalyzeRequest, *, update_current_analysis: bool = True) -> dict[str, Any]:
+async def load_analysis(request: AnalyzeRequest, *, update_current_analysis: bool = True,
+                        parsed_telemetry: Optional[ParsedTelemetry] = None) -> dict[str, Any]:
     """Analyze one file; internal A/B calculations leave the displayed analysis and practice untouched."""
     request = request_with_structured_feedback(request)
     path = await asyncio.to_thread(resolve_telemetry_file, request.filename)
@@ -3869,7 +3953,16 @@ async def load_analysis(request: AnalyzeRequest, *, update_current_analysis: boo
             ),
         )
     try:
-        telemetry = await asyncio.to_thread(repository.load, path)
+        # Automatic reference discovery can evict the active file from the small
+        # repository. Keep this request's immutable recording and its analysis
+        # cache, but never reuse it after a file/signature change.
+        signature = await asyncio.to_thread(file_signature, path) if parsed_telemetry is not None else None
+        telemetry = (parsed_telemetry if parsed_telemetry is not None
+                     and parsed_telemetry.signature == signature
+                     and parsed_telemetry.path.resolve() == path.resolve()
+                     else await asyncio.to_thread(repository.load, path))
+        if telemetry is parsed_telemetry:
+            await asyncio.to_thread(repository.retain, telemetry)
         await asyncio.to_thread(telemetry_file_visibility, path, telemetry)
         def analyze_and_snapshot() -> tuple[dict[str, Any], dict[str, Any]]:
             analyzer = TelemetryAnalyzer(telemetry)
@@ -4201,6 +4294,7 @@ _handlers = register_settings_routes(app, SettingsRoutesServices(
     _reload_settings=lambda *args, **kwargs: _reload_settings(*args, **kwargs),
     app_settings_view=lambda *args, **kwargs: app_settings_view(*args, **kwargs),
     get_voice_note_store=lambda: voice_note_store,
+    get_session_log_extras=lambda defer=False: session_log_extras(defer),
 ))
 get_app_settings = _handlers.get_app_settings
 put_app_settings = _handlers.put_app_settings
@@ -4263,6 +4357,20 @@ practice_drills = _handlers.practice_drills
 close_practice = _handlers.close_practice
 get_corner_names = _handlers.get_corner_names
 put_corner_names = _handlers.put_corner_names
+
+
+_CORNER_NOTE_STORES = {}
+
+
+def _corner_note_store():
+    path = Path(os.getenv('IRACING_CORNER_NOTES_PATH') or app_settings.data_dir() / 'corner-notes.json').resolve()
+    return _CORNER_NOTE_STORES.setdefault(path, CornerNotesStore(path))
+
+
+register_corner_notes_routes(app, CornerNotesRoutesServices(
+    get_store=_corner_note_store,
+    get_corner_definition_store=lambda: _CORNER_DEFINITION_STORE,
+))
 
 
 _handlers = register_memory_routes(app, MemoryRoutesServices(

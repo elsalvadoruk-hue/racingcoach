@@ -60,6 +60,8 @@
 !/scripts/make_patch.py
 !/scripts/read_coach_log.py
 !/scripts/read_timing_log.py
+!/scripts/read_traffic_log.py
+!/scripts/replay_lmu_live.py
 !/scripts/find_python.bat
 !/scripts/overlay_sample.py
 !/scripts/overlay_trace.py
@@ -75,6 +77,10 @@
 !/scripts/prepare_lmu_bridge.py
 !/scripts/test_prepare_lmu_bridge.py
 !/scripts/test_make_release_assets.py
+!/scripts/measure_corner_events.py
+!/scripts/test_measure_corner_events.py
+!/scripts/evaluate_handling.py
+!/scripts/test_evaluate_handling.py
 !/scripts/audit_git.py
 !/scripts/test_audit_git.py
 !/scripts/dev_lmu_layout_check.py

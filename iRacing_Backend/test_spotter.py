@@ -167,20 +167,20 @@ class SpotterTests(unittest.TestCase):
         self.tick(2, .1)
         self.assertEqual(self.keys(), ['left', 'hold_left'])
 
-    def test_a_long_side_by_side_is_repeated_twice_then_only_before_corners(self):
+    def test_a_long_side_by_side_is_repeated_once_then_only_before_corners(self):
         self.stable(2, corner_in_s=20.)
         for _ in range(300):                                  # 30 s alongside on a straight
             self.tick(2, .1, corner_in_s=20.)
-        self.assertEqual(self.keys(), ['left', 'hold_left', 'hold_left'])
+        self.assertEqual(self.keys(), ['left', 'hold_left'])
         for _ in range(40):                                   # the next corner comes up
             self.tick(2, .1, corner_in_s=2.5)
         self.assertEqual(self.keys()[-1], 'hold_left')
-        self.assertEqual(len(self.keys()), 4)                 # once for that corner
+        self.assertEqual(len(self.keys()), 3)                 # once for that corner
         for _ in range(40):
             self.tick(2, .1, corner_in_s=10.)
         for _ in range(5):
             self.tick(2, .1, corner_in_s=2.)
-        self.assertEqual(len(self.keys()), 5)                 # and once for the next
+        self.assertEqual(len(self.keys()), 4)                 # and once for the next
         self.stable(1)
         self.assertEqual(self.keys()[-1], 'clear_left')
 

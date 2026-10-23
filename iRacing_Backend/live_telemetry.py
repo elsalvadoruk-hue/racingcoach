@@ -18,6 +18,7 @@ import uuid
 from race_engineer import RaceEngineer, read_race, parse_measure
 from spotter import AlongsideSpeed, Spotter
 from race_radio import RaceRadio
+from qualifying_traffic import is_open_qualifying
 from radio_policy import TrackSpeechWindows, HOLD_DEFAULT_S
 import radio_phrases
 from live_corners import LiveCornerCoach, call_seconds, CALL_EARLY_S
@@ -33,6 +34,7 @@ from live_sectors import LapSectors, RivalSectors, place_name
 from live_damage import DamageWatch, PitStopWatch, damage_parts, repair_parts
 from live_pit import COLD_TYRE_S, PitKnowledge, PitLossWatch, TyreWatch, stall_estimate, tyre_advice
 from timing_log import TimingLog
+from traffic_log import TrafficLog, traffic_snapshot
 
 logger = logging.getLogger('iRacingLive')
 
@@ -136,6 +138,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.pit_stop = PitStopWatch()
         self.pit_knowledge = PitKnowledge()   # in memory until the backend gives it a file beside the database
         self.timing_log = TimingLog()         # raw race timing (F2Time study); written only once the backend gives it a folder
+        self.traffic_log = TrafficLog()
         self.tyres = TyreWatch()
         self.pit_loss = PitLossWatch()
         self.drill = CornerDrill()          # today's practice corner with Active Reset (live_drill)
@@ -159,6 +162,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.stop_event.set()
         if self.thread:
             self.thread.join(timeout=3)
+        self.traffic_log.close()
 
     def ingest(self, identity, sample, race=None):
         """Also used by isolated tests. Never accepts telemetry through an HTTP endpoint."""
@@ -213,10 +217,11 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self._track_fuel(sample)
             self.energy.ingest(sample)
             sample['fuel_l_per_lap'] = max(self.fuel_history) if self.fuel_history else None
-            # No side calls in qualifying (a lone run in iRacing, a private one in LMU) or before a race
-            # starts: the grid and the double-file formation lap kept a car beside us the whole time.
-            session = str(self.radio.metadata.get('session_type') or '').lower()
-            if 'qual' in session or (session == 'race' and sample.get('session_state') in (1, 2, 3)):
+            # Only explicitly open qualifying has shared-track side calls. Lone/unknown qualifying
+            # keeps its existing silence. Use this tick's metadata, including the first session sample.
+            session_metadata = race if race is not None else self.radio.metadata
+            session = str(session_metadata.get('session_type') or '').strip().lower()
+            if ('qual' in session and not is_open_qualifying(session_metadata)) or (session == 'race' and sample.get('session_state') in (1, 2, 3)):
                 self.spotter.reset()
             else:
                 self.spotter.ingest(sample, self.run_id, now)
@@ -263,7 +268,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                       'rejoin': 180., 'stint_ahead': 300., 'stint_behind': 300.}
     STINT_DIFFERENT_LAPS = 3     # a stint this many laps longer or shorter than ours is worth saying
     REJOIN_FUEL_LAPS = 6         # where a stop now comes out is said from this many laps of fuel left
-    QUALI_BRIEFS = ('corner', 'delta', 'theoretical')   # what helps a qualifying lap; other cars are never mentioned
+    QUALI_BRIEFS = ('corner', 'delta', 'theoretical')   # existing lap coaching in both kinds; open traffic has a separate measured advisor
 
 
     def spotter_status(self, after=0):
@@ -332,7 +337,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             previous['at'] = sample['session_time']
 
     def status(self, after=0):
-        context = self.context()
+        context = self.context(include_recent=False)
         with self.lock:
             return {**{k: v for k, v in context.items() if k != 'recent'},
                     'state': self.state if context['connected'] else ('STALE' if self.state == 'CONNECTED' else self.state),
@@ -416,6 +421,12 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                     race = read_race(sdk, names, sample.get('session_num'))
                     self._race_read_at, self._race_session = self.clock(), race_key
                 self.ingest(identity, sample, race)
+                if self.traffic_log.folder is not None:
+                    try:
+                        self.traffic_log.record(traffic_snapshot(sdk, names, sample, identity),
+                                                self.run_id, sample.get('session_time'))
+                    except Exception:
+                        self.traffic_log.fail(self.run_id)
         finally:
             sdk.unfreeze_var_buffer_latest()
         return True

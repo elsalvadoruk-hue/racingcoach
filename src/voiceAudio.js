@@ -46,6 +46,8 @@ export class VoiceRecorder {
       this.silent = this.context.createGain(); this.silent.gain.value = 0;
       this.node.port.onmessage = ({ data }) => { if (this.recording) this.chunks.push(data); };
       this.source.connect(this.node); this.node.connect(this.silent); this.silent.connect(this.context.destination);
+      const track = this.stream.getAudioTracks?.()[0];
+      return { deviceId: track?.getSettings?.().deviceId || '', label: track?.label || '' };
     } catch (error) { this.close(); throw error; }
   }
   async start() {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { activateSession, currentSessionResult, labRequest, LMU_SESSION_KEY, rememberSession } from '../desktop/sessionData';
 import { useHoverHelpSetting } from '../components/HelpGuide';
+import { useAnalysisProgress } from '../desktop/AnalysisProgress';
 
 const unavailable = error => [400, 404, 409, 422].includes(error.status);
 export const LMU_RECORDING_POLL_MS = 5000;
@@ -11,6 +12,11 @@ const versions = files => new Map(files.map(file => [file.name, fileVersion(file
 export function useLmuWorkspace() {
   const [hoverHelpEnabled, toggleHoverHelp] = useHoverHelpSetting();
   const [initialLoading, setInitialLoading] = useState(true);
+  const [initializationAttempt, setInitializationAttempt] = useState(0);
+  const { view: analysisProgress, begin: beginProgress, end: endProgress } = useAnalysisProgress();
+  const retryInitialization = useCallback(() => {
+    setError(''); setInitialLoading(true); setInitializationAttempt(value => value + 1);
+  }, []);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   const [selectedFile, setSelectedFile] = useState('');
@@ -18,6 +24,11 @@ export function useLmuWorkspace() {
   useEffect(() => {
     const state = automatic.current;
     let disposed = false, timer, first = true;
+    const loadSession = async (body, signal) => {
+      const progressId = beginProgress();
+      try { return await labRequest('session', { ...body, progress_id: progressId }, signal); }
+      finally { endProgress(progressId); }
+    };
     const poll = async () => {
       const controller = new AbortController();
       state.controller = controller;
@@ -51,19 +62,19 @@ export function useLmuWorkspace() {
           try {
             if (initial && filename === saved?.filename) {
               try {
-                session = await labRequest('session', { ...saved, filename,
+                session = await loadSession({ ...saved, filename,
                   reference_selection: saved.reference_selection || 'AUTO' }, controller.signal);
               } catch (error) {
                 if (controller.signal.aborted || !unavailable(error)) throw error;
                 // The file may still be usable after saved lap numbers expire.
               }
             }
-            if (!session) session = await labRequest('session', { filename, reference_selection: 'AUTO' }, controller.signal);
+            if (!session) session = await loadSession({ filename, reference_selection: 'AUTO' }, controller.signal);
             // Comparing the best lap with itself shows nothing to practise: when the
             // automatic personal best is the opened lap, open the latest other lap.
             if (session.personalReference?.same_lap) {
               const other = [...(session.laps || [])].reverse().find(lap => lap.status === 'VALID' && lap.lap_number !== session.defaultReference);
-              if (other) session = await labRequest('session', { filename, target_lap: other.lap_number, reference_selection: 'AUTO' }, controller.signal);
+              if (other) session = await loadSession({ filename, target_lap: other.lap_number, reference_selection: 'AUTO' }, controller.signal);
             }
           } catch (error) {
             if (controller.signal.aborted || !unavailable(error)) throw error;
@@ -93,7 +104,7 @@ export function useLmuWorkspace() {
     };
     poll();
     return () => { disposed = true; clearTimeout(timer); state.controller?.abort(); };
-  }, []);
+  }, [beginProgress, endProgress, initializationAttempt]);
   const adoptDesktopAnalysis = useCallback(session => {
     const state = automatic.current;
     state.controller?.abort();
@@ -106,6 +117,6 @@ export function useLmuWorkspace() {
     state.paused += 1; state.controller?.abort();
     return () => { state.paused -= 1; };
   }, []);
-  return { game: 'lmu', initialLoading, error, setError, revision, selectedFile, adoptDesktopAnalysis, pauseAutomaticSelection, hoverHelpEnabled, toggleHoverHelp,
+  return { game: 'lmu', initialLoading, analysisProgress, retryInitialization, error, setError, revision, selectedFile, adoptDesktopAnalysis, pauseAutomaticSelection, hoverHelpEnabled, toggleHoverHelp,
     loading: false, analysis: null, analysisSnapshot: null, activeTrial: null };
 }

@@ -24,6 +24,7 @@ class SettingsRoutesServices:
     _reload_settings: Callable[..., Any]
     app_settings_view: Callable[..., Any]
     get_voice_note_store: Callable[..., Any]
+    get_session_log_extras: Callable[..., Any] = lambda defer=False: ()
 
 
 def register_routes(app, services: SettingsRoutesServices):
@@ -116,7 +117,8 @@ def register_routes(app, services: SettingsRoutesServices):
         if not re.fullmatch(r"[A-Za-z0-9-]{8,64}", run_id):
             raise HTTPException(status_code=422, detail="세션을 다시 선택하세요.")
         try:
-            found = session_log.export(services.get_voice_note_store(), run_id, services.get_app_version(), include_questions=body.questions)
+            found = session_log.export(services.get_voice_note_store(), run_id, services.get_app_version(), include_questions=body.questions,
+                                       extras=services.get_session_log_extras(defer=False), limit=session_log.SEND_LIMIT)
             if not found:
                 raise HTTPException(status_code=404, detail="그 세션의 기록이 없습니다.")
             session_log.send(app_settings.log_upload_url(), found[0], found[1], body.note, services.get_app_version())
@@ -129,7 +131,9 @@ def register_routes(app, services: SettingsRoutesServices):
         if not re.fullmatch(r"[A-Za-z0-9-]{8,64}", run_id):
             raise HTTPException(status_code=422, detail="세션을 다시 선택하세요.")
         try:
-            found = session_log.export(services.get_voice_note_store(), run_id, services.get_app_version(), include_questions=questions)
+            # A saved file has no upload limit: everything that exists goes in.
+            found = session_log.export(services.get_voice_note_store(), run_id, services.get_app_version(), include_questions=questions,
+                                       extras=services.get_session_log_extras(defer=False))
         except ValueError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         if not found:

@@ -126,6 +126,27 @@ class PersonalReferenceIndex:
                              (game, str(Path(path).resolve()))).fetchone()
         return row is not None and row['version'] == version and self.source_current(row)
 
+    def current_recordings(self, game, paths, version=''):
+        """Check a discovered library with one DB read, retaining per-file signatures.
+
+        Only supplied paths are inspected on disk; old rows outside configured
+        telemetry folders must not cause filesystem access or become candidates.
+        """
+        with self._connect() as db:
+            rows = db.execute('SELECT path,size,mtime_ns FROM personal_reference_files WHERE game=? AND version=?',
+                              (game, version)).fetchall()
+        indexed = {row['path']: row for row in rows}
+        current = set()
+        for path in paths:
+            try:
+                key = str(Path(path).resolve())
+                row = indexed.get(key)
+                if row is not None and self.source_current(row):
+                    current.add(key)
+            except (OSError, ValueError):
+                continue
+        return current
+
     def index_recording(self, game, path, identity, laps, expected_signature=None, version=''):
         path = Path(path).resolve()
         stat = path.stat()

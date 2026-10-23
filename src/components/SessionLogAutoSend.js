@@ -54,10 +54,14 @@ export function ConsentDialog({ auto }) {
         <DialogDescription>켜면 주행이 끝날 때마다 아래 기록이 앱을 만든 사람에게 자동으로 전달됩니다. iRacing과 LMU에 함께 적용됩니다. 읽어 보고 동의할 때만 켜집니다.</DialogDescription>
       </DialogHeader>
       <dl className="flex flex-col gap-3 text-sm leading-relaxed text-foreground">
-        <div><dt className="font-semibold">왜 받나요</dt><dd>스포터·엔지니어 안내가 제때 나오고 끝까지 들렸는지, 연료·에너지 계산이 맞았는지 확인해 앱을 고치기 위해서입니다. 다른 목적으로 쓰지 않습니다.</dd></div>
+        <div><dt className="font-semibold">왜 받나요</dt><dd>스포터·엔지니어 안내가 제때 나오고 끝까지 들렸는지, 연료·에너지 계산이 맞았는지 확인하고, 코너 분석·차 거동 판정과 레이스 중 주변 차와의 상황 분석을 더 정확하게 만들어 앱을 고치기 위해서입니다. 다른 목적으로 쓰지 않습니다.</dd></div>
         <div><dt className="font-semibold">보내는 것</dt><dd>안내마다 나온 시각·종류·끝까지 들렸는지와 끊긴 이유, 엔지니어 보고 문장과 그때의 측정값(랩, 연료, 간격, 순위, 트랙, 차량, 세션 종류, 게임), 앱 버전.</dd></div>
-        <div><dt className="font-semibold">보내지 않는 것</dt><dd>내 이름과 다른 드라이버 이름(“Driver 번호”로 바뀜), 레이팅, 세션 번호, 마이크로 한 질문과 답변, 음성, 주행 파일(IBT·DuckDB), Google 키, Garage61 토큰, PC의 폴더 경로.</dd></div>
-        <div><dt className="font-semibold">언제</dt><dd>이 설정을 켠 뒤의 주행만, 주행이 끝나고 10분쯤 뒤에 주행 하나당 한 번 보냅니다. 켜기 전의 주행은 보내지 않습니다. 짧은 주행(2분 미만이나 안내 10건 미만)은 보내지 않습니다.</dd></div>
+        <div><dt className="font-semibold">함께 보내는 것 · 내 주행 측정값</dt><dd>모든 세션에서, 앱이 주행 파일을 분석해 계산한 측정값 요약을 보냅니다. 랩타임과 유효 여부, 코너마다 제동·가속을 시작한 위치, 속도, ABS 개입, 차의 회전 반응, 그 랩의 날씨·노면·연료 조건입니다. 주행 파일 원본은 보내지 않습니다.</dd></div>
+        <div><dt className="font-semibold">함께 보내는 것 · 주변 차 기록 (레이스만)</dt><dd>내 앞뒤 200m 안에 있던 차들의 거리·순위·클래스·피트 여부(초당 10번)와, 모든 차의 순위와 랩 위치(초당 1번)입니다. 차는 번호로만 표시되고 이름은 들어가지 않습니다.</dd></div>
+        <div><dt className="font-semibold">파일이 클 때</dt><dd>보낼 수 있는 크기를 넘으면(긴 내구 레이스 등) 주변 차 기록을 먼저 빼고, 그래도 크면 내 주행 측정값도 빼서 위의 기본 기록만 보냅니다.</dd></div>
+        <div><dt className="font-semibold">남는 용량에 함께 보내는 것 · 코너 거동 측정값</dt><dd>주변 차 기록이 없는 파일에는 같은 코너의 여러 유효 랩(최소 4개, 최대 8개)에서 기록된 시각·랩 위치·속도·핸들·브레이크·스로틀·회전율·횡가속도·종가속도·ABS 개입을 일부 넣습니다. 표시가 없는 구간도 포함하며, 기록 간격과 결측을 보존합니다. 기본 기록과 측정값 요약을 유지하고 전체 압축 파일이 1.4MB 이하일 때만 추가합니다. 공간이 부족하면 코너 묶음을 생략합니다.</dd></div>
+        <div><dt className="font-semibold">보내지 않는 것</dt><dd>내 이름과 다른 드라이버 이름(“Driver 번호”로 바뀜), 레이팅, 세션 번호, 마이크로 한 질문과 답변, 음성, 주행 파일(IBT·DuckDB) 원본, 셋업 파일 이름, Google 키, Garage61 토큰, PC의 폴더 경로.</dd></div>
+        <div><dt className="font-semibold">언제</dt><dd>이 설정을 켠 뒤의 주행만, 주행이 끝나고 10분쯤 뒤에 주행 하나당 한 번 보냅니다. 내 주행 측정값은 계산에 시간이 걸려 차에서 내린 뒤에 만들어 보냅니다. 켜기 전의 주행은 보내지 않습니다. 짧은 주행(2분 미만이나 안내 10건 미만)은 보내지 않습니다.</dd></div>
         <div><dt className="font-semibold">어디로, 어떻게</dt><dd>암호화된 연결(HTTPS)로 Google Apps Script를 거쳐 앱 제작자의 Google Drive에 저장됩니다. Google의 국내외 데이터센터에 보관될 수 있고, Google이 저장할 때 암호화합니다.</dd></div>
         <div><dt className="font-semibold">얼마나 보관하나요</dt><dd>앱 개선에 쓰는 동안 보관하고, 받은 날로부터 1년이 지나면 지웁니다.</dd></div>
         <div><dt className="font-semibold">동의하지 않거나 끄고 싶을 때</dt><dd>동의하지 않아도 앱의 모든 기능을 그대로 쓸 수 있습니다. 언제든 스위치를 끄면 바로 보내기를 멈춥니다. 이미 보낸 기록을 지우고 싶으면 앱을 받은 곳에서 제작자에게 요청해 주세요.</dd></div>

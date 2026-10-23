@@ -14,6 +14,7 @@ from typing import Any, Callable, Literal
 from fastapi import Body, HTTPException
 from pydantic import ValidationError
 
+import analysis_progress
 from analysis_models import AnalyzeRequest, ComparisonDetailRequest, ExperimentRequest, LapOverlayRequest
 from workspace_controls import comparison_controls
 from workspace_setup import setup_plan
@@ -56,6 +57,7 @@ def _recording(services, name):
     path = services.resolve_telemetry_file(_filename(name))
     if path is None:
         raise HTTPException(status_code=404, detail='주행 파일을 찾을 수 없습니다. 목록을 새로 불러오세요.')
+    analysis_progress.file_size(path)
     telemetry = services.get_repository().load(path)
     services.telemetry_file_visibility(path, telemetry)
     return telemetry
@@ -85,7 +87,8 @@ def workspace_comparison(services, telemetry, body):
             aggregate=request.reference_mode == 'AGGREGATE')
         return {**detail, 'corners': external['corners'], 'targetTime': aggregate.get('target_time_s'),
                 'referenceTime': aggregate.get('reference_median_time_s'), 'delta': aggregate.get('gap_to_reference_median_s'),
-                'warnings': external.get('warnings', []), 'aggregate': aggregate, 'controlEvents': signals}
+                'warnings': external.get('warnings', []), 'aggregate': aggregate, 'controlEvents': signals,
+                'setupInfluence': (external.get('performance_diagnostics') or {}).get('setup_influence')}
     # An explicitly chosen self-comparison stays a zero baseline rather than
     # silently selecting a different lap as the legacy default selector does.
     if target.valid and request.reference_lap == target.lap_number:
@@ -166,6 +169,7 @@ def _attach_practice(services, full, comparison, body):
         option.update(practice_source='WORKSPACE', practice_focus_index=index)
     full.setdefault('practice_focuses', {})['WORKSPACE'] = [option['focus'] for option in summary['options']]
     comparison.update(practiceSummary=summary, analysisResult=full,
+                      handling=full.get('handling'),
                       practice=full.get('practice'), practiceFocuses=full.get('practice_focuses'))
     return comparison
 
@@ -175,16 +179,23 @@ def register_routes(app, services: WorkspaceRoutesServices):
     # comparison most recently completed by the desktop workspace.
     request_lock = asyncio.Lock()
 
+    @app.get('/api/workspace/progress/{job_id}')
+    def workspace_progress(job_id: str):
+        """The picker's progress bar. Outside the request lock so it answers while an analysis runs."""
+        return analysis_progress.status(job_id) or {'percent': None, 'stage': 'unknown'}
+
     @app.post('/api/workspace/{route}')
     async def workspace_request(route: Literal['files', 'session', 'file-laps', 'references', 'overlay', 'comparison', 'setup-plan', 'setup-compare'],
                                 body: dict[str, Any] = Body(default_factory=dict)):
         async with request_lock:
+            progress = analysis_progress.start(body.get('progress_id')) if route in ('session', 'comparison') else None
+            success = False
             try:
                 if route == 'files':
                     paths = await asyncio.to_thread(services.list_ibt_files, 250)
                     fields = ('car_name', 'car_path', 'track_name', 'track_path', 'track_config', 'track_platform_id', 'analyzable', 'reason',
                               'detected_laps', 'complete_laps', 'valid_laps', 'metadata_pending', 'status', 'retryable',
-                              'session_type', 'session_duration_s', 'suggested_session_mode')
+                              'session_type', 'session_duration_s', 'suggested_session_mode', 'best_lap_s', 'recording_time')
                     files = []
                     for path in paths:
                         visibility = await asyncio.to_thread(services.quick_file_visibility, path)
@@ -207,7 +218,8 @@ def register_routes(app, services: WorkspaceRoutesServices):
                     fields = ('name', 'driver_name', 'car_name', 'track_name', 'track_config', 'track_platform_id',
                               'lap_time_s', 'usable', 'compatible', 'condition_similarity', 'validation_error')
                     personal = await asyncio.to_thread(select_personal_reference, services, telemetry, body.get('target_lap'))
-                    result = {'files': [{key: row.get(key) for key in fields} for row in catalog['files']], 'personalReference': personal}
+                    result = {'files': [{key: row.get(key) for key in fields} for row in catalog['files']],
+                              'recommended_selection': catalog.get('recommended_selection', []), 'personalReference': personal}
                 elif route == 'overlay':
                     result = await asyncio.to_thread(services.lap_overlay_payload, telemetry, LapOverlayRequest(**body))
                 elif route == 'setup-plan':
@@ -232,6 +244,7 @@ def register_routes(app, services: WorkspaceRoutesServices):
                         body.get('reference_selection') == 'AUTO' or ('reference_selection' not in body and body.get('reference_lap') is None))
                     personal = None
                     if automatic:
+                        analysis_progress.stage('reference')
                         personal = await asyncio.to_thread(select_personal_reference, services, telemetry, body.get('target_lap'))
                         body['personalReference'] = personal
                         body['reference_filename'] = personal.get('filename')
@@ -249,7 +262,8 @@ def register_routes(app, services: WorkspaceRoutesServices):
                             'setup_mode', 'pit_rule') if key in body})
                     # Browsing a file in an unconfirmed picker must not replace
                     # the active practice or voice context behind the visible UI.
-                    full = await services.load_analysis(request, update_current_analysis=not body.get('preview', False))
+                    full = await services.load_analysis(request, update_current_analysis=not body.get('preview', False),
+                                                        parsed_telemetry=telemetry)
                     selected = full.get('comparison') or {}
                     lap_selection = full.get('lap_selection') or {}
                     target = body.get('target_lap') if body.get('target_lap') is not None else selected.get('target_lap')
@@ -264,6 +278,7 @@ def register_routes(app, services: WorkspaceRoutesServices):
                     if target is None:
                         raise ValueError('비교할 랩을 찾지 못했습니다.')
                     selection = {**body, 'target_lap': target, 'reference_lap': reference}
+                    analysis_progress.stage('comparison')
                     result = await asyncio.to_thread(workspace_comparison, services, telemetry, selection)
                     result.update(referenceFallback=body.get('referenceFallback'),
                                   reference_selection='AUTO' if automatic else 'MANUAL')
@@ -292,10 +307,14 @@ def register_routes(app, services: WorkspaceRoutesServices):
                             'comparisonSummary': full['comparison'], 'lapSelection': full.get('lap_selection'),
                             'quality': full.get('data_quality'), 'priorities': full.get('coaching', {}).get('priorities', []),
                             'analysisResult': full, 'practice': full.get('practice'), 'practiceFocuses': full.get('practice_focuses')}
-                return services.json_safe(result)
+                response = services.json_safe(result)
+                success = True
+                return response
             except ValidationError as exc:
                 raise HTTPException(status_code=422, detail=exc.errors(include_context=False, include_input=False)) from exc
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
+            finally:
+                analysis_progress.finish(progress, success=success)
 
-    return SimpleNamespace(workspace_request=workspace_request)
+    return SimpleNamespace(workspace_request=workspace_request, workspace_progress=workspace_progress)

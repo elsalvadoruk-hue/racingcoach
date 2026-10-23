@@ -24,7 +24,10 @@ class LiveCoaching:
         # Coaching is optional; a fault here must never reset the spotter.
         try:
             self.corners.ingest(sample, identity, now, self.radio.metadata.get('track_length_m'))
+            self.radio.corner_revision = self.corners.revision
             pending = self.corners.focus
+            if pending is None:
+                self._corner_call = (None, None)
             if pending and not pending['announced']:
                 if self._corner_call[0] is not pending:
                     # The whole call, and the same without its last sentence for a straight too short for all of it.
@@ -36,7 +39,7 @@ class LiveCoaching:
                                               [call_seconds(text) for text in texts])
                 if focus:
                     self.radio.emit('corner_focus', now, focus['text'], role='coach', ttl=CALL_EARLY_S, cooldown=20, group='corner_focus',
-                                    condition=('corner_ahead', (focus['until_pct'], focus['margin_pct'])), speech_text=texts[focus['fits']])
+                                    condition=('corner_ahead', (focus['until_pct'], focus['margin_pct'], self.corners.revision)), speech_text=texts[focus['fits']])
             self.controls.ingest(sample)
             newest = self.controls.laps[-1]['lap'] if self.controls.laps else None
             if newest != self._control_lap:

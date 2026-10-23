@@ -1,116 +1,116 @@
-# iRacing 주행 코치
+<h1 align="center">iRacing 주행 코치</h1>
 
-iRacing과 Le Mans Ultimate(LMU)의 주행 기록을 비교·분석하고, 주행 중 한국어 스포터·피트월을 제공하는 Windows용 로컬 앱입니다.
+<p align="center"><strong>달린 기록을 살펴보고, 다음 주행에서 바꿀 한 가지를 찾으세요.</strong></p>
 
-**현재 버전: 2.0.3** · [최신 릴리즈](../../releases/latest) · [버전별 변경 내역](../../releases) · [그림 매뉴얼](manual/매뉴얼.html) · [PDF 매뉴얼](manual/매뉴얼-1.3.0.pdf)
+<p align="center">iRacing과 Le Mans Ultimate의 주행 기록을 분석하고<br>한국어 스포터·피트월·음성 질문으로 주행을 돕는 Windows 로컬 앱입니다.</p>
 
-> **음성은 따로 받지 않아도 됩니다.** 앱을 켜면 뜨는 **업데이트 창**에서 **빠진 음성 받기**를 누르면, 필요한 음성(약 0.66GB)을 앱이 받아서 알맞은 폴더에 바로 넣습니다. 압축을 풀거나 폴더를 고를 필요가 없습니다. Google Drive는 앱에서 받기가 안 될 때만 쓰세요([음성을 직접 받을 때](#음성을-직접-받을-때)).
+<p align="center"><a href="https://github.com/elsalvadoruk-hue/racingcoach/releases/latest"><strong>최신 버전 다운로드</strong></a> &nbsp;·&nbsp; <a href="#getting-started">빠른 시작</a> &nbsp;·&nbsp; <a href="https://github.com/elsalvadoruk-hue/racingcoach/releases">업데이트 내역</a></p>
 
-**2.0.3:** 처음 설치용 ZIP에 Python과 화면 빌드를 포함합니다. `설치.bat` → `실행.bat`만 실행하면 되고 Python·Node.js·PATH 설정은 필요 없습니다. LMU 실시간 연결은 Python 리더가 설치된 LMU의 데이터 구조를 읽어 맞춥니다. [LMU 연결 도움말](manual/lmu-bridge-guide.html) · [패치 노트](패치%20노트.txt)
+<p align="center"><sub>Windows x64 &nbsp; / &nbsp; iRacing · Le Mans Ultimate &nbsp; / &nbsp; 개인·비상업적 사용 무료</sub></p>
 
-LMU의 일반 데이터 구조 변경은 자동으로 따릅니다. 연결 방식 자체가 바뀌면 앱 업데이트가 필요합니다. 앱의 **설정 → LMU 실시간 연결 → 연결 도움말**에서도 안내를 열 수 있습니다.
+<p><img src="manual/img/readme-2.1.0-hero.png" alt="트랙을 달리는 GT 레이스카와 텔레메트리 곡선을 표현한 앱 소개 이미지" width="100%"></p>
 
-**이용조건: 개인·비상업적 사용 무료 / 무단 재배포·판매 금지** — 프로그램과 공식 음성팩의 자세한 조건은 [이용조건](LICENSE.md)을 확인하세요.
+<h2>주행 전후를 잇는 세 가지 기능</h2>
 
-## 주요 기능
+<table>
+<tr><th width="33%">주행 후 분석</th><th width="34%">주행 중 지원</th><th width="33%">연습과 셋업</th></tr>
+<tr><td>랩·코너별 시간 차이<br>지도·고스트·조작 그래프<br>내 랩 / Garage61 기준 비교</td><td>한국어 좌우 차량 스포터<br>연료·순위·피트월 보고<br>F8 음성 질문과 주행 메모</td><td>오늘의 연습 과제<br>다음 주행 결과 확인<br>한 항목씩 바꾸는 셋업 A/B</td></tr>
+</table>
 
-- **주행 분석:** 랩·코너 비교, 지도·고스트·조작 그래프, Garage61 기준 선택(iRacing), LMU 주행 기록(DuckDB) 분석.
-- **주행 지원:** 한국어 스포터, 레이스·전략 엔지니어 자동 보고, F8 음성 질문.
-- **연습과 셋업:** 오늘의 한 가지, 구간 반복 연습, 단일 변경 A/B 실험과 기록.
+<p><sub>Garage61 기준 비교와 셋업 실험은 iRacing에서 지원합니다. LMU의 상세 지원 범위는 아래 표를 확인하세요.</sub></p>
 
-상세 사용법과 문제 해결은 앱 왼쪽 아래 **사용 가이드** 또는 매뉴얼을 확인하세요. 버전별 변경 설명은 **Releases**에서 관리하며, 기존 [패치 노트](패치%20노트.txt)는 오프라인 기록으로 유지합니다.
+<h2>01 &nbsp; 어느 코너에서 시간을 잃었는지</h2>
 
-## 설치와 실행
+<p>내 랩과 기준 랩을 같은 거리에서 비교합니다. 지도와 브레이크·스로틀·속도 그래프를 함께 보며, 제동 시작부터 탈출까지 차이가 생긴 지점을 확인하세요.</p>
 
-1. [최신 Releases](../../releases/latest)의 **racingcoach-setup-2.0.3.zip**을 받고 압축을 풉니다. `실행.bat`이 있는 폴더를 엽니다.
-2. **Python과 Node.js 설치, PATH 설정은 필요 없습니다.** Windows x64용 Python이 프로그램 안에 들어 있습니다.
-3. **설치.bat**을 한 번 실행합니다. 내장 Python에 필요한 패키지를 설치합니다. 인터넷이 필요하며 몇 분 걸릴 수 있습니다. 화면은 포함된 빌드를 사용합니다.
-4. **실행.bat**을 실행하면 **http://localhost:24157** 에서 앱이 열립니다. 실행 창은 닫지 말고 그대로 둡니다.
-5. 처음 켜면 **업데이트 창**이 뜹니다. **빠진 음성 받기**를 누르면 음성을 받습니다(약 0.66GB, 보통 몇 분). 받는 동안 앱을 계속 써도 됩니다. 창을 닫았다면 **설정 → 업데이트**에서 다시 받을 수 있습니다.
-6. **설정 → 설치 설정**에서 IBT 폴더와 서비스 연결을 지정합니다.
+<p><img src="manual/img/readme-2.1.0-corners.png" alt="코너 비교 화면: 구간별 시간 손실, 조작 그래프, 트랙 지도와 비교 포인트" width="100%"></p>
 
-Google 키 없이도 로컬 주행 분석과 **받아 둔 고정 음성** 안내를 사용할 수 있습니다. 마이크 질문·AI 답변·새 문장 합성에는 본인의 Google Cloud 설정이 필요하며 사용 비용이 발생할 수 있습니다. Garage61 기준 수집에는 본인의 토큰을 사용합니다.
+<p><strong>랩·코너 비교</strong> &nbsp;·&nbsp; <strong>GPS 주행선·고스트</strong> &nbsp;·&nbsp; <strong>브레이크·스로틀·조향 분석</strong></p>
 
-### 소스 ZIP·Git으로 설치하기 (개발자용)
+<h2>02 &nbsp; 다음 주행에서 바꿀 한 가지</h2>
 
-Python 3.10 이상(**3.12 권장**)과 **Node.js LTS**를 설치합니다. 이 저장소의 **Code → Download ZIP**([직접 다운로드](../../archive/refs/heads/main.zip))을 풀거나 Git으로 복제한 뒤 `설치.bat` → `실행.bat`을 실행합니다. 소스에는 Python과 화면 빌드가 없으므로 설치 과정에서 Python 패키지 설치와 `npm ci`·화면 빌드를 수행합니다. 기존 Python을 사용하는 업데이트 사용자는 그대로 쓰며 내장 Python으로 강제로 옮기지 않습니다.
+<p>분석 결과를 연습 과제로 정리합니다. 집중할 구간과 바꿀 조작, 확인할 기준을 고르고 다시 달린 뒤 같은 구간의 결과를 확인할 수 있습니다.</p>
 
-## 업데이트
+<p><img src="manual/img/readme-2.1.0-summary.png" alt="주행 요약 화면: 오늘의 연습 과제, 다음 주행에서 할 일과 비교 분석" width="100%"></p>
 
-**1.4.2 이상:** 앱을 켤 때 새 버전이 있으면 업데이트 창이 뜹니다. **업데이트 받기** → **지금 다시 시작해서 적용**을 누르면 끝입니다. 데이터 폴더(기록·설정·키·토큰·음성)는 그대로 남고, 필요한 패키지가 바뀌면 자동으로 설치합니다. 업데이트 창은 앱을 켤 때만 뜨고 주행 중에는 뜨지 않습니다. 켜 둔 동안 나온 새 버전은 **설정 → 업데이트**에 표시됩니다. 새 버전에 필요한 음성이 있으면 같은 창의 **빠진 음성 받기**로 받습니다.
+<p><strong>우선순위가 있는 연습 과제</strong> &nbsp;·&nbsp; <strong>구간 반복 연습</strong> &nbsp;·&nbsp; <strong>다음 주행 피드백</strong></p>
 
-**1.4.1 이하에서 올라올 때(한 번만):**
+<h2>03 &nbsp; 주행 중에는 한국어 안내로</h2>
 
-1. 앱을 종료하고 기존 프로그램 폴더를 복사해 백업합니다.
-2. **Code → Download ZIP**을 새로 받아 임시 위치에 풉니다. 그 안의 `실행.bat`, `src`, `scripts` 등 **내용물**을 기존 프로그램 폴더에 덮어씁니다. 새 `racingcoach-main` 폴더 자체를 기존 폴더 안에 넣지 마세요. 기존 `data`와 개인 설정은 삭제하지 않습니다.
-3. **설치.bat**을 다시 실행해 필요한 패키지와 화면 빌드를 갱신합니다.
-4. **실행.bat**으로 켜면 업데이트 창이 뜹니다. 빠진 음성이 있으면 **빠진 음성 받기**를 누릅니다. 1.4.0 이전 버전에서 올라왔다면 **이전 버전 음성 정리**도 누르세요. 더 이상 쓰지 않는 예전 랩타임 음성(약 1.4GB)을 지웁니다. 음성 폴더를 직접 지우거나 음성팩을 받을 필요는 없습니다.
+<p>좌우 차량과 주요 경기 상황은 스포터가, 연료·순위·피트 정보는 피트월이 알려 줍니다. F8을 누른 채 질문하거나 주행 중 느낀 점을 메모로 남길 수 있습니다.</p>
 
-Git으로 복제한 사용자는 ZIP 덮어쓰기 대신 `git pull --ff-only` 후 설치.bat을 실행합니다. Git 폴더에서는 앱이 프로그램을 덮어쓰지 않지만, 음성 받기는 그대로 쓸 수 있습니다.
+<p><img src="manual/img/readme-2.1.0-voice.png" alt="음성 코치 설정 화면: F8 질문, 한국어 스포터, 레이스 피트월과 오디오 설정" width="100%"></p>
 
-### 음성을 직접 받을 때
+<p><strong>한국어 스포터</strong> &nbsp;·&nbsp; <strong>레이스·전략 엔지니어</strong> &nbsp;·&nbsp; <strong>F8 질문·메모</strong> &nbsp;·&nbsp; <strong>주행 오버레이</strong></p>
 
-앱의 **빠진 음성 받기**가 안 될 때만 씁니다(회사·학교 네트워크에서 GitHub 다운로드가 막힌 경우 등).
+<p><sub>받아 둔 고정 음성 안내는 Google 키 없이 사용할 수 있습니다. 마이크 질문·AI 답변·새 문장 합성에는 본인의 Google Cloud 설정이 필요합니다.</sub></p>
 
-1. 앱과 `실행.bat` 창을 모두 닫습니다.
-2. [Google Drive 공유 폴더](https://drive.google.com/drive/folders/1MPvrKi4Zw9fInU5f84mCwe_Bt0uhW631?usp=sharing)에서 **전체 음성팩 2.0.0**을 받아 `실행.bat`이 있는 프로그램 폴더에 풉니다. ZIP 안의 `data` 폴더가 프로그램의 `data` 폴더와 합쳐져야 합니다.
-   - 올바른 위치: `프로그램 폴더\data\radio_audio\*.mp3`, `프로그램 폴더\data\radio_audio\pieces\*.ogg`, `프로그램 폴더\data\spotter_audio\*.mp3`
-   - `프로그램 폴더\data\data\...`나 `프로그램 폴더\음성팩이름\data\...`처럼 한 단계 더 들어가면 안 됩니다.
-   - 데이터 폴더를 따로 지정했다면(**설정 → 설치 설정**에 표시) 그 폴더 안에 `radio_audio`, `spotter_audio`를 합칩니다.
-3. `실행.bat`으로 다시 켭니다. **설정 → 업데이트**에 "음성 52,364개가 모두 있습니다"가 나오면 됩니다. 1.4.0 이전 음성이 남아 있으면 같은 곳의 **이전 버전 음성 정리**로 지웁니다.
+<h2>04 &nbsp; 셋업은 한 항목씩, 효과는 A/B로</h2>
 
-`data` 폴더 자체와 그 안의 다른 파일(주행 기록 DB, `settings.json`, Google 키, Garage61 토큰, 코너 번호, 피트·경기 기록)은 지우지 마세요.
+<p>불편한 구간과 증상을 고르고 한 항목만 바꿔 다시 달립니다. 체감과 실제 측정 결과를 함께 남기며, 조건이 맞는 주행끼리 페이스·일관성·완주 안정성을 비교합니다.</p>
 
-## 음성 설정
+<p><img src="manual/img/readme-2.1.0-setup.png" alt="셋업 실험 화면: 증상 선택, 변경 전후 값, 주행 후 체감과 A/B 결과 확인" width="100%"></p>
 
-**음성 코치 → 음성·장치 세부 설정**에서 출력장치와 볼륨·속도를 조절합니다.
+<p><strong>현재값과 변경값 기록</strong> &nbsp;·&nbsp; <strong>단일 변경 비교</strong> &nbsp;·&nbsp; <strong>유지·원복·재시험 이력</strong></p>
 
-Bluetooth 등의 출력장치가 잠시 끊겨도 저장된 선택은 유지합니다. 2초 안에 돌아오면 말하던 안내를 그대로 이어 가고, 끊겨서 멈춘 안내는 장치가 돌아오거나 무전이 비면 처음부터 다시 말합니다. 장치를 사용할 수 없으면 앱 음성은 임시로 Windows 기본 출력으로 재생하고, 같은 장치가 돌아오면 다음 안내부터 원래 출력으로 복귀합니다. 직접 다른 장치나 Windows 기본 출력을 선택하면 그 선택을 유지합니다. Windows나 iRacing 자체의 오디오 설정은 변경하지 않습니다.
+<blockquote><p>스크린샷은 예시 데이터를 사용한 2.1.0 화면입니다. 공개 버전의 변경 내용은 <a href="https://github.com/elsalvadoruk-hue/racingcoach/releases">Releases</a>를 확인하세요.</p></blockquote>
 
-목록에는 Windows "통신" 출력이 나오지 않습니다. 통신 출력은 Windows가 통화로 처리해 게임 소리를 줄이거나 블루투스 헤드셋을 통화 모드로 바꿀 수 있기 때문입니다. 블루투스 헤드셋의 "Hands-Free" 출력에는 "통화용 연결" 표시가 붙으며, 일반 헤드폰(스테레오) 출력을 권장합니다. 앱을 꺼도 Grid 진입 등에서 음악·게임 소리까지 함께 끊긴다면 출력장치 속성 → 고급의 "응용 프로그램이 이 장치를 단독으로 제어할 수 있음"을 끄고 확인해 보세요.
+<h2>지원 게임</h2>
 
-| 설정 | 기본값 | 범위 |
-| --- | --- | --- |
-| 스포터 속도 | 1.15배 | 1.0~1.4배 |
-| 피트월 속도 | 1.15배 | 1.0~1.4배 |
-| 여러 문장 속도 | 1.30배 | 1.0~1.4배 |
-| 음성 볼륨 | 100% | 0~130% |
+<table>
+<tr><th>기능</th><th>iRacing</th><th>Le Mans Ultimate</th></tr>
+<tr><td>주행 기록 분석</td><td>IBT</td><td>DuckDB 기록</td></tr>
+<tr><td>스포터·피트월·음성 질문</td><td>지원</td><td>지원</td></tr>
+<tr><td>Garage61 기준 비교</td><td>지원</td><td>—</td></tr>
+<tr><td>셋업 A/B 실험</td><td>지원</td><td>준비 중</td></tr>
+</table>
 
-여러 문장 안내는 별도 속도만 적용하며 담당 속도와 곱하지 않습니다. 포메이션 브리핑은 1.15배 고정입니다. 음높이와 기존 저장값을 유지하고 속도 변경은 다음 안내부터 적용합니다. 볼륨의 100% 초과 구간은 빨간색이며, 소리가 찌그러지면 낮추세요. 게임 소리에 묻히면 Windows 볼륨 믹서에서 게임 소리를 낮출 수 있습니다.
+<a name="getting-started"></a>
 
-## 배포와 데이터
+<h2>설치와 첫 실행</h2>
 
-- **GitHub:** 프로그램 소스, 버전별 Releases 설명, 앱이 자동으로 받는 파일(릴리즈의 `racingcoach-app-*.zip`, `voice` 릴리즈의 음성 조각). **Google Drive:** 직접 받는 사람을 위한 전체 음성팩(예비).
-- 전체 음성팩은 `python scripts/make_voice_pack.py --version 2.0.0 --from 1.4.0`, 앱이 받는 음성 조각과 앱 zip은 `python scripts/make_release_assets.py`로 만듭니다. 배포 절차는 [자동 업데이트 배포 방법](manual/자동-업데이트-배포.md)에 있습니다.
-- 키·토큰·개인 DB·주행 파일·녹음·음성 캐시·로컬 설정은 Git에 올리지 않습니다. 개인 데이터는 앱의 **설정**에 표시되는 데이터 폴더에 보관합니다.
-- iRacing SDK는 **읽기 전용**입니다. 자동 보고·스포터는 AI를 호출하지 않으며, 측정값이 없으면 추측하지 않습니다. 개인 질문·AI 답변 음성과 녹음 원음은 디스크 음성 캐시에 저장하지 않습니다.
-- 브라우저 설정을 유지하려면 화면 주소 **http://localhost:24157** 을 사용하세요.
+<p>Windows x64에서 사용합니다. 처음 설치용 ZIP에는 Python과 화면 빌드가 포함돼 있어 Python·Node.js·PATH를 따로 설정할 필요가 없습니다.</p>
 
-## 저작권과 이용조건
+<ol>
+<li><a href="https://github.com/elsalvadoruk-hue/racingcoach/releases/latest"><strong>최신 Releases</strong></a>에서 <code>racingcoach-setup-*.zip</code>을 받아 압축을 풉니다.</li>
+<li><code>설치.bat</code>을 한 번 실행한 뒤 <code>실행.bat</code>으로 앱을 켭니다. 최초 설치에는 인터넷이 필요합니다.</li>
+<li>업데이트 창의 <strong>빠진 음성 받기</strong>로 고정 안내 음성을 받습니다. 첫 다운로드는 약 0.66GB입니다.</li>
+<li><strong>설정 → 설치 설정</strong>에서 게임의 주행 기록 폴더를 지정합니다. Google Cloud·Garage61은 사용할 기능에 맞춰 연결합니다.</li>
+</ol>
 
-Copyright © 2026 iRacing 주행 코치 제작자.
+<p>화면 주소는 <strong>http://localhost:24157</strong>을 사용하세요. 평소에는 <code>실행.bat</code>만 실행하고, 함께 열린 실행 창은 유지합니다.</p>
 
-- 개인·비상업적 사용은 무료이며, 본인 사용을 위한 백업·로컬 수정·빌드를 허용합니다.
-- 원본·수정본 프로그램, 소스와 음성팩의 재배포·재업로드·판매 및 다른 제품에 포함하는 행위는 사전 서면 허락이 필요합니다.
-- 다른 사람에게 소개할 때는 공식 GitHub 링크를 공유해 주세요(음성은 앱이 받습니다). 별도 이용 허락은 이 저장소의 [Issues](../../issues)로 문의할 수 있습니다.
-- 외부 라이브러리·폰트·지도·상표 등의 권리는 각 권리자에게 있으며 원래 조건을 따릅니다. 법령 및 GitHub 이용약관에 따른 권리는 유지됩니다.
+<p>최신 사용법은 앱 왼쪽 아래 <strong>사용 가이드</strong>에서 확인하세요. <a href="https://github.com/elsalvadoruk-hue/racingcoach/raw/refs/heads/main/manual/매뉴얼.html">오프라인 HTML 매뉴얼</a>은 이전 1.3.0 화면 기준의 참고 자료입니다.</p>
 
-전체 조건과 적용 범위는 [LICENSE.md](LICENSE.md)에 있습니다.
+<h2>업데이트</h2>
 
-## 개발
+<p>앱 시작 시 새 버전이 있으면 업데이트 창에서 <strong>업데이트 받기 → 지금 다시 시작해서 적용</strong>을 선택합니다. 기존 기록·설정·키·토큰·음성은 보존됩니다.</p>
 
-LMU 지원의 구조와 개발 기록은 [LMU 개발 안내](manual/lmu-development.md)에 있습니다.
+<p>켜 둔 동안 나온 업데이트와 추가 음성은 <strong>설정 → 업데이트</strong>에서 확인할 수 있습니다. 업데이트 창은 주행 중에 자동으로 뜨지 않습니다.</p>
 
-새로 복제한 저장소에서는 `git config core.hooksPath .githooks`를 실행하세요. 커밋 전에는 스테이징 파일, push 전에는 전체 이력의 비밀 정보·개인 데이터 포함 여부를 검사합니다.
+<details>
+<summary>이전 버전에서 옮기기 · 음성을 직접 받기 · 소스로 실행하기</summary>
+<p>구버전의 수동 이전과 음성 다운로드 문제는 <a href="manual/설치-상세-안내.md">설치 상세 안내</a>와 앱의 <strong>사용 가이드</strong>를 참고하세요. 개인 데이터 폴더는 삭제하지 마세요.</p>
+<p>개발용 소스에는 내장 Python과 화면 빌드가 포함되지 않습니다. Python 3.12와 Node.js LTS 환경에서 <code>설치.bat</code>을 실행합니다. 검증 명령과 구조는 <a href="manual/개발-안내.md">개발 안내</a>를 확인하세요.</p>
+</details>
 
-```powershell
-python scripts/audit_git.py --staged
-python scripts/audit_git.py --history
-python -m unittest discover -s iRacing_Backend -p 'test_*.py'
-python -m unittest discover -s scripts -p 'test_*.py'
-$env:CI='true'
-npm test -- --watchAll=false --runInBand
-npm run build
-```
+<h2>서비스 비용과 데이터</h2>
 
-화면 소스를 변경하면 빌드를 다시 실행하세요. 개발 서버는 `python scripts/launch_app.py --dev`로 실행합니다. 기존 버전 태그는 유지하며 새 배포는 새 버전의 태그와 릴리즈로 추가합니다.
+<ul>
+<li><strong>기본 분석과 고정 안내:</strong> 로컬 주행 분석과 받아 둔 고정 음성은 Google 키 없이 사용할 수 있습니다. 자동 보고·스포터는 AI를 호출하지 않습니다.</li>
+<li><strong>선택 서비스:</strong> 마이크 음성 인식·AI 답변·새 문장 합성은 본인의 Google Cloud를 사용하며 비용이 발생할 수 있습니다. Garage61 수집에는 본인 토큰이 필요합니다.</li>
+<li><strong>주행과 개인정보:</strong> SDK는 읽기 전용입니다. 측정값이 없으면 추측하지 않습니다. 녹음 원음과 개인 질문·AI 답변 음성은 디스크에 저장하지 않습니다.</li>
+<li><strong>로그 보내기:</strong> 자동 전송은 사용자가 동의해 켰을 때 동작합니다. 전송 항목을 확인하고 앱에서 사용 여부를 선택할 수 있습니다.</li>
+</ul>
+
+<h2>저작권과 이용조건</h2>
+
+<p><strong>개인·비상업적 사용은 무료입니다.</strong> 본인 사용을 위한 백업·로컬 수정·빌드를 허용합니다. 소스가 공개돼 있어도 MIT 등 자유 재배포 라이선스가 적용되는 것은 아닙니다.</p>
+
+<p>프로그램·소스·문서·음성팩의 재배포·재업로드·판매 및 다른 제품에 포함하는 행위는 사전 서면 허락이 필요합니다. 소개할 때는 공식 저장소 링크를 공유해 주세요. 외부 라이브러리·폰트·지도·상표의 권리는 각 권리자에게 있습니다.</p>
+
+<p>Copyright © 2026 iRacing 주행 코치 제작자. &nbsp; <a href="https://github.com/elsalvadoruk-hue/racingcoach/blob/main/LICENSE.md">전체 이용조건</a> · <a href="https://github.com/elsalvadoruk-hue/racingcoach/issues">문의·문제 제보</a></p>
+
+<hr>
+
+<p align="center"><a href="https://github.com/elsalvadoruk-hue/racingcoach/releases/latest">다운로드</a> &nbsp;·&nbsp; <a href="#getting-started">빠른 시작</a> &nbsp;·&nbsp; <a href="https://github.com/elsalvadoruk-hue/racingcoach/releases">변경 내역</a> &nbsp;·&nbsp; <a href="https://github.com/elsalvadoruk-hue/racingcoach/issues">문의</a></p>

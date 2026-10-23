@@ -10,6 +10,10 @@ from analysis_models import AnalyzeRequest, SessionMode, session_policy
 from analysis_numeric import contiguous_groups, mean_finite, pct_distance, round_or_none
 from reference_conditions import telemetry_reference_conditions
 from practice_metrics import KEPT_METRICS
+from closed_loop_coach import first_deviation
+from handling import analyze_handling
+from racing_line import racing_line_context, racing_line_offsets
+import analysis_progress
 
 
 class CornerAnalysis:
@@ -235,23 +239,27 @@ class CornerAnalysis:
         target: dict[str, np.ndarray[Any, Any]],
         reference: Optional[dict[str, np.ndarray[Any, Any]]],
         definitions: list[dict[str, int]],
+        *,
+        _details: bool = True,
     ) -> list[dict[str, Any]]:
         n = len(target["distance_pct"])
         delta = target["time_s"] - reference["time_s"] if reference else np.zeros(n)
         results: list[dict[str, Any]] = []
 
+        def coverage(grid: Optional[dict[str, Any]]) -> Optional[np.ndarray]:
+            if grid is None:
+                return None
+            mask = np.asarray(grid.get("_coverage", np.isfinite(grid["time_s"]) & np.isfinite(grid.get("speed_kph", np.full(n, np.nan)))), dtype=bool)
+            return mask & np.asarray(grid.get("_analysis_coverage", np.ones(n, dtype=bool)), dtype=bool)
+
+        target_coverage, reference_coverage = coverage(target), coverage(reference)
+
         for number, definition in enumerate(definitions, start=1):
             entry = definition["entry"]
             apex = definition["apex"]
             exit_idx = definition["exit"]
-            def supported(grid: Optional[dict[str, Any]]) -> bool:
-                if grid is None:
-                    return False
-                mask = np.asarray(grid.get("_coverage", np.isfinite(grid["time_s"]) & np.isfinite(grid.get("speed_kph", np.full(n, np.nan)))), dtype=bool)
-                mask = mask & np.asarray(grid.get("_analysis_coverage", np.ones(n, dtype=bool)), dtype=bool)
-                return bool(np.all(mask[entry:exit_idx + 1]))
-            target_supported = supported(target)
-            reference_supported = supported(reference)
+            target_supported = target_coverage is not None and bool(np.all(target_coverage[entry:exit_idx + 1]))
+            reference_supported = reference_coverage is not None and bool(np.all(reference_coverage[entry:exit_idx + 1]))
             measurement_usable = target_supported and (reference is None or reference_supported)
             local_delta = float(delta[exit_idx] - delta[entry]) if reference and measurement_usable else None
             target_metrics = self._corner_metrics(target, entry, apex, exit_idx)
@@ -298,9 +306,121 @@ class CornerAnalysis:
             }
             results.append(result)
 
+        # Repetition only consumes the evidence above. Keep detailed enrichment
+        # for displayed corners and memory snapshots, without computing it for
+        # every lap merely to discard it during pattern aggregation.
+        if not _details:
+            return sorted(results, key=lambda item: item.get("delta_s") or -999, reverse=True)
+
+        ordered = sorted(results, key=lambda item: item['entry_pct'])
+        line_context = racing_line_context(target, reference, self.track_length_m,
+                                          [(item['entry_pct'], item['exit_pct']) for item in ordered])
+        for index, corner in enumerate(ordered):
+            next_corner = ordered[index + 1] if index + 1 < len(ordered) else None
+            corner['phases'] = self._corner_phases(target, reference, corner, next_corner)
+            corner['first_deviation'] = first_deviation(corner, self.track_length_m)
+            corner['line'] = racing_line_offsets(target, reference, corner, self.track_length_m,
+                                                 _context=line_context)
+
+        analysis_progress.stage('handling')
+        handling = self._handling_analysis(ordered)
+        for corner in ordered:
+            corner['handling'] = [item for item in handling['corners'] if item['corner_id'] == corner['id']] if handling else []
+            corner['handling_coverage'] = [item for item in handling['phase_coverage'] if item['corner_id'] == corner['id']] if handling else []
+
         # The UI and briefing consume the largest losses first while the map still
         # uses distance ordering through its markers.
         return sorted(results, key=lambda item: item.get("delta_s") or -999, reverse=True)
+
+    def _handling_analysis(self, corners):
+        if not getattr(self, 'valid_laps', None) or not hasattr(self, 'telemetry'):
+            return None
+        cache = getattr(self, '_handling_cache', None)
+        if cache is None:
+            self._handling_cache = cache = {}
+        key = tuple(sorted((item['id'], item['entry_pct'], item['apex_pct'], item['exit_pct']) for item in corners))
+        if key not in cache:
+            if len(cache) >= 8:
+                cache.pop(next(iter(cache)))
+            cache[key] = analyze_handling(self, corners)
+        result = cache[key]
+        if result is None:
+            return None
+        names = {item['id']: item['label'] for item in corners}
+        return {**result, 'corners': [{**item, 'label': names[item['corner_id']]} for item in result['corners']]}
+
+    def _corner_phases(self, target_grid, reference_grid, corner, next_corner):
+        """Partition entry-to-exit; compare approach and the following straight separately."""
+        reference = corner.get('reference') or {}
+        if reference_grid is None or not any(reference.get(key + '_pct') is not None
+                for key in ('brake_start', 'brake_release', 'throttle_first')):
+            return None
+
+        def number(value):
+            return float(value) if value is not None and math.isfinite(value) else None
+
+        def at(grid, key, pct):
+            if pct is None or key not in grid:
+                return None
+            axis, values = grid['distance_pct'], grid[key]
+            if pct < axis[0] or pct > axis[-1]:
+                return None
+            index = int(np.searchsorted(axis, pct))
+            if index < len(axis) and axis[index] == pct:
+                return number(values[index])
+            if index == 0 or index == len(axis):
+                return None
+            a, b = number(values[index - 1]), number(values[index])
+            if a is None or b is None:
+                return None
+            return a + (b - a) * (pct - axis[index - 1]) / (axis[index] - axis[index - 1])
+
+        def entry_bound(item):
+            entry = number(item.get('entry_pct'))
+            brake = number((item.get('reference') or {}).get('brake_start_pct'))
+            return min(entry, brake) if entry is not None and brake is not None else entry
+
+        entry, exit_pct = number(corner.get('entry_pct')), number(corner.get('exit_pct'))
+        if entry is None or exit_pct is None or exit_pct < entry:
+            return None
+        brake_start = number(reference.get('brake_start_pct'))
+        release = number(reference.get('brake_release_pct'))
+        pickup = number(reference.get('throttle_first_pct'))
+        has_brake = brake_start is not None or release is not None
+        release = float(np.clip(release, entry, exit_pct)) if release is not None else (entry if not has_brake else None)
+        pickup = float(np.clip(pickup, entry, exit_pct)) if pickup is not None else exit_pct
+        if release is not None:
+            pickup = max(release, pickup)
+        straight_end = entry_bound(next_corner) if next_corner is not None else None
+        lap_end = min(float(target_grid['distance_pct'][-1]), float(reference_grid['distance_pct'][-1]))
+        if straight_end is None or (exit_pct is not None and straight_end <= exit_pct):
+            straight_end = lap_end
+
+        def phase(start, end):
+            if start is None or end is None or end < start:
+                return None
+            times = [at(grid, 'time_s', pct) for grid in (target_grid, reference_grid) for pct in (start, end)]
+            if any(time is None for time in times):
+                return None
+            return {'start_pct': start, 'end_pct': end,
+                    'delta_s': round((times[1] - times[0]) - (times[3] - times[2]), 6)}
+
+        phases = {'approach': phase(brake_start, entry) if brake_start is not None and brake_start < entry else None,
+                  'braking': phase(entry, release),
+                  'rotation': phase(release, pickup),
+                  'drive': phase(pickup, exit_pct),
+                  'straight_after': phase(exit_pct, straight_end),
+                  'bounds_source': 'reference_events'}
+        if phases['straight_after'] is not None:
+            a, b = (at(grid, 'speed_kph', exit_pct) for grid in (target_grid, reference_grid))
+            phases['straight_after']['exit_speed_delta_kph'] = round(a - b, 3) if a is not None and b is not None else None
+        required = ('braking', 'rotation', 'drive')
+        total = corner.get('delta_s')
+        phases['unexplained_s'] = (round(float(total) - sum(phases[key]['delta_s'] for key in required
+                                                          if phases[key] is not None), 6)
+                                   if number(total) is not None else None)
+        phases['unexplained_reason'] = 'missing_boundary' if any(phases[key] is None for key in required) else None
+        return phases
 
     def _corner_metrics(
         self,
@@ -434,7 +554,7 @@ class CornerAnalysis:
             if lap.lap_number == fastest.lap_number:
                 continue
             compared_laps += 1
-            analyzed = self._corner_analysis(self._lap_grid(lap), reference_grid, definitions)
+            analyzed = self._corner_analysis(self._lap_grid(lap), reference_grid, definitions, _details=False)
             for corner in analyzed:
                 if corner.get("issue_type") != "BALANCE_SUSPECT" or (corner.get("delta_s") or 0) < 0.02:
                     continue

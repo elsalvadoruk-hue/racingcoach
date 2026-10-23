@@ -3,9 +3,11 @@ import { initialModeForFile } from './analysisShared';
 import { readDesktopLaps } from './desktopSelection';
 
 export function useWorkspaceInitialization({
+  initializationAttempt = 0,
   loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus,
   maybeStartGarage61Collection, restoreFileDraft, runAnalysisRef, selectedFileRef, setError,
-  setInitialLoading, setPitRule, setSelectedFile, setSessionMode, activeTrialRef, setTargetLapManual, setReferenceLapManual
+  setInitialLoading, setPitRule, setSelectedFile, setSessionMode, activeTrialRef, setTargetLapManual, setReferenceLapManual,
+  signatureRef, waitingFileRef
 }) {
   useEffect(() => {
     let cancelled = false;
@@ -14,12 +16,17 @@ export function useWorkspaceInitialization({
       try {
         const [filePayload, statusPayload] = await Promise.all([loadFiles(), loadStatus()]);
         if (cancelled) return;
+        const telemetry = statusPayload.telemetry;
+        // SSE sends the latest file on each subscription. Remember the startup
+        // snapshot so it cannot replace the restored file as if it were new.
+        // Seed before analysis so files changed during it are still detected.
+        signatureRef.current = telemetry ? JSON.stringify(telemetry.file_signature || []) : null;
+        waitingFileRef.current = telemetry?.retryable ? telemetry.file_name : '';
         void loadMemory();
         void loadGarage61ApiStatus();
         if (cancelled) return;
         const selected = selectedFileRef.current;
         const available = filePayload.filter(file => file.analyzable !== false).map(file => file.name);
-        const telemetry = statusPayload.telemetry;
         const candidates = [...new Set([
           ...(selected && !filePayload.some(file => file.name === selected && file.analyzable === false) ? [selected] : []),
           ...available,
@@ -82,7 +89,7 @@ export function useWorkspaceInitialization({
     return () => {
       cancelled = true;
     };
-  }, [loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus, maybeStartGarage61Collection, restoreFileDraft,
+  }, [initializationAttempt, loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus, maybeStartGarage61Collection, restoreFileDraft,
     runAnalysisRef, selectedFileRef, setError, setInitialLoading, setPitRule, setSelectedFile, setSessionMode,
-    activeTrialRef, setTargetLapManual, setReferenceLapManual]);
+    activeTrialRef, setTargetLapManual, setReferenceLapManual, signatureRef, waitingFileRef]);
 }

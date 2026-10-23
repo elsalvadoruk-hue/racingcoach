@@ -44,6 +44,30 @@ def statuses(data):
 
 
 class LapValidityTests(unittest.TestCase):
+    def test_cumulative_incident_catches_a_missing_transient_without_voiding_later_laps(self):
+        for event_log in (True, False):
+            with self.subTest(event_log=event_log):
+                data = channels([[], [], []], incident_log=event_log)
+                count = np.zeros(len(data['Lap']))
+                count[LAP + 3000:] = 1
+                data['PlayerCarMyIncidentCount'] = count
+                self.assertEqual(statuses(data), [('VALID', None), ('INVALID', 'incident during the lap'), ('VALID', None)])
+
+    def test_count_increment_at_line_belongs_to_new_lap_and_reset_is_not_incident(self):
+        data = channels([[], [], []])
+        count = np.full(len(data['Lap']), 4.)
+        count[LAP:] = 5.
+        count[2 * LAP:] = 0.
+        data['PlayerCarMyIncidentCount'] = count
+        self.assertEqual(statuses(data), [('VALID', None), ('INVALID', 'incident during the lap'), ('VALID', None)])
+
+    def test_zero_x_contact_still_counts_and_bad_counts_do_not_manufacture_incidents(self):
+        data = channels([[], [], []], {0: 0x0107})
+        count = np.zeros(len(data['Lap']))
+        count[200:202] = [float('nan'), -1.]
+        data['PlayerCarMyIncidentCount'] = count
+        self.assertEqual(statuses(data), [('VALID', None)] * 3)
+
     def test_a_lap_counts_unless_the_sim_gave_an_incident(self):
         # Lap 1: a second over the kerb (60 samples, 1% of the lap) with no incident: counted, as in the sim.
         # Lap 2: an off with 1x (penalty byte 2). Lap 3: light contact, 0x (penalty byte 1): counted.

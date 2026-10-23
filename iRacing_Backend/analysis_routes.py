@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 import asyncio
 import json
 from analysis_models import AnalyzeRequest, ComparisonDetailRequest, LapOverlayRequest
+import analysis_progress
 
 logger = logging.getLogger("iRacingSetupTuner")
 
@@ -89,6 +90,8 @@ def register_routes(app, services: AnalysisRoutesServices):
                     "modified_at": path.stat().st_mtime,
                     **{key: visibility.get(key) for key in ("eligible", "analyzable", "comparison_ready", "coaching_ready", "clean_segment_count", "metadata_pending", "status", "reason", "error", "retryable")},
                     "lap_count": visibility.get("detected_laps", 0),
+                    "best_lap_s": visibility.get("best_lap_s"),
+                    "recording_time": visibility.get("recording_time"),
                     "complete_laps": visibility.get("complete_laps", 0),
                     "valid_laps": visibility.get("valid_laps", 0),
                     "car_name": visibility.get("car_name") or "Unknown Car",
@@ -200,7 +203,14 @@ def register_routes(app, services: AnalysisRoutesServices):
 
     @app.post("/api/analyze")
     async def analyze_telemetry(payload: AnalyzeRequest = Body(default=AnalyzeRequest())) -> dict[str, Any]:
-        return await services.load_analysis(payload)
+        token = analysis_progress.start(payload.progress_id)
+        success = False
+        try:
+            result = await services.load_analysis(payload)
+            success = True
+            return result
+        finally:
+            analysis_progress.finish(token, success=success)
 
     @app.post("/api/lap-overlay")
     async def get_lap_overlay(payload: LapOverlayRequest) -> dict[str, Any]:

@@ -32,10 +32,10 @@ test('voice settings expose the boost range in red and save normal-speed playbac
   expect(JSON.parse(localStorage.getItem('iracing.voice.playback.iracing'))).toMatchObject({ rate: 1, spotterRate: 1.2, pitwallRate: 1.3 });
 });
 
-function Controls({ speechAvailable = false }) {
+function Controls({ speechAvailable = false, armed = false, activeMicrophone = null, phase = 'idle' }) {
   const audioOutput = useAudioOutput();
   const [inputDevice, setInputDevice] = useState('mic');
-  const host = { audioOutput, inputDevice, phase: 'idle', spotter: {}, wallPreferences: {}, testOutput: jest.fn() };
+  const host = { audioOutput, inputDevice, armed, activeMicrophone, phase, spotter: {}, wallPreferences: {}, testOutput: jest.fn() };
   const runtime = { host, controls: controlsFromHost(host), speech: { available: speechAvailable },
     // An old desktop snapshot must never override the player's current output list.
     devices: [microphone, { kind: 'audiooutput', deviceId: 'old', label: '이전 출력장치' }],
@@ -133,5 +133,24 @@ test('unsupported browsers keep an explanation and a disabled output selector', 
   expect(within(dialog).getByRole('combobox')).toBeDisabled();
   expect(within(dialog).getByRole('status')).toHaveTextContent('최신 Chrome 또는 Edge');
   await act(async () => {});
+  expect(media.getUserMedia).not.toHaveBeenCalled();
+});
+
+test('header microphone picker shows the connected device and saves the selection', async () => {
+  const { unmount } = render(<Controls speechAvailable armed activeMicrophone={{ deviceId: 'mic', label: 'USB 마이크 (연결됨)' }} />);
+  const trigger = screen.getByRole('button', { name: '입력장치 선택' });
+  expect(trigger).toHaveTextContent('USB 마이크 (연결됨)');
+  fireEvent.click(trigger);
+  const dialog = screen.getByRole('dialog', { name: '마이크 입력장치' });
+  expect(within(dialog).getByText(/현재 연결: USB 마이크 \(연결됨\)/)).toBeInTheDocument();
+  const select = within(dialog).getByRole('combobox', { name: '마이크 입력장치' });
+  fireEvent.change(select, { target: { value: 'default' } });
+  expect(select).toHaveValue('default');
+  unmount();
+  render(<Controls speechAvailable phase="recording" />);
+  fireEvent.click(screen.getByRole('button', { name: '입력장치 선택' }));
+  const busy = screen.getByRole('dialog', { name: '마이크 입력장치' });
+  expect(within(busy).getByRole('combobox', { name: '마이크 입력장치' })).toBeDisabled();
+  expect(within(busy).getByRole('button', { name: '마이크 준비' })).toBeDisabled();
   expect(media.getUserMedia).not.toHaveBeenCalled();
 });

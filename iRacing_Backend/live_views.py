@@ -72,29 +72,37 @@ class LiveViews:
                     'track_length_m': self.radio.metadata.get('track_length_m'),
                     'snapshot': {key: latest.get(key) for key in keys}, 'points': points[::-1]}
 
-    def context(self):
+    def _current_snapshot(self):
+        """Call under the live lock; every consumer uses the same freshness rule."""
+        now = self.clock()
+        latest = dict(self.samples[-1]) if self.samples else None
+        fresh = latest is not None and now - latest['wall_time'] < 2 and self.state == 'CONNECTED'
+        return now, latest if fresh else None
+
+    def _recent_samples(self, now, latest):
+        # Five samples/sec for twenty seconds anchor a voice comment. Status
+        # and pit-wall polling need neither this walk nor its sample copies.
+        window = []
+        for point in reversed(self.samples):
+            if point['wall_time'] < now - 20:
+                break
+            window.append(point)
+        recent, last_time = [], -math.inf
+        for point in reversed(window):
+            if point['session_time'] - last_time >= .19:
+                recent.append(dict(point))
+                last_time = point['session_time']
+        if not recent or recent[-1]['session_time'] != latest['session_time']:
+            recent.append(latest)
+        return recent
+
+    def context(self, *, include_recent=True):
         with self.lock:
-            now = self.clock()
-            latest = dict(self.samples[-1]) if self.samples else None
-            fresh = latest is not None and now - latest['wall_time'] < 2 and self.state == 'CONNECTED'
-            if not fresh:
+            now, latest = self._current_snapshot()
+            if latest is None:
                 return {'connected': False, 'game': self.game if self.state == 'CONNECTED' else None,
                         'identity': {}, 'snapshot': None, 'recent': [], 'captured_at': now}
-            # Five samples/sec for twenty seconds is sufficient to anchor a comment;
-            # the full live buffer never leaves this process or enters the database.
-            # Only the newest twenty seconds are needed; don't walk the whole buffer.
-            window = []
-            for point in reversed(self.samples):
-                if point['wall_time'] < now - 20:
-                    break
-                window.append(point)
-            recent, last_time = [], -math.inf
-            for point in reversed(window):
-                if point['session_time'] - last_time >= .19:
-                    recent.append(dict(point))
-                    last_time = point['session_time']
-            if not recent or recent[-1]['session_time'] != latest['session_time']:
-                recent.append(latest)
+            recent = self._recent_samples(now, latest) if include_recent else []
             return {'connected': True, 'game': self.game if self.state == 'CONNECTED' else None,
                     'identity': dict(self.identity), 'snapshot': latest,
                     'recent': recent, 'captured_at': now,
@@ -167,9 +175,9 @@ class LiveViews:
 
     def race_view(self, reserve_laps=.5, pit_loss_s=None, fuel_save_mode='finish'):
         with self.lock:
-            context = self.context()
-            if not context['connected']:
+            _, latest = self._current_snapshot()
+            if latest is None:
                 return None
-            return {**self._pit_view(context['snapshot'], context.get('fuel_l_per_lap'),
-                                     context.get('fuel_observed_laps', 0), reserve_laps, pit_loss_s, fuel_save_mode),
+            return {**self._pit_view(latest, max(self.fuel_history) if self.fuel_history else None,
+                                     len(self.fuel_history), reserve_laps, pit_loss_s, fuel_save_mode),
                     'fuel_last_lap': dict(self.fuel_feedback[-1]) if self.fuel_feedback else None}

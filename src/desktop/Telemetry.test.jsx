@@ -43,6 +43,24 @@ function chart(channel, extra = {}) {
     onPosition={jest.fn()} controls={controls} {...extra} />);
 }
 
+test.each(['brake', 'throttle', 'steering'])('%s graph gestures suppress native selection and text dragging while preserving zoom', key => {
+  const onRange = jest.fn(), onZoomBack = jest.fn(), onLabelDown = jest.fn();
+  chart({ key, label: key }, { onRange, onZoomBack, onLabelDown });
+  const graph = screen.getByRole('img', { name: `${key} 거리별 비교 그래프` });
+  const down = new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, clientX: 200 });
+  fireEvent(graph, down);
+  expect(down.defaultPrevented).toBe(true);
+  fireEvent.pointerUp(graph, { button: 0, clientX: 500 });
+  expect(onRange).toHaveBeenCalledTimes(1);
+  expect(onLabelDown).not.toHaveBeenCalled();
+  fireEvent.pointerDown(graph, { button: 0, clientX: 500 });
+  fireEvent.pointerUp(graph, { button: 0, clientX: 200 });
+  expect(onZoomBack).toHaveBeenCalledTimes(1);
+  const native = new MouseEvent('dragstart', { bubbles: true, cancelable: true });
+  fireEvent(graph, native);
+  expect(native.defaultPrevented).toBe(true);
+});
+
 test('steering zero remains centred for one-sided turns, reference peaks and zoomed ranges', () => {
   const channel = { key: 'steering', reference: 'referenceSteering', label: '조향', unit: '°' };
   const values = rows.map((row, i) => ({ ...row, steering: -10 - i * 10, referenceSteering: -20 - i * 12 }));

@@ -3,6 +3,7 @@ from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
@@ -17,6 +18,38 @@ import test_partial_coaching as partial_fixtures
 
 
 class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
+    def test_external_analysis_adds_notice_without_changing_existing_calculations(self):
+        from test_setup_influence import fixture
+        data = fixture()
+        for grid in (data['target_grid'], data['reference_grid']):
+            x = grid['distance_pct']
+            grid['Speed'] = grid['speed_kph'] / 3.6
+            for corner in data['corners']:
+                grid['Throttle'][(x >= corner['entry_pct']) & (x <= corner['exit_pct'])] = .5
+        definitions = [{'entry': round(c['entry_pct'] * 2000), 'apex': round((c['entry_pct'] + c['exit_pct']) * 1000),
+                        'exit': round(c['exit_pct'] * 2000)} for c in data['corners']]
+        source = self.sources['baseline.ibt']
+        analyzer = api.TelemetryAnalyzer(source)
+        analyzer.grid_points = 2001
+        analyzer.track_length_m = 6000
+        target = replace(source.laps[-1], lap_time_s=100.2)
+        reference = SimpleNamespace(path=Path('reference.csv'), metadata={'lap_time_s': 100., 'driver_name': 'Synthetic'},
+                                    distance_pct=data['reference_grid']['distance_pct'],
+                                    grid=lambda *args: data['reference_grid'])
+        with patch.object(api, 'resolve_external_reference_file', return_value=reference.path), \
+             patch.object(api.external_reference_repository, 'load', return_value=reference), \
+             patch.object(api, 'external_reference_compatible', return_value=True), \
+             patch.object(analyzer, '_lap_grid', return_value=data['target_grid']), \
+             patch.object(analyzer, '_detect_corners', return_value=definitions):
+            with patch.object(api, 'setup_influence_notice', return_value=None):
+                before = analyzer._external_reference_analysis(target, ['reference.csv'])
+            after = analyzer._external_reference_analysis(target, ['reference.csv'])
+        notice = after['performance_diagnostics'].pop('setup_influence')
+        before['performance_diagnostics'].pop('setup_influence')
+        self.assertEqual(notice['status'], 'POSSIBLE')
+        self.assertEqual(after, before)
+        self.assertFalse(after['setup_conclusion_allowed'])  # A single lap still cannot prove a setup cause.
+
     def setUp(self):
         super().setUp()
         source = self.telemetry([(50, 50), (45, 45), (44, 45)])
@@ -64,6 +97,58 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
         self.assertEqual(self.state['analysis_result']['practice_focuses']['WORKSPACE'], [option['focus'] for option in options])
         self.assertNotIn('analysisResult', result['initialComparison'])
 
+    def test_a_named_job_reports_every_analysis_stage_and_ends_complete(self):
+        import analysis_progress
+        seen, original = [], analysis_progress.stage
+        def record(key, laps=None):
+            seen.append(key)
+            original(key, laps)
+        with patch.object(analysis_progress, 'stage', side_effect=record):
+            response = self.post('session', {'filename': 'baseline.ibt', 'progress_id': 'job-1'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([key for key in dict.fromkeys(seen)], ['reference', 'laps', 'corners', 'handling', 'repetition', 'summary', 'comparison'])
+        done = self.client.get('/api/workspace/progress/job-1').json()
+        self.assertEqual((done['percent'], done['stage']), (100, 'done'))
+        self.assertEqual(self.client.get('/api/workspace/progress/unknown').json()['percent'], None)
+
+    def test_requests_without_a_job_report_nothing(self):
+        response = self.post('session', {'filename': 'baseline.ibt'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn('progress_id', response.text)
+        plain = response.json()
+        tracked = self.post('session', {'filename': 'baseline.ibt', 'progress_id': 'same-result'}).json()
+        plain['analysisResult']['session'].pop('analyzed_at', None)
+        tracked['analysisResult']['session'].pop('analyzed_at', None)
+        self.assertEqual(plain, tracked)
+
+    def test_failed_analysis_is_not_reported_as_complete(self):
+        response = self.post('session', {'filename': 'missing.ibt', 'progress_id': 'job-failed'})
+        self.assertEqual(response.status_code, 404)
+        status = self.client.get('/api/workspace/progress/job-failed').json()
+        self.assertEqual(status['stage'], 'error')
+        self.assertLess(status['percent'], 100)
+
+    def test_progress_answers_while_the_analysis_request_is_still_running(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        entered, release = threading.Event(), threading.Event()
+        def load(path):
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError('analysis worker was not released')
+            return self.sources[path.name]
+        with patch.object(api.repository, 'load', side_effect=load), ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(self.post, 'session', {'filename': 'baseline.ibt', 'progress_id': 'job-running'})
+            try:
+                self.assertTrue(entered.wait(5))
+                status = self.client.get('/api/workspace/progress/job-running').json()
+                self.assertEqual(status['stage'], 'load')
+                self.assertLess(status['percent'], 100)
+                self.assertFalse(pending.done())
+            finally:
+                release.set()
+            self.assertEqual(pending.result(timeout=30).status_code, 200)
+
     def test_explicit_self_comparison_has_zero_delta_and_does_not_silently_change_reference(self):
         response = self.post('comparison', {'filename': 'baseline.ibt', 'target_lap': 3, 'reference_lap': 3})
         self.assertEqual(response.status_code, 200, response.text)
@@ -99,6 +184,7 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
                                             'session_mode': 'ENDURANCE', **options})
             self.assertEqual(response.status_code, 200, response.text)
             request = load.call_args.args[0]
+            self.assertIs(load.call_args.kwargs['parsed_telemetry'], self.sources['baseline.ibt'])
             for key, value in options.items():
                 self.assertEqual(getattr(request, key), value)
             result = response.json()['analysisResult']
@@ -124,16 +210,38 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
         self.assertGreater(len(result['distance_pct']), 100)
         self.assertGreaterEqual(min(result['distance_pct']), .1)
 
+    def test_catalog_best_uses_valid_complete_laps_only(self):
+        telemetry = self.sources['baseline.ibt']
+        telemetry.laps[0].valid = False
+        telemetry.laps[0].lap_time_s = 5.
+        telemetry.laps[1].lap_time_s = 99.123
+        telemetry.laps[2].lap_time_s = 70.
+        telemetry.laps[2].complete = False
+        result = api.telemetry_file_visibility(telemetry.path, telemetry)
+        self.assertEqual(result['best_lap_s'], 99.123)
+
     def test_catalog_and_references_use_actual_services(self):
         with patch.object(api, 'list_ibt_files', return_value=[self.sources['baseline.ibt'].path]), patch.object(api, 'quick_file_visibility', return_value={
-                'car_name': 'Test', 'session_type': 'Practice', 'valid_laps': 3, 'detected_laps': 3, 'analyzable': True}):
+                'car_name': 'Test', 'session_type': 'Practice', 'valid_laps': 3, 'detected_laps': 3, 'analyzable': True, 'best_lap_s': 99.123}):
             response = self.post('files', {})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['files'][0]['valid_laps'], 3)
+        self.assertEqual(response.json()['files'][0]['best_lap_s'], 99.123)
         with patch.object(api, 'list_external_reference_metadata', return_value={'files': [{'name': 'actual.csv', 'usable': True, 'compatible': True}]}):
             response = self.post('references')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['files'][0]['name'], 'actual.csv')
+
+    def test_reference_catalog_exposes_existing_recommendations_without_private_catalog_paths(self):
+        catalog = {'files': [{'name': 'first.csv', 'usable': True, 'compatible': True}],
+                   'recommended_selection': ['first.csv'], 'directory': 'private-reference-directory',
+                   'catalog_path': 'private-catalog-path'}
+        with patch.object(api, 'list_external_reference_metadata', return_value=catalog):
+            response = self.post('references')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['recommended_selection'], ['first.csv'])
+        self.assertNotIn('directory', response.json())
+        self.assertNotIn('catalog_path', response.json())
 
     def test_setup_plan_is_local_and_setup_compare_uses_real_persistence_handler(self):
         plan = self.post('setup-plan', {'filename': 'baseline.ibt', 'phase': 'EXIT', 'symptom': 'OVERSTEER'})

@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import SourcePicker from './SourcePicker';
 import { activateSession, currentSessionResult, data, LAST_SESSION_KEY, labRequest, rememberSession, selectGame } from './sessionData';
 import { readDesktopLaps } from '../analysis/desktopSelection';
@@ -16,6 +16,61 @@ const session = { kind: 'LIVE_LOCAL', filename: 'current-file', defaultTarget: 2
 
 beforeEach(() => { localStorage.clear(); labRequest.mockReset(); });
 afterEach(() => selectGame('iracing'));
+
+test.each(['iracing', 'lmu'])('%s looks up the current automatic reference only once when the picker opens', async game => {
+  selectGame(game); activateSession(currentSessionResult({ ...session, provider: game }));
+  labRequest.mockImplementation(async route => {
+    if (route === 'files') return { files: [{ name: 'current-file' }, { name: 'best-file' }] };
+    if (route === 'references') return { files: [], personalReference: personal };
+    if (route === 'file-laps') return { laps: [validLap(7, 87)] };
+    throw new Error(route);
+  });
+  render(<SourcePicker target="2" reference="7" external={[]} analysisWorkspace={{ game }} onApply={jest.fn()} />);
+  await waitFor(() => expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled());
+  const lookups = labRequest.mock.calls.filter(([route]) => route === 'references');
+  expect(lookups.map(([, body]) => body)).toEqual([{ filename: 'current-file', target_lap: 2 }]);
+});
+
+test.each(['iracing', 'lmu'])('%s refreshes the automatic reference after changing laps and ignores a late result', async game => {
+  selectGame(game); activateSession(currentSessionResult({ ...session, provider: game }));
+  let late;
+  labRequest.mockImplementation(async (route, body) => {
+    if (route === 'files') return { files: [{ name: 'current-file' }, { name: 'best-file' }] };
+    if (route === 'references') {
+      if (body.target_lap === 1) return new Promise(resolve => { late = resolve; });
+      return { files: [], personalReference: personal };
+    }
+    if (route === 'file-laps') return { laps: [validLap(7, 87), validLap(8, 89)] };
+    throw new Error(route);
+  });
+  render(<SourcePicker target="2" reference="7" external={[]} analysisWorkspace={{ game }} onApply={jest.fn()} />);
+  await waitFor(() => expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled());
+  fireEvent.change(screen.getByLabelText('내 주행'), { target: { value: '1' } });
+  await waitFor(() => expect(late).toBeDefined());
+  fireEvent.change(screen.getByLabelText('내 주행'), { target: { value: '2' } });
+  await waitFor(() => expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled());
+  await act(async () => late({ files: [], personalReference: { ...personal, lap: 8 } }));
+  expect(screen.getByLabelText('비교 기준')).toHaveValue('7');
+  expect(labRequest.mock.calls.filter(([route]) => route === 'references').map(([, body]) => body.target_lap))
+    .toEqual([2, 1, 2]);
+});
+
+test.each(['iracing', 'lmu'])('%s looks up a newly selected file only once', async game => {
+  selectGame(game); activateSession(currentSessionResult({ ...session, provider: game }));
+  labRequest.mockImplementation(async route => {
+    if (route === 'files') return { files: [{ name: 'current-file' }, { name: 'next-file' }, { name: 'best-file' }] };
+    if (route === 'session') return { ...session, filename: 'next-file' };
+    if (route === 'references') return { files: [], personalReference: personal };
+    if (route === 'file-laps') return { laps: [validLap(7, 87)] };
+    throw new Error(route);
+  });
+  render(<SourcePicker target="2" reference="7" external={[]} analysisWorkspace={{ game }} onApply={jest.fn()} />);
+  await waitFor(() => expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled());
+  fireEvent.change(screen.getByLabelText(`주행 파일 · ${game === 'lmu' ? 'LMU DuckDB' : 'IBT'}`), { target: { value: 'next-file' } });
+  await waitFor(() => expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled());
+  expect(labRequest.mock.calls.filter(([route]) => route === 'references').map(([, body]) => body.filename))
+    .toEqual(['current-file', 'next-file']);
+});
 
 test.each(['iracing', 'lmu'])('%s falls back from unavailable Garage61 to a compatible best lap in another file', async game => {
   selectGame(game); activateSession(currentSessionResult({ ...session, provider: game }));

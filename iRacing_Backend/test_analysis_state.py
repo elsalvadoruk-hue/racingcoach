@@ -1,5 +1,6 @@
 """Analysis and A/B API regressions with synthetic telemetry and isolated storage."""
 from contextlib import ExitStack
+import asyncio
 from dataclasses import replace
 from pathlib import Path
 import unittest
@@ -68,6 +69,25 @@ class AnalysisStateTests(BackToBackLaps, unittest.TestCase):
         self.record.assert_called_once()
         self.refresh.assert_called_once()
         self.assertIn("practice", response.json())
+
+    def test_request_keeps_parsed_recording_after_repository_eviction(self):
+        source = self.sources['baseline.ibt']
+        with patch.object(api.repository, 'load', side_effect=AssertionError('recording was already read')):
+            result = asyncio.run(api.load_analysis(api.AnalyzeRequest(filename=source.path.name),
+                                                   parsed_telemetry=source, update_current_analysis=False))
+        self.assertEqual(result['file']['name'], source.path.name)
+        self.assertIs(self.state['analysis_result'], self.current)
+
+    def test_changed_or_different_recording_never_reuses_request_cache(self):
+        source = self.sources['baseline.ibt']
+        for supplied in (replace(source, signature=('stale', 0, 0)),
+                         replace(source, path=self.sources['candidate.ibt'].path)):
+            with self.subTest(path=supplied.path, signature=supplied.signature):
+                with patch.object(api.repository, 'load', return_value=source) as load:
+                    result = asyncio.run(api.load_analysis(api.AnalyzeRequest(filename=source.path.name),
+                                                           parsed_telemetry=supplied, update_current_analysis=False))
+                load.assert_called_once_with(source.path)
+                self.assertEqual(result['file']['name'], source.path.name)
 
 
 class SessionBestTests(BackToBackLaps, unittest.TestCase):

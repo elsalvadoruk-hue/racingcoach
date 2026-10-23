@@ -16,12 +16,15 @@ def _finite_channel_median(
     values = telemetry.channels.get(name)
     if values is None:
         return None
-    numeric = values.astype(float, copy=False)
-    if target is not None and len(numeric):
+    if target is not None and len(values):
         start = max(0, int(target.start_idx))
-        end = min(len(numeric), int(target.end_idx) + 1)
+        end = min(len(values), int(target.end_idx) + 1)
         if end > start:
-            numeric = numeric[start:end]
+            values = values[start:end]
+    # A lap needs only its own samples. Converting the entire recording first
+    # repeatedly copied every other lap's float32 channels during condition
+    # matching and indexing; slicing first keeps the same float64 median.
+    numeric = values.astype(float, copy=False)
     numeric = numeric[np.isfinite(numeric)]
     return float(np.nanmedian(numeric)) if len(numeric) else None
 

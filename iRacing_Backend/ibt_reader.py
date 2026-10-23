@@ -324,6 +324,17 @@ class IBTReader:
             incidents = channels.get("PlayerIncidents")
             penalised = (bool(np.any((np.asarray(incidents[start : end + 1], dtype=np.int64) >> 8 & 0xFF) >= 2))
                          if incidents is not None else None)
+            # PlayerIncidents is a transient event and can be absent from the
+            # recording even though the cumulative personal 1x count increases.
+            # Compare adjacent samples, including the preceding lap's last one;
+            # a held count or a session reset is not a new incident.
+            count = channels.get("PlayerCarMyIncidentCount")
+            if count is not None:
+                values = np.asarray(count[max(0, start - 1) : end + 1], dtype=float)
+                pairs = (np.isfinite(values[:-1]) & np.isfinite(values[1:])
+                         & (values[:-1] >= 0) & (values[1:] >= 0))
+                increased = bool(np.any(pairs & (np.diff(values) > 0)))
+                penalised = bool(penalised) or increased
 
             official_time = self._completed_lap_time(
                 channels=channels,

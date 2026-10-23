@@ -8,8 +8,9 @@ import { TrackMap } from './Telemetry';
 import { cornerLabel, data } from './sessionData';
 import { requestJson } from '../analysis/analysisClient';
 import { findOfficialTrackMap } from '../lib/officialTrackMaps';
+import { NoteIcon } from './CornerNotes';
 
-export default function CornerNamesPage({ corners, points, names, onSaved, onBack, initialSelected, game = 'iracing' }) {
+export default function CornerNamesPage({ corners, points, names, onSaved, onBack, initialSelected, game = 'iracing', cornerNotes = [] }) {
   // LMU recordings analysed by the shared workspace use the shared corner-number store;
   // their official map is the matching iRacing scan (session.official_track_id).
   const lmu = game === 'lmu' && data.session?.game !== 'lmu';
@@ -62,6 +63,10 @@ export default function CornerNamesPage({ corners, points, names, onSaved, onBac
   if (!corner) return <main className="names-page"><Button variant="outline" onClick={onBack}>코너 비교로</Button><p>편집할 자동 구간이 없습니다.</p></main>;
   return <main className="names-page">
     <div className="names-heading"><Button variant="outline" onClick={onBack} disabled={dirty}><ArrowLeft data-icon="inline-start" />코너 비교로</Button><div><h1>코너 번호 확인</h1><p>{lmu ? '참조 지도와 기록 주행선을 대조해 번호 또는 이름을 연결하세요.' : '공식 지도를 보며 자동 구간에 번호 또는 이름을 연결하세요.'}</p></div><Badge variant="outline">{data.session.track_name} · {data.session.track_config}</Badge><span>{Object.values(draft).filter(v => v.number || v.name).length} / {corners.length}개 입력</span></div>
+    <nav className="corner-note-index" aria-label="코너 목록">{corners.map(item =>
+      <Button key={item.id} size="sm" variant={selected === item.id ? 'secondary' : 'ghost'} aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}>
+        {item.id} · {cornerLabel(item, draft)}<NoteIcon notes={cornerNotes} pct={item.apex_pct} />
+      </Button>)}</nav>
     <div className="names-maps">
       <section className="official-map-panel"><div className="panel-heading"><h2>{lmu ? 'iRacing 참조 지도' : 'iRacing 공식 지도'}</h2><div className="flex gap-1"><Button variant="ghost" size="icon" aria-label="공식 지도 축소" onClick={() => setZoom(z => Math.max(1, z - .5))}><ZoomOut /></Button><Button variant="ghost" size="icon" aria-label="공식 지도 확대" onClick={() => setZoom(z => Math.min(3, z + .5))}><ZoomIn /></Button><Button variant="ghost" size="sm" onClick={() => setZoom(1)}>맞춤</Button></div></div><div className="official-map-scroll">{!official && <p className="empty-data">이 레이아웃의 참조 지도가 없습니다. 오른쪽 주행선을 확인하세요.</p>}<div className="official-layers" style={{ width: `${zoom * 100}%`, height: `${zoom * 100}%` }}>{layers.map((src, i) => <img key={src} src={src} alt={i === 0 ? `iRacing ${data.session.track_name} 트랙 지도` : i === 3 ? '코너 번호 참조' : ''} draggable="false" />)}</div></div><p>iRacing 제공 · 코너 번호 참조용 · 확대 후 스크롤로 이동{lmu ? ' · LMU 구간과 대조 후 확정하세요.' : ''}</p></section>
       <section className="automatic-map-panel"><div className="panel-heading"><h2>{lmu ? '기록 주행선 · 자동 감지 구간' : 'GPS · 자동 감지 구간'}</h2><Badge variant="secondary">{selected} 선택됨</Badge></div><div className="automatic-map-scroll" ><TrackMap points={points} corners={corners} selected={corner} onSelect={setSelected} large names={draft} segmentMode rotatable schematic={lmu} /></div><p>숫자를 누르면 아래에서 편집합니다. 휠로 확대하고 좌클릭 드래그로 이동합니다. Ctrl+좌클릭을 누른 채 위로 움직이면 반시계, 아래로 움직이면 시계 방향으로 회전하며 숫자는 똑바로 유지됩니다.</p></section>

@@ -86,11 +86,11 @@ export function TelemetryChart({ channel, rows, position, onPosition, ghost, gho
     lanes[lane] = px;
     return [note.id, { x: px, y: lane ? Math.max(13, Math.min(34, plotBottom - 10)) : 13 }];
   }));
-  return <div className={cn('telemetry-row', channel.key === 'speed' && 'speed-row', dragging && 'is-reordering')} data-channel-row={channel.key}>
+  return <div className={cn('telemetry-row', channel.key === 'speed' && 'speed-row', dragging && 'is-reordering')} data-channel-row={channel.key} onDragStart={event => event.preventDefault()}>
     <button className="channel-label" aria-label={`${channel.label} 순서 이동`} aria-pressed={dragging} title="좌클릭 드래그로 채널 순서 변경 · Alt+↑/↓로 이동 · 자동 저장" onPointerDown={onLabelDown} onKeyDown={event => { if (event.altKey && ['ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); onNudge?.(event.key === 'ArrowUp' ? -1 : 1); } }}><GripVertical aria-hidden="true" /><strong>{channel.label}</strong><span>{channel.unit}</span></button>
     <div className="trace-canvas" ref={canvasRef}>
       <svg viewBox={`0 0 ${size.width} ${size.height}`} data-range={range.join(',')} onPointerMove={e => { onPosition(at(e)); if (drag.current) setSelection([drag.current.from, at(e)]); }}
-        onPointerDown={e => { if (e.button !== 0) return; drag.current = { from: at(e), x: e.clientX }; setSelection([at(e), at(e)]); e.currentTarget.setPointerCapture(e.pointerId); onPosition(at(e)); }}
+        onPointerDown={e => { if (e.button !== 0) return; e.preventDefault(); drag.current = { from: at(e), x: e.clientX }; setSelection([at(e), at(e)]); e.currentTarget.setPointerCapture(e.pointerId); onPosition(at(e)); }}
         onPointerUp={e => { const start = drag.current; drag.current = null; setSelection(null); if (!start || Math.abs(e.clientX - start.x) < 8) return; if (e.clientX < start.x) onZoomBack?.(Math.min(1, Math.abs(e.clientX - start.x) / Math.max(1, plotRight - plotLeft))); else if (at(e) - start.from >= 10) onRange?.([start.from, at(e)], true); }}
         onPointerCancel={() => { drag.current = null; setSelection(null); }} aria-label={`${channel.label} 거리별 비교 그래프`} role="img">
         {[0, .2, .4, .6, .8, 1].map(t => <line key={t} x1={plotLeft + (plotRight - plotLeft) * t} x2={plotLeft + (plotRight - plotLeft) * t} y1="5" y2={plotBottom + 4} className="chart-grid" />)}

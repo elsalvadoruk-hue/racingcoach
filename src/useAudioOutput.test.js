@@ -158,10 +158,12 @@ test.each(['coach', 'spotter'])('answers from %s and replay retain the speaker c
   expect(players[0].volume).toBe(.45);
   fireEvent.click(screen.getByRole('button', { name: '답변 다시 듣기' }));
   await waitFor(() => expect(players[1]?.play).toHaveBeenCalled());
-  const requests = fetchMock.mock.calls.length;
+  // Playback status reports can arrive asynchronously; the test tone needs no content request.
+  const contentRequests = () => fetchMock.mock.calls.filter(([url]) => !url.endsWith('/radio-delivery'));
+  const requests = contentRequests().length;
   fireEvent.click(screen.getByRole('button', { name: '테스트 소리' }));
   await waitFor(() => expect(players[2]?.play).toHaveBeenCalled());
-  expect(fetchMock.mock.calls).toHaveLength(requests);
+  expect(contentRequests()).toHaveLength(requests);
   expect(players[2].src).toMatch(/^data:audio\/wav;base64,/);
   players.forEach((player, index) => {
     expect(player.setSinkId).toHaveBeenCalledWith('headset');

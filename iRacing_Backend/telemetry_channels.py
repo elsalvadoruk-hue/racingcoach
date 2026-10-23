@@ -48,6 +48,7 @@ ANALYSIS_CHANNELS = {
     "PlayerTrackSurface",
     "PlayerTrackSurfaceMaterial",
     "PlayerIncidents",
+    "PlayerCarMyIncidentCount",
     # Driver controls and vehicle response
     "Speed",
     "Throttle",

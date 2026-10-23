@@ -66,8 +66,9 @@ class Spotter:
     PASSING_MPS = 7.        # faster along our car than this (25 km/h) it is past before the call ends
     UNKNOWN_SECONDS = 1.    # the side picture may drop out this long (LMU coverage) without starting over
     # "계속 왼쪽" every few seconds of a long side-by-side was most of the side calls in iRacing races
-    # (Le Mans lap 1: 32 in 100 s). Two repeats, then one just before each corner while it lasts.
-    HOLD_REPEATS = 2
+    # (Le Mans lap 1: 32 in 100 s). One timed reminder, then one just before each new corner.
+    # The second timed reminder added no new side information, including during the same corner.
+    HOLD_REPEATS = 1
     CORNER_SECONDS = 3.     # a repeat this close to the next braking or turning
     CORNER_REARM_S = 6.     # and the next corner counts once the road ahead is this long again
     # 2026-10-21 (driver's decision, both games): a car we are passing is not called; it is called
