@@ -6,6 +6,12 @@ The file is a zip of plain JSON, readable without the app:
     radio.jsonl     every call's life (started, completed, interrupted, expired, cancelled) with its reason
     reports.jsonl   the engineer's reports and the measured pit wall state behind each one
 
+and, when they exist and the file stays small enough to send (EXTRA_ORDER, manifest "extras"):
+
+    drive_summary.json.xz   the driver's own laps and corner passes as measured values (drive_summary)
+    traffic.packed.xz       races: nearby cars ten times a second, positions only (traffic_log, log_pack)
+    timing.packed.xz        races: every car's lap position and order once a second (timing_log, log_pack)
+
 It answers "what was said, what was lost and why" for a whole session, which is what the
 improvements so far were found from. It holds no audio, no telemetry file, no key or token.
 Names of drivers are replaced by "Driver <number>". What the driver asked by microphone,
@@ -19,6 +25,10 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from dataclasses import dataclass, field
+import logging
+
+logger = logging.getLogger(__name__)
 
 FORMAT, FORMAT_VERSION = 'iracing-coach-log', 1
 NAME_KEYS = {'name', 'user_name', 'driver_name', 'team_name', 'abbrev_name', 'initials'}
@@ -91,8 +101,46 @@ def sessions(store, limit=20):
     return result
 
 
-def export(store, run_id, app_version, include_questions=False):
-    """(file name, zip bytes) for one session, or None when that session left nothing."""
+class Deferred(Exception):
+    """An extra part cannot be made right now (the driver is on track); try the session later."""
+
+
+@dataclass
+class Extra:
+    """Files added to a log. Empty files: not included, and why (``info['reason']``)."""
+    group: str
+    files: dict = field(default_factory=dict)
+    info: dict = field(default_factory=dict)
+
+
+# Dropped first when the file would not fit: nearby cars, then the driver's own measured values.
+EXTRA_ORDER = ('nearby_cars', 'drive_summary')
+EXTRA_DESCRIPTIONS = {
+    'drive_summary.json.xz': "xz JSON: own laps, every valid lap's corner passes and handling observations (measured values only)",
+    'traffic.packed.xz': 'races: nearby cars (within 200 m, 10 Hz), positions/order/class/pit only, no names (log_pack)',
+    'timing.packed.xz': "races: every car's lap position and order once a second, no names (log_pack)",
+}
+
+
+def _zip(manifest, radio, reports, extras):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
+        archive.writestr('radio.jsonl', '\n'.join(json.dumps(item, ensure_ascii=False) for item in radio))
+        archive.writestr('reports.jsonl', '\n'.join(json.dumps(item, ensure_ascii=False) for item in reports))
+        for extra in extras:
+            for name, data in extra.files.items():
+                archive.writestr(name, data, compress_type=zipfile.ZIP_STORED)   # already xz
+    return buffer.getvalue()
+
+
+def export(store, run_id, app_version, include_questions=False, extras=(), limit=None):
+    """(file name, zip bytes) for one session, or None when that session left nothing.
+
+    ``extras`` are callables taking the run (id, times, identity, session type) and returning an
+    Extra or None. With ``limit``, extra groups are left out in EXTRA_ORDER until the file fits;
+    the manifest says what was left out and why. A Deferred from an extra is passed on.
+    """
     with store.connect() as db:
         rows = db.execute('SELECT created_at, event_json FROM radio_delivery WHERE run_id=? ORDER BY id', (run_id,)).fetchall()
         if not rows:
@@ -139,17 +187,48 @@ def export(store, run_id, app_version, include_questions=False):
         'files': {'radio.jsonl': 'one line for each change in a call: started, completed, interrupted, expired, cancelled',
                   'reports.jsonl': 'engineer reports with the measured state behind them'},
     }
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
-        archive.writestr('radio.jsonl', '\n'.join(json.dumps(item, ensure_ascii=False) for item in radio))
-        archive.writestr('reports.jsonl', '\n'.join(json.dumps(item, ensure_ascii=False) for item in reports))
+    run = {'run_id': run_id, 'started_at': started, 'ended_at': ended, 'identity': identity,
+           'session_type': session_type, 'game': identity.get('game')}
+    made = []
+    for provider in extras or ():
+        try:
+            extra = provider(run)
+        except Deferred:
+            raise
+        except Exception:
+            logger.exception('A session log extra could not be made; the log is made without it')
+            continue
+        if extra is not None:
+            made.append(extra)
+    included = [extra for extra in made if extra.files]
+    status = {extra.group: {'included': bool(extra.files), 'reason': extra.info.get('reason'),
+                            'bytes': sum(len(data) for data in extra.files.values()),
+                            **{k: v for k, v in extra.info.items() if k != 'reason'}} for extra in made}
+
+    def build():
+        files = dict(manifest['files'])
+        for extra in included:
+            for name in extra.files:
+                files[name] = EXTRA_DESCRIPTIONS.get(name, extra.group)
+        return _zip({**manifest, 'files': files, 'extras': status}, radio, reports, included)
+
+    data = build()
+    for group in EXTRA_ORDER:
+        if limit is None or len(data) <= limit:
+            break
+        if any(extra.group == group for extra in included):
+            size = len(data)
+            included = [extra for extra in included if extra.group != group]
+            status[group].update(included=False, reason='size_limit', file_bytes_with=size)
+            data = build()
     stamp = time.strftime('%Y%m%d-%H%M', time.localtime(started))
     place = re.sub(r'[^A-Za-z0-9]+', '-', identity.get('track_path') or 'session').strip('-') or 'session'
-    return f'coach-log-{place}-{stamp}.zip', buffer.getvalue()
+    return f'coach-log-{place}-{stamp}.zip', data
 
 
 UPLOAD_FORMAT, UPLOAD_LIMIT = 'iracing-coach-log-upload', 1_500_000
+# Extras must leave room under the receiving script's limit (Code.gs MAX_BYTES).
+SEND_LIMIT = 1_400_000
 
 
 def send(url, name, data, note='', app_version=''):
@@ -171,6 +250,21 @@ def send(url, name, data, note='', app_version=''):
         reason = reply.get('error') if isinstance(reply, dict) and isinstance(reply.get('error'), str) else ''
         raise ValueError('받는 쪽에서 로그를 받지 않았습니다.' + (f' ({reason[:80]})' if reason else ''))
     return True
+
+
+def read_extras(data):
+    """The extra parts of a log file, unpacked: {'drive_summary': {...}, 'traffic': (header, rows), ...}."""
+    import drive_summary
+    import log_pack
+    parts = {}
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        names = set(archive.namelist())
+        if 'drive_summary.json.xz' in names:
+            parts['drive_summary'] = drive_summary.unpack(archive.read('drive_summary.json.xz'))
+        for key in ('traffic', 'timing'):
+            if f'{key}.packed.xz' in names:
+                parts[key] = log_pack.unpack(archive.read(f'{key}.packed.xz'))
+    return parts
 
 
 def read(data):

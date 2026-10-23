@@ -26,16 +26,41 @@ class AutoSendTests(unittest.TestCase):
         self.runs = []
         self.sent = []
         for name, value in (('sessions', lambda store, limit: list(self.runs)),
-                            ('export', lambda store, run_id, version, include_questions=False:
-                                (self.exported.append(include_questions) or (f'log-{run_id}.zip', b'zip')))):
+                            ('export', self._export)):
             p = mock.patch.object(session_log, name, side_effect=value)
             p.start()
             self.addCleanup(p.stop)
         self.exported = []
+        self.export_options, self.defer = [], False
         self.now = 100_000.
         self.uploader = AutoUploader(None, '1.4.3', current_run=lambda: 'live-run',
                                      send=lambda url, name, data, note, version: self.sent.append((url, name, note)),
                                      clock=lambda: self.now)
+
+    def _export(self, store, run_id, version, include_questions=False, extras=(), limit=None):
+        self.exported.append(include_questions)
+        self.export_options.append((extras, limit))
+        if self.defer:
+            raise session_log.Deferred('driver on track')
+        return f'log-{run_id}.zip', b'zip'
+
+    def test_extras_are_sent_within_the_upload_limit_and_wait_while_driving(self):
+        self.export_options, self.defer = [], True
+        uploader = AutoUploader(None, '2.1.0', current_run=lambda: 'live-run', extras=('provider',),
+                                send=lambda url, name, data, note, version: self.sent.append((url, name, note)),
+                                clock=lambda: self.now)
+        session_log_auto.set_enabled(True, CONSENT_VERSION, now=1000.)
+        self.runs = [run('drive-a', 2000., 3000.)]
+        self.assertEqual(uploader.run_once(), 0)
+        self.assertEqual(self.export_options, [(('provider',), session_log.SEND_LIMIT)])
+        entry = session_log_auto.load()['runs'].get('drive-a')
+        self.assertIsNone(entry)           # waiting is not a failed attempt
+        self.defer = False
+        self.assertEqual(uploader.run_once(), 1)
+        self.assertEqual(self.sent[0][1], 'log-drive-a.zip')
+
+    def test_the_new_notice_with_nearby_cars_and_own_laps_asks_again(self):
+        self.assertEqual(CONSENT_VERSION, 2)
 
     def test_nothing_is_sent_without_consent_and_turning_on_needs_the_shown_notice(self):
         self.runs = [run('a', 10_000, 20_000)]

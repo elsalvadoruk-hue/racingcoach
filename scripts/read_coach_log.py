@@ -7,6 +7,7 @@ call in order with its reason, the way the improvements so far were found.
     python scripts/read_coach_log.py that.zip --timeline
     python scripts/read_coach_log.py that.zip --timeline --all      # with the side-by-side calls too
     python scripts/read_coach_log.py that.zip --reports             # engineer reports and the fuel numbers behind them
+    python scripts/read_coach_log.py that.zip --extract out-folder  # own drive summary and race logs as plain JSON
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ def main() -> int:
     parser.add_argument("--timeline", action="store_true")
     parser.add_argument("--all", action="store_true", help="좌우 호출도 타임라인에 포함")
     parser.add_argument("--reports", action="store_true")
+    parser.add_argument("--extract", type=Path, help="측정값 요약·주변 차 기록을 풀어 JSON으로 저장할 폴더")
     args = parser.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -45,8 +47,22 @@ def main() -> int:
     done = {event["event_id"] for event in radio if event.get("status") == "completed"}
     print(f"안내 {len(events)}건 가운데 끝까지 들린 것 {len(done)}건 · 보고 {manifest['reports']}건 · 질문 {manifest['questions_in_session']}건"
           f"{'' if manifest['questions_included'] else ' (내용 미포함)'}\n")
+    for group, value in (manifest.get("extras") or {}).items():
+        state = "포함" if value.get("included") else f"빠짐({value.get('reason')})"
+        print(f"추가 자료 {group}: {state} · {value.get('bytes', 0):,} B")
+    if manifest.get("extras"):
+        print()
     for key, counts in sorted(manifest["calls"].items(), key=lambda item: -sum(item[1].values())):
         print(f"{key:<26}{'  '.join(f'{name} {count}' for name, count in sorted(counts.items(), key=lambda item: -item[1]))}")
+    if args.extract:
+        import json
+        args.extract.mkdir(parents=True, exist_ok=True)
+        for name, part in session_log.read_extras(args.file.read_bytes()).items():
+            if isinstance(part, tuple):
+                part = {"header": part[0], "rows": part[1]}
+            target = args.extract / f"{name}.json"
+            target.write_text(json.dumps(part, ensure_ascii=False), encoding="utf-8")
+            print(f"풀어 저장: {target}")
     if args.timeline:
         print()
         for event in radio:

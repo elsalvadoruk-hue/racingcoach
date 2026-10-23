@@ -61,6 +61,15 @@ class TrafficLogTests(unittest.TestCase):
             time.sleep(.005)
         self.assertTrue(predicate())
 
+    def test_own_lap_position_keeps_six_places(self):
+        log = self.new_log()
+        self.sample = dict(self.sample, distance_pct=.123456789)
+        log.record(self.snapshot(), 'run', 1.)
+        log.close()
+        header, rows = read(next(self.folder.glob('traffic-*.jsonl.gz')))
+        self.assertEqual(header['version'], 2)
+        self.assertEqual(rows[0]['own']['distance_pct'], .123457)
+
     def test_only_live_race_with_folder_is_recorded_including_pit_road(self):
         TrafficLog().record(self.snapshot(), 'run', 1.)
         log = self.new_log()
