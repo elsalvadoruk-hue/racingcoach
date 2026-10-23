@@ -5,8 +5,8 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter }
 const phaseNames = { braking: '제동', rotation: '회전', drive: '가속' };
 const shortNames = { understeer: '덜 돌아감', oversteer: '더 돌아감', countersteer: '반대 조향' };
 const meanings = {
-  understeer: '비슷한 속도·조향·페달 조건에서 내 다른 랩보다 차의 회전 반응이 작았습니다.',
-  oversteer: '비슷한 속도·조향·페달 조건에서 내 다른 랩보다 차의 회전 반응이 컸습니다.',
+  understeer: '비슷한 속도·횡가속도·페달 조건에서 내 다른 랩보다 차의 회전 반응이 작았습니다.',
+  oversteer: '비슷한 속도·횡가속도·페달 조건에서 내 다른 랩보다 차의 회전 반응이 컸습니다.',
   countersteer: '차가 도는 방향과 반대로 핸들을 돌린 상태가 관측됐습니다. 개인 기준과 별개입니다.',
 };
 const withNames = { braking: '제동 중', lift: '스로틀을 뗀 직후', power: '가속 중' };
