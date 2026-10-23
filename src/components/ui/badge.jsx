@@ -9,7 +9,8 @@ const badgeVariants = cva("inline-flex items-center rounded-md border px-2.5 py-
       destructive: "border-transparent bg-destructive text-destructive-foreground shadow hover:bg-destructive/80",
       outline: "text-foreground",
       "handling-under": "border-transparent bg-secondary text-cyan-400",
-      "handling-over": "border-transparent bg-secondary text-chart-reference"
+      "handling-over": "border-transparent bg-secondary text-chart-reference",
+      "handling-reference": "border-dashed border-border bg-transparent text-muted-foreground"
     }
   },
   defaultVariants: {

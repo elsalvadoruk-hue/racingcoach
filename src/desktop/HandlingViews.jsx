@@ -10,6 +10,10 @@ const meanings = {
   countersteer: '차가 도는 방향과 반대로 핸들을 돌린 상태가 관측됐습니다. 개인 기준과 별개입니다.',
 };
 const withNames = { braking: '제동 중', lift: '스로틀을 뗀 직후', power: '가속 중' };
+// Mirrors handling.EVIDENCE; older saved results have no evidence field.
+const evidenceByKind = { understeer: 'compared', oversteer: 'reference', countersteer: 'measured' };
+const evidenceOf = item => item.evidence || evidenceByKind[item.kind];
+const referenceNote = '참고 표시 · 평소 랩과의 차이가 우연과 뚜렷이 구분된다는 근거가 아직 부족합니다.';
 
 function costText(value) {
   if (!Number.isFinite(value)) return '시간 차이 확인 필요';
@@ -21,21 +25,24 @@ export function HandlingBadges({ items = [] }) {
   const kinds = ['understeer', 'oversteer', 'countersteer'].filter(kind => items.some(item => item.kind === kind));
   if (!kinds.length) return null;
   return <span className="handling-badges" aria-label="내 다른 랩 대비 차 거동">{kinds.map(kind =>
-    <Badge key={kind} data-kind={kind} title={meanings[kind]} variant={kind === 'countersteer' ? 'outline' : kind === 'understeer' ? 'handling-under' : 'handling-over'}>{shortNames[kind]}</Badge>)}</span>;
+    <Badge key={kind} data-kind={kind} data-evidence={evidenceByKind[kind]} title={evidenceByKind[kind] === 'reference' ? `${meanings[kind]} ${referenceNote}` : meanings[kind]}
+      variant={kind === 'countersteer' ? 'outline' : kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[kind]}</Badge>)}</span>;
 }
 
 function orderHandling(items) {
-  return [...items].sort((a, b) => Number(Number.isFinite(b.time_cost_s)) - Number(Number.isFinite(a.time_cost_s)) ||
+  return [...items].sort((a, b) => Number(evidenceOf(a) === 'reference') - Number(evidenceOf(b) === 'reference') ||
+    Number(Number.isFinite(b.time_cost_s)) - Number(Number.isFinite(a.time_cost_s)) ||
     (Number.isFinite(a.time_cost_s) && Number.isFinite(b.time_cost_s) ? b.time_cost_s - a.time_cost_s : 0) || b.laps - a.laps);
 }
 
 function HandlingObservation({ item }) {
   return <article className="handling-observation" data-handling-item aria-label={`${phaseNames[item.phase]} · ${shortNames[item.kind]}`}>
-    <div className="handling-observation-heading"><Badge variant={item.kind === 'countersteer' ? 'outline' : item.kind === 'understeer' ? 'handling-under' : 'handling-over'}>{shortNames[item.kind]}</Badge><strong>{phaseNames[item.phase]} 구간</strong></div>
+    <div className="handling-observation-heading"><Badge variant={item.kind === 'countersteer' ? 'outline' : item.kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[item.kind]}{evidenceOf(item) === 'reference' ? ' · 참고' : ''}</Badge><strong>{phaseNames[item.phase]} 구간</strong></div>
     <dl className="handling-facts"><div><dt>관측된 랩</dt><dd>{item.of_laps}랩 중 {item.laps}랩</dd></div><div><dt>코너 시간 차이</dt><dd>{costText(item.time_cost_s)}</dd></div></dl>
     {withNames[item.with] && <small>함께 관측된 조작: {withNames[item.with]}</small>}
     {item.observed_laps != null && item.observed_laps < item.of_laps && <small>{item.kind === 'countersteer' ? '반대 조향 관측 가능' : '비교 가능'} {item.observed_laps}랩 · 부분 구간에서 관측한 결과도 포함합니다.</small>}
     {item.kind === 'countersteer' && <small>개인 기준과 별개로 관측했습니다.</small>}
+    {evidenceOf(item) === 'reference' && <small data-evidence-note>{referenceNote}</small>}
     {item.approximate && <small>참고용(LMU는 회전량을 GPS로 추정)</small>}</article>;
 }
 
@@ -52,6 +59,7 @@ export function HandlingDetail({ items = [], coverage = [] }) {
       <dl>{['understeer', 'oversteer', 'countersteer'].map(kind => <div key={kind}><dt>{shortNames[kind]}</dt><dd>{meanings[kind]}</dd></div>)}</dl>
       <p>같은 코너·같은 단계에서 비교합니다. 서로 다른 랩이나 단계에서 두 표시가 함께 나올 수 있습니다.</p>
       <p>비교 횟수는 랩별 제동·회전·가속 단계를 각각 셉니다. 단계 시간의 90% 이상을 다른 랩과 비교했으면 비교한 단계로 셉니다. 그보다 적으면 확인 필요로 남깁니다.</p>
+      <p>더 돌아감은 참고로 표시합니다. 기록 5개로 평가했을 때 덜 돌아감보다 근거가 약했습니다.</p>
       <p>문턱은 검증 전 초기값입니다. 절대적인 언더·오버 판정이나 원인·셋업 효과를 확정하지 않습니다.</p>
     </details>
     {orderHandling(items).map((item, i) => <HandlingObservation key={`${item.kind}-${item.phase}-${i}`} item={item} />)}

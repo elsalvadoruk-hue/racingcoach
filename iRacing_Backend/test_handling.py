@@ -523,6 +523,33 @@ class LagTests(unittest.TestCase):
 
 
 
+class EvidenceTests(unittest.TestCase):
+    def test_each_kind_carries_its_evaluated_evidence_level(self):
+        from handling import EVIDENCE
+        self.assertEqual(EVIDENCE, {'understeer': 'compared', 'oversteer': 'reference', 'countersteer': 'measured'})
+        result = analyze_handling(analyzer(['understeer', 'lift', 'counter', None, None, None, None]), [CORNER])
+        kinds = [item['kind'] for item in result['corners']]
+        self.assertTrue({'understeer', 'countersteer'} <= set(kinds))
+        for item in result['corners']:
+            self.assertEqual(item['evidence'], EVIDENCE[item['kind']])
+        references = [i for i, item in enumerate(result['corners']) if item['evidence'] == 'reference']
+        others = [i for i, item in enumerate(result['corners']) if item['evidence'] != 'reference']
+        self.assertTrue(all(i > j for i in references for j in others))
+        self.assertEqual(result['evidence'], EVIDENCE)
+
+    def test_reference_repeats_come_after_supported_repeats(self):
+        with tempfile.TemporaryDirectory() as folder:
+            history = HandlingHistory(Path(folder) / 'history.json')
+            metadata = {'car_path': 'test-car', 'track_platform_id': 1}
+            items = [{**CORNER, 'corner_id': f'C{i}', 'apex_pct': .1 + .1 * i, 'kind': kind, 'phase': 'drive',
+                      'laps': 2, 'of_laps': 6, 'time_cost_s': cost}
+                     for i, (kind, cost) in enumerate((('oversteer', .5), ('oversteer', .4), ('oversteer', .3), ('understeer', .1)))]
+            history.update(metadata, ('a', 1), {'method': METHOD, 'corners': items})
+            repeats = history.update(metadata, ('b', 1), {'method': METHOD, 'corners': items})
+        self.assertEqual([item['kind'] for item in repeats], ['understeer', 'oversteer', 'oversteer'])
+        self.assertEqual([item['time_cost_s'] for item in repeats][1:], [.5, .4])
+
+
 class CoverageTests(unittest.TestCase):
     def test_compared_time_share_decides_classifiable(self):
         self.assertEqual(COVERAGE_MIN, .9)

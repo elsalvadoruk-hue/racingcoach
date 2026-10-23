@@ -10,7 +10,8 @@ test('compact badges explain personal reactions and deduplicate phases', () => {
   expect(screen.getAllByText('덜 돌아감')).toHaveLength(1);
   expect(screen.getByText('덜 돌아감')).toHaveClass('text-cyan-400');
   expect(screen.getByText('덜 돌아감')).toHaveAttribute('title', expect.stringContaining('내 다른 랩보다'));
-  expect(screen.getByText('더 돌아감')).toHaveClass('text-chart-reference');
+  expect(screen.getByText('더 돌아감')).toHaveClass('text-muted-foreground', 'border-dashed');
+  expect(screen.getByText('더 돌아감')).toHaveAttribute('title', expect.stringContaining('근거가 아직 부족'));
 });
 
 test('detail reports measured frequency, cost and accompanying input without a cause assertion', () => {
@@ -45,7 +46,7 @@ test('unknown or absent observations do not invent a handling verdict', () => {
 });
 
 test('known time differences precede frequency-only observations even when the difference is negative', () => {
-  render(<HandlingDetail items={[{ ...item, time_cost_s: null, laps: 12 }, { ...item, time_cost_s: -.03, kind: 'oversteer' }, { ...item, time_cost_s: 0 }]} />);
+  render(<HandlingDetail items={[{ ...item, time_cost_s: null, laps: 12 }, { ...item, time_cost_s: -.03, phase: 'drive' }, { ...item, time_cost_s: 0 }]} />);
   const rows = screen.getByRole('region', { name: '차 거동' }).querySelectorAll('[data-handling-item]');
   expect(rows[0]).toHaveTextContent('시간 차이 0.00초');
   expect(rows[1]).toHaveTextContent('0.03초 빠름');
@@ -64,4 +65,22 @@ test('countersteering is separate from the personal baseline and missing compari
   expect(screen.getByLabelText('내 다른 랩 대비 차 거동').querySelector('[data-kind=countersteer]')).toHaveClass('text-foreground');
   expect(screen.getByRole('article', { name: '회전 · 반대 조향' })).toHaveTextContent('개인 기준과 별개로 관측했습니다.');
   expect(screen.getByText('개인 기준 비교 0/5회 · 5회 확인 필요')).toBeInTheDocument();
+});
+
+test('oversteer is shown as a reference after better supported observations', () => {
+  render(<HandlingDetail items={[{ ...item, kind: 'oversteer', time_cost_s: .5 }, { ...item, time_cost_s: null }]} />);
+  const rows = screen.getByRole('region', { name: '차 거동' }).querySelectorAll('[data-handling-item]');
+  expect(rows[0]).toHaveTextContent('덜 돌아감');
+  expect(rows[1]).toHaveTextContent('더 돌아감 · 참고');
+  expect(rows[1].querySelector('[data-evidence-note]')).toHaveTextContent('우연과 뚜렷이 구분된다는 근거가 아직 부족');
+  expect(screen.getByText(/더 돌아감은 참고로 표시합니다/)).toBeInTheDocument();
+});
+
+test('a reference repeat never pushes a supported repeat out of the top three', () => {
+  render(<HandlingRepeats items={[...[3, 2, 1].map(cost => ({ ...item, kind: 'oversteer', files: 2, time_cost_s: cost, label: `참고 ${cost}` })),
+    { ...item, files: 2, time_cost_s: .1, label: '덜 구간' }]} />);
+  const rows = screen.getAllByRole('listitem');
+  expect(rows).toHaveLength(3);
+  expect(rows[0]).toHaveTextContent('덜 구간');
+  expect(screen.queryByText(/참고 1/)).not.toBeInTheDocument();
 });

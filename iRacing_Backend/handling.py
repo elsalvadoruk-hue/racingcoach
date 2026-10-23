@@ -33,6 +33,12 @@ MAX_PEDAL_DIFFERENCE = .2
 # personal comparison. Fixed before evaluation; not tuned to any result.
 COVERAGE_MIN = .9
 METHOD = 'personal_corner_phase_v3'
+# How much the offline evaluation supports each kind (logs/analysis-210/handling-v2-vs-v3.txt,
+# five recordings, 2026-10-23). Understeer: above the position null (1.13x, 76.5% of
+# draws), slower laps (AUC .71) and repeats between lap halves. Oversteer: barely above
+# the null (1.07x, 55.5%) and no time relation (AUC .46), so it is shown as a reference.
+# Countersteer is a measured event, not a personal comparison. Display only; detection unchanged.
+EVIDENCE = {'understeer': 'compared', 'oversteer': 'reference', 'countersteer': 'measured'}
 REQUIRED = ('Speed', 'SteeringWheelAngle', 'YawRate', 'LatAccel', 'Brake', 'Throttle')
 PHASES = ('braking', 'rotation', 'drive')
 
@@ -454,7 +460,7 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
                                   'z_median': float(np.median(selected_z)) if selected_z else None,
                                   'time_cost_s': round(float(np.median(slower) - np.median(other)), 4)
                                       if len(slower) >= 3 and len(other) >= 3 else None,
-                                  'approximate': approximate, 'method': METHOD,
+                                  'approximate': approximate, 'method': METHOD, 'evidence': EVIDENCE[kind],
                                   'basis': 'measured_countersteer' if kind == 'countersteer' else 'personal_corner_phase'})
     applicable = coverage['total_slots'] - coverage['not_applicable']
     coverage.update(applicable=applicable,
@@ -462,7 +468,8 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
                     applicable_corner_phases=len(applicable_keys),
                     result_items=len(summaries), time_cost_items=sum(item['time_cost_s'] is not None for item in summaries))
     coverage['unknown_fraction'] = coverage['unknown'] / applicable if applicable else None
-    summaries.sort(key=lambda item: (item['time_cost_s'] is None, -(item['time_cost_s'] or 0), -item['laps']))
+    summaries.sort(key=lambda item: (item['evidence'] == 'reference', item['time_cost_s'] is None,
+                                     -(item['time_cost_s'] or 0), -item['laps']))
     result = {'source': 'approximate' if approximate else 'measured', 'approximate': approximate,
             'corners': summaries, 'k_bands': model['bands'],
             'valid_laps': len(analyzer.valid_laps), 'thresholds_validated': False, 'method': METHOD,
@@ -471,7 +478,7 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
                                 'unknown_reasons': dict(phase_reasons[key])}
                                for key, counts in phase_counts.items()],
             'unknown_reasons': dict(unknown_reasons),
-            'steer_lag_s': lag_s, 'fast_steer_rate_rad_s': phase_rates,
+            'steer_lag_s': lag_s, 'fast_steer_rate_rad_s': phase_rates, 'evidence': dict(EVIDENCE),
             'coverage_rule': {'min_compared_time_fraction': COVERAGE_MIN},
             'noise_rules': {'z_limit': Z_LIMIT, 'min_ratio': [UNDER_B, OVER_B], 'spread': 'mad',
                             'min_laps_for_point_spread': MIN_LAPS_FOR_POINT_SPREAD},
@@ -539,4 +546,6 @@ class HandlingHistory:
                     costs = [entry['time_cost_s'] for entry in matches if entry['time_cost_s'] is not None]
                     repeated.append({**item, 'files': len(matches),
                                      'time_cost_s': float(np.median(costs)) if costs else None})
-        return sorted(repeated, key=lambda item: item['time_cost_s'] if item['time_cost_s'] is not None else -float('inf'), reverse=True)[:3]
+        repeated.sort(key=lambda item: item['time_cost_s'] if item['time_cost_s'] is not None else -float('inf'), reverse=True)
+        # Reference-level tendencies never push a better supported repeat out of the top three.
+        return sorted(repeated, key=lambda item: EVIDENCE.get(item['kind']) == 'reference')[:3]
