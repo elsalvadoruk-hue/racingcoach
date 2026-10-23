@@ -27,8 +27,8 @@ import session_log
 logger = logging.getLogger(__name__)
 
 # Raise when what the consent text says changes: the driver is then asked again.
-# 2 (2026-10-23): own measured laps for every session, nearby cars in races.
-CONSENT_VERSION = 2
+# 3 (2026-10-23): selected corner traces in spare space, without nearby-car files.
+CONSENT_VERSION = 3
 FINISHED_AFTER_S = 600       # a drive with no new radio event for 10 minutes has ended
 MIN_CALLS, MIN_MINUTES = 10, 2.  # too little to learn anything from
 MAX_ATTEMPTS, RETRY_AFTER_S = 3, 1800

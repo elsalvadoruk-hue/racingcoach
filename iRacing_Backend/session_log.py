@@ -9,6 +9,7 @@ The file is a zip of plain JSON, readable without the app:
 and, when they exist and the file stays small enough to send (EXTRA_ORDER, manifest "extras"):
 
     drive_summary.json.xz   the driver's own laps and corner passes as measured values (drive_summary)
+    handling-traces/*.json.xz   selected corners across laps, only without nearby-car files and within spare space
     traffic.packed.xz       races: nearby cars ten times a second, positions only (traffic_log, log_pack)
     timing.packed.xz        races: every car's lap position and order once a second (timing_log, log_pack)
 
@@ -27,6 +28,7 @@ import urllib.request
 import zipfile
 from dataclasses import dataclass, field
 import logging
+from itertools import islice
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +113,8 @@ class Extra:
     group: str
     files: dict = field(default_factory=dict)
     info: dict = field(default_factory=dict)
+    # Lazy, bounded corner bundles. Called only after the ordinary size rule is resolved.
+    supplement: object = None
 
 
 # Dropped first when the file would not fit: nearby cars, then the driver's own measured values.
@@ -120,6 +124,7 @@ EXTRA_DESCRIPTIONS = {
     'traffic.packed.xz': 'races: nearby cars (within 200 m, 10 Hz), positions/order/class/pit only, no names (log_pack)',
     'timing.packed.xz': "races: every car's lap position and order once a second, no names (log_pack)",
 }
+MAX_SUPPLEMENT_GROUPS = 12
 
 
 def _zip(manifest, radio, reports, extras):
@@ -221,6 +226,56 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
             included = [extra for extra in included if extra.group != group]
             status[group].update(included=False, reason='size_limit', file_bytes_with=size)
             data = build()
+    # A supplement never displaces an existing file. Measure the complete ZIP,
+    # including its manifest and directory entries, for every whole-corner bundle.
+    summary = next((e for e in included if e.group == 'drive_summary' and e.supplement), None)
+    budget = min(limit, SEND_LIMIT) if limit is not None else SEND_LIMIT
+    if summary is not None and len(data) < budget:
+        nearby = any(e.group == 'nearby_cars' for e in included)
+        detail = Extra('handling_traces')
+        status[detail.group] = {'included': False, 'reason': 'nearby_cars_included' if nearby else 'no_eligible_corners',
+                                'bytes': 0, 'groups': 0, 'passes': 0, 'samples': 0, 'skipped_groups': 0}
+        before = data
+        metadata_only = build()
+        if len(metadata_only) <= budget:
+            data = metadata_only
+            if not nearby:
+                included.append(detail)
+                try:
+                    for addition in islice(summary.supplement(), MAX_SUPPLEMENT_GROUPS):
+                        previous = dict(status[detail.group])
+                        detail.files.update(addition.files)
+                        status[detail.group] = {
+                            'included': True, 'reason': None,
+                            'bytes': previous['bytes'] + sum(len(v) for v in addition.files.values()),
+                            'groups': previous['groups'] + 1,
+                            'passes': previous['passes'] + addition.info['passes'],
+                            'samples': previous['samples'] + addition.info['samples'],
+                            'skipped_groups': previous['skipped_groups'],
+                        }
+                        candidate = build()
+                        if len(candidate) <= budget:
+                            data = candidate
+                        else:
+                            for name in addition.files:
+                                detail.files.pop(name)
+                            status[detail.group] = previous
+                            status[detail.group]['skipped_groups'] += 1
+                            if not detail.files:
+                                status[detail.group]['reason'] = 'size_limit'
+                    final = build()
+                    if len(final) <= budget:
+                        data = final
+                except Deferred:
+                    raise
+                except Exception:
+                    # Failure of optional detail must not lose the base log.
+                    logger.exception('Handling trace supplement could not be made')
+        else:
+            status.pop(detail.group)
+            data = before
+    if limit is not None and len(data) > limit:
+        raise ValueError('기본 로그만으로 보낼 수 있는 크기를 넘었습니다. 로그 파일 받기로 저장해 주세요.')
     stamp = time.strftime('%Y%m%d-%H%M', time.localtime(started))
     place = re.sub(r'[^A-Za-z0-9]+', '-', identity.get('track_path') or 'session').strip('-') or 'session'
     return f'coach-log-{place}-{stamp}.zip', data
@@ -261,6 +316,10 @@ def read_extras(data):
         names = set(archive.namelist())
         if 'drive_summary.json.xz' in names:
             parts['drive_summary'] = drive_summary.unpack(archive.read('drive_summary.json.xz'))
+        trace_names = sorted(n for n in names if re.fullmatch(r'handling-traces/[0-9]+\.json\.xz', n))
+        if trace_names:
+            import handling_traces
+            parts['handling_traces'] = [handling_traces.unpack(archive.read(n)) for n in trace_names]
         for key in ('traffic', 'timing'):
             if f'{key}.packed.xz' in names:
                 parts[key] = log_pack.unpack(archive.read(f'{key}.packed.xz'))

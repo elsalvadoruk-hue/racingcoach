@@ -1047,3 +1047,13 @@ body { min-width: 1100px; }
   /* Device pickers keep their icons; the words return on wider screens. */
   .runtime-input label span { display:none; }
 }
+
+/* The picker's analysis progress (AnalysisProgress.jsx). */
+.analysis-progress { display:flex; flex-direction:column; gap:5px; margin-top:8px; }
+.analysis-progress-label { display:flex; justify-content:space-between; gap:8px; font-size:12px; color:hsl(var(--muted-foreground)); }
+.analysis-progress-track { height:6px; border-radius:999px; background:hsl(var(--muted)); overflow:hidden; }
+.analysis-progress-fill { height:100%; border-radius:inherit; background:hsl(var(--primary)); transition:width .45s ease-out; }
+.analysis-progress small { font-size:10px; color:hsl(var(--muted-foreground)); }
+.analysis-progress-waiting { width:30%; animation:analysis-progress-waiting 1.2s ease-in-out infinite alternate; }
+@keyframes analysis-progress-waiting { to { transform:translateX(230%); } }
+@media (prefers-reduced-motion:reduce) { .analysis-progress-fill { transition:none; } .analysis-progress-waiting { animation:none; } }

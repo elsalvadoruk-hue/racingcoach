@@ -64,6 +64,58 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
         self.assertEqual(self.state['analysis_result']['practice_focuses']['WORKSPACE'], [option['focus'] for option in options])
         self.assertNotIn('analysisResult', result['initialComparison'])
 
+    def test_a_named_job_reports_every_analysis_stage_and_ends_complete(self):
+        import analysis_progress
+        seen, original = [], analysis_progress.stage
+        def record(key, laps=None):
+            seen.append(key)
+            original(key, laps)
+        with patch.object(analysis_progress, 'stage', side_effect=record):
+            response = self.post('session', {'filename': 'baseline.ibt', 'progress_id': 'job-1'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual([key for key in dict.fromkeys(seen)], ['reference', 'laps', 'corners', 'handling', 'repetition', 'summary', 'comparison'])
+        done = self.client.get('/api/workspace/progress/job-1').json()
+        self.assertEqual((done['percent'], done['stage']), (100, 'done'))
+        self.assertEqual(self.client.get('/api/workspace/progress/unknown').json()['percent'], None)
+
+    def test_requests_without_a_job_report_nothing(self):
+        response = self.post('session', {'filename': 'baseline.ibt'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotIn('progress_id', response.text)
+        plain = response.json()
+        tracked = self.post('session', {'filename': 'baseline.ibt', 'progress_id': 'same-result'}).json()
+        plain['analysisResult']['session'].pop('analyzed_at', None)
+        tracked['analysisResult']['session'].pop('analyzed_at', None)
+        self.assertEqual(plain, tracked)
+
+    def test_failed_analysis_is_not_reported_as_complete(self):
+        response = self.post('session', {'filename': 'missing.ibt', 'progress_id': 'job-failed'})
+        self.assertEqual(response.status_code, 404)
+        status = self.client.get('/api/workspace/progress/job-failed').json()
+        self.assertEqual(status['stage'], 'error')
+        self.assertLess(status['percent'], 100)
+
+    def test_progress_answers_while_the_analysis_request_is_still_running(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        entered, release = threading.Event(), threading.Event()
+        def load(path):
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError('analysis worker was not released')
+            return self.sources[path.name]
+        with patch.object(api.repository, 'load', side_effect=load), ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(self.post, 'session', {'filename': 'baseline.ibt', 'progress_id': 'job-running'})
+            try:
+                self.assertTrue(entered.wait(5))
+                status = self.client.get('/api/workspace/progress/job-running').json()
+                self.assertEqual(status['stage'], 'load')
+                self.assertLess(status['percent'], 100)
+                self.assertFalse(pending.done())
+            finally:
+                release.set()
+            self.assertEqual(pending.result(timeout=30).status_code, 200)
+
     def test_explicit_self_comparison_has_zero_delta_and_does_not_silently_change_reference(self):
         response = self.post('comparison', {'filename': 'baseline.ibt', 'target_lap': 3, 'reference_lap': 3})
         self.assertEqual(response.status_code, 200, response.text)

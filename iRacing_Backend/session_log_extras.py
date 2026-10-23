@@ -99,7 +99,7 @@ def recordings_for(run, candidates, metadata_of):
     return found[-MAX_RECORDINGS:]
 
 
-def own_drive(candidates, metadata_of, analyze, driving=lambda: False, defer=True, app_version=''):
+def own_drive(candidates, metadata_of, analyze, driving=lambda: False, defer=True, app_version='', traces=None):
     """Extra provider: the driver's own recordings of the run as measured values.
 
     ``analyze(path)`` returns (analysis result, metadata, handling with observations). It is
@@ -111,15 +111,38 @@ def own_drive(candidates, metadata_of, analyze, driving=lambda: False, defer=Tru
             return Extra('drive_summary', info={'reason': 'no_recording'})
         if defer and driving():
             raise Deferred('driver on track')
-        recordings, laps, started = [], 0, time.time()
+        recordings, sources, laps, started = [], [], 0, time.time()
         for path in paths:
+            if defer and driving():
+                raise Deferred('driver on track')
+            stamp = (path.stat().st_size, path.stat().st_mtime_ns)
             result, metadata, handling = analyze(path)
             summary = drive_summary.compact(result, metadata, handling)
             recordings.append(scrub(summary))
+            sources.append((path, recordings[-1], stamp))
             laps += len(summary['laps'])
         if not recordings:
             return Extra('drive_summary', info={'reason': 'no_recording'})
         data = drive_summary.pack(recordings, app_version)
+        def supplement():
+            import handling_traces
+            ordinal = 0
+            for recording_index, (path, summary, stamp) in enumerate(sources):
+                if defer and driving():
+                    raise Deferred('driver on track')
+                if (path.stat().st_size, path.stat().st_mtime_ns) != stamp:
+                    continue
+                for document in traces(path, summary, run['run_id']):
+                    if defer and driving():
+                        raise Deferred('driver on track')
+                    document = scrub({**document, 'recording_index': recording_index})
+                    yield Extra('handling_traces',
+                                {f'handling-traces/{ordinal:03}.json.xz': handling_traces.pack(document)},
+                                {'passes': len(document['passes']),
+                                 'samples': sum(p['samples'] for p in document['passes'])})
+                    ordinal += 1
+
         return Extra('drive_summary', {'drive_summary.json.xz': data},
-                     {'recordings': len(recordings), 'laps': laps, 'seconds_to_make': round(time.time() - started, 1)})
+                     {'recordings': len(recordings), 'laps': laps, 'seconds_to_make': round(time.time() - started, 1)},
+                     supplement=supplement if traces is not None else None)
     return provider

@@ -59,8 +59,14 @@ class AutoSendTests(unittest.TestCase):
         self.assertEqual(uploader.run_once(), 1)
         self.assertEqual(self.sent[0][1], 'log-drive-a.zip')
 
-    def test_the_new_notice_with_nearby_cars_and_own_laps_asks_again(self):
-        self.assertEqual(CONSENT_VERSION, 2)
+    def test_the_new_notice_with_corner_traces_invalidates_previous_consent(self):
+        self.assertEqual(CONSENT_VERSION, 3)
+        with mock.patch.object(session_log_auto, 'CONSENT_VERSION', 2):
+            session_log_auto.set_enabled(True, 2, now=1000.)
+        self.assertFalse(session_log_auto.status()['enabled'])
+        self.runs = [run('drive-a', 2000., 3000.)]
+        self.assertEqual(self.uploader.run_once(), 0)
+        self.assertEqual(self.sent, [])
 
     def test_nothing_is_sent_without_consent_and_turning_on_needs_the_shown_notice(self):
         self.runs = [run('a', 10_000, 20_000)]

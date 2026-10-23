@@ -9,6 +9,7 @@ from application_runtime import (DEFAULT_CORS_ORIGINS, telemetry_file_busy_respo
 from analysis_routes import AnalysisRoutesServices, register_routes as register_analysis_routes
 from reference_routes import ReferenceRoutesServices, register_routes as register_reference_routes
 from settings_routes import SettingsRoutesServices, register_routes as register_settings_routes
+import analysis_progress
 from practice_routes import PracticeRoutesServices, register_routes as register_practice_routes
 from memory_routes import MemoryRoutesServices, register_routes as register_memory_routes
 from corner_notes import CornerNotesStore
@@ -1360,6 +1361,7 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
         request = request_with_structured_feedback(request)
         policy = session_policy(request.session_mode)
         data_quality = self._data_quality(request.session_mode)
+        analysis_progress.stage('laps', laps=len(self.valid_laps))
         target, reference, lap_selection = self._select_laps(request.target_lap, request.reference_lap)
         lap_table = self._lap_table(lap_selection)
 
@@ -1383,9 +1385,11 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                 "reference_lap": None, "total_delta_s": None, "gap_to_session_best_s": None,
                 "scope": "CLEAN_SEGMENTS_ONLY", "reason": self._clean_context()["reason"],
             }
+            analysis_progress.stage('corners')
             corners = self._corner_analysis(target_grid, reference_grid, corner_defs)
             confirmed_names = _CORNER_DEFINITION_STORE.names_for(
                 corner_defs, self.telemetry.metadata.get("track_platform_id"), self.telemetry.metadata.get("track_config"))
+            analysis_progress.stage('repetition')
             repetition = self._repetition_analysis(corner_defs, request.session_mode)
             visualizations = self._visualizations(target_grid, reference_grid, corners)
             for lap in sorted((lap for lap in self.telemetry.laps if lap.lap_number in self._clean_context()["lap_windows"]),
@@ -1396,6 +1400,7 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                         clean_corners.append({**corner, "source": "CLEAN_SEGMENT", "scope": "COACHING_ONLY",
                                               "lap_number": lap.lap_number, "official_valid_lap": False})
 
+        analysis_progress.stage('summary')
         external_reference = self._external_reference_analysis(
             target,
             request.external_reference_files,
@@ -3889,9 +3894,14 @@ def session_log_extras(defer: bool = False):
         measured = handling.analyze_handling(analyzer, corners, include_observations=True) if corners else None
         return result, dict(telemetry.metadata or {}), measured
 
+    def trace_groups(path, summary, seed):
+        import handling_traces
+        analyzer = TelemetryAnalyzer(repository.load(Path(path)))
+        yield from handling_traces.groups(analyzer, summary, seed)
+
     return (extras.nearby_cars(live_telemetry.traffic_log.folder, live_telemetry.timing_log.folder),
             extras.own_drive(candidates, metadata_of, analyze, driving=lambda: getattr(live_telemetry, "_link", None) == "DRIVING",
-                             defer=defer, app_version=APP_VERSION))
+                             defer=defer, app_version=APP_VERSION, traces=trace_groups))
 
 
 @asynccontextmanager

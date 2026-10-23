@@ -7,6 +7,7 @@ import { data, labRequest, lapTime, analysisOptions, measurableLap } from './ses
 import { fileLapLabel, fileChoiceLabel, fileBestLap, lapCounts, lapReason, lapStatus, isBestLap, lapIsComplete, sessionTypeLabel, sessionTypeTone } from './labPreferences';
 import ConnectionControls from './ConnectionControls';
 import { requestJson } from '../analysis/analysisClient';
+import { AnalysisProgressBar, useAnalysisProgress } from './AnalysisProgress';
 
 // The server returns codes; the driver reads a sentence.
 const REFERENCE_REASONS = {
@@ -36,6 +37,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   const [refs, setRefs] = useState([]);
   const [selected, setSelected] = useState(external);
   const [busy, setBusy] = useState(false);
+  const { view: analysisProgress, begin: beginProgress, end: endProgress } = useAnalysisProgress();
   const [error, setError] = useState('');
   const [importBusy, setImportBusy] = useState(false);
   const [importNotice, setImportNotice] = useState('');
@@ -60,10 +62,12 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   useEffect(() => {
     if (!file) { setSession(null); return; }
     let live = true;
+    let progressId = null;
     setBusy(true); setError('');
     (async () => {
       const trial = lockedReferences.current;
-      const next = file === data.filename ? data : await labRequest('session', { filename: file, preview: true, ...analysisOptions(workspaceRef.current, file),
+      if (file !== data.filename) progressId = beginProgress();
+      const next = file === data.filename ? data : await labRequest('session', { filename: file, preview: true, progress_id: progressId, ...analysisOptions(workspaceRef.current, file),
         ...(trial ? { reference_mode: trial.reference_mode, external_reference_files: trial.reference_files || [] } : {}) });
       let references;
       try { references = await labRequest('references', { filename: file, target_lap: next.defaultTarget }); }
@@ -86,9 +90,9 @@ export default function SourcePicker({ target, reference, external, onApply, ana
         if (!personal) setBase(String(next.defaultReference ?? ''));
         setSelected(trial?.reference_files || []); setMode(trial?.reference_files?.length ? 'GARAGE61' : 'LOCAL');
       }
-    })().catch(e => { if (live) { setError(e.message); setSession(null); } }).finally(() => { if (live) setBusy(false); });
-    return () => { live = false; };
-  }, [file, external]);
+    })().catch(e => { if (live) { setError(e.message); setSession(null); } }).finally(() => { if (progressId) endProgress(progressId); if (live) setBusy(false); });
+    return () => { live = false; if (progressId) endProgress(progressId); };
+  }, [file, external, beginProgress, endProgress]);
   useEffect(() => {
     if (!referenceFile || referenceFile === file) { setReferenceBusy(false); setReferenceError(''); return undefined; }
     const controller = new AbortController();
@@ -168,9 +172,10 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   async function apply() {
     if (importBusy || importError) return;
     setBusy(true); setError('');
+    const progressId = session.kind === 'LIVE_LOCAL' ? beginProgress() : null;
     try {
       let externalFiles = mode === 'GARAGE61' ? selected : [];
-      const result = session.kind === 'LIVE_LOCAL' ? await labRequest('comparison', { filename: file, ...analysisOptions(analysisWorkspace, file), target_lap: Number(own), reference_lap: base ? Number(base) : null,
+      const result = session.kind === 'LIVE_LOCAL' ? await labRequest('comparison', { filename: file, progress_id: progressId, ...analysisOptions(analysisWorkspace, file), target_lap: Number(own), reference_lap: base ? Number(base) : null,
         reference_filename: referenceFile || file, reference_selection: referenceSelection,
         reference_mode: externalFiles.length > 1 ? 'AGGREGATE' : externalFiles.length ? 'SINGLE' : 'LOCAL', external_reference_files: externalFiles, points: 10000 }) : null;
       if (result?.referenceFallback) externalFiles = [];
@@ -179,7 +184,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
         referenceFallback: result?.referenceFallback, personalReference: result?.personalReference || personalReference,
         reference_file_name: files.find(f => f.name === referenceFile)?.file_name || session.file_name,
         reference_laps: baseOptions }, own, String(result?.reference_lap ?? base), externalFiles, result);
-    } catch (e) { if (mounted.current) setError(e.message); } finally { if (mounted.current) setBusy(false); }
+    } catch (e) { if (mounted.current) setError(e.message); } finally { if (progressId) endProgress(progressId); if (mounted.current) setBusy(false); }
   }
   const options = session?.laps || [];
   const baseOptions = referenceFile && referenceFile !== file ? referenceLaps : options;
@@ -209,6 +214,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     {referenceError && <p role="alert">{referenceError}</p>}
     {referenceNotice && <p role="status">{referenceNotice}</p>}
     <Button disabled={importBusy || Boolean(importError) || busy || referenceBusy || personalBusy || Boolean(referenceError) || !session || !own || (mode === 'LOCAL' && !baseOptions.some(l => String(l.lap_number) === base && measurableLap(l))) || (mode === 'GARAGE61' && !selected.length)} onClick={apply}>{busy ? '주행 데이터 계산 중…' : '선택한 랩 비교하기'}</Button>
+    <AnalysisProgressBar view={analysisProgress} />
     {analysisWorkspace && !lmu && <ConnectionControls workspace={analysisWorkspace} />}
   </div>;
 }

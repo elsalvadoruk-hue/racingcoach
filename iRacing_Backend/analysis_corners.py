@@ -13,6 +13,7 @@ from practice_metrics import KEPT_METRICS
 from closed_loop_coach import first_deviation
 from handling import analyze_handling
 from racing_line import racing_line_context, racing_line_offsets
+import analysis_progress
 
 
 class CornerAnalysis:
@@ -311,6 +312,7 @@ class CornerAnalysis:
             corner['line'] = racing_line_offsets(target, reference, corner, self.track_length_m,
                                                  _context=line_context)
 
+        analysis_progress.stage('handling')
         handling = self._handling_analysis(ordered)
         for corner in ordered:
             corner['handling'] = [item for item in handling['corners'] if item['corner_id'] == corner['id']] if handling else []

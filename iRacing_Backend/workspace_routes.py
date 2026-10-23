@@ -14,6 +14,7 @@ from typing import Any, Callable, Literal
 from fastapi import Body, HTTPException
 from pydantic import ValidationError
 
+import analysis_progress
 from analysis_models import AnalyzeRequest, ComparisonDetailRequest, ExperimentRequest, LapOverlayRequest
 from workspace_controls import comparison_controls
 from workspace_setup import setup_plan
@@ -56,6 +57,7 @@ def _recording(services, name):
     path = services.resolve_telemetry_file(_filename(name))
     if path is None:
         raise HTTPException(status_code=404, detail='주행 파일을 찾을 수 없습니다. 목록을 새로 불러오세요.')
+    analysis_progress.file_size(path)
     telemetry = services.get_repository().load(path)
     services.telemetry_file_visibility(path, telemetry)
     return telemetry
@@ -176,10 +178,17 @@ def register_routes(app, services: WorkspaceRoutesServices):
     # comparison most recently completed by the desktop workspace.
     request_lock = asyncio.Lock()
 
+    @app.get('/api/workspace/progress/{job_id}')
+    def workspace_progress(job_id: str):
+        """The picker's progress bar. Outside the request lock so it answers while an analysis runs."""
+        return analysis_progress.status(job_id) or {'percent': None, 'stage': 'unknown'}
+
     @app.post('/api/workspace/{route}')
     async def workspace_request(route: Literal['files', 'session', 'file-laps', 'references', 'overlay', 'comparison', 'setup-plan', 'setup-compare'],
                                 body: dict[str, Any] = Body(default_factory=dict)):
         async with request_lock:
+            progress = analysis_progress.start(body.get('progress_id')) if route in ('session', 'comparison') else None
+            success = False
             try:
                 if route == 'files':
                     paths = await asyncio.to_thread(services.list_ibt_files, 250)
@@ -233,6 +242,7 @@ def register_routes(app, services: WorkspaceRoutesServices):
                         body.get('reference_selection') == 'AUTO' or ('reference_selection' not in body and body.get('reference_lap') is None))
                     personal = None
                     if automatic:
+                        analysis_progress.stage('reference')
                         personal = await asyncio.to_thread(select_personal_reference, services, telemetry, body.get('target_lap'))
                         body['personalReference'] = personal
                         body['reference_filename'] = personal.get('filename')
@@ -265,6 +275,7 @@ def register_routes(app, services: WorkspaceRoutesServices):
                     if target is None:
                         raise ValueError('비교할 랩을 찾지 못했습니다.')
                     selection = {**body, 'target_lap': target, 'reference_lap': reference}
+                    analysis_progress.stage('comparison')
                     result = await asyncio.to_thread(workspace_comparison, services, telemetry, selection)
                     result.update(referenceFallback=body.get('referenceFallback'),
                                   reference_selection='AUTO' if automatic else 'MANUAL')
@@ -293,10 +304,14 @@ def register_routes(app, services: WorkspaceRoutesServices):
                             'comparisonSummary': full['comparison'], 'lapSelection': full.get('lap_selection'),
                             'quality': full.get('data_quality'), 'priorities': full.get('coaching', {}).get('priorities', []),
                             'analysisResult': full, 'practice': full.get('practice'), 'practiceFocuses': full.get('practice_focuses')}
-                return services.json_safe(result)
+                response = services.json_safe(result)
+                success = True
+                return response
             except ValidationError as exc:
                 raise HTTPException(status_code=422, detail=exc.errors(include_context=False, include_input=False)) from exc
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
+            finally:
+                analysis_progress.finish(progress, success=success)
 
-    return SimpleNamespace(workspace_request=workspace_request)
+    return SimpleNamespace(workspace_request=workspace_request, workspace_progress=workspace_progress)
