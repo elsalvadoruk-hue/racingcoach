@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -305,6 +306,100 @@ class HandlingEvaluationTests(unittest.TestCase):
         self.assertEqual(missing['rate'], 0.)
         self.assertEqual(missing['second_testable'], 0)
         self.assertIsNone(evaluation.time_link_replication([], 'first_second')['rate'])
+
+    def _matching_fixture(self, lateral=5.):
+        module, model, phases = self._v3_phases(0)
+        phase = phases[0]
+        model['edges_mps'] = np.array([20., 25.1, 40., 50.])
+        phase['bands'] = np.searchsorted(model['edges_mps'], phase['local'].channels['Speed'], side='right')
+        phase['local'].channels['LatAccel'][:] = lateral
+        phase['q_ready'][100:110] = False
+        values = [.05, 25., .1, 0., .3, lateral]
+        references = [dict(values=values.copy()) for _ in range(3)]
+
+        def reference_at(reference, pct):
+            return np.repeat(np.array(reference['values'])[:, None], len(pct), axis=1)
+
+        return module, model, phase, references, reference_at
+
+    def test_matching_diagnosis_counts_each_condition_independently(self):
+        variants = [(1, 25.2), (1, 23.8), (3, .4), (4, .7), (2, -.1), (5, -.2), (5, 7.)]
+        for key, (column, value) in zip(evaluation.MATCH_CONDITIONS, variants):
+            with self.subTest(condition=key):
+                module, model, phase, refs, interpolate = self._matching_fixture(
+                    lateral=.2 if key == 'lateral_direction' else 5.)
+                refs[2]['values'][column] = value
+                with patch.object(module, '_reference_at', side_effect=interpolate):
+                    result = evaluation.matching_diagnosis(module, phase, [phase, None, *refs], model)
+                n = int(np.sum(phase['inside'] & phase['q_ready'] & (phase['durations'] > 0)))
+                self.assertGreater(n, 0)
+                self.assertEqual(result['samples'], n)
+                self.assertEqual(result['available_pairs'], 3 * n)
+                self.assertEqual(result['matched_pairs'], 2 * n)
+                self.assertEqual(result['below_three_samples'], n)
+                for condition, counts in result['conditions'].items():
+                    self.assertEqual(counts['rejected_pairs'], n if condition == key else 0)
+                    self.assertEqual(counts['rescued_samples'], n if condition == key else 0)
+
+    def test_matching_diagnosis_overlaps_do_not_claim_single_condition_rescue(self):
+        module, model, phase, refs, interpolate = self._matching_fixture()
+        refs[2]['values'][1] = 28.  # Fails both quintile and 4%; neither alone restores 3 laps.
+        with patch.object(module, '_reference_at', side_effect=interpolate):
+            result = evaluation.matching_diagnosis(module, phase, refs, model)
+        n = result['samples']
+        self.assertEqual(result['conditions']['speed_quintile']['rejected_pairs'], n)
+        self.assertEqual(result['conditions']['speed_relative']['rejected_pairs'], n)
+        self.assertTrue(all(value['rescued_samples'] == 0 for value in result['conditions'].values()))
+
+    def test_matching_diagnosis_keeps_missing_evidence_separate_and_merges_counts(self):
+        module, model, phase, refs, interpolate = self._matching_fixture()
+        refs[2]['values'] = [np.nan] * 6
+        with patch.object(module, '_reference_at', side_effect=interpolate):
+            missing = evaluation.matching_diagnosis(module, phase, refs, model)
+        self.assertEqual(missing['available_below_three_samples'], missing['samples'])
+        self.assertTrue(all(value == dict(rejected_pairs=0, rescued_samples=0)
+                            for value in missing['conditions'].values()))
+        empty = evaluation.matching_diagnosis(module, None, [], model)
+        self.assertEqual(empty['unavailable_phases'], 1)
+        model['edges_mps'][:] = np.nan
+        unknown = evaluation.matching_diagnosis(module, phase, refs, model)
+        self.assertEqual(unknown['speed_model_unavailable_samples'], unknown['samples'])
+        merged = evaluation.merge_matching_counts([missing, missing, empty])
+        self.assertEqual(merged['samples'], 2 * missing['samples'])
+        self.assertEqual(merged['available_pairs'], 2 * missing['available_pairs'])
+        self.assertEqual(merged['unavailable_phases'], 1)
+        json.dumps(merged, allow_nan=False)
+
+    def test_matching_diagnosis_leaves_full_product_analysis_identical(self):
+        module, _, phases = self._v3_phases(0)
+        raws = [phase['raw'] for phase in phases]
+        analyzer = SimpleNamespace(
+            telemetry=SimpleNamespace(metadata=dict(game='iracing'), signature=('synthetic',)),
+            channels=raws[0].channels,
+            valid_laps=[SimpleNamespace(lap_number=i) for i in range(len(raws))],
+            _lap_grid=lambda lap: dict(raw=raws[lap.lap_number], distance_pct=raws[lap.lap_number].pct),
+            _raw_lap_for=lambda grid: grid['raw'],
+            _corner_metrics=lambda *args: {},
+            _corner_phases=lambda *args: dict(braking=dict(start_pct=.05, end_pct=.05),
+                rotation=dict(start_pct=.05, end_pct=.45), drive=dict(start_pct=.45, end_pct=.45)),
+        )
+        corners = [dict(id='C1', label='합성', entry_pct=.05, apex_pct=.25, exit_pct=.45)]
+        before = module.analyze_handling(analyzer, corners, include_observations=True)
+        native, captures, points = evaluation.native_evaluation(module, analyzer, corners, collect_points=False)
+        diagnosis = evaluation.matching_by_phase(module, captures, native['observations'])
+        after = module.analyze_handling(analyzer, corners, include_observations=True)
+        self.assertEqual(before, native)
+        self.assertEqual(before, after)
+        self.assertEqual(points, [])
+        self.assertGreater(diagnosis['rotation']['samples'], 0)
+        self.assertEqual(diagnosis['ALL'], diagnosis['rotation'])
+
+    def test_matching_diagnosis_cli_requires_v3_before_opening_recordings(self):
+        with patch.object(evaluation, 'fingerprint') as fingerprint:
+            with self.assertRaisesRegex(ValueError, 'v3'):
+                evaluation.main(['--diagnose-matching'])
+            fingerprint.assert_not_called()
+        self.assertTrue(evaluation.parser().parse_args(['--method', 'v3', '--diagnose-matching']).diagnose_matching)
 
 
 if __name__ == '__main__':

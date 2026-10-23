@@ -25,6 +25,10 @@ BASELINE_COMMIT = 'a5eb18da746c98fb3e962b9109396310bac3076f'
 BASELINE_BLOB = 'cf0665290afd7a0d96d3b6bd6c014def079501d3'
 KINDS = ('understeer', 'oversteer', 'countersteer')
 PHASES = ('braking', 'rotation', 'drive')
+MATCH_CONDITIONS = ('speed_quintile', 'speed_relative', 'brake', 'throttle',
+                    'steer_direction', 'lateral_direction', 'lateral_magnitude')
+MATCH_LABELS = ('속도 5분위', '속도 4%', '브레이크', '스로틀',
+                '핸들 방향', '횡G 방향', '횡G 크기')
 DEFAULT_NAMES = (
     'mclaren720sgt3_monza full 2026-10-21 19-34-32.ibt',
     'mclaren720sgt3_hockenheim gp 2026-08-01 18-13-18.ibt',
@@ -159,7 +163,123 @@ def parser():
     p.add_argument('--out', type=Path)
     p.add_argument('--grid-hz', type=float, default=20.)
     p.add_argument('--resume', action='store_true', help='원본·방식·옵션 해시가 같은 파일별 결과만 재사용')
+    p.add_argument('--diagnose-matching', action='store_true',
+                   help='v3 비교 조건별 탈락만 진단합니다. 판정 변경·귀무 재평가 없음')
     return p
+
+
+def empty_matching_counts():
+    return dict(samples=0, reference_pairs=0, available_pairs=0, matched_pairs=0,
+                below_three_samples=0, available_below_three_samples=0,
+                speed_model_unavailable_samples=0, unavailable_phases=0,
+                conditions={key: dict(rejected_pairs=0, rescued_samples=0)
+                            for key in MATCH_CONDITIONS})
+
+
+def matching_diagnosis(module, phase, references, model):
+    """Count independent rejections and leave-one-condition-out support only.
+
+    Use the product's native required-time samples, without stride or a new
+    grid. Missing reference intervals are unavailable, never condition failures.
+    Reaching three other laps is not proof of classifiability: direction,
+    200-sample support, noise, and complete-phase guards still apply.
+    """
+    result = empty_matching_counts()
+    if phase is None:
+        result['unavailable_phases'] = 1
+        return result
+    selected = phase['inside'] & phase.get('q_ready', phase['eligible']) & (phase['durations'] > 0)
+    result['samples'] = int(selected.sum())
+    if not np.all(np.isfinite(model['edges_mps'])):
+        result['speed_model_unavailable_samples'] = result['samples']
+        return result
+    c = phase['local'].channels
+    speed, steer, brake, throttle, lateral = (c[k][selected] for k in
+        ('Speed', 'SteeringWheelAngle', 'Brake', 'Throttle', 'LatAccel'))
+    available = np.zeros(result['samples'], dtype=int)
+    matched = np.zeros_like(available)
+    without = {key: np.zeros_like(available) for key in MATCH_CONDITIONS}
+    for reference in references:
+        if reference is None or reference is phase:
+            continue
+        q, rv, rs, rb, rt, ra = module._reference_at(reference, phase['local'].pct[selected])
+        base = np.isfinite(q) & (q > 0)
+        conditions = (
+            np.searchsorted(model['edges_mps'], rv, side='right') == phase['bands'][selected],
+            abs(rv - speed) <= module.MAX_SPEED_RELATIVE * speed,
+            abs(rb - brake) <= module.MAX_PEDAL_DIFFERENCE,
+            abs(rt - throttle) <= module.MAX_PEDAL_DIFFERENCE,
+            rs * steer > 0,
+            ra * lateral > 0,
+            abs(ra - lateral) <= np.maximum(module.MAX_LAT_ACCEL_ABS,
+                                          module.MAX_LAT_ACCEL_RELATIVE * abs(lateral)),
+        )
+        failures = np.sum(~np.asarray(conditions), axis=0)
+        result['reference_pairs'] += result['samples']
+        available += base
+        matched += base & (failures == 0)
+        for key, passed in zip(MATCH_CONDITIONS, conditions):
+            result['conditions'][key]['rejected_pairs'] += int(np.sum(base & ~passed))
+            without[key] += base & (failures == (~passed).astype(int))
+    shortage = matched < module.MIN_REFERENCE_LAPS
+    result['available_pairs'] = int(available.sum())
+    result['matched_pairs'] = int(matched.sum())
+    result['below_three_samples'] = int(shortage.sum())
+    result['available_below_three_samples'] = int(np.sum(available < module.MIN_REFERENCE_LAPS))
+    for key in MATCH_CONDITIONS:
+        result['conditions'][key]['rescued_samples'] = int(np.sum(
+            shortage & (without[key] >= module.MIN_REFERENCE_LAPS)))
+    return result
+
+
+def merge_matching_counts(values):
+    result = empty_matching_counts()
+    for value in values:
+        for key in result:
+            if key != 'conditions':
+                result[key] += value[key]
+        for key in MATCH_CONDITIONS:
+            for metric in ('rejected_pairs', 'rescued_samples'):
+                result['conditions'][key][metric] += value['conditions'][key][metric]
+    return result
+
+
+def matching_by_phase(module, captures, rows):
+    if len(captures) != len(rows):
+        raise ValueError('진단 캡처와 관측 수가 다릅니다.')
+    grouped = {name: [] for name in PHASES}
+    for (phase, references, model), row in zip(captures, rows):
+        grouped[row['phase']].append(matching_diagnosis(module, phase, references, model))
+    return {name: merge_matching_counts(values) for name, values in
+            [('ALL', [item for values in grouped.values() for item in values]), *grouped.items()]}
+
+
+def matching_text_report(report):
+    lines = ['N2 비교 조건별 탈락 진단 (제품 판정 변경 없음)',
+             '표본 분모: 제품 required = 단계 내부 & q_ready & 양의 관측 시간. 간격 재표본화·간추림 없음.',
+             '탈락은 같은 위치에서 q가 관측된 다른 랩-표본 쌍 중 해당 조건을 어긴 수(중복 가능).',
+             '단독 제외는 현재 3랩 미만이지만 그 조건 하나만 빼면 3랩 이상인 대상 표본 수입니다.',
+             '비율 분모는 전체 대상 표본과 현재 3랩 미만 표본을 각각 적습니다.',
+             '3랩 확보는 판정 가능 회복과 다릅니다. 200표본·방향·흩어짐·단계 완전성 조건은 그대로 남습니다.',
+             '누락 참조 구간과 속도 모델 미확정은 조건 탈락에 넣지 않습니다. 조건 완화는 사용자 결정 전 보류.', '']
+    groups = [('전체 6파일', report['matching_diagnosis']),
+              ('원래 5파일', report['baseline_five_matching'])]
+    groups += [(file['file'], file['matching_diagnosis']) for file in report['files']]
+    for label, phases in groups:
+        lines.append(label)
+        for phase, value in phases.items():
+            n, short = value['samples'], value['below_three_samples']
+            lines.append(f"{phase}: 대상 {n}, 3랩 미만 {short}, 위치 관측 자체 3랩 미만 {value['available_below_three_samples']}, "
+                         f"속도 모델 미확정 {value['speed_model_unavailable_samples']}, 단계 미관측 {value['unavailable_phases']}")
+            lines.append('조건 | 탈락 쌍/관측 쌍 | 단독 제외 시 3랩 확보/전체 표본 (%) | 3랩 미만 표본 대비 (%)')
+            for key, title in zip(MATCH_CONDITIONS, MATCH_LABELS):
+                item = value['conditions'][key]
+                rescued = item['rescued_samples']
+                pct = f'{rescued / n * 100:.4f}' if n else 'UNKNOWN'
+                short_pct = f'{rescued / short * 100:.4f}' if short else 'UNKNOWN'
+                lines.append(f"{title} | {item['rejected_pairs']}/{value['available_pairs']} | {rescued}/{n} ({pct}) | {short_pct}")
+        lines.append('')
+    return '\n'.join(lines)
 
 
 def matched_matrix(module, phase, references, model):
@@ -249,7 +369,7 @@ def point_summary(values):
     return out
 
 
-def native_evaluation(module, analyzer, corners):
+def native_evaluation(module, analyzer, corners, *, collect_points=True):
     """Instrument the selected implementation without changing its decisions."""
     original_prepare, original_classify = module.prepare_phase, module.classify_phase
     original_phases = analyzer._corner_phases
@@ -272,7 +392,7 @@ def native_evaluation(module, analyzer, corners):
     def classify(phase, references, model):
         result = original_classify(phase, references, model)
         captures.append((phase, references, model))
-        if phase is not None:
+        if phase is not None and collect_points:
             name = phase['_evaluation_name'][1]
             values.extend((name, r) for r in point_values(module, phase, references, model))
         return result
@@ -881,6 +1001,8 @@ def text_report(report):
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.diagnose_matching and args.method != 'v3':
+        raise ValueError('비교 조건 진단은 --method v3로 실행하세요.')
     if not (args.permutations > 0 and 0 < args.grid_hz <= 60):
         raise ValueError('섞기 횟수는 양수이고 grid-hz는 0~60이어야 합니다.')
     inputs = [path.resolve(strict=True) for path in (args.files or default_inputs())]
@@ -888,7 +1010,8 @@ def main(argv=None):
         raise ValueError('평가 입력은 IBT 주행 기록이어야 합니다.')
     if len(set(inputs)) != len(inputs):
         raise ValueError('같은 입력 기록을 두 번 평가할 수 없습니다.')
-    out = args.out or ROOT / f'logs/analysis-210/handling-{args.method}.json'
+    default_name = 'n2-diagnosis' if args.diagnose_matching else args.method
+    out = args.out or ROOT / f'logs/analysis-210/handling-{default_name}.json'
     json_path, txt_path = output_paths(out, inputs)
     cache_folder = json_path.with_suffix('.files')
     for path in inputs:
@@ -897,6 +1020,8 @@ def main(argv=None):
     json_path.parent.mkdir(parents=True, exist_ok=True)
     cache_folder.mkdir(exist_ok=True)
     options = dict(seed=args.seed, permutations=args.permutations, grid_hz=args.grid_hz, skip_null=args.skip_null)
+    if args.diagnose_matching:
+        options['diagnose_matching'] = True
     files = []
     with tempfile.TemporaryDirectory(prefix='handling-evaluation-') as folder:
         sys.path.insert(0, str(ROOT / 'scripts'))
@@ -924,15 +1049,16 @@ def main(argv=None):
             analyzed = analyzer.analyze(api.AnalyzeRequest(filename=source.name, include_ai=False, persist_memory=False))
             corners = [{key: corner[key] for key in ('id', 'label', 'entry_pct', 'apex_pct', 'exit_pct')}
                        for corner in analyzed['performance']['corners']]
-            native, captures, points = native_evaluation(module, analyzer, corners)
+            native, captures, points = native_evaluation(module, analyzer, corners,
+                                                       collect_points=not args.diagnose_matching)
             rows = native['observations']
-            if args.skip_null:
+            if args.skip_null or args.diagnose_matching:
                 null = {}
             else:
                 null = null_function(module, captures, rows, permutations=args.permutations,
                                      seed=args.seed + index, grid_hz=args.grid_hz)
                 null['summary'] = summarize_nulls([null])
-            split = split_half_cells(module, analyzer, corners)
+            split = {} if args.diagnose_matching else split_half_cells(module, analyzer, corners)
             metadata = telemetry.metadata
             context = [metadata.get('game', 'iracing'), metadata.get('car_path') or metadata.get('car_model_key'),
                        metadata.get('track_platform_id') or metadata.get('track_path'),
@@ -951,6 +1077,8 @@ def main(argv=None):
                           point_values=points, point_metrics=point_summary(points), slot_rates=slot_rates(rows),
                           time_auc=adjusted_auc(rows, corners), null=null, split_half=split,
                           steer_lag_s=native.get('steer_lag_s'), fast_steer_rate_rad_s=native.get('fast_steer_rate_rad_s'))
+            if args.diagnose_matching:
+                result['matching_diagnosis'] = matching_by_phase(module, captures, rows)
             cache_path.write_text(json.dumps(dict(identity=identity, result=result), ensure_ascii=False, allow_nan=False), encoding='utf-8')
             files.append(result)
             print(f"완료: 판정 가능 {native['coverage']['classifiable']}/{native['coverage']['applicable']}", flush=True)
@@ -960,10 +1088,14 @@ def main(argv=None):
     baseline = [file for file in files if file['file'] in DEFAULT_NAMES[:5]]
     report = dict(method=args.method, provenance=provenance, evaluator_sha256=evaluator_sha, options=options,
                   files=files, aggregate=aggregate(files), baseline_five=aggregate(baseline),
-                  replication=repeated_files(files, permutations=args.permutations, seed=args.seed),
-                  split_half=split_half_summary(files, permutations=args.permutations, seed=args.seed))
+                  replication={} if args.diagnose_matching else repeated_files(files, permutations=args.permutations, seed=args.seed),
+                  split_half={} if args.diagnose_matching else split_half_summary(files, permutations=args.permutations, seed=args.seed))
+    if args.diagnose_matching:
+        for key, selected in [('matching_diagnosis', files), ('baseline_five_matching', baseline)]:
+            report[key] = {phase: merge_matching_counts(file['matching_diagnosis'][phase] for file in selected)
+                           for phase in ('ALL', *PHASES)}
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=1, allow_nan=False), encoding='utf-8')
-    txt_path.write_text(text_report(report), encoding='utf-8')
+    txt_path.write_text(matching_text_report(report) if args.diagnose_matching else text_report(report), encoding='utf-8')
     print(f'평가 보고서 저장: {json_path.name}, {txt_path.name}', flush=True)
     return 0
 
