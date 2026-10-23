@@ -96,6 +96,58 @@ def _accompaniment(raw, indices, durations):
     return votes.most_common(1)[0][0] if votes else None
 
 
+def lagged_values(raw, values, lag_s):
+    result = np.full(len(values), np.nan)
+    if lag_s == 0:
+        return np.asarray(values, dtype=float).copy()
+    finite = np.isfinite(values) & np.isfinite(raw.time_s)
+    connected = _edges(raw) & finite[:-1] & finite[1:]
+    changes = np.diff(np.r_[False, connected, False].astype(int))
+    for start, end in zip(np.flatnonzero(changes == 1), np.flatnonzero(changes == -1)):
+        axis = raw.time_s[start:end + 1]
+        query = axis - lag_s
+        keep = (query >= axis[0]) & (query <= axis[-1])
+        indices = np.arange(start, end + 1)[keep]
+        result[indices] = np.interp(query[keep], axis, values[start:end + 1])
+    return result
+
+
+def steer_rate(raw):
+    rate = np.full(len(raw.time_s), np.nan)
+    steer = raw.channels['SteeringWheelAngle']
+    good = _edges(raw) & np.isfinite(steer[:-1]) & np.isfinite(steer[1:])
+    np.divide(np.diff(steer), np.diff(raw.time_s), out=rate[1:], where=good)
+    rate[1:][~good] = np.nan
+    return rate
+
+
+def estimate_lag(raws, selections):
+    if not raws:
+        return 0.
+    tick = float(np.median([raw.tick_s for raw in raws]))
+    best, best_corr = 0., -np.inf
+    for lag_s in np.arange(int(np.floor(.30 / tick + 1e-9)) + 1) * tick:
+        count = sx = sy = sxx = syy = sxy = 0.
+        for raw, selection in zip(raws, selections):
+            c = raw.channels
+            x = lagged_values(raw, c['SteeringWheelAngle'] * c['Speed'], lag_s)
+            y = c['YawRate']
+            good = selection & np.isfinite(x) & np.isfinite(y)
+            x, y = x[good], y[good]
+            count += len(x)
+            sx += float(x.sum()); sy += float(y.sum())
+            sxx += float(x @ x); syy += float(y @ y); sxy += float(x @ y)
+        if count < 3:
+            continue
+        vx, vy = sxx - sx * sx / count, syy - sy * sy / count
+        if vx <= 1e-12 or vy <= 1e-12:
+            continue
+        corr = (sxy - sx * sy / count) / np.sqrt(vx * vy)
+        if corr > best_corr + 1e-12:
+            best, best_corr = float(lag_s), float(corr)
+    return best if best_corr >= .5 else 0.
+
+
 def prepare_phase(raw, start_pct, end_pct, model):
     """Keep original time order and a boundary-straddling pair on each side."""
     if not _supported(raw) or end_pct <= start_pct:
@@ -112,8 +164,11 @@ def prepare_phase(raw, start_pct, end_pct, model):
     for key in REQUIRED:
         finite &= np.isfinite(c[key])
     eligible = finite & (speed > MIN_SPEED) & (np.abs(steer) > MIN_STEER)
+    aligned = model.get('_aligned_steer', {}).get(id(raw))
+    q_steer = steer if aligned is None else aligned[start:end]
     q = np.full(len(speed), np.nan)
-    np.divide(np.abs(yaw), np.abs(steer) * speed, out=q, where=eligible)
+    np.divide(np.abs(yaw), np.abs(q_steer) * speed, out=q,
+              where=eligible & np.isfinite(q_steer) & (abs(q_steer) > MIN_STEER))
     inside = (local.pct >= start_pct) & (local.pct <= end_pct)
     edges = _edges(local) & finite[:-1] & finite[1:]
     dp = np.diff(local.pct)
@@ -123,13 +178,13 @@ def prepare_phase(raw, start_pct, end_pct, model):
     durations = np.zeros(len(speed))
     durations[:-1] = np.where(edges & (dp > 0), np.maximum(0., np.minimum(1., right) - np.maximum(0., left)) * np.diff(local.time_s), 0.)
     bands = np.searchsorted(model['edges_mps'], speed, side='right')
-    reference_ok = eligible & (steer * yaw > 0) & (q > 0)
+    reference_ok = eligible & (q_steer * yaw > 0) & (q > 0)
     interval_ok = edges & reference_ok[:-1] & reference_ok[1:] & (dp > 0) & (durations[:-1] > 0)
     support = np.bincount(bands[reference_ok & inside & (np.r_[interval_ok, False] | np.r_[False, interval_ok])], minlength=5)
     changes = np.diff(np.r_[False, interval_ok, False].astype(int))
     segments = [slice(a, b + 1) for a, b in zip(np.flatnonzero(changes == 1), np.flatnonzero(changes == -1))]
     return {'raw': raw, 'local': local, 'offset': start, 'start': start_pct, 'end': end_pct,
-            'q': q, 'bands': bands, 'support': support, 'eligible': eligible,
+            'q': q, 'q_steer': q_steer, 'bands': bands, 'support': support, 'eligible': eligible,
             'inside': inside, 'durations': durations, 'segments': segments,
             'complete': bool(raw.pct[0] <= start_pct < end_pct <= raw.pct[-1]
                              and _window_ok(local, start_pct, end_pct, REQUIRED))}
@@ -204,20 +259,21 @@ def classify_phase(phase, references, model):
             spread[point_spread] = 1.4826 * np.nanmedian(
                 abs(logs[:, point_spread] - log_baseline[point_spread]), axis=0)
             # Borrow only point spreads supported by five other laps in this phase.
-            sources = point_spread & phase['inside'] & eligible & (steer * yaw > 0)
+            sources = point_spread & phase['inside'] & eligible & (phase['q_steer'] * yaw > 0)
             if np.any(sources):
                 spread[good & ~point_spread] = np.median(spread[sources])
     ratio = np.full(len(speed), np.nan)
     np.divide(phase['q'], baseline, out=ratio,
-              where=eligible & (steer * yaw > 0) & np.isfinite(baseline) & (baseline > 0) & np.isfinite(spread))
+              where=eligible & (phase['q_steer'] * yaw > 0) & np.isfinite(baseline) & (baseline > 0) & np.isfinite(spread))
     delta = np.full(len(speed), np.nan)
     np.log(ratio, out=delta, where=np.isfinite(ratio) & (ratio > 0))
     z = np.full(len(speed), np.nan)
     np.divide(delta, spread, out=z, where=np.isfinite(delta) & (spread > 0))
     z[np.isfinite(delta) & (spread == 0) & (delta == 0)] = 0.
     # With identical reference values the minimum ratio alone decides; z is undefined.
-    under = _sustained((delta < np.log(UNDER_B)) & ((spread == 0) | (z < -Z_LIMIT)), durations, UNDER_SECONDS)
-    over = _sustained((delta > np.log(OVER_B)) & ((spread == 0) | (z > Z_LIMIT)), durations, OVER_SECONDS)
+    steady = phase.get('steady_steer', np.ones(len(speed), dtype=bool))
+    under = _sustained(steady & (delta < np.log(UNDER_B)) & ((spread == 0) | (z < -Z_LIMIT)), durations, UNDER_SECONDS)
+    over = _sustained(steady & (delta > np.log(OVER_B)) & ((spread == 0) | (z > Z_LIMIT)), durations, OVER_SECONDS)
     # Countersteering is a separate measured event, independent of personal q.
     counter = _sustained(eligible & (steer * yaw < 0) & (np.abs(yaw) > COUNTER_YAW), durations, COUNTER_SECONDS)
     events = []
@@ -250,8 +306,12 @@ def classify_phase(phase, references, model):
             reasons.append('inputs_not_comparable')
         if np.any(required & (matched < MIN_REFERENCE_LAPS) & (lateral_rejected > 0)):
             reasons.append('lateral_not_comparable')
-        if np.any(required & (steer * yaw <= 0)):
+        if np.any(required & (phase['q_steer'] * yaw <= 0)):
             reasons.append('rotation_direction_not_comparable')
+        if np.any(required & ~np.isfinite(phase['q_steer'])):
+            reasons.append('steer_lag_unavailable')
+        if np.any(required & np.isfinite(phase['q_steer']) & (abs(phase['q_steer']) <= MIN_STEER)):
+            reasons.append('steer_lag_below_minimum')
         if np.any(required & np.isfinite(baseline) & ~np.isfinite(spread)):
             reasons.append('noise_unknown')
     return {'observed': observed, 'counter_observed': bool(np.any(required) and phase['complete']),
@@ -318,6 +378,40 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
                 applicable_keys.add((corner['id'], phase))
                 data = prepare_phase(raw, bounds['start_pct'], bounds['end_pct'], model)
                 prepared[(corner['id'], phase)].append({'lap': lap.lap_number, 'time_s': elapsed, 'data': data})
+    selections = {id(raw): np.zeros(len(raw.time_s), dtype=bool) for _, _, raw in laps}
+    for rows in prepared.values():
+        for row in rows:
+            data = row['data']
+            if data is not None:
+                used = data['inside'] & data['eligible'] & (data['durations'] > 0)
+                selections[id(data['raw'])][data['offset']:data['offset'] + len(used)] |= used
+    # Incomplete raw channel arrays stay unknown, as in prepare_phase().
+    raws = [raw for _, _, raw in laps if _supported(raw)]
+    lag_s = estimate_lag(raws, [selections[id(raw)] for raw in raws])
+    model['_aligned_steer'] = {id(raw): lagged_values(raw, raw.channels['SteeringWheelAngle'], lag_s) for raw in raws}
+    rates = {id(raw): lagged_values(raw, steer_rate(raw), lag_s) for raw in raws}
+    phase_rates = {}
+    for phase_name in PHASES:
+        values = []
+        for key, rows in prepared.items():
+            if key[1] != phase_name:
+                continue
+            for row in rows:
+                data = row['data']
+                if data is not None:
+                    rate = rates[id(data['raw'])][data['offset']:data['offset'] + len(data['q'])]
+                    keep = data['inside'] & data['eligible'] & (data['durations'] > 0) & np.isfinite(rate)
+                    values.extend(abs(rate[keep]))
+        phase_rates[phase_name] = float(np.percentile(values, 90)) if values else None
+    for key, rows in prepared.items():
+        for row in rows:
+            previous = row['data']
+            if previous is not None:
+                data = prepare_phase(previous['raw'], previous['start'], previous['end'], model)
+                rate = rates[id(data['raw'])][data['offset']:data['offset'] + len(data['q'])]
+                limit = phase_rates[key[1]]
+                data['steady_steer'] = (np.isfinite(rate) & (abs(rate) <= limit)) if limit is not None else np.zeros(len(rate), dtype=bool)
+                row['data'] = data
     for key, rows in prepared.items():
         references = [row['data'] for row in rows]
         for row in rows:
@@ -369,6 +463,7 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
                                 'unknown_reasons': dict(phase_reasons[key])}
                                for key, counts in phase_counts.items()],
             'unknown_reasons': dict(unknown_reasons),
+            'steer_lag_s': lag_s, 'fast_steer_rate_rad_s': phase_rates,
             'noise_rules': {'z_limit': Z_LIMIT, 'min_ratio': [UNDER_B, OVER_B], 'spread': 'mad',
                             'min_laps_for_point_spread': MIN_LAPS_FOR_POINT_SPREAD},
             'coverage': dict(coverage), 'reference_rules': {'other_laps': MIN_REFERENCE_LAPS,

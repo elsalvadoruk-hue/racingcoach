@@ -16,7 +16,7 @@ atexit.register(_runtime.cleanup)
 os.environ.setdefault('IRACING_TUNER_DB_PATH', str(Path(_runtime.name) / 'memory.sqlite3'))
 
 from corner_events import RawLap
-from handling import HandlingHistory, METHOD, analyze_handling, classify_phase, learn_bands, prepare_phase
+from handling import HandlingHistory, METHOD, analyze_handling, classify_phase, learn_bands, prepare_phase, estimate_lag, lagged_values, steer_rate
 from telemetry_types import LapSegment
 
 
@@ -458,6 +458,128 @@ class HandlingTests(unittest.TestCase):
         self.assertEqual(rules['max_lat_accel_relative'], .1)
         self.assertNotIn('max_steer_ratio', rules)
         self.assertNotIn('max_speed_difference_mps', rules)
+
+
+
+
+
+
+def response():
+    time = np.arange(1201) / 100
+    steer = .15 + .08 * np.sin(2 * np.pi * .7 * time) + .02 * np.sin(2 * np.pi * 1.3 * time)
+    yaw = np.interp(time - .1, time, steer) * 25 * .05
+    return RawLap(time, time / 12, {'Speed': np.full(len(time), 25.),
+        'SteeringWheelAngle': steer, 'YawRate': yaw, 'LatAccel': np.full(len(time), 5.),
+        'Brake': np.zeros(len(time)), 'Throttle': np.full(len(time), .3)}, .01, 3000.)
+
+
+class LagTests(unittest.TestCase):
+    def test_estimate_recovers_tenth_second_measured_delay(self):
+        raw = response()
+        lag = estimate_lag([raw], [raw.time_s > .4])
+        self.assertGreaterEqual(lag, .08)
+        self.assertLessEqual(lag, .12)
+
+    def test_uncorrelated_yaw_falls_back_to_zero(self):
+        raw = response()
+        raw.channels['YawRate'][:] = np.random.default_rng(42).normal(size=len(raw.pct))
+        self.assertEqual(estimate_lag([raw], [np.ones(len(raw.pct), dtype=bool)]), 0.)
+
+    def test_time_distance_gap_and_duplicate_cannot_supply_past_steering(self):
+        raw = response()
+        for times, pct in ((np.r_[raw.time_s[:500], raw.time_s[500:] + 1], raw.pct),
+                           (raw.time_s, np.r_[raw.pct[:500], raw.pct[500:] - .1]),
+                           (np.r_[raw.time_s[:500], raw.time_s[499], raw.time_s[501:]], raw.pct)):
+            subject = replace(raw, time_s=times, pct=pct)
+            values = lagged_values(subject, subject.channels['SteeringWheelAngle'], .1)
+            self.assertTrue(np.all(np.isnan(values[500:509])))
+            self.assertTrue(np.isfinite(values[520]))
+
+    def test_steer_derivative_does_not_cross_duplicate_time(self):
+        raw = response()
+        times = raw.time_s.copy(); times[500] = times[499]
+        self.assertTrue(np.isnan(steer_rate(replace(raw, time_s=times))[500]))
+
+    def test_alignment_removes_false_over_during_unwinding(self):
+        raw = response()
+        time = raw.time_s
+        # A sustained rapid unwind produces a delayed-yaw ratio above the fixed floor.
+        steer = .3 * np.exp(-1.8 * np.clip(time - 3., 0., .7))
+        raw.channels['SteeringWheelAngle'][:] = steer
+        raw.channels['YawRate'][:] = np.interp(time - .1, time, steer) * 25 * .05
+        refs = [response() for _ in range(5)]
+        for ref in refs:
+            ref.channels['SteeringWheelAngle'][:] = .15
+            ref.channels['YawRate'][:] = .15 * 25 * .05
+        model = learn_bands([raw, *refs])
+        before = prepare_phase(raw, .2, .4, model)
+        references = [prepare_phase(ref, .2, .4, model) for ref in refs]
+        self.assertIn('oversteer', [e['kind'] for e in classify_phase(before, references, model)['events']])
+        model['_aligned_steer'] = {id(raw): lagged_values(raw, steer, .1)}
+        after = prepare_phase(raw, .2, .4, model)
+        self.assertNotIn('oversteer', [e['kind'] for e in classify_phase(after, references, model)['events']])
+
+
+
+
+
+class DynamicsTests(unittest.TestCase):
+    def test_raw_lap_missing_required_channel_stays_unknown(self):
+        subject = analyzer([None] * 6)
+        original = subject._raw_lap_for
+        def incomplete(grid):
+            raw = original(grid)
+            return replace(raw, channels={key: value for key, value in raw.channels.items() if key != 'YawRate'})
+        with patch.object(subject, '_raw_lap_for', side_effect=incomplete):
+            measured = analyze_handling(subject, [CORNER])
+        self.assertEqual(measured['corners'], [])
+        self.assertEqual(measured['coverage']['classifiable'], 0)
+        self.assertGreater(measured['coverage']['unknown'], 0)
+
+    def test_small_aligned_steering_explains_unknown_without_shrinking_counter_coverage(self):
+        raw = lap_wave()
+        refs = [lap_wave() for _ in range(5)]
+        model = learn_bands([raw, *refs])
+        model['_aligned_steer'] = {id(raw): np.full(len(raw.pct), .02)}
+        target = prepare_phase(raw, .2, .25, model)
+        references = [prepare_phase(ref, .2, .25, model) for ref in refs]
+        measured = classify_phase(target, references, model)
+        self.assertFalse(measured['observed'])
+        self.assertTrue(measured['counter_observed'])
+        self.assertEqual(measured['known_fraction'], 0.)
+        self.assertIn('steer_lag_below_minimum', measured['unknown_reasons'])
+        self.assertEqual(measured['events'], [])
+
+    def test_excluded_fast_steering_breaks_detection_runs(self):
+        raw = reaction_scale(.7)
+        refs = [lap_wave() for _ in range(5)]
+        model = learn_bands([raw, *refs])
+        target = prepare_phase(raw, .2, .205, model)
+        references = [prepare_phase(ref, .2, .205, model) for ref in refs]
+        # Use a longer window so local-band sample support is observed.
+        target = prepare_phase(raw, .2, .25, model)
+        references = [prepare_phase(ref, .2, .25, model) for ref in refs]
+        self.assertIn('understeer', [event['kind'] for event in classify_phase(target, references, model)['events']])
+        target['steady_steer'] = np.arange(len(target['q'])) % 10 != 0
+        measured = classify_phase(target, references, model)
+        self.assertTrue(measured['observed'])
+        self.assertEqual(measured['events'], [])
+
+    def test_fast_steering_exclusion_never_hides_measured_countersteer(self):
+        raw = lap_wave('counter')
+        model = learn_bands([raw])
+        target = prepare_phase(raw, .25, .5, model)
+        target['steady_steer'] = np.zeros(len(target['q']), dtype=bool)
+        measured = classify_phase(target, [], model)
+        self.assertEqual([event['kind'] for event in measured['events']], ['countersteer'])
+
+    def test_file_reports_lag_and_per_phase_ninetieth_percentile(self):
+        result = analyze_handling(analyzer([None] * 6), [CORNER])
+        self.assertGreaterEqual(result['steer_lag_s'], 0.)
+        self.assertLessEqual(result['steer_lag_s'], .3)
+        self.assertEqual(set(result['fast_steer_rate_rad_s']), {'braking', 'rotation', 'drive'})
+        self.assertTrue(all(value == 0. for value in result['fast_steer_rate_rad_s'].values()))
+
 
 
 if __name__ == '__main__':
