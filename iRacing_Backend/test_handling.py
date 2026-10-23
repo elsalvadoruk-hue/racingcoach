@@ -577,6 +577,85 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(result['coverage_rule'], {'min_compared_time_fraction': COVERAGE_MIN})
 
 
+class TimeLinkTests(unittest.TestCase):
+    def time_rows(self, delay=0., proportional=False):
+        corners = [{'id': f'C{i}'} for i in range(4)]
+        rows = []
+        for c, corner in enumerate(corners):
+            for lap in range(12):
+                hit = lap >= 6
+                base = 20. + c * 10
+                elapsed = base * (1 + lap * .01) if proportional else base + lap % 6
+                if c == 0 and hit:
+                    elapsed += delay
+                rows.append(dict(corner_id=corner['id'], phase='rotation', lap=lap,
+                                 time_s=elapsed, v_start=25., observed=True, counter_observed=True,
+                                 events=[dict(kind='understeer')] if c == 0 and hit else []))
+        return rows, corners
+
+    def link(self, rows, corners):
+        from handling import adjusted_corner_times, corner_time_link
+        return corner_time_link([r for r in rows if r['corner_id'] == 'C0'],
+                                adjusted_corner_times(rows, corners), 'understeer', ('synthetic', 1, 1))
+
+    def test_local_delay_and_gain_have_opposite_links(self):
+        for delay, expected in ((10., 'slower'), (-10., 'faster'), (0., 'unclear')):
+            with self.subTest(delay=delay):
+                self.assertEqual(self.link(*self.time_rows(delay)), expected)
+
+    def test_proportional_whole_lap_drift_is_not_a_corner_link(self):
+        self.assertEqual(self.link(*self.time_rows(proportional=True)), 'unclear')
+
+    def test_small_groups_and_missing_times_or_speeds_stay_unknown(self):
+        for mode in ('two_hits', 'two_controls', 'missing_times', 'missing_speeds'):
+            rows, corners = self.time_rows(10.)
+            for row in rows:
+                if row['corner_id'] != 'C0':
+                    continue
+                if mode == 'two_hits' and row['lap'] >= 8:
+                    row['events'] = []
+                if mode == 'two_controls' and row['lap'] >= 2:
+                    row['events'] = [dict(kind='understeer')]
+                if mode == 'missing_times' and row['lap'] >= 8:
+                    row['time_s'] = None
+                if mode == 'missing_speeds' and row['lap'] >= 8:
+                    row['v_start'] = None
+            with self.subTest(mode=mode):
+                self.assertIsNone(self.link(rows, corners))
+
+    def test_unknown_non_hit_laps_cannot_supply_controls(self):
+        rows, corners = self.time_rows(10.)
+        for row in rows:
+            if row['lap'] < 4:
+                row['observed'] = False
+        self.assertIsNone(self.link(rows, corners))
+
+    def test_speed_explained_delay_does_not_create_a_link(self):
+        rows, corners = self.time_rows(10.)
+        from handling import adjusted_corner_times, corner_time_link
+        adjusted = adjusted_corner_times(rows, corners)
+        selected = [r for r in rows if r['corner_id'] == 'C0']
+        for row in selected:
+            row['v_start'] = 25. + adjusted[('C0', row['lap'])]
+        self.assertEqual(corner_time_link(selected, adjusted, 'understeer', 'synthetic'), 'unclear')
+
+    def test_signature_seed_is_repeatable_and_inputs_are_unchanged(self):
+        rows, corners = self.time_rows(10.)
+        before = json.dumps(rows, sort_keys=True)
+        self.assertEqual(self.link(rows, corners), self.link(rows, corners))
+        self.assertEqual(json.dumps(rows, sort_keys=True), before)
+
+    def test_api_keeps_raw_cost_and_detection_method(self):
+        subject = analyzer(['understeer'] * 3 + [None] * 3)
+        result = analyze_handling(subject, [CORNER])
+        item = next(i for i in result['corners'] if i['kind'] == 'understeer' and i['phase'] == 'rotation')
+        self.assertAlmostEqual(item['time_cost_s'], .8, places=3)
+        self.assertIsNone(item['time_link'])  # No other corners to remove shared lap drift.
+        self.assertEqual(result['method'], 'personal_corner_phase_v3')
+        self.assertEqual(result['time_link_rules'], dict(permutations=200, percentiles=[10, 90], min_group_laps=3))
+        json.dumps(result, allow_nan=False)
+
+
 class DynamicsTests(unittest.TestCase):
     def test_raw_lap_missing_required_channel_stays_unknown(self):
         subject = analyzer([None] * 6)

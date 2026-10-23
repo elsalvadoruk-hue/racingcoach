@@ -290,6 +290,22 @@ class HandlingEvaluationTests(unittest.TestCase):
                     evaluation.main([str(source)])
                 fingerprint.assert_not_called()
 
+    def test_time_link_replication_is_directional_seeded_and_reports_missing_support(self):
+        cells = [[f'C{i}', 'rotation', 'understeer', 10, 4, 4] for i in range(8)]
+        links = [[f'C{i}', 'rotation', 'understeer', 'slower' if i < 2 else 'unclear'] for i in range(8)]
+        half = dict(cells=cells, time_links=links)
+        files = [dict(split_half=dict(splits=dict(first_second=[half, half])))]
+        result = evaluation.time_link_replication(files, 'first_second', seed=42)
+        self.assertEqual(result, evaluation.time_link_replication(files, 'first_second', seed=42))
+        self.assertEqual((result['first_slower'], result['second_slower'], result['shared']), (2, 2, 2))
+        self.assertEqual(result['rate'], 1.)
+        self.assertLess(result['shuffled_corners']['mean'], 1.)
+        files[0]['split_half']['splits']['first_second'][1] = dict(cells=cells, time_links=[])
+        missing = evaluation.time_link_replication(files, 'first_second')
+        self.assertEqual(missing['rate'], 0.)
+        self.assertEqual(missing['second_testable'], 0)
+        self.assertIsNone(evaluation.time_link_replication([], 'first_second')['rate'])
+
 
 if __name__ == '__main__':
     unittest.main()

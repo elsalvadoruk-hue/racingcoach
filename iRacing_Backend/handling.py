@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import threading
 import time
+import warnings
 
 import numpy as np
 
@@ -41,6 +42,57 @@ METHOD = 'personal_corner_phase_v3'
 EVIDENCE = {'understeer': 'compared', 'oversteer': 'reference', 'countersteer': 'measured'}
 REQUIRED = ('Speed', 'SteeringWheelAngle', 'YawRate', 'LatAccel', 'Brake', 'Throttle')
 PHASES = ('braking', 'rotation', 'drive')
+TIME_LINK_PERMUTATIONS = 200
+TIME_LINK_PERCENTILES = (10, 90)
+
+
+def adjusted_corner_times(rows, corners):
+    """Remove shared lap drift; missing/constant corner evidence stays unknown."""
+    laps = sorted({row['lap'] for row in rows})
+    ci = {corner['id']: i for i, corner in enumerate(corners)}
+    li = {lap: i for i, lap in enumerate(laps)}
+    times = np.full((len(ci), len(li)), np.nan)
+    for row in rows:
+        if row['time_s'] is not None:
+            times[ci[row['corner_id']], li[row['lap']]] = row['time_s']
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        center = np.nanmedian(times, axis=1, keepdims=True)
+        spread = 1.4826 * np.nanmedian(abs(times - center), axis=1, keepdims=True)
+        spread[spread <= 1e-4] = np.nan
+        standard = (times - center) / spread
+        adjusted = np.array([standard[c] - np.nanmedian(np.delete(standard, c, axis=0), axis=0)
+                             for c in range(len(ci))])
+    return {(corner, lap): adjusted[c, l] for corner, c in ci.items() for lap, l in li.items()}
+
+
+def corner_time_link(rows, adjusted, kind, signature):
+    """A seeded within-corner label permutation; association is not a cause."""
+    observed_key = 'counter_observed' if kind == 'countersteer' else 'observed'
+    good = [row for row in rows
+            if (row[observed_key] or any(event['kind'] == kind for event in row['events']))
+            and row.get('v_start') is not None and np.isfinite(row['v_start'])
+            and np.isfinite(adjusted.get((row['corner_id'], row['lap']), np.nan))]
+    flag = np.array([any(event['kind'] == kind for event in row['events']) for row in good], dtype=bool)
+    if flag.sum() < 3 or (~flag).sum() < 3:
+        return None
+    y = np.array([adjusted[(row['corner_id'], row['lap'])] for row in good])
+    speed = np.array([row['v_start'] for row in good])
+    if len({row['lap'] for row in good}) >= 6 and speed.std() > 0:
+        z = (speed - speed.mean()) / speed.std()
+        y -= np.polyfit(z, y, 1)[0] * z
+    # Floating-point cancellation of identical shared drift must not create a link.
+    if np.ptp(y) <= 1e-12:
+        return 'unclear'
+    difference = float(np.median(y[flag]) - np.median(y[~flag]))
+    seed_bytes = hashlib.sha256(json.dumps(signature, default=str, sort_keys=True).encode()).digest()
+    rng = np.random.default_rng(int.from_bytes(seed_bytes[:8], 'big'))
+    shuffled = []
+    for _ in range(TIME_LINK_PERMUTATIONS):
+        labels = rng.permutation(flag)
+        shuffled.append(np.median(y[labels]) - np.median(y[~labels]))
+    low, high = np.percentile(shuffled, TIME_LINK_PERCENTILES)
+    return 'slower' if difference > high else 'faster' if difference < low else 'unclear'
 
 
 def _supported(raw):
@@ -438,7 +490,13 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
             coverage['classifiable_partial'] += bool(measured['observed'] and measured['known_fraction'] < 1)
             unknown_reasons.update(measured['unknown_reasons'])
             phase_reasons[key].update(measured['unknown_reasons'])
-            observations[key].append({'lap': row['lap'], 'time_s': row['time_s'], **measured})
+            data = row['data']
+            v_start = (float(np.interp(data['start'], data['local'].pct, data['local'].channels['Speed']))
+                       if data is not None else None)
+            observations[key].append({'lap': row['lap'], 'time_s': row['time_s'], 'v_start': v_start, **measured})
+    time_rows = [{'corner_id': key[0], **row} for key, rows in observations.items() for row in rows]
+    adjusted = adjusted_corner_times(time_rows, corners)
+    signature = getattr(analyzer.telemetry, 'signature', None)
     summaries = []
     for corner in corners:
         for phase in PHASES:
@@ -460,6 +518,8 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
                                   'z_median': float(np.median(selected_z)) if selected_z else None,
                                   'time_cost_s': round(float(np.median(slower) - np.median(other)), 4)
                                       if len(slower) >= 3 and len(other) >= 3 else None,
+                                  'time_link': corner_time_link(
+                                      [{**row, 'corner_id': corner['id']} for row in rows], adjusted, kind, signature),
                                   'approximate': approximate, 'method': METHOD, 'evidence': EVIDENCE[kind],
                                   'basis': 'measured_countersteer' if kind == 'countersteer' else 'personal_corner_phase'})
     applicable = coverage['total_slots'] - coverage['not_applicable']
@@ -468,7 +528,7 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
                     applicable_corner_phases=len(applicable_keys),
                     result_items=len(summaries), time_cost_items=sum(item['time_cost_s'] is not None for item in summaries))
     coverage['unknown_fraction'] = coverage['unknown'] / applicable if applicable else None
-    summaries.sort(key=lambda item: (item['evidence'] == 'reference', item['time_cost_s'] is None,
+    summaries.sort(key=lambda item: (item['evidence'] == 'reference', item['time_link'] != 'slower', item['time_cost_s'] is None,
                                      -(item['time_cost_s'] or 0), -item['laps']))
     result = {'source': 'approximate' if approximate else 'measured', 'approximate': approximate,
             'corners': summaries, 'k_bands': model['bands'],
@@ -480,6 +540,8 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
             'unknown_reasons': dict(unknown_reasons),
             'steer_lag_s': lag_s, 'fast_steer_rate_rad_s': phase_rates, 'evidence': dict(EVIDENCE),
             'coverage_rule': {'min_compared_time_fraction': COVERAGE_MIN},
+            'time_link_rules': {'permutations': TIME_LINK_PERMUTATIONS,
+                                'percentiles': list(TIME_LINK_PERCENTILES), 'min_group_laps': 3},
             'noise_rules': {'z_limit': Z_LIMIT, 'min_ratio': [UNDER_B, OVER_B], 'spread': 'mad',
                             'min_laps_for_point_spread': MIN_LAPS_FOR_POINT_SPREAD},
             'coverage': dict(coverage), 'reference_rules': {'other_laps': MIN_REFERENCE_LAPS,
@@ -548,4 +610,5 @@ class HandlingHistory:
                                      'time_cost_s': float(np.median(costs)) if costs else None})
         repeated.sort(key=lambda item: item['time_cost_s'] if item['time_cost_s'] is not None else -float('inf'), reverse=True)
         # Reference-level tendencies never push a better supported repeat out of the top three.
-        return sorted(repeated, key=lambda item: EVIDENCE.get(item['kind']) == 'reference')[:3]
+        return sorted(repeated, key=lambda item: (EVIDENCE.get(item['kind']) == 'reference',
+                                                  item.get('time_link') != 'slower'))[:3]

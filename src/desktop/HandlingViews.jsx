@@ -31,14 +31,16 @@ export function HandlingBadges({ items = [] }) {
 
 function orderHandling(items) {
   return [...items].sort((a, b) => Number(evidenceOf(a) === 'reference') - Number(evidenceOf(b) === 'reference') ||
+    Number(b.time_link === 'slower') - Number(a.time_link === 'slower') ||
     Number(Number.isFinite(b.time_cost_s)) - Number(Number.isFinite(a.time_cost_s)) ||
     (Number.isFinite(a.time_cost_s) && Number.isFinite(b.time_cost_s) ? b.time_cost_s - a.time_cost_s : 0) || b.laps - a.laps);
 }
 
 function HandlingObservation({ item }) {
   return <article className="handling-observation" data-handling-item aria-label={`${phaseNames[item.phase]} · ${shortNames[item.kind]}`}>
-    <div className="handling-observation-heading"><Badge variant={item.kind === 'countersteer' ? 'outline' : item.kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[item.kind]}{evidenceOf(item) === 'reference' ? ' · 참고' : ''}</Badge><strong>{phaseNames[item.phase]} 구간</strong></div>
+    <div className="handling-observation-heading"><Badge variant={item.kind === 'countersteer' ? 'outline' : item.kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[item.kind]}{evidenceOf(item) === 'reference' ? ' · 참고' : ''}</Badge><strong>{phaseNames[item.phase]} 구간</strong>{item.time_link === 'slower' && <Badge variant="outline">코너 시간과 연결</Badge>}</div>
     <dl className="handling-facts"><div><dt>관측된 랩</dt><dd>{item.of_laps}랩 중 {item.laps}랩</dd></div><div><dt>코너 시간 차이</dt><dd>{costText(item.time_cost_s)}</dd></div></dl>
+    <small data-time-link={item.time_link || 'unknown'}>{item.time_link === 'slower' ? '이 코너에서 이 거동이 나온 랩이 평소보다 느렸습니다' : '시간과의 관계는 확인되지 않았습니다'}</small>
     {withNames[item.with] && <small>함께 관측된 조작: {withNames[item.with]}</small>}
     {item.observed_laps != null && item.observed_laps < item.of_laps && <small>{item.kind === 'countersteer' ? `반대 조향을 끝까지 확인한 랩 ${item.observed_laps}랩` : `평소와 끝까지 비교한 랩 ${item.observed_laps}랩`} · 일부 구간만 비교한 랩의 결과도 포함합니다.</small>}
     {item.kind === 'countersteer' && <small>개인 기준과 별개로 관측했습니다.</small>}
@@ -70,6 +72,7 @@ export function HandlingDetail({ items = [], coverage = [] }) {
       <p>같은 코너·같은 단계에서 비교합니다. 서로 다른 랩이나 단계에서 두 표시가 함께 나올 수 있습니다.</p>
       <p>비교 횟수는 랩별 제동·회전·가속 단계를 각각 셉니다. 단계 시간의 90% 이상을 다른 랩과 비교했으면 비교한 단계로 셉니다. 그보다 적으면 확인 필요로 남깁니다.</p>
       <p>더 돌아감은 참고로 표시합니다. 기록 5개로 평가했을 때 덜 돌아감보다 근거가 약했습니다.</p>
+      <p>시간 연결은 랩 전체의 느려짐과 단계 시작 속도 영향을 보정해 확인합니다. 위의 초 단위 시간 차이는 보정 전 관측값입니다. 시간 연결도 원인을 확정하지 않습니다.</p>
       <p>문턱은 검증 전 초기값입니다. 절대적인 언더·오버 판정이나 원인·셋업 효과를 확정하지 않습니다.</p>
     </details>
     {orderHandling(items).map((item, i) => <HandlingObservation key={`${item.kind}-${item.phase}-${i}`} item={item} />)}

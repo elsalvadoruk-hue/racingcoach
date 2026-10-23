@@ -612,7 +612,9 @@ def split_half_cells(module, analyzer, corners):
                     cell['any_hits'] += bool(hit)
             halves.append(dict(laps=[lap.lap_number for lap in subset],
                                cells=[[*key, value['observed'], value['observed_hits'], value['any_hits']]
-                                      for key, value in sorted(cells.items())]))
+                                      for key, value in sorted(cells.items())],
+                               time_links=[[item['corner_id'], item['phase'], item['kind'], item.get('time_link')]
+                                           for item in (result or {}).get('corners', [])]))
         out['splits'][name] = halves
     return out
 
@@ -700,7 +702,37 @@ def split_half_summary(files, *, permutations=200, seed=20261023):
                   files={file['file']: (file.get('split_half') or {}).get('status') for file in files})
     for split in ('first_second', 'odd_even'):
         result[split] = _split_scores(files, split, rng, permutations)
+        result[split]['time_link'] = time_link_replication(files, split, permutations=permutations, seed=seed)
     return result
+
+
+def time_link_replication(files, split, *, permutations=200, seed=20261023):
+    """Directional replication: first-half slower items found slower again."""
+    rng = np.random.default_rng(seed + 19)
+    shared = first = second = testable = 0
+    draws = np.zeros(permutations, dtype=int)
+    for file in files:
+        halves = (file.get('split_half') or {}).get('splits', {}).get(split)
+        if not halves:
+            continue
+        left = {tuple(item[:3]): item[3] for item in halves[0].get('time_links', [])}
+        right = {tuple(item[:3]): item[3] for item in halves[1].get('time_links', [])}
+        corners = sorted({cell[0] for half in halves for cell in half['cells']})
+        for phase in PHASES:
+            for kind in KINDS:
+                a = np.array([left.get((c, phase, kind)) == 'slower' for c in corners])
+                b = np.array([right.get((c, phase, kind)) == 'slower' for c in corners])
+                first += int(a.sum())
+                second += int(b.sum())
+                shared += int(np.sum(a & b))
+                testable += sum(bool(hit) and right.get((c, phase, kind)) is not None
+                                for c, hit in zip(corners, a))
+                for i in range(permutations):
+                    draws[i] += int(np.sum(a & b[rng.permutation(len(b))]))
+    rate = shared / first if first else None
+    return dict(first_slower=first, second_slower=second, shared=shared, second_testable=testable,
+                rate=rate, shuffled_corners=distribution(draws / first if first else [], rate),
+                convention='앞 절반 slower 중 뒤 절반도 slower인 비율. 뒤 절반 자료 부족도 미반복으로 셈; 파일·단계·종류 안 코너 섞기 200회와 비교.')
 
 
 def distribution(values, actual=None):
@@ -785,6 +817,8 @@ def aggregate(files):
     counts['unknown_fraction'] = counts['unknown'] / counts['applicable'] if counts['applicable'] else None
     return dict(point_metrics=point_summary(points), slot_rates=slot_rates(rows),
                 coverage=dict(counts), unknown_reasons=dict(reasons),
+                time_link_counts=dict(Counter(item.get('time_link') or 'unknown'
+                                              for file in files for item in file.get('summaries', []))),
                 null=summarize_nulls([file['null'] for file in files]),
                 time_auc=dict(items=items, item_count=len(items),
                               mean=float(np.mean([item['auc'] for item in items])) if items else None))
@@ -815,6 +849,8 @@ def text_report(report):
                 pa, pn = n.get('paired_actual_rate', {}).get('mean'), n.get('paired_null_rate', {}).get('mean')
                 lines.append(f"{phase} / {kind} | {value['observed_hits']}/{value['observed_slots']} ({number(value['rate'], 100)}) | {value['partial_hits']} | {value['all_hits']} | {number(pa, 100)}/{number(pn, 100)} | {number(n.get('paired_actual_over_null'))}")
         lines.append('판정 불가 이유(중복 가능): ' + json.dumps(data['unknown_reasons'], ensure_ascii=False))
+        if 'time_link_counts' in data:
+            lines.append('시간 연결 항목 수: ' + json.dumps(data['time_link_counts'], ensure_ascii=False))
 
     for label, data in [('전체 입력', report['aggregate']), ('원래 5개 기준선', report['baseline_five'])]:
         metrics(label, data)
@@ -835,6 +871,11 @@ def text_report(report):
                 null = value['shuffled_corners']
                 lines.append(f"{label} / 표시율 상관 / {kind}: r={number(value['correlation'])} (칸 {value['cells']}) "
                              f"/ 섞기 평균 {number(null['mean'])} [{number(null['p025'])}, {number(null['p975'])}] / p_ge {number(null['p_ge_actual'])}")
+            link = data.get('time_link')
+            if link:
+                lines.append(f"{label} / 시간 연결 반복: {link['shared']}/{link['first_slower']} = {number(link['rate'], 100)}% "
+                             f"/ 뒤 절반 slower {link['second_slower']} / 뒤 절반 비교 가능 {link['second_testable']} "
+                             f"/ 코너 섞기 평균 {number(link['shuffled_corners']['mean'], 100)}%")
     return '\n'.join(lines) + '\n'
 
 
@@ -905,6 +946,8 @@ def main(argv=None):
             result = dict(file=source.name, fingerprint=before, source_unchanged=True,
                           valid_laps=len(analyzer.valid_laps), context=context, corners=corners,
                           observations=rows, coverage=native['coverage'], unknown_reasons=native['unknown_reasons'],
+                          summaries=native['corners'], time_link_counts=dict(Counter(
+                              item.get('time_link') or 'unknown' for item in native['corners'])),
                           point_values=points, point_metrics=point_summary(points), slot_rates=slot_rates(rows),
                           time_auc=adjusted_auc(rows, corners), null=null, split_half=split,
                           steer_lag_s=native.get('steer_lag_s'), fast_steer_rate_rad_s=native.get('fast_steer_rate_rad_s'))

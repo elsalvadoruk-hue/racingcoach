@@ -93,3 +93,21 @@ test('partial and full comparison counts are written in plain words', () => {
   expect(screen.getByText('랩별 제동·회전·가속 30번을 모두 평소와 비교했습니다.')).toBeInTheDocument();
   expect(screen.queryByText(/문제가 있다는 뜻도/)).not.toBeInTheDocument();
 });
+
+test('slower links take priority within evidence levels while oversteer keeps its reference', () => {
+  render(<HandlingDetail items={[{ ...item, time_cost_s: .9 }, { ...item, phase: 'drive', time_link: 'slower', time_cost_s: -.1 },
+    { ...item, kind: 'oversteer', time_link: 'slower' }]} />);
+  const rows = screen.getByRole('region', { name: '차 거동' }).querySelectorAll('[data-handling-item]');
+  expect(rows[0]).toHaveTextContent('가속 구간');
+  expect(rows[0]).toHaveTextContent('이 코너에서 이 거동이 나온 랩이 평소보다 느렸습니다');
+  expect(rows[1]).toHaveTextContent('시간과의 관계는 확인되지 않았습니다');
+  expect(rows[2]).toHaveTextContent('더 돌아감 · 참고');
+  expect(rows[2]).toHaveTextContent('이 코너에서 이 거동이 나온 랩이 평소보다 느렸습니다');
+  expect(rows[2].querySelector('[data-evidence-note]')).toBeInTheDocument();
+});
+
+test.each(['faster', 'unclear', null, undefined])('non-slower time links stay unconfirmed (%s)', link => {
+  render(<HandlingDetail items={[{ ...item, time_link: link }]} />);
+  expect(screen.getByText('시간과의 관계는 확인되지 않았습니다')).toBeInTheDocument();
+  expect(screen.queryByText('코너 시간과 연결')).not.toBeInTheDocument();
+});
