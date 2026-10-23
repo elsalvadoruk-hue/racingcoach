@@ -31,6 +31,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   const [referenceError, setReferenceError] = useState('');
   const [referenceSelection, setReferenceSelection] = useState(data.reference_selection || (data.personalReference ? 'AUTO' : 'MANUAL'));
   const [personalReference, setPersonalReference] = useState(data.personalReference || null);
+  const initialReferenceLookup = useRef(null);
   const [referenceNotice, setReferenceNotice] = useState('');
   const [personalBusy, setPersonalBusy] = useState(false);
   const [mode, setMode] = useState(external.length ? 'GARAGE61' : 'LOCAL');
@@ -70,6 +71,9 @@ export default function SourcePicker({ target, reference, external, onApply, ana
       const next = file === data.filename ? data : await labRequest('session', { filename: file, preview: true, progress_id: progressId, ...analysisOptions(workspaceRef.current, file),
         ...(trial ? { reference_mode: trial.reference_mode, external_reference_files: trial.reference_files || [] } : {}) });
       let references;
+      // This lookup also supplies the initial automatic reference. The lap
+      // effect must not queue the same expensive search behind it.
+      initialReferenceLookup.current = { session: next, file, lap: Number(next.defaultTarget) };
       try { references = await labRequest('references', { filename: file, target_lap: next.defaultTarget }); }
       catch (error) { references = { files: [], personalReference: next.personalReference, unavailable: error.message }; }
       if (!live) return;
@@ -109,6 +113,11 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   }, [file, referenceFile]);
   useEffect(() => {
     if (referenceSelection !== 'AUTO' || !own || !session || session.filename !== file) return undefined;
+    const initial = initialReferenceLookup.current;
+    if (initial?.session === session && initial.file === file && initial.lap === Number(own)) return undefined;
+    // Once the selection changes, returning to the initial lap needs a fresh
+    // lookup rather than retaining the other lap's automatic reference.
+    initialReferenceLookup.current = null;
     const controller = new AbortController();
     setPersonalBusy(true);
     labRequest('references', { filename: file, target_lap: Number(own) }, controller.signal).then(next => {
