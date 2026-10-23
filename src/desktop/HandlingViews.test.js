@@ -26,7 +26,7 @@ test('detail reports measured frequency, cost and accompanying input without a c
 test('LMU approximation, missing cost and observed-lap coverage stay explicit', () => {
   render(<HandlingDetail items={[{ ...item, approximate: true, time_cost_s: null, observed_laps: 7, with: 'lift' }]} />);
   expect(screen.getByText(/시간 차이 확인 필요/)).toBeInTheDocument();
-  expect(screen.getByText(/전 구간 비교 가능 7랩/)).toBeInTheDocument();
+  expect(screen.getByText(/비교 가능 7랩/)).toBeInTheDocument();
   expect(screen.getByText('참고용(LMU는 회전량을 GPS로 추정)')).toBeInTheDocument();
   expect(screen.getByText(/스로틀을 뗀 직후/)).toBeInTheDocument();
 });
@@ -63,5 +63,5 @@ test('countersteering is separate from the personal baseline and missing compari
   render(<><HandlingBadges items={[{ ...item, kind: 'countersteer' }]} /><HandlingDetail items={[{ ...item, kind: 'countersteer', time_cost_s: null }]} coverage={[{ classifiable: 0, unknown: 5 }]} /></>);
   expect(screen.getByLabelText('내 다른 랩 대비 차 거동').querySelector('[data-kind=countersteer]')).toHaveClass('text-foreground');
   expect(screen.getByRole('article', { name: '회전 · 반대 조향' })).toHaveTextContent('개인 기준과 별개로 관측했습니다.');
-  expect(screen.getByText('개인 기준 전 구간 비교 0/5회 · 5회 확인 필요')).toBeInTheDocument();
+  expect(screen.getByText('개인 기준 비교 0/5회 · 5회 확인 필요')).toBeInTheDocument();
 });

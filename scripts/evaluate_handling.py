@@ -70,10 +70,10 @@ def load_method(method, candidate=None):
         return module, dict(commit=BASELINE_COMMIT, blob=blob, method=module.METHOD)
     path = Path(candidate) if candidate else ROOT / 'iRacing_Backend/handling.py'
     source = path.read_bytes()
-    module = types.ModuleType('handling_evaluation_v2')
+    module = types.ModuleType(f'handling_evaluation_{method}')
     exec(compile(source, str(path), 'exec'), module.__dict__)
-    if module.METHOD != 'personal_corner_phase_v2':
-        raise ValueError('v2 구현이 아직 적용되지 않았습니다. 로컬 후보는 --candidate로 지정하세요.')
+    if module.METHOD != f'personal_corner_phase_{method}':
+        raise ValueError(f'{method} 구현이 아닙니다({module.METHOD}). 로컬 후보는 --candidate로 지정하세요.')
     return module, dict(sha256=hashlib.sha256(source).hexdigest(), method=module.METHOD)
 
 
@@ -150,9 +150,11 @@ def adjusted_auc(rows, corners):
 def parser():
     p = argparse.ArgumentParser(description='개인 저장소를 격리하여 차 거동 지표 6개를 평가합니다.')
     p.add_argument('files', nargs='*', type=Path)
-    p.add_argument('--method', choices=('v1', 'v2'), default='v1')
-    p.add_argument('--candidate', type=Path, help='평가만 할 로컬 v2 후보 모듈')
+    p.add_argument('--method', choices=('v1', 'v2', 'v3'), default='v1')
+    p.add_argument('--candidate', type=Path, help='평가만 할 로컬 후보 모듈')
     p.add_argument('--permutations', type=int, default=200)
+    p.add_argument('--skip-null', action='store_true',
+                   help='위치 귀무 비교를 건너뛰고 원본 판정·랩 절반 반복만 계산')
     p.add_argument('--seed', type=int, default=20261023)
     p.add_argument('--out', type=Path)
     p.add_argument('--grid-hz', type=float, default=20.)
@@ -411,10 +413,21 @@ def _classify(module, grid, references, model):
             under, over = ratio < module.UNDER_B, ratio > module.OVER_B
     finite = np.all(np.isfinite(target[:, 1:7]), axis=1)
     eligible = finite & (v > module.MIN_SPEED) & (abs(steer) > module.MIN_STEER)
-    required = eligible & (duration > 0)
-    known = good & eligible & np.isfinite(q) & (qsteer * yaw > 0)
-    observed = required.any(axis=1) & np.all(~required | known, axis=1) & complete
-    counter_observed = required.any(axis=1) & complete
+    coverage_min = getattr(module, 'COVERAGE_MIN', None)
+    q_ready = eligible
+    if coverage_min is not None:
+        # Same rule as the product: known small aligned steering is not comparable.
+        q_ready = eligible & ~(np.isfinite(qsteer) & (abs(qsteer) <= module.MIN_STEER))
+    required = q_ready & (duration > 0)
+    known = good & q_ready & np.isfinite(q) & (qsteer * yaw > 0)
+    if coverage_min is None:
+        observed = required.any(axis=1) & np.all(~required | known, axis=1) & complete
+    else:
+        total = np.sum(np.where(required, duration, 0.), axis=1)
+        compared = np.sum(np.where(required & known, duration, 0.), axis=1)
+        fraction = np.divide(compared, total, out=np.zeros_like(total), where=total > 0)
+        observed = required.any(axis=1) & complete & (fraction >= coverage_min - 1e-9)
+    counter_observed = (eligible & (duration > 0)).any(axis=1) & complete
     under = _sustained_any(under & known & steady, duration, module.UNDER_SECONDS)
     over = _sustained_any(over & known & steady, duration, module.OVER_SECONDS)
     counter = _sustained_any(eligible & (steer * yaw < 0) & (abs(yaw) > module.COUNTER_YAW),
@@ -553,6 +566,143 @@ def repeated_files(files, *, permutations=200, seed=20261023):
     return dict(pairs=pairs, convention='정점 근접 일대일 코너 대응; 표시된 (코너,단계,종류)의 교집합/합집합. 부분 관측 표시도 포함하며 미관측은 정상으로 해석하지 않음.')
 
 
+class _LapSubset:
+    """The same analyzer restricted to some valid laps; references stay inside the subset."""
+
+    def __init__(self, analyzer, laps):
+        self._analyzer = analyzer
+        self.valid_laps = list(laps)
+
+    def __getattr__(self, name):
+        return getattr(self._analyzer, name)
+
+
+MIN_HALF_LAPS = 4
+MIN_HALF_OBSERVED = 3
+
+
+def split_half_cells(module, analyzer, corners):
+    """Run the method separately on two halves of one file's valid laps.
+
+    Each half only uses its own laps as personal references, so the halves are
+    independent judgements of the same corners. Two splits are kept apart:
+    first/second half in time (fuel, tyres and track may drift) and odd/even laps.
+    """
+    laps = list(analyzer.valid_laps)
+    n = len(laps)
+    out = dict(valid_laps=n, splits={})
+    if n < 2 * MIN_HALF_LAPS:
+        out['status'] = 'too_few_laps'
+        return out
+    out['status'] = 'evaluated'
+    for name, (a, b) in (('first_second', (laps[:n // 2], laps[n // 2:])),
+                         ('odd_even', (laps[0::2], laps[1::2]))):
+        halves = []
+        for subset in (a, b):
+            result = module.analyze_handling(_LapSubset(analyzer, subset), corners, include_observations=True)
+            cells = {}
+            for row in (result or {}).get('observations', []):
+                for kind in KINDS:
+                    key = (row['corner_id'], row['phase'], kind)
+                    observed_key = 'counter_observed' if kind == 'countersteer' else 'observed'
+                    hit = any(e['kind'] == kind for e in row['events'])
+                    cell = cells.setdefault(key, dict(observed=0, observed_hits=0, any_hits=0))
+                    cell['observed'] += bool(row[observed_key])
+                    cell['observed_hits'] += bool(row[observed_key] and hit)
+                    cell['any_hits'] += bool(hit)
+            halves.append(dict(laps=[lap.lap_number for lap in subset],
+                               cells=[[*key, value['observed'], value['observed_hits'], value['any_hits']]
+                                      for key, value in sorted(cells.items())]))
+        out['splits'][name] = halves
+    return out
+
+
+def _split_scores(files, split, rng, permutations):
+    """Pooled Jaccard of flagged cells and correlation of per-cell rates between halves.
+
+    Null: within each file, phase and kind, corners of the second half are permuted.
+    """
+    actual = defaultdict(lambda: np.zeros(2))
+    draws = defaultdict(lambda: np.zeros((permutations, 2)))
+    pairs = defaultdict(list)
+    for file in files:
+        data = (file.get('split_half') or {}).get('splits', {}).get(split)
+        if not data:
+            continue
+        left = {tuple(c[:3]): c[3:] for c in data[0]['cells']}
+        right = {tuple(c[:3]): c[3:] for c in data[1]['cells']}
+        corners = sorted({key[0] for key in left} | {key[0] for key in right})
+        for phase in PHASES:
+            for kind in KINDS:
+                def flag(table, corner, which):
+                    value = table.get((corner, phase, kind))
+                    if value is None:
+                        return False
+                    return value[2] > 0 if which == 'any' else value[1] > 0
+
+                def rate(table, corner):
+                    value = table.get((corner, phase, kind))
+                    return value[1] / value[0] if value and value[0] >= MIN_HALF_OBSERVED else None
+
+                for which in ('any', 'observed'):
+                    a = np.array([flag(left, c, which) for c in corners], dtype=bool)
+                    b = np.array([flag(right, c, which) for c in corners], dtype=bool)
+                    for label in ((which, 'ALL'), (which, kind)):
+                        actual[label] += [np.sum(a & b), np.sum(a | b)]
+                    for i in range(permutations):
+                        bb = b[rng.permutation(len(b))]
+                        for label in ((which, 'ALL'), (which, kind)):
+                            draws[label][i] += [np.sum(a & bb), np.sum(a | bb)]
+                ra = [rate(left, c) for c in corners]
+                rb = [rate(right, c) for c in corners]
+                both = [i for i in range(len(corners)) if ra[i] is not None and rb[i] is not None]
+                pairs[kind].append(([ra[i] for i in both], [rb[i] for i in both]))
+
+    def jaccard(value):
+        return float(value[0] / value[1]) if value[1] else None
+
+    out = {}
+    for (which, kind), value in sorted(actual.items()):
+        null = [jaccard(row) for row in draws[(which, kind)]]
+        rate = jaccard(value)
+        out.setdefault(which, {})[kind] = dict(shared=int(value[0]), union=int(value[1]), rate=rate,
+                                               shuffled_corners=distribution(null, rate))
+
+    def correlation(groups, shuffle):
+        xs, ys = [], []
+        for x, y in groups:
+            y = list(y)
+            if shuffle and len(y) > 1:
+                y = [y[i] for i in rng.permutation(len(y))]
+            xs.extend(x)
+            ys.extend(y)
+        xs, ys = np.array(xs, dtype=float), np.array(ys, dtype=float)
+        if len(xs) < 5 or xs.std() == 0 or ys.std() == 0:
+            return None, len(xs)
+        return float(np.corrcoef(xs, ys)[0, 1]), len(xs)
+
+    rates = {}
+    for kind in ('understeer', 'oversteer', 'ALL'):
+        groups = [g for k in (KINDS[:2] if kind == 'ALL' else (kind,)) for g in pairs[k]]
+        value, cells = correlation(groups, False)
+        null = [correlation(groups, True)[0] for _ in range(permutations)]
+        rates[kind] = dict(cells=cells, correlation=value, shuffled_corners=distribution(null, value))
+    out['rate_correlation'] = rates
+    return out
+
+
+def split_half_summary(files, *, permutations=200, seed=20261023):
+    rng = np.random.default_rng(seed + 7)
+    result = dict(convention=('파일 하나의 유효 랩을 둘로 나눠 각 절반이 자기 랩만 개인 기준으로 따로 판정; '
+                              '같은 (코너,단계,종류) 표시의 교집합/합집합과, 두 절반 모두 관측 3랩 이상인 칸의 '
+                              '완전 관측 표시율 상관. 귀무는 파일·단계·종류 안에서 둘째 절반의 코너를 섞음.'),
+                  min_half_laps=MIN_HALF_LAPS, min_half_observed=MIN_HALF_OBSERVED,
+                  files={file['file']: (file.get('split_half') or {}).get('status') for file in files})
+    for split in ('first_second', 'odd_even'):
+        result[split] = _split_scores(files, split, rng, permutations)
+    return result
+
+
 def distribution(values, actual=None):
     finite = np.array([v for v in values if v is not None and np.isfinite(v)], dtype=float)
     return dict(n=len(finite), mean=float(finite.mean()) if len(finite) else None,
@@ -564,6 +714,7 @@ def distribution(values, actual=None):
 
 def summarize_nulls(nulls):
     result = {}
+    nulls = [data for data in nulls if data and data.get('permutations')]
     if not nulls:
         return result
     repetitions = {data['permutations'] for data in nulls}
@@ -670,6 +821,20 @@ def text_report(report):
     for file in report['files']:
         metrics(f"{file['file']} / 유효 랩 {file['valid_laps']} / 원본 보존 {file['source_unchanged']}", file)
     lines.extend(['', '파일 간 반복률', json.dumps(report['replication'], ensure_ascii=False, indent=2)])
+    split = report.get('split_half')
+    if split:
+        lines.extend(['', '랩 절반 나누기 반복', split['convention'], json.dumps(split['files'], ensure_ascii=False)])
+        for name, label in (('first_second', '앞/뒤 절반'), ('odd_even', '홀/짝 랩')):
+            data = split[name]
+            for which, title in (('any', '부분 관측 포함 표시'), ('observed', '완전 관측 표시만')):
+                for kind, value in data.get(which, {}).items():
+                    null = value['shuffled_corners']
+                    lines.append(f"{label} / {title} / {kind}: {value['shared']}/{value['union']} = {number(value['rate'], 100)}% "
+                                 f"/ 코너 섞기 평균 {number(null['mean'], 100)}% / p_ge {number(null['p_ge_actual'])}")
+            for kind, value in data['rate_correlation'].items():
+                null = value['shuffled_corners']
+                lines.append(f"{label} / 표시율 상관 / {kind}: r={number(value['correlation'])} (칸 {value['cells']}) "
+                             f"/ 섞기 평균 {number(null['mean'])} [{number(null['p025'])}, {number(null['p975'])}] / p_ge {number(null['p_ge_actual'])}")
     return '\n'.join(lines) + '\n'
 
 
@@ -690,7 +855,7 @@ def main(argv=None):
             raise ValueError('입력 파일이 출력 캐시 폴더 안에 있습니다.')
     json_path.parent.mkdir(parents=True, exist_ok=True)
     cache_folder.mkdir(exist_ok=True)
-    options = dict(seed=args.seed, permutations=args.permutations, grid_hz=args.grid_hz)
+    options = dict(seed=args.seed, permutations=args.permutations, grid_hz=args.grid_hz, skip_null=args.skip_null)
     files = []
     with tempfile.TemporaryDirectory(prefix='handling-evaluation-') as folder:
         sys.path.insert(0, str(ROOT / 'scripts'))
@@ -720,9 +885,13 @@ def main(argv=None):
                        for corner in analyzed['performance']['corners']]
             native, captures, points = native_evaluation(module, analyzer, corners)
             rows = native['observations']
-            null = null_function(module, captures, rows, permutations=args.permutations,
-                                 seed=args.seed + index, grid_hz=args.grid_hz)
-            null['summary'] = summarize_nulls([null])
+            if args.skip_null:
+                null = {}
+            else:
+                null = null_function(module, captures, rows, permutations=args.permutations,
+                                     seed=args.seed + index, grid_hz=args.grid_hz)
+                null['summary'] = summarize_nulls([null])
+            split = split_half_cells(module, analyzer, corners)
             metadata = telemetry.metadata
             context = [metadata.get('game', 'iracing'), metadata.get('car_path') or metadata.get('car_model_key'),
                        metadata.get('track_platform_id') or metadata.get('track_path'),
@@ -737,7 +906,7 @@ def main(argv=None):
                           valid_laps=len(analyzer.valid_laps), context=context, corners=corners,
                           observations=rows, coverage=native['coverage'], unknown_reasons=native['unknown_reasons'],
                           point_values=points, point_metrics=point_summary(points), slot_rates=slot_rates(rows),
-                          time_auc=adjusted_auc(rows, corners), null=null,
+                          time_auc=adjusted_auc(rows, corners), null=null, split_half=split,
                           steer_lag_s=native.get('steer_lag_s'), fast_steer_rate_rad_s=native.get('fast_steer_rate_rad_s'))
             cache_path.write_text(json.dumps(dict(identity=identity, result=result), ensure_ascii=False, allow_nan=False), encoding='utf-8')
             files.append(result)
@@ -748,7 +917,8 @@ def main(argv=None):
     baseline = [file for file in files if file['file'] in DEFAULT_NAMES[:5]]
     report = dict(method=args.method, provenance=provenance, evaluator_sha256=evaluator_sha, options=options,
                   files=files, aggregate=aggregate(files), baseline_five=aggregate(baseline),
-                  replication=repeated_files(files, permutations=args.permutations, seed=args.seed))
+                  replication=repeated_files(files, permutations=args.permutations, seed=args.seed),
+                  split_half=split_half_summary(files, permutations=args.permutations, seed=args.seed))
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=1, allow_nan=False), encoding='utf-8')
     txt_path.write_text(text_report(report), encoding='utf-8')
     print(f'평가 보고서 저장: {json_path.name}, {txt_path.name}', flush=True)

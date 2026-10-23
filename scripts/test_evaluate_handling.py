@@ -196,6 +196,91 @@ class HandlingEvaluationTests(unittest.TestCase):
         self.assertLess(pair['shuffled_corners']['understeer']['mean'], 1.)
         self.assertEqual(pair['shuffled_corners']['understeer']['n'], 200)
 
+    def test_current_method_is_v3_with_fixed_coverage_share(self):
+        with patch.object(sys, 'path', [str(evaluation.ROOT / 'iRacing_Backend'), *sys.path]):
+            module, provenance = evaluation.load_method('v3')
+            with self.assertRaisesRegex(ValueError, 'v2'):
+                evaluation.load_method('v2')
+        self.assertEqual(provenance['method'], 'personal_corner_phase_v3')
+        self.assertEqual(module.COVERAGE_MIN, .9)
+
+    def _v3_phases(self, mismatch_samples):
+        with patch.object(sys, 'path', [str(evaluation.ROOT / 'iRacing_Backend'), *sys.path]):
+            from corner_events import RawLap
+            module, _ = evaluation.load_method('v3')
+        time = np.arange(501) / 100
+        raws = []
+        for index in range(8):
+            speed = np.full(len(time), 25.)
+            steer = np.full(len(time), .1)
+            yaw = .05 * speed * steer
+            throttle = np.full(len(time), .3)
+            if index == 0:
+                throttle[100:100 + mismatch_samples] = .9
+            raws.append(RawLap(time.copy(), time / 10,
+                              dict(Speed=speed, SteeringWheelAngle=steer, YawRate=yaw,
+                                   LatAccel=np.full(len(time), 5.), Brake=np.zeros(len(time)),
+                                   Throttle=throttle), .01, 3000.))
+        model = module.learn_bands(raws)
+        phases = [module.prepare_phase(raw, .05, .45, model) for raw in raws]
+        return module, model, phases
+
+    def test_grid_null_uses_the_same_compared_time_share_as_the_product(self):
+        for samples, expected in ((20, True), (80, False)):
+            with self.subTest(samples=samples):
+                module, model, phases = self._v3_phases(samples)
+                native = module.classify_phase(phases[0], phases, model)
+                self.assertEqual(native['observed'], expected)
+                self.assertLess(native['known_fraction'], 1.)
+                grid = evaluation._phase_grid(module, phases, model, 20.)
+                _, observed = evaluation._classify(module, grid, grid[1], model)
+                self.assertEqual(bool(observed[0][0]), expected)
+                self.assertTrue(observed[2][0])
+
+    def test_split_half_judges_each_half_only_with_its_own_laps(self):
+        seen = []
+
+        class Fake:
+            @staticmethod
+            def analyze_handling(analyzer, corners, include_observations=False):
+                laps = [lap.lap_number for lap in analyzer.valid_laps]
+                seen.append(laps)
+                rows = [dict(corner_id='C1', phase='rotation', observed=True, counter_observed=True,
+                             events=[dict(kind='understeer')] if lap % 3 == 0 else []) for lap in laps]
+                return dict(observations=rows)
+
+        class Analyzer:
+            valid_laps = [type('Lap', (), dict(lap_number=i))() for i in range(1, 10)]
+
+        result = evaluation.split_half_cells(Fake, Analyzer(), [])
+        self.assertEqual(result['status'], 'evaluated')
+        self.assertEqual(seen, [[1, 2, 3, 4], [5, 6, 7, 8, 9], [1, 3, 5, 7, 9], [2, 4, 6, 8]])
+        first, second = result['splits']['first_second']
+        self.assertIn(['C1', 'rotation', 'understeer', 4, 1, 1], first['cells'])
+        self.assertIn(['C1', 'rotation', 'understeer', 5, 2, 2], second['cells'])  # laps 6 and 9
+        Analyzer.valid_laps = Analyzer.valid_laps[:7]
+        self.assertEqual(evaluation.split_half_cells(Fake, Analyzer(), [])['status'], 'too_few_laps')
+
+    def test_split_half_scores_identical_halves_above_corner_shuffle(self):
+        cells = []
+        for i in range(6):
+            hits = 2 if i < 2 else 0
+            cells.append([f'C{i}', 'rotation', 'understeer', 10, hits, hits])
+            cells.append([f'C{i}', 'rotation', 'oversteer', 10, 0, 0])
+        half = dict(laps=[], cells=cells)
+        files = [dict(file='A.ibt', split_half=dict(status='evaluated',
+                                                    splits=dict(first_second=[half, half], odd_even=[half, half])))]
+        first = evaluation.split_half_summary(files, permutations=200, seed=5)
+        self.assertEqual(first, evaluation.split_half_summary(files, permutations=200, seed=5))
+        score = first['first_second']['observed']['understeer']
+        self.assertEqual((score['shared'], score['union'], score['rate']), (2, 2, 1.))
+        self.assertLess(score['shuffled_corners']['mean'], 1.)
+        correlation = first['first_second']['rate_correlation']['understeer']
+        self.assertAlmostEqual(correlation['correlation'], 1.)
+        self.assertEqual(correlation['cells'], 6)
+        self.assertLess(correlation['shuffled_corners']['mean'], 1.)
+        json.dumps(first, allow_nan=False)
+
     def test_non_recording_input_is_rejected_before_hash_or_app_import(self):
         with tempfile.TemporaryDirectory(prefix='handling-invalid-input-') as folder:
             source = Path(folder) / 'synthetic-not-recording.txt'

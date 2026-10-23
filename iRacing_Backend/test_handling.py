@@ -16,7 +16,7 @@ atexit.register(_runtime.cleanup)
 os.environ.setdefault('IRACING_TUNER_DB_PATH', str(Path(_runtime.name) / 'memory.sqlite3'))
 
 from corner_events import RawLap
-from handling import HandlingHistory, METHOD, analyze_handling, classify_phase, learn_bands, prepare_phase, estimate_lag, lagged_values, steer_rate
+from handling import COVERAGE_MIN, HandlingHistory, METHOD, analyze_handling, classify_phase, learn_bands, prepare_phase, estimate_lag, lagged_values, steer_rate
 from telemetry_types import LapSegment
 
 
@@ -352,7 +352,7 @@ class HandlingTests(unittest.TestCase):
 
     def test_noise_metadata_and_event_z_are_added_without_changing_existing_fields(self):
         result = analyze_handling(analyzer(['understeer'] + [None] * 5), [CORNER], include_observations=True)
-        self.assertEqual(result['method'], 'personal_corner_phase_v2')
+        self.assertEqual(result['method'], 'personal_corner_phase_v3')
         self.assertEqual(result['noise_rules'], {'z_limit': 2.5, 'min_ratio': [.85, 1.15],
                                                 'spread': 'mad', 'min_laps_for_point_spread': 5})
         self.assertTrue(result['corners'])
@@ -523,6 +523,33 @@ class LagTests(unittest.TestCase):
 
 
 
+class CoverageTests(unittest.TestCase):
+    def test_compared_time_share_decides_classifiable(self):
+        self.assertEqual(COVERAGE_MIN, .9)
+        # Phase .25-.5 is 25 s; mismatched throttle removes the comparison there.
+        for seconds, expected in ((1.25, True), (2.5, True), (4., False)):
+            with self.subTest(seconds=seconds):
+                raw = lap_wave()
+                raw.channels['Throttle'][1560:1560 + int(seconds * 60)] = 1.
+                result = measure(raw, .25, .5)
+                self.assertLess(result['known_fraction'], 1.)
+                self.assertEqual(result['observed'], expected)
+                self.assertEqual(result['unknown_reasons'] == [], expected)
+
+    def test_tendency_in_the_compared_part_is_kept_and_counted(self):
+        raw = lap_wave('understeer')
+        raw.channels['Throttle'][1470:1488] = 1.  # 0.3 s of the 5 s phase, after the slow rotation
+        result = measure(raw, .2, .25)
+        self.assertTrue(result['observed'])
+        self.assertLess(result['known_fraction'], 1.)
+        self.assertIn('understeer', [event['kind'] for event in result['events']])
+
+    def test_coverage_reports_classifiable_partial_phases(self):
+        result = analyze_handling(analyzer([None] * 6), [CORNER])
+        self.assertIn('classifiable_partial', result['coverage'])
+        self.assertEqual(result['coverage_rule'], {'min_compared_time_fraction': COVERAGE_MIN})
+
+
 class DynamicsTests(unittest.TestCase):
     def test_raw_lap_missing_required_channel_stays_unknown(self):
         subject = analyzer([None] * 6)
@@ -536,7 +563,7 @@ class DynamicsTests(unittest.TestCase):
         self.assertEqual(measured['coverage']['classifiable'], 0)
         self.assertGreater(measured['coverage']['unknown'], 0)
 
-    def test_small_aligned_steering_explains_unknown_without_shrinking_counter_coverage(self):
+    def test_small_aligned_steering_is_not_comparable_and_keeps_counter_coverage(self):
         raw = lap_wave()
         refs = [lap_wave() for _ in range(5)]
         model = learn_bands([raw, *refs])
@@ -547,8 +574,36 @@ class DynamicsTests(unittest.TestCase):
         self.assertFalse(measured['observed'])
         self.assertTrue(measured['counter_observed'])
         self.assertEqual(measured['known_fraction'], 0.)
-        self.assertIn('steer_lag_below_minimum', measured['unknown_reasons'])
+        self.assertIn('no_eligible_samples', measured['unknown_reasons'])
+        self.assertNotIn('steer_lag_below_minimum', measured['unknown_reasons'])
         self.assertEqual(measured['events'], [])
+
+    def test_small_aligned_steering_at_turn_in_does_not_make_the_phase_unknown(self):
+        raw = lap_wave()
+        refs = [lap_wave() for _ in range(5)]
+        model = learn_bands([raw, *refs])
+        aligned = raw.channels['SteeringWheelAngle'].copy()
+        aligned[1200:1230] = .02  # the first half second has not caught up yet
+        model['_aligned_steer'] = {id(raw): aligned}
+        target = prepare_phase(raw, .2, .25, model)
+        references = [prepare_phase(ref, .2, .25, model) for ref in refs]
+        measured = classify_phase(target, references, model)
+        self.assertTrue(measured['observed'])
+        self.assertEqual(measured['known_fraction'], 1.)
+        self.assertEqual(measured['unknown_reasons'], [])
+
+    def test_unknown_aligned_steering_after_a_gap_stays_missing_evidence(self):
+        raw = lap_wave()
+        refs = [lap_wave() for _ in range(5)]
+        model = learn_bands([raw, *refs])
+        aligned = raw.channels['SteeringWheelAngle'].copy()
+        aligned[1200:1500] = np.nan
+        model['_aligned_steer'] = {id(raw): aligned}
+        target = prepare_phase(raw, .2, .25, model)
+        references = [prepare_phase(ref, .2, .25, model) for ref in refs]
+        measured = classify_phase(target, references, model)
+        self.assertFalse(measured['observed'])
+        self.assertIn('steer_lag_unavailable', measured['unknown_reasons'])
 
     def test_excluded_fast_steering_breaks_detection_runs(self):
         raw = reaction_scale(.7)

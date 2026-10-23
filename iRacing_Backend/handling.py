@@ -29,7 +29,10 @@ MAX_SPEED_RELATIVE = .04
 MAX_LAT_ACCEL_ABS = .8
 MAX_LAT_ACCEL_RELATIVE = .10
 MAX_PEDAL_DIFFERENCE = .2
-METHOD = 'personal_corner_phase_v2'
+# A phase counts as compared when this share of its eligible time has a
+# personal comparison. Fixed before evaluation; not tuned to any result.
+COVERAGE_MIN = .9
+METHOD = 'personal_corner_phase_v3'
 REQUIRED = ('Speed', 'SteeringWheelAngle', 'YawRate', 'LatAccel', 'Brake', 'Throttle')
 PHASES = ('braking', 'rotation', 'drive')
 
@@ -169,6 +172,10 @@ def prepare_phase(raw, start_pct, end_pct, model):
     q = np.full(len(speed), np.nan)
     np.divide(np.abs(yaw), np.abs(q_steer) * speed, out=q,
               where=eligible & np.isfinite(q_steer) & (abs(q_steer) > MIN_STEER))
+    # q is undefined where the aligned steering is known to be below the minimum,
+    # just as low current steering was never compared. Unknown aligned steering
+    # (e.g. right after a recording gap) stays missing evidence.
+    q_ready = eligible & ~(np.isfinite(q_steer) & (abs(q_steer) <= MIN_STEER))
     inside = (local.pct >= start_pct) & (local.pct <= end_pct)
     edges = _edges(local) & finite[:-1] & finite[1:]
     dp = np.diff(local.pct)
@@ -184,7 +191,7 @@ def prepare_phase(raw, start_pct, end_pct, model):
     changes = np.diff(np.r_[False, interval_ok, False].astype(int))
     segments = [slice(a, b + 1) for a, b in zip(np.flatnonzero(changes == 1), np.flatnonzero(changes == -1))]
     return {'raw': raw, 'local': local, 'offset': start, 'start': start_pct, 'end': end_pct,
-            'q': q, 'q_steer': q_steer, 'bands': bands, 'support': support, 'eligible': eligible,
+            'q': q, 'q_steer': q_steer, 'bands': bands, 'support': support, 'eligible': eligible, 'q_ready': q_ready,
             'inside': inside, 'durations': durations, 'segments': segments,
             'complete': bool(raw.pct[0] <= start_pct < end_pct <= raw.pct[-1]
                              and _window_ok(local, start_pct, end_pct, REQUIRED))}
@@ -285,9 +292,11 @@ def classify_phase(phase, references, model):
                            '_z_samples': z[selected & np.isfinite(z)].tolist() if kind != 'countersteer' else [],
                            'z_median': float(np.median(z[selected & np.isfinite(z)]))
                                if kind != 'countersteer' and np.any(selected & np.isfinite(z)) else None})
-    required = phase['inside'] & eligible & (durations > 0)
+    required = phase['inside'] & phase.get('q_ready', eligible) & (durations > 0)
+    counter_required = phase['inside'] & eligible & (durations > 0)
     known = required & np.isfinite(ratio)
-    observed = bool(np.any(required) and np.all(np.isfinite(ratio[required])) and phase['complete'])
+    known_fraction = float(np.sum(durations[known]) / np.sum(durations[required])) if np.any(required) else 0.
+    observed = bool(np.any(required) and phase['complete'] and known_fraction >= COVERAGE_MIN - 1e-9)
     # Explain missing evidence without relaxing the personal reference or detection limits.
     # Several reasons may apply to the same phase; these are not disjoint percentages.
     reasons = []
@@ -310,14 +319,12 @@ def classify_phase(phase, references, model):
             reasons.append('rotation_direction_not_comparable')
         if np.any(required & ~np.isfinite(phase['q_steer'])):
             reasons.append('steer_lag_unavailable')
-        if np.any(required & np.isfinite(phase['q_steer']) & (abs(phase['q_steer']) <= MIN_STEER)):
-            reasons.append('steer_lag_below_minimum')
         if np.any(required & np.isfinite(baseline) & ~np.isfinite(spread)):
             reasons.append('noise_unknown')
-    return {'observed': observed, 'counter_observed': bool(np.any(required) and phase['complete']),
+    return {'observed': observed, 'counter_observed': bool(np.any(counter_required) and phase['complete']),
             'b_median': float(np.median(ratio[known])) if np.any(known) else None,
             'z_median': float(np.median(z[known & np.isfinite(z)])) if np.any(known & np.isfinite(z)) else None,
-            'known_fraction': float(np.sum(durations[known]) / np.sum(durations[required])) if np.any(required) else 0.,
+            'known_fraction': known_fraction,
             'events': events, 'unknown_reasons': reasons}
 
 
@@ -422,6 +429,7 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
             coverage['classifiable' if measured['observed'] else 'unknown'] += 1
             phase_counts[key]['classifiable' if measured['observed'] else 'unknown'] += 1
             coverage['partial'] += bool(0 < measured['known_fraction'] < 1)
+            coverage['classifiable_partial'] += bool(measured['observed'] and measured['known_fraction'] < 1)
             unknown_reasons.update(measured['unknown_reasons'])
             phase_reasons[key].update(measured['unknown_reasons'])
             observations[key].append({'lap': row['lap'], 'time_s': row['time_s'], **measured})
@@ -464,6 +472,7 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
                                for key, counts in phase_counts.items()],
             'unknown_reasons': dict(unknown_reasons),
             'steer_lag_s': lag_s, 'fast_steer_rate_rad_s': phase_rates,
+            'coverage_rule': {'min_compared_time_fraction': COVERAGE_MIN},
             'noise_rules': {'z_limit': Z_LIMIT, 'min_ratio': [UNDER_B, OVER_B], 'spread': 'mad',
                             'min_laps_for_point_spread': MIN_LAPS_FOR_POINT_SPREAD},
             'coverage': dict(coverage), 'reference_rules': {'other_laps': MIN_REFERENCE_LAPS,

@@ -34,7 +34,7 @@ function HandlingObservation({ item }) {
     <div className="handling-observation-heading"><Badge variant={item.kind === 'countersteer' ? 'outline' : item.kind === 'understeer' ? 'handling-under' : 'handling-over'}>{shortNames[item.kind]}</Badge><strong>{phaseNames[item.phase]} 구간</strong></div>
     <dl className="handling-facts"><div><dt>관측된 랩</dt><dd>{item.of_laps}랩 중 {item.laps}랩</dd></div><div><dt>코너 시간 차이</dt><dd>{costText(item.time_cost_s)}</dd></div></dl>
     {withNames[item.with] && <small>함께 관측된 조작: {withNames[item.with]}</small>}
-    {item.observed_laps != null && item.observed_laps < item.of_laps && <small>{item.kind === 'countersteer' ? '반대 조향 관측 가능' : '전 구간 비교 가능'} {item.observed_laps}랩 · 부분 구간에서 관측한 결과도 포함합니다.</small>}
+    {item.observed_laps != null && item.observed_laps < item.of_laps && <small>{item.kind === 'countersteer' ? '반대 조향 관측 가능' : '비교 가능'} {item.observed_laps}랩 · 부분 구간에서 관측한 결과도 포함합니다.</small>}
     {item.kind === 'countersteer' && <small>개인 기준과 별개로 관측했습니다.</small>}
     {item.approximate && <small>참고용(LMU는 회전량을 GPS로 추정)</small>}</article>;
 }
@@ -47,11 +47,11 @@ export function HandlingDetail({ items = [], coverage = [] }) {
     <p className="handling-basis">핸들을 꺾은 정도에 비해 차가 덜 또는 더 돌아간 랩을 표시합니다. 같은 기록의 다른 유효 랩과 비교합니다.</p>
     <small>위에서 선택한 기준 랩·Garage61 비교와는 별개입니다.</small>
     <small>검증 전 초기값 · 체감 대조 전입니다.</small>
-    {coverage.length > 0 && <p className="handling-coverage">{known + unknown > 0 ? `개인 기준 전 구간 비교 ${known}/${known + unknown}회${unknown > 0 ? ` · ${unknown}회 확인 필요` : ''}` : '비교 대상 단계가 없습니다.'}</p>}
+    {coverage.length > 0 && <p className="handling-coverage">{known + unknown > 0 ? `개인 기준 비교 ${known}/${known + unknown}회${unknown > 0 ? ` · ${unknown}회 확인 필요` : ''}` : '비교 대상 단계가 없습니다.'}</p>}
     <details className="handling-help"><summary>표시 뜻과 비교 범위</summary>
       <dl>{['understeer', 'oversteer', 'countersteer'].map(kind => <div key={kind}><dt>{shortNames[kind]}</dt><dd>{meanings[kind]}</dd></div>)}</dl>
       <p>같은 코너·같은 단계에서 비교합니다. 서로 다른 랩이나 단계에서 두 표시가 함께 나올 수 있습니다.</p>
-      <p>비교 횟수는 랩별 제동·회전·가속 단계를 각각 셉니다. 자료가 부족한 구간은 확인 필요로 남깁니다.</p>
+      <p>비교 횟수는 랩별 제동·회전·가속 단계를 각각 셉니다. 단계 시간의 90% 이상을 다른 랩과 비교했으면 비교한 단계로 셉니다. 그보다 적으면 확인 필요로 남깁니다.</p>
       <p>문턱은 검증 전 초기값입니다. 절대적인 언더·오버 판정이나 원인·셋업 효과를 확정하지 않습니다.</p>
     </details>
     {orderHandling(items).map((item, i) => <HandlingObservation key={`${item.kind}-${item.phase}-${i}`} item={item} />)}
