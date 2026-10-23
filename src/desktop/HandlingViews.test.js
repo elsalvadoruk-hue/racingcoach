@@ -1,6 +1,23 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
-import { HandlingBadges, HandlingDetail, HandlingRepeats } from './HandlingViews';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { HANDLING_EXPLANATION_KEY, HandlingBadges, HandlingDetail, HandlingRepeats } from './HandlingViews';
+
+beforeEach(() => localStorage.clear());
+
+test('closing the explanation persists across corners and remounts while observations remain visible', () => {
+  const view = render(<HandlingDetail items={[item]} />);
+  const intro = view.container.querySelector('.handling-intro');
+  expect(intro.open).toBe(true);
+  intro.open = false; fireEvent(intro, new Event('toggle'));
+  expect(localStorage.getItem(HANDLING_EXPLANATION_KEY)).toBe('false');
+  view.unmount();
+  const next = render(<HandlingDetail items={[{ ...item, phase: 'drive' }]} />);
+  expect(next.container.querySelector('.handling-intro').open).toBe(false);
+  expect(screen.getByRole('article', { name: '가속 · 회전 반응 작음' })).toBeVisible();
+  const reopened = next.container.querySelector('.handling-intro');
+  reopened.open = true; fireEvent(reopened, new Event('toggle'));
+  expect(localStorage.getItem(HANDLING_EXPLANATION_KEY)).toBe('true');
+});
 
 const item = { corner_id: 'C1', label: '측정 구간', phase: 'rotation', kind: 'understeer',
   with: 'braking', laps: 5, of_laps: 12, observed_laps: 12, time_cost_s: .09 };
@@ -10,8 +27,8 @@ test('compact badges explain personal reactions and deduplicate phases', () => {
   expect(screen.getAllByText('회전 반응 작음')).toHaveLength(1);
   expect(screen.getByText('회전 반응 작음')).toHaveClass('text-cyan-400');
   expect(screen.getByText('회전 반응 작음')).toHaveAttribute('title', expect.stringContaining('내 다른 랩보다'));
-  expect(screen.getByText('회전 반응 큼 · 참고')).toHaveClass('text-muted-foreground', 'border-dashed');
-  expect(screen.getByText('회전 반응 큼 · 참고')).toHaveAttribute('title', expect.stringContaining('아직 근거가 약해서'));
+  expect(screen.getByText('회전 반응 큼')).toHaveClass('text-muted-foreground', 'border-dashed');
+  expect(screen.getByText('회전 반응 큼')).toHaveAttribute('title', expect.stringContaining('아직 근거가 약해서'));
 });
 
 test('detail reports measured frequency, cost and accompanying input without a cause assertion', () => {
@@ -79,7 +96,7 @@ test('oversteer is shown as a reference after better supported observations', ()
   render(<HandlingDetail items={[{ ...item, kind: 'oversteer', time_cost_s: .5 }, { ...item, time_cost_s: null }]} />);
   const rows = screen.getByRole('region', { name: '차 거동' }).querySelectorAll('[data-handling-item]');
   expect(rows[0]).toHaveTextContent('회전 반응 작음');
-  expect(rows[1]).toHaveTextContent('회전 반응 큼 · 참고');
+  expect(rows[1]).toHaveTextContent('회전 반응 큼');
   expect(rows[1].querySelector('[data-evidence-note]')).toHaveTextContent('우연일 가능성이 큽니다');
   expect(screen.getByText(/회전 반응 큼은 참고로 표시합니다/)).toBeInTheDocument();
 });
@@ -109,7 +126,7 @@ test('slower links take priority within evidence levels while oversteer keeps it
   expect(rows[0]).toHaveTextContent('이게 나온 랩은 이 코너에서 실제로 느렸습니다');
   expect(rows[0]).toHaveTextContent('느린 랩과 겹침');
   expect(rows[1]).toHaveTextContent('이 때문인지는 확인되지 않았습니다');
-  expect(rows[2]).toHaveTextContent('회전 반응 큼 · 참고');
+  expect(rows[2]).toHaveTextContent('회전 반응 큼');
   expect(rows[2]).toHaveTextContent('이게 나온 랩은 이 코너에서 실제로 느렸습니다');
   expect(rows[2].querySelector('[data-evidence-note]')).toBeInTheDocument();
 });

@@ -23,11 +23,11 @@ function DeviceOptions({ devices, kind, selected }) {
 export function LogSendSwitch({ apiBase }) {
   const auto = useSessionLogAuto(apiBase);
   if (!auto.state?.available) return null;
-  // Unlike the switches beside it: a boxed label that lights up while logs are being sent.
+  // The consent flow stays the same wherever this header switch is placed.
   const on = auto.state.enabled;
   return <>
     <Button size="sm" variant={on ? 'default' : 'outline'} aria-pressed={on} aria-label="로그 자동 보내기" disabled={auto.busy}
-      className={`log-send-toggle${on ? ' log-send-on' : ''}`} onClick={() => auto.toggle(!on)}
+      className={`runtime-toggle log-send-toggle${on ? ' runtime-toggle-on log-send-on' : ''}`} onClick={() => auto.toggle(!on)}
       title={on ? '주행이 끝나면 세션 로그를 자동으로 보냅니다 (iRacing·LMU)' : '세션 로그 자동 보내기 꺼짐'}>
       <CloudUpload data-icon="inline-start" /><span className="log-send-label">로그 보내기</span>
     </Button>
@@ -61,7 +61,6 @@ export function RuntimeControls({ runtime }) {
           disabled={unsupported || (key === 'overlay' ? runtime.overlayBusy || !runtime.overlay?.supported : key === 'spotter' ? runtime.host?.spotter?.preparing : false)}
           onClick={() => change(key, !on)}><Icon data-icon="inline-start" aria-hidden="true" />{label}</Button>;
       })}
-      <LogSendSwitch apiBase={host.apiBase ?? ''} />
     </FieldGroup>
     {runtime.speech?.available && <>
     <Field orientation="horizontal" className="runtime-input"><FieldLabel htmlFor="input-device-trigger"><Mic aria-hidden="true" /><span>입력장치</span></FieldLabel><Button id="input-device-trigger" variant="outline" aria-label="입력장치 선택" aria-haspopup="dialog" aria-expanded={inputDialog} title={inputLabel} onClick={() => { setInputDialog(true); runtime.refreshDevices?.(); }}><span className="truncate">{inputLabel}</span><ChevronDown data-icon="inline-end" /></Button></Field>
@@ -80,6 +79,7 @@ export function RuntimeControls({ runtime }) {
       <FieldGroup><Field data-disabled={!audio.supported}><FieldLabel htmlFor="quick-output">출력장치 선택</FieldLabel><NativeSelect id="quick-output" value={controls.output} disabled={!audio.supported} onChange={event => change('output', event.target.value)}><DeviceOptions devices={audio.devices} kind="audiooutput" selected={controls.output} /></NativeSelect></Field><FieldDescription role="status">{!audio.supported ? '이 브라우저는 출력장치 선택을 지원하지 않아 시스템 기본 장치로 재생합니다. 최신 Chrome 또는 Edge에서 선택할 수 있습니다.' : audio.message || (audio.refreshing ? '장치 목록과 마이크 접근 권한을 확인하고 있습니다.' : '선택은 자동 저장됩니다. 장치를 바꾸면 재생 중인 음성이 중단됩니다.')}</FieldDescription></FieldGroup>
       <div className="flex flex-wrap justify-between gap-3"><Button variant="outline" disabled={!audio.supported || audio.refreshing} onClick={() => audio.refresh({ ask: true })}><RefreshCw data-icon="inline-start" />{audio.refreshing ? '목록 확인 중' : '목록 갱신'}</Button><Button variant="outline" disabled={host.phase !== 'idle'} onClick={host.testOutput}>테스트 소리</Button><Button onClick={() => setDeviceDialog(false)}>선택 완료</Button></div>
     </DialogContent></Dialog>
+    <LogSendSwitch apiBase={host.apiBase ?? ''} />
   </div>;
 }
 

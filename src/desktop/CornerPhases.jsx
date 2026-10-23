@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, AlertDescription } from '../components/ui/alert';
+import { CornerDownRight } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const eventLabels = { brake_start: '제동 시작', brake_release: '브레이크 놓음', min_speed: '최저 속도 지점', throttle_first: '가속 시작', full_throttle: '풀스로틀' };
@@ -24,7 +24,7 @@ export default function CornerPhases({ corner }) {
   const keys = [...(phases.approach ? ['approach'] : []), 'braking', 'rotation', 'drive', 'straight_after'];
   return <section className="corner-phases" aria-label="코너 단계별 시간 차이">
     {Number.isFinite(straightLoss) && Number.isFinite(corner.delta_s) && straightLoss > 0 && straightLoss > corner.delta_s &&
-      <Alert><AlertDescription>탈출 속도 차이가 직선에서 더 크게 이어졌습니다.</AlertDescription></Alert>}
+      <p className="phase-carry-note"><CornerDownRight aria-hidden="true" /><span>탈출 속도 차이가 직선에서 더 크게 이어졌습니다.</span></p>}
     <dl className="phase-bar">{keys.map(key => {
       const value = phases[key]?.delta_s;
       return <div key={key} className={cn('phase-cell', ['approach', 'straight_after'].includes(key) && 'phase-outside')} data-phase={key}>

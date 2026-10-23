@@ -115,10 +115,10 @@ test('three summary columns sit side by side and the clicked one widens while th
   expect(screen.getByText('선택한 두 랩 비교')).toBeInTheDocument();
   expect(screen.getByText('구간 1 · 지난 2개 주행에서 반복')).toBeInTheDocument();
   expect(screen.queryByText('차량과 트랙 유지')).not.toBeInTheDocument();
-  // Choosing a task from the narrow task column widens it as well.
+  // Task selection updates the comparison while retaining the expanded column.
   fireEvent.click(screen.getByRole('radio', { name: '이번 연습: 구간 2 · 관측 시간 차이' }));
-  expect(section).toHaveAttribute('data-expanded', 'tasks');
+  expect(section).toHaveAttribute('data-expanded', 'analysis');
   // An action button inside a narrow column keeps its own job and does not widen it.
   fireEvent.click(screen.getByRole('button', { name: '기록에서 연습 기준 준비' }));
-  expect(section).toHaveAttribute('data-expanded', 'tasks');
+  expect(section).toHaveAttribute('data-expanded', 'analysis');
 });

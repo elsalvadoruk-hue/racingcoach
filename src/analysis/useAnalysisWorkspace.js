@@ -472,7 +472,7 @@ export function useAnalysisWorkspace() {
     await runAnalysis({ includeAI: false, quiet: true });
   }, [loadMemory, runAnalysis]);
 
-  useWorkspaceInitialization({ initializationAttempt, loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus, maybeStartGarage61Collection, restoreFileDraft, runAnalysisRef, selectedFileRef, setError, setInitialLoading, setPitRule, setSelectedFile, setSessionMode, activeTrialRef, setTargetLapManual, setReferenceLapManual });
+  useWorkspaceInitialization({ initializationAttempt, loadExternalReferences, loadFiles, loadGarage61ApiStatus, loadMemory, loadStatus, maybeStartGarage61Collection, restoreFileDraft, runAnalysisRef, selectedFileRef, setError, setInitialLoading, setPitRule, setSelectedFile, setSessionMode, activeTrialRef, setTargetLapManual, setReferenceLapManual, signatureRef, waitingFileRef });
 
   useEffect(() => {
     runAnalysisRef.current = runAnalysis;

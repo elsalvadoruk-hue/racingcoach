@@ -87,7 +87,8 @@ def workspace_comparison(services, telemetry, body):
             aggregate=request.reference_mode == 'AGGREGATE')
         return {**detail, 'corners': external['corners'], 'targetTime': aggregate.get('target_time_s'),
                 'referenceTime': aggregate.get('reference_median_time_s'), 'delta': aggregate.get('gap_to_reference_median_s'),
-                'warnings': external.get('warnings', []), 'aggregate': aggregate, 'controlEvents': signals}
+                'warnings': external.get('warnings', []), 'aggregate': aggregate, 'controlEvents': signals,
+                'setupInfluence': (external.get('performance_diagnostics') or {}).get('setup_influence')}
     # An explicitly chosen self-comparison stays a zero baseline rather than
     # silently selecting a different lap as the legacy default selector does.
     if target.valid and request.reference_lap == target.lap_number:
@@ -217,7 +218,8 @@ def register_routes(app, services: WorkspaceRoutesServices):
                     fields = ('name', 'driver_name', 'car_name', 'track_name', 'track_config', 'track_platform_id',
                               'lap_time_s', 'usable', 'compatible', 'condition_similarity', 'validation_error')
                     personal = await asyncio.to_thread(select_personal_reference, services, telemetry, body.get('target_lap'))
-                    result = {'files': [{key: row.get(key) for key in fields} for row in catalog['files']], 'personalReference': personal}
+                    result = {'files': [{key: row.get(key) for key in fields} for row in catalog['files']],
+                              'recommended_selection': catalog.get('recommended_selection', []), 'personalReference': personal}
                 elif route == 'overlay':
                     result = await asyncio.to_thread(services.lap_overlay_payload, telemetry, LapOverlayRequest(**body))
                 elif route == 'setup-plan':

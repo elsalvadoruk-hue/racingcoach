@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Badge } from '../components/ui/badge';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/card';
 
@@ -14,6 +14,7 @@ const withNames = { braking: '제동 중', lift: '스로틀을 뗀 직후', powe
 const evidenceByKind = { understeer: 'compared', oversteer: 'reference', countersteer: 'measured' };
 const evidenceOf = item => item.evidence || evidenceByKind[item.kind];
 const referenceNote = '참고 표시 · 이 종류는 아직 근거가 약해서 우연일 가능성이 큽니다.';
+export const HANDLING_EXPLANATION_KEY = 'coach.handling.explanation-open.v1';
 
 // What happened, in one plain sentence per kind.
 const happened = {
@@ -42,19 +43,19 @@ export function HandlingBadges({ items = [] }) {
   if (!kinds.length) return null;
   return <span className="handling-badges" aria-label="내 다른 랩 대비 차 거동">{kinds.map(kind =>
     <Badge key={kind} data-kind={kind} data-evidence={evidenceByKind[kind]} title={evidenceByKind[kind] === 'reference' ? `${meanings[kind]} ${referenceNote}` : meanings[kind]}
-      variant={kind === 'countersteer' ? 'outline' : kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[kind]}{evidenceByKind[kind] === 'reference' ? ' · 참고' : ''}</Badge>)}</span>;
+      variant={kind === 'countersteer' ? 'outline' : kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[kind]}</Badge>)}</span>;
 }
 
-function orderHandling(items) {
+export function orderHandling(items) {
   return [...items].sort((a, b) => Number(evidenceOf(a) === 'reference') - Number(evidenceOf(b) === 'reference') ||
     Number(b.time_link === 'slower') - Number(a.time_link === 'slower') ||
     Number(Number.isFinite(b.time_cost_s)) - Number(Number.isFinite(a.time_cost_s)) ||
     (Number.isFinite(a.time_cost_s) && Number.isFinite(b.time_cost_s) ? b.time_cost_s - a.time_cost_s : 0) || b.laps - a.laps);
 }
 
-function HandlingObservation({ item }) {
+export function HandlingObservation({ item }) {
   return <article className="handling-observation" data-handling-item aria-label={`${phaseNames[item.phase]} · ${shortNames[item.kind]}`}>
-    <div className="handling-observation-heading"><Badge variant={item.kind === 'countersteer' ? 'outline' : item.kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[item.kind]}{evidenceOf(item) === 'reference' ? ' · 참고' : ''}</Badge><strong>{phaseNames[item.phase]} 구간</strong>{item.time_link === 'slower' && <Badge variant="outline">느린 랩과 겹침</Badge>}</div>
+    <div className="handling-observation-heading"><Badge title={evidenceOf(item) === 'reference' ? referenceNote : meanings[item.kind]} variant={item.kind === 'countersteer' ? 'outline' : item.kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[item.kind]}</Badge><strong>{phaseNames[item.phase]} 구간</strong>{item.time_link === 'slower' && <Badge variant="outline">느린 랩과 겹침</Badge>}</div>
     <p className="handling-happened">{happened[item.kind]}</p>
     <dl className="handling-facts"><div><dt>나온 랩</dt><dd>{item.of_laps}랩 중 {item.laps}랩</dd></div>
       {Number.isFinite(item.time_cost_s) && <div><dt>나온 랩의 이 코너 시간</dt><dd>{costText(item.time_cost_s)}</dd></div>}</dl>
@@ -75,10 +76,17 @@ function coverageText(known, unknown) {
 }
 
 export function HandlingDetail({ items = [], coverage = [] }) {
+  const [explanationOpen, setExplanationOpen] = useState(() => {
+    try { return localStorage.getItem(HANDLING_EXPLANATION_KEY) !== 'false'; } catch { return true; }
+  });
   if (!items.length && !coverage.length) return null;
   const known = coverage.reduce((sum, item) => sum + item.classifiable, 0);
   const unknown = coverage.reduce((sum, item) => sum + item.unknown, 0);
-  return <section className="handling-detail" aria-label="차 거동"><h4>차 거동 · 내 다른 랩과 비교</h4>
+  return <section className="handling-detail" aria-label="차 거동"><details className="handling-intro" open={explanationOpen} onToggle={event => {
+    const next = event.currentTarget.open;
+    setExplanationOpen(next);
+    try { localStorage.setItem(HANDLING_EXPLANATION_KEY, String(next)); } catch { /* Keep this view usable when storage is unavailable. */ }
+  }}><summary><h4>차 거동 · 내 다른 랩과 비교</h4><span>{explanationOpen ? '설명 접기' : '설명 보기'}</span></summary><div className="handling-intro-content">
     <p className="handling-basis">같은 기록의 내 다른 랩과 비슷한 조건에서 차체가 방향을 바꾸는 반응을 비교합니다. 회전 반응이 작으면 평소보다 덜, 크면 더 방향을 바꾼 것입니다. 회전 반경이나 뒤 타이어의 미끄러짐을 확정하는 표시는 아닙니다.</p>
     <small>잘했다·못했다를 판정하지 않습니다. 여러 랩에서 반복되고 그 랩이 느렸다면 살펴볼 만합니다.</small>
     <small>위에서 선택한 기준 랩·Garage61 비교와는 별개입니다. 아직 다듬는 중인 분석이라 참고용으로 보세요.</small>
@@ -92,6 +100,7 @@ export function HandlingDetail({ items = [], coverage = [] }) {
       <p>시간 연결은 랩 전체의 느려짐과 단계 시작 속도 영향을 보정해 확인합니다. 위의 초 단위 시간 차이는 보정 전 관측값입니다. 시간 연결도 원인을 확정하지 않습니다.</p>
       <p>문턱은 검증 전 초기값입니다. 절대적인 언더·오버 판정이나 원인·셋업 효과를 확정하지 않습니다.</p>
     </details>
+    </div></details>
     {orderHandling(items).map((item, i) => <HandlingObservation key={`${item.kind}-${item.phase}-${i}`} item={item} />)}
   </section>;
 }

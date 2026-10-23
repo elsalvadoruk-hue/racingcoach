@@ -9,9 +9,10 @@ import { cn } from '../lib/utils';
 import { TrackMap } from './Telemetry';
 import { cornerLabel, number, signed, length, data, labRequest, analysisOptions } from './sessionData';
 import { cornerAnnotations } from './cornerAnnotations';
-import CornerPhases, { DeviationLine } from './CornerPhases';
-import RacingLine from './RacingLine';
-import { HandlingBadges, HandlingDetail, HandlingRepeats, repeatedHandling } from './HandlingViews';
+import { DeviationLine } from './CornerPhases';
+import { HandlingBadges, repeatedHandling } from './HandlingViews';
+import SummaryAnalysis, { measuredSections, noteSection } from './SummaryAnalysis';
+import FittedSections from './FittedSections';
 import { requestJson, API_BASE } from '../analysis/analysisClient';
 import PracticeCoach from '../components/PracticeCoach';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
@@ -82,14 +83,14 @@ export default function DrivingSummary({ comparison, names, onCorner, onCompare,
     aria-label={`${columnNames[id]} 넓게 보기`} disabled={open === id} onClick={() => setOpen(id)}>{open === id ? '펼침' : '넓게'}</Button>;
 
   return <section className={cn('driving-summary', plan?.mode?.startsWith('SETUP_') && 'summary-has-setup')} aria-label="주행 요약" data-expanded={open}>
-    <div className="summary-intro"><div><h2>주행 요약</h2><p>칸을 누르면 그 칸이 넓어지고 나머지는 요약으로 줄어듭니다.</p></div><Badge variant="outline">로컬 측정 기반</Badge></div>
+    <div className="summary-intro"><div><h2>주행 요약</h2><p>과제를 고르면 내용이 바뀝니다. 카드 빈 곳을 누르면 넓게 봅니다.</p></div><Badge variant="outline">로컬 측정 기반</Badge></div>
     <div className="summary-columns">
       <Card className={cn('summary-column summary-task', open === 'tasks' && 'is-open')} aria-labelledby="today-task-title" {...columnProps('tasks')}>
         <CardHeader className="summary-column-header"><div className="summary-column-title"><CardTitle asChild><h3 id="today-task-title" className="flex items-center gap-2"><Target />오늘의 연습 과제<Badge variant="secondary">{options.length}개</Badge></h3></CardTitle>{widen('tasks')}</div>
           {open === 'tasks' && <CardDescription>{lmu ? '관측 시간 차이 · 확인할 입력 · 반복 측정 기준을 확인하세요.' : plan?.mode?.startsWith('SETUP_') ? '다음 주행은 셋업 확인 계획입니다. 입력 연습은 별도 주행으로 진행하세요.' : '문제 · 바꿀 조작 · 확인 기준입니다. 과제를 고르면 다른 칸도 바뀝니다.'}</CardDescription>}</CardHeader>
         <CardContent className="summary-column-content">
           {focus ? <ToggleGroup className="summary-issues" type="single" value={String(choice)} onValueChange={value => { if (value !== '') { setChoice(Number(value)); setInspected(null); } }} aria-label="이번 주행에 집중할 과제">
-            {options.map((item, index) => <ToggleGroupItem className={cn('summary-issue', choice === index && 'is-focused')} key={item.focus.root_cause} value={String(index)} aria-label={`이번 연습: ${item.focus.root_cause_label}`} data-testid="summary-issue">
+            {options.map((item, index) => <ToggleGroupItem data-own-action className={cn('summary-issue', choice === index && 'is-focused')} key={item.focus.root_cause} value={String(index)} aria-label={`이번 연습: ${item.focus.root_cause_label}`} data-testid="summary-issue">
               <span className="summary-issue-heading"><span className="summary-rank numeric">{String(index + 1).padStart(2, '0')}</span><strong className="summary-issue-title">{item.focus.root_cause_label}</strong><strong className="summary-issue-loss numeric">+{number(item.focus.total_observed_loss_s, 3)}<small> s</small></strong></span>
               <span className="summary-issue-location"><MapPin aria-hidden="true" />{item.corner_ids.join(' · ') || '위치 확인 필요'}{open === 'tasks' && <span className={badgeVariants({ variant: choice === index ? 'default' : 'outline' })}>{choice === index ? '집중 과제' : '이번에 연습'}</span>}</span>
               {open === 'tasks' && <>
@@ -113,8 +114,12 @@ export default function DrivingSummary({ comparison, names, onCorner, onCompare,
           <div className="summary-run-goal"><span>이번 주행 목표</span><h2>{lmu ? '측정 가능' : '유효'} <b>{lmu ? plan.required_measured_laps : plan.required_valid_laps}</b>랩 이상 <small>권장 {lmu ? plan.recommended_measured_laps : plan.recommended_valid_laps}랩</small></h2>{plan.required_clean_corners > 0 && <p>정상 구간 {plan.required_clean_corners}회 이상 확인</p>}{focus && plan.mode === 'DRIVING_FOCUS' && <Button data-own-action disabled={busy || !data.filename} onClick={savePreparation} variant={prepared ? 'secondary' : 'default'}><BookmarkCheck data-icon="inline-start" />{busy ? '과제 저장 중…' : prepared ? '진행 과제 확인' : lmu ? '기록에서 연습 기준 준비' : '이 과제로 연습 시작'}</Button>}</div>
           {plan.mode !== 'DRIVING_FOCUS' && <div className="summary-run-instruction"><strong>{plan.title}</strong><p>{plan.primary_instruction}</p></div>}
           {open === 'next'
-            ? <div className="summary-run-details"><div className="summary-run-lock"><h4>유지할 것</h4><ul>{lockList.map((text, i) => <li key={i}>{text}</li>)}</ul></div>
-              <div className="summary-run-criteria"><h4>주행 후 확인할 기준</h4><ul>{criteriaList.map((text, i) => <li key={i}><Check aria-hidden="true" /><span>{text}</span></li>)}</ul></div></div>
+            ? <div className="summary-run-details"><FittedSections label="공간에 맞춘 다음 주행 계획" sections={[
+              { key: 'lock', content: <div className="summary-run-lock"><h4>유지할 것</h4><ul>{lockList.map((text, i) => <li key={i}>{text}</li>)}</ul></div> },
+              { key: 'criteria', content: <div className="summary-run-criteria"><h4>주행 후 확인할 기준</h4><ul>{criteriaList.map((text, i) => <li key={i}><Check aria-hidden="true" /><span>{text}</span></li>)}</ul></div> },
+              ...(corner ? measuredSections(corner) : []),
+              ...notes.map(noteSection),
+            ]} /></div>
             : <p className="summary-run-counts">유지할 것 {lockList.length}개 · 확인 기준 {criteriaList.length}개</p>}
         </> : <Empty><EmptyHeader><EmptyTitle>다음 주행 계획 확인 전</EmptyTitle><EmptyDescription>비교할 기록을 선택하면 계획을 계산합니다.</EmptyDescription></EmptyHeader></Empty>}</CardContent>
         {open === 'next' && <CardFooter className="summary-column-footer"><ArrowRight aria-hidden="true" /><p>{plan?.after_run || '새 기록을 불러와 비교해 주세요.'}</p></CardFooter>}
@@ -124,17 +129,8 @@ export default function DrivingSummary({ comparison, names, onCorner, onCompare,
         <CardHeader className="summary-column-header"><div className="summary-column-title"><CardTitle asChild><h3 id="analysis-title" className="flex items-center gap-2"><ChartColumn />비교·분석</h3></CardTitle>{widen('analysis')}</div>
           <CardDescription>{corner ? `${corner.id} · ${cornerLabel(corner, names)} · 구간 ${signed(corner.delta_s)} s` : '과제 구간이 없습니다.'}</CardDescription></CardHeader>
         <CardContent className="summary-column-content">{corner ? (open === 'analysis' ? <>
-          <div className="summary-analysis-main">
-          <section className="comparison-facts" aria-label="선택한 두 랩 비교"><h4>선택한 두 랩 비교</h4><CornerPhases corner={corner} /><RacingLine line={corner.line} /></section>
-          <section className="summary-points" aria-label="그래프 비교 포인트"><h4>그래프 비교 포인트 <Badge variant="secondary">{notes.length}개</Badge></h4>
-            {notes.length ? <ul>{notes.map(note => <li key={note.key}><i className="insight-number">{note.id}</i><span><b>{note.label}</b><strong>{note.value}</strong><small>{note.text}</small></span></li>)}</ul>
-              : <p className="insight-empty">관측된 큰 차이가 없습니다.</p>}</section>
-          <Button variant="outline" size="sm" data-own-action onClick={() => onCorner(corner.id)}>코너 비교에서 보기<ArrowRight data-icon="inline-end" /></Button>
-          </div>
-          <div className="summary-analysis-side">
-          <HandlingDetail items={handling} coverage={corner.handling_coverage} />
-          {repeated.length > 0 && <HandlingRepeats items={repeats} />}
-          </div>
+          <SummaryAnalysis corner={corner} notes={notes} affected={affected} names={names} repeats={repeats} />
+          <Button className="summary-analysis-link" variant="outline" size="sm" data-own-action onClick={() => onCorner(corner.id)}>코너 비교에서 보기<ArrowRight data-icon="inline-end" /></Button>
         </> : <>
           {corner.phases && <dl className="summary-phase-mini">{['braking', 'rotation', 'drive', 'straight_after'].map(key => { const value = corner.phases[key]?.delta_s; return <div key={key}><dt>{phaseNames[key]}</dt><dd className={cn('numeric', Number.isFinite(value) && value > 0 && 'loss', Number.isFinite(value) && value < 0 && 'gain')}>{Number.isFinite(value) ? `${value < 0 ? '−' : '+'}${Math.abs(value).toFixed(2)}` : '—'}</dd></div>; })}</dl>}
           <DeviationLine deviation={corner.first_deviation} />

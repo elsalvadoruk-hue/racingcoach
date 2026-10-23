@@ -3,6 +3,7 @@ from contextlib import ExitStack
 from dataclasses import replace
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
@@ -17,6 +18,38 @@ import test_partial_coaching as partial_fixtures
 
 
 class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
+    def test_external_analysis_adds_notice_without_changing_existing_calculations(self):
+        from test_setup_influence import fixture
+        data = fixture()
+        for grid in (data['target_grid'], data['reference_grid']):
+            x = grid['distance_pct']
+            grid['Speed'] = grid['speed_kph'] / 3.6
+            for corner in data['corners']:
+                grid['Throttle'][(x >= corner['entry_pct']) & (x <= corner['exit_pct'])] = .5
+        definitions = [{'entry': round(c['entry_pct'] * 2000), 'apex': round((c['entry_pct'] + c['exit_pct']) * 1000),
+                        'exit': round(c['exit_pct'] * 2000)} for c in data['corners']]
+        source = self.sources['baseline.ibt']
+        analyzer = api.TelemetryAnalyzer(source)
+        analyzer.grid_points = 2001
+        analyzer.track_length_m = 6000
+        target = replace(source.laps[-1], lap_time_s=100.2)
+        reference = SimpleNamespace(path=Path('reference.csv'), metadata={'lap_time_s': 100., 'driver_name': 'Synthetic'},
+                                    distance_pct=data['reference_grid']['distance_pct'],
+                                    grid=lambda *args: data['reference_grid'])
+        with patch.object(api, 'resolve_external_reference_file', return_value=reference.path), \
+             patch.object(api.external_reference_repository, 'load', return_value=reference), \
+             patch.object(api, 'external_reference_compatible', return_value=True), \
+             patch.object(analyzer, '_lap_grid', return_value=data['target_grid']), \
+             patch.object(analyzer, '_detect_corners', return_value=definitions):
+            with patch.object(api, 'setup_influence_notice', return_value=None):
+                before = analyzer._external_reference_analysis(target, ['reference.csv'])
+            after = analyzer._external_reference_analysis(target, ['reference.csv'])
+        notice = after['performance_diagnostics'].pop('setup_influence')
+        before['performance_diagnostics'].pop('setup_influence')
+        self.assertEqual(notice['status'], 'POSSIBLE')
+        self.assertEqual(after, before)
+        self.assertFalse(after['setup_conclusion_allowed'])  # A single lap still cannot prove a setup cause.
+
     def setUp(self):
         super().setUp()
         source = self.telemetry([(50, 50), (45, 45), (44, 45)])
@@ -198,6 +231,17 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
             response = self.post('references')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['files'][0]['name'], 'actual.csv')
+
+    def test_reference_catalog_exposes_existing_recommendations_without_private_catalog_paths(self):
+        catalog = {'files': [{'name': 'first.csv', 'usable': True, 'compatible': True}],
+                   'recommended_selection': ['first.csv'], 'directory': 'private-reference-directory',
+                   'catalog_path': 'private-catalog-path'}
+        with patch.object(api, 'list_external_reference_metadata', return_value=catalog):
+            response = self.post('references')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['recommended_selection'], ['first.csv'])
+        self.assertNotIn('directory', response.json())
+        self.assertNotIn('catalog_path', response.json())
 
     def test_setup_plan_is_local_and_setup_compare_uses_real_persistence_handler(self):
         plan = self.post('setup-plan', {'filename': 'baseline.ibt', 'phase': 'EXIT', 'symptom': 'OVERSTEER'})

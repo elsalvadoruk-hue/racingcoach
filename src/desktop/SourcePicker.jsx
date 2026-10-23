@@ -32,6 +32,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   const [referenceSelection, setReferenceSelection] = useState(data.reference_selection || (data.personalReference ? 'AUTO' : 'MANUAL'));
   const [personalReference, setPersonalReference] = useState(data.personalReference || null);
   const initialReferenceLookup = useRef(null);
+  const loadedFile = useRef(data.filename || null);
   const [referenceNotice, setReferenceNotice] = useState('');
   const [personalBusy, setPersonalBusy] = useState(false);
   const [mode, setMode] = useState(external.length ? 'GARAGE61' : 'LOCAL');
@@ -79,24 +80,31 @@ export default function SourcePicker({ target, reference, external, onApply, ana
       if (!live) return;
       const available = (references.files || []).filter(r => r.usable !== false && r.compatible !== false);
       const personal = references.personalReference || next.personalReference;
+      const changedFile = file !== loadedFile.current;
+      loadedFile.current = file;
+      const retained = external.filter(name => available.some(row => row.name === name));
+      const recommended = (references.recommended_selection ?? available.slice(0, 1).map(row => row.name))
+        .filter(name => available.some(row => row.name === name));
+      const nextSelected = trial?.reference_files || (lmu ? [] : retained.length ? retained : recommended);
       setSession(next); setRefs(available); setPersonalReference(personal || null);
-      const missingExternal = !trial && external.length && !external.some(name => available.some(row => row.name === name));
-      setReferenceNotice(references.unavailable || missingExternal ? 'Garage61 기준을 사용할 수 없어 조건이 비슷한 내 베스트 랩을 사용합니다.' : '');
+      const missingExternal = !trial && external.length && !retained.length;
+      const fallback = changedFile ? !trial && !lmu && !nextSelected.length : missingExternal;
+      setReferenceNotice(references.unavailable || fallback ? 'Garage61 기준을 사용할 수 없어 조건이 비슷한 내 베스트 랩을 사용합니다.' : '');
       if (missingExternal) { setMode('LOCAL'); setSelected([]); }
-      if (personal && (file !== data.filename || data.reference_selection !== 'MANUAL') && !trial) {
+      if (personal && (changedFile || data.reference_selection !== 'MANUAL') && !trial) {
         setReferenceSelection('AUTO');
         setReferenceFile(personal.filename || next.defaultReferenceFile || file);
         setBase(String(personal.lap ?? personal.lap_number ?? next.defaultReference ?? ''));
       }
       setFiles(current => current.map(row => row.name === file ? { ...row, ...lapCounts(next.laps), best_lap_s: fileBestLap(next.laps), recording_time: next.session?.recording_time || row.recording_time } : row));
-      if (file !== data.filename) {
+      if (changedFile) {
         setOwn(next.defaultTarget == null ? '' : String(next.defaultTarget));
         if (!personal) setBase(String(next.defaultReference ?? ''));
-        setSelected(trial?.reference_files || []); setMode(trial?.reference_files?.length ? 'GARAGE61' : 'LOCAL');
+        setSelected(nextSelected); setMode(nextSelected.length ? 'GARAGE61' : 'LOCAL');
       }
     })().catch(e => { if (live) { setError(e.message); setSession(null); } }).finally(() => { if (progressId) endProgress(progressId); if (live) setBusy(false); });
     return () => { live = false; if (progressId) endProgress(progressId); };
-  }, [file, external, beginProgress, endProgress]);
+  }, [file, external, lmu, beginProgress, endProgress]);
   useEffect(() => {
     if (!referenceFile || referenceFile === file) { setReferenceBusy(false); setReferenceError(''); return undefined; }
     const controller = new AbortController();

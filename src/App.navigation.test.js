@@ -42,6 +42,95 @@ const ready = async () => {
 };
 const requests = () => global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/analyze')).map(([, options]) => JSON.parse(options.body));
 
+test('startup restores Monza once and ignores the existing Hockenheim announcement on subscription or reconnect', async () => {
+  const monza = { ...files[1], name: 'monza.ibt', track_name: 'Monza' };
+  const hockenheim = { ...files[0], name: 'hockenheim.ibt', track_name: 'Hockenheim' };
+  localStorage.setItem('iracing-tuner.workflow.v1', JSON.stringify({ version: 1, preferences: { selectedFile: monza.name } }));
+  let source;
+  global.EventSource = class { constructor() { source = this; } close() {} };
+  const original = global.fetch.getMockImplementation();
+  const telemetry = { file_name: hockenheim.name, file_signature: [hockenheim.name, 100, 1], analyzable: true };
+  global.fetch.mockImplementation((url, options) => url.includes('/api/files') ? response({ files: [hockenheim, monza] })
+    : url.endsWith('/api/status') ? response({ telemetry }) : original(url, options));
+  const { result } = await ready();
+  expect(result.current.selectedFile).toBe(monza.name);
+  for (let announcement = 0; announcement < 2; announcement += 1) {
+    await act(async () => source.onmessage({ data: JSON.stringify({ telemetry }) }));
+  }
+  expect(result.current.selectedFile).toBe(monza.name);
+  expect(result.current.analysisSnapshot.filename).toBe(monza.name);
+  expect(requests().map(request => request.filename)).toEqual([monza.name]);
+
+  // A real update to that latest recording must still be adopted exactly once.
+  const updated = { ...telemetry, file_signature: [hockenheim.name, 200, 2] };
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: updated }) }));
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: updated }) }));
+  expect(result.current.analysisSnapshot.filename).toBe(hockenheim.name);
+  expect(requests().map(request => request.filename)).toEqual([monza.name, hockenheim.name]);
+});
+
+test('a new recording arriving during startup is analyzed after restoration finishes', async () => {
+  let source, finish;
+  global.EventSource = class { constructor() { source = this; } close() {} };
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => {
+    if (url.endsWith('/api/status')) return response({ telemetry: { file_name: 'A.ibt', file_signature: [1] } });
+    if (url.endsWith('/api/analyze') && JSON.parse(options.body).filename === 'A.ibt') {
+      return new Promise(resolve => { finish = resolve; });
+    }
+    return original(url, options);
+  });
+  const { result } = renderHook(() => useAnalysisWorkspace());
+  await waitFor(() => expect(finish).toBeDefined());
+  const telemetry = { file_name: 'B.ibt', file_signature: [2] };
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry }) }));
+  expect(requests().map(request => request.filename)).toEqual(['A.ibt']);
+  await act(async () => finish(response(analysisFor('A.ibt'))));
+  await waitFor(() => expect(result.current.initialLoading).toBe(false));
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry }) }));
+  expect(result.current.analysisSnapshot.filename).toBe('B.ibt');
+  expect(requests().map(request => request.filename)).toEqual(['A.ibt', 'B.ibt']);
+});
+
+test('the first SSE snapshot does not retry a latest recording already rejected during startup', async () => {
+  let source;
+  global.EventSource = class { constructor() { source = this; } close() {} };
+  const original = global.fetch.getMockImplementation();
+  const telemetry = { file_name: 'A.ibt', file_signature: [1] };
+  global.fetch.mockImplementation((url, options) => {
+    if (url.endsWith('/api/status')) return response({ telemetry });
+    if (url.endsWith('/api/analyze') && JSON.parse(options.body).filename === 'A.ibt') {
+      return response({ ...analysisFor('A.ibt'), comparison: null,
+        data_quality: { analysis_scope: 'UNAVAILABLE', valid_laps: 0, coaching_ready: false } });
+    }
+    return original(url, options);
+  });
+  const { result } = await ready();
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry }) }));
+  expect(result.current.analysisSnapshot.filename).toBe('B.ibt');
+  expect(result.current.error).toBe('');
+  expect(requests().map(request => request.filename)).toEqual(['A.ibt', 'B.ibt']);
+});
+
+test('a locked latest recording at startup is adopted when it unlocks without a signature change', async () => {
+  let source, locked = true;
+  global.EventSource = class { constructor() { source = this; } close() {} };
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => {
+    if (url.includes('/api/files')) return response({ files: [{ ...files[0], analyzable: !locked, retryable: locked }, files[1]] });
+    if (url.endsWith('/api/status')) return response({ telemetry: {
+      file_name: 'A.ibt', file_signature: [1], analyzable: false, retryable: true,
+    } });
+    return original(url, options);
+  });
+  const { result } = await ready();
+  expect(result.current.selectedFile).toBe('B.ibt');
+  locked = false;
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'A.ibt', file_signature: [1], retryable: false } }) }));
+  expect(result.current.analysisSnapshot.filename).toBe('A.ibt');
+  expect(requests().map(request => request.filename)).toEqual(['B.ibt', 'A.ibt']);
+});
+
 test('startup skips an empty newest recording and keeps the previous usable run after its SSE announcement', async () => {
   let source;
   global.EventSource = class { constructor() { source = this; } close() {} };

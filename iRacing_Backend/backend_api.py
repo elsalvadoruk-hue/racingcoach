@@ -10,6 +10,7 @@ from analysis_routes import AnalysisRoutesServices, register_routes as register_
 from reference_routes import ReferenceRoutesServices, register_routes as register_reference_routes
 from settings_routes import SettingsRoutesServices, register_routes as register_settings_routes
 import analysis_progress
+from setup_influence import setup_influence_notice
 from practice_routes import PracticeRoutesServices, register_routes as register_practice_routes
 from memory_routes import MemoryRoutesServices, register_routes as register_memory_routes
 from corner_notes import CornerNotesStore
@@ -2238,6 +2239,11 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                 "line_comparison": line_comparison,
                 "performance_diagnostics": {
                     "straight_line": straight_performance,
+                    "setup_influence": setup_influence_notice(
+                        target_grid, aggregate_grid, aggregate_corners, straight_performance,
+                        pace_eligible=bool(target.valid), lap_delta_s=gap_to_reference,
+                        current_conditions=current_conditions,
+                        reference_conditions=pool_rows),
                 },
                 "visualizations": {"trace": trace,
                                    "track_path": gps_path(target_grid),

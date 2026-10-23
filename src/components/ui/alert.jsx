@@ -5,6 +5,7 @@ const alertVariants = cva("relative w-full rounded-lg border px-4 py-3 text-sm [
   variants: {
     variant: {
       default: "bg-background text-foreground",
+      warning: "border-warning/40 bg-warning/10 text-foreground [&>svg]:text-warning [&_h5]:text-warning",
       destructive: "border-destructive/50 text-destructive dark:border-destructive [&>svg]:text-destructive"
     }
   },
