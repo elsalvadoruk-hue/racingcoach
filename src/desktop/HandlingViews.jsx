@@ -13,12 +13,28 @@ const withNames = { braking: '제동 중', lift: '스로틀을 뗀 직후', powe
 // Mirrors handling.EVIDENCE; older saved results have no evidence field.
 const evidenceByKind = { understeer: 'compared', oversteer: 'reference', countersteer: 'measured' };
 const evidenceOf = item => item.evidence || evidenceByKind[item.kind];
-const referenceNote = '참고 표시 · 평소 랩과의 차이가 우연과 뚜렷이 구분된다는 근거가 아직 부족합니다.';
+const referenceNote = '참고 표시 · 이 종류는 아직 근거가 약해서 우연일 가능성이 큽니다.';
+
+// What happened, in one plain sentence per kind.
+const happened = {
+  understeer: '이 구간에서 평소의 내 랩보다 차가 덜 돌았습니다.',
+  oversteer: '이 구간에서 평소의 내 랩보다 차가 더 돌았습니다.',
+  countersteer: '차가 도는 반대쪽으로 핸들을 돌린 순간이 있었습니다. 뒤가 미끄러질 때 잡으면서 주로 생깁니다.',
+};
 
 function costText(value) {
-  if (!Number.isFinite(value)) return '시간 차이 확인 필요';
-  if (value === 0) return '시간 차이 0.00초';
-  return `나온 랩이 ${Math.abs(value).toFixed(2)}초 ${value > 0 ? '느림' : '빠름'}`;
+  if (value === 0) return '평소와 같음';
+  return `평소보다 ${Math.abs(value).toFixed(2)}초 ${value > 0 ? '느림' : '빠름'}`;
+}
+
+// How to read it: what the numbers can and cannot say, without judging the driving.
+function readingText(item) {
+  if (item.time_link === 'slower') return '이게 나온 랩은 이 코너에서 실제로 느렸습니다. 다음 주행에서 줄여 볼 만한 후보입니다.';
+  if (item.laps <= 2) return '한두 랩에서만 나온 일이라 우연일 수 있습니다. 다음 주행에서도 반복되는지 지켜보세요.';
+  if (!Number.isFinite(item.time_cost_s)) return '시간에 준 영향은 알 수 없습니다. 반복되는지 정도만 참고하세요.';
+  if (item.time_cost_s < 0) return '이게 나온 랩이 오히려 빨랐지만, 이렇게 달리는 게 더 낫다는 뜻은 아닙니다. 그 랩이 빨랐던 다른 이유가 섞여 있을 수 있습니다.';
+  if (item.time_cost_s > 0) return '이게 나온 랩이 조금 느렸지만, 이 때문인지는 확인되지 않았습니다. 다른 이유로 느렸을 수 있습니다.';
+  return '시간 차이가 없었습니다. 큰 문제는 아닌 것으로 보입니다.';
 }
 
 export function HandlingBadges({ items = [] }) {
@@ -38,12 +54,13 @@ function orderHandling(items) {
 
 function HandlingObservation({ item }) {
   return <article className="handling-observation" data-handling-item aria-label={`${phaseNames[item.phase]} · ${shortNames[item.kind]}`}>
-    <div className="handling-observation-heading"><Badge variant={item.kind === 'countersteer' ? 'outline' : item.kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[item.kind]}{evidenceOf(item) === 'reference' ? ' · 참고' : ''}</Badge><strong>{phaseNames[item.phase]} 구간</strong>{item.time_link === 'slower' && <Badge variant="outline">코너 시간과 연결</Badge>}</div>
-    <dl className="handling-facts"><div><dt>관측된 랩</dt><dd>{item.of_laps}랩 중 {item.laps}랩</dd></div><div><dt>코너 시간 차이</dt><dd>{costText(item.time_cost_s)}</dd></div></dl>
-    <small data-time-link={item.time_link || 'unknown'}>{item.time_link === 'slower' ? '이 코너에서 이 거동이 나온 랩이 평소보다 느렸습니다' : '시간과의 관계는 확인되지 않았습니다'}</small>
-    {withNames[item.with] && <small>함께 관측된 조작: {withNames[item.with]}</small>}
-    {item.observed_laps != null && item.observed_laps < item.of_laps && <small>{item.kind === 'countersteer' ? `반대 조향을 끝까지 확인한 랩 ${item.observed_laps}랩` : `평소와 끝까지 비교한 랩 ${item.observed_laps}랩`} · 일부 구간만 비교한 랩의 결과도 포함합니다.</small>}
-    {item.kind === 'countersteer' && <small>개인 기준과 별개로 관측했습니다.</small>}
+    <div className="handling-observation-heading"><Badge variant={item.kind === 'countersteer' ? 'outline' : item.kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[item.kind]}{evidenceOf(item) === 'reference' ? ' · 참고' : ''}</Badge><strong>{phaseNames[item.phase]} 구간</strong>{item.time_link === 'slower' && <Badge variant="outline">느린 랩과 겹침</Badge>}</div>
+    <p className="handling-happened">{happened[item.kind]}</p>
+    <dl className="handling-facts"><div><dt>나온 랩</dt><dd>{item.of_laps}랩 중 {item.laps}랩</dd></div>
+      {Number.isFinite(item.time_cost_s) && <div><dt>나온 랩의 이 코너 시간</dt><dd>{costText(item.time_cost_s)}</dd></div>}</dl>
+    <p className="handling-reading" data-time-link={item.time_link || 'unknown'}>{readingText(item)}</p>
+    {withNames[item.with] && <small>그때 조작: {withNames[item.with]}</small>}
+    {item.observed_laps != null && item.observed_laps < item.of_laps && <small>일부 랩은 구간의 일부만 비교했습니다.</small>}
     {evidenceOf(item) === 'reference' && <small data-evidence-note>{referenceNote}</small>}
     {item.approximate && <small>참고용(LMU는 회전량을 GPS로 추정)</small>}</article>;
 }
@@ -62,9 +79,8 @@ export function HandlingDetail({ items = [], coverage = [] }) {
   const known = coverage.reduce((sum, item) => sum + item.classifiable, 0);
   const unknown = coverage.reduce((sum, item) => sum + item.unknown, 0);
   return <section className="handling-detail" aria-label="차 거동"><h4>차 거동 · 내 다른 랩과 비교</h4>
-    <p className="handling-basis">핸들을 꺾은 정도에 비해 차가 덜 또는 더 돌아간 랩을 표시합니다. 같은 기록의 다른 유효 랩과 비교합니다.</p>
-    <small>위에서 선택한 기준 랩·Garage61 비교와는 별개입니다.</small>
-    <small>검증 전 초기값 · 체감 대조 전입니다.</small>
+    <p className="handling-basis">같은 기록의 내 다른 랩과 비교해, 평소와 다르게 차가 움직인 순간을 보여 줍니다. 잘했다·못했다를 판정하는 표시가 아닙니다. 여러 랩에서 반복되고 그 랩이 느렸다면 살펴볼 만합니다.</p>
+    <small>위에서 선택한 기준 랩·Garage61 비교와는 별개입니다. 아직 다듬는 중인 분석이라 참고용으로 보세요.</small>
     {coverage.length > 0 && <p className="handling-coverage">{coverageText(known, unknown)}</p>}
     {unknown > 0 && <small>랩마다 속도·페달·공략이 조금씩 달라서 흔히 생깁니다. 문제가 있다는 뜻도, 없다는 뜻도 아닙니다.</small>}
     <details className="handling-help"><summary>표시 뜻과 비교 범위</summary>
