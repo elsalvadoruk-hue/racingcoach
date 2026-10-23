@@ -3852,11 +3852,54 @@ overlay_controller = OverlayController(reference=OverlayReference(
     EXTERNAL_REFERENCE_DIR, lambda path: Garage61ReferenceReader(path).parse(), pinned_loader=load_task_overlay_reference))
 
 
+def session_log_extras(defer: bool = False):
+    """Extra parts for a session log (session_log_extras): nearby cars in races, the own drive measured.
+
+    The own drive is the run's recordings analysed like opening them, without handling history
+    or long-term memory writes. With ``defer`` it waits while the driver is on track."""
+    import session_log_extras as extras
+
+    def candidates():
+        files = list(_list_raw_ibt_files(40))
+        try:
+            from lmu_telemetry import list_lmu_telemetry_files
+            files += list_lmu_telemetry_files()
+        except Exception:
+            logger.debug("LMU recordings were not listed for a session log", exc_info=True)
+        return files
+
+    def metadata_of(path):
+        path = Path(path)
+        if path.suffix.casefold() == ".duckdb":
+            return cached_file_visibility(path) or {}   # never index an LMU file as a broken IBT
+        try:
+            return quick_file_visibility(path)
+        except Exception:
+            return {}
+
+    def analyze(path):
+        import handling
+        path = Path(path)
+        telemetry = repository.load(path)
+        analyzer = TelemetryAnalyzer(telemetry)
+        analyzer._handling_analysis = lambda corners: None   # no handling-history write from an upload
+        result = analyzer.analyze(AnalyzeRequest(filename=path.name, include_ai=False, persist_memory=False))
+        corners = [{key: corner[key] for key in ("id", "label", "entry_pct", "apex_pct", "exit_pct")}
+                   for corner in (result.get("performance") or {}).get("corners") or []]
+        measured = handling.analyze_handling(analyzer, corners, include_observations=True) if corners else None
+        return result, dict(telemetry.metadata or {}), measured
+
+    return (extras.nearby_cars(live_telemetry.traffic_log.folder, live_telemetry.timing_log.folder),
+            extras.own_drive(candidates, metadata_of, analyze, driving=lambda: getattr(live_telemetry, "_link", None) == "DRIVING",
+                             defer=defer, app_version=APP_VERSION))
+
+
 @asynccontextmanager
 async def app_lifespan(_app):
     # Sends finished drives only while the driver's consent is recorded (session_log_auto).
     from session_log_auto import AutoUploader
-    uploader = AutoUploader(voice_note_store, APP_VERSION, current_run=lambda: live_telemetry.run_id)
+    uploader = AutoUploader(voice_note_store, APP_VERSION, current_run=lambda: live_telemetry.run_id,
+                            extras=session_log_extras(defer=True))
     # LMU: one car per model, whatever the livery. Before the live coach and the stores load.
     # Tests run on a temporary database; they never read the driver's recordings unless given a folder.
     scan = not _DATABASE_GIVEN or bool(os.getenv("LMU_TELEMETRY_DIRS"))
@@ -4225,6 +4268,7 @@ _handlers = register_settings_routes(app, SettingsRoutesServices(
     _reload_settings=lambda *args, **kwargs: _reload_settings(*args, **kwargs),
     app_settings_view=lambda *args, **kwargs: app_settings_view(*args, **kwargs),
     get_voice_note_store=lambda: voice_note_store,
+    get_session_log_extras=lambda defer=False: session_log_extras(defer),
 ))
 get_app_settings = _handlers.get_app_settings
 put_app_settings = _handlers.put_app_settings

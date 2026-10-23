@@ -20,6 +20,8 @@ FIELDS = ['idx', 'class_id', 'gap_m', 'est_time_s', 'lap_completed', 'position',
           'class_position', 'on_pit_road', 'track_surface', 'local_x_m', 'local_z_m']
 OWN_FIELDS = ['lap_completed', 'distance_pct', 'speed_mps', 'brake', 'throttle',
               'steering_rad', 'car_left_right', 'on_pit_road']
+# Version 2: the own lap position to 6 places (3 places was ~5 m on a 5 km track).
+OWN_DIGITS = [3, 6, 3, 3, 3, 3, 3, 3]
 ARRAYS = {'distance_pct': 'CarIdxLapDistPct', 'lap_completed': 'CarIdxLapCompleted',
           'position': 'CarIdxPosition', 'class_position': 'CarIdxClassPosition',
           'on_pit_road': 'CarIdxOnPitRoad', 'track_surface': 'CarIdxTrackSurface',
@@ -159,7 +161,7 @@ class TrafficLog:
                          rounded(surface), rounded(position.get('x_m'), 2), rounded(position.get('z_m'), 2)])
         # Only detached primitive values cross threads; SDK arrays are never queued.
         row = {'t': round(session_time, 3),
-               'own': [rounded(sample.get(k)) for k in OWN_FIELDS], 'c': cars}
+               'own': [rounded(sample.get(k), d) for k, d in zip(OWN_FIELDS, OWN_DIGITS)], 'c': cars}
         with self._condition:
             if self._closed or self._run.failed:
                 return
@@ -174,7 +176,7 @@ class TrafficLog:
 
     def _header(self, snapshot):
         identity = snapshot['identity']
-        return {'format': FORMAT, 'version': 1, 'game': snapshot.get('game'), 'run_id': self.run_id,
+        return {'format': FORMAT, 'version': 2, 'game': snapshot.get('game'), 'run_id': self.run_id,
                 'track': identity.get('track_name'), 'track_id': identity.get('track_id'),
                 'track_config': identity.get('track_config'), 'track_length_m': snapshot['track_length_m'],
                 'car': identity.get('car_path'), 'player_idx': snapshot.get('player_idx'),
