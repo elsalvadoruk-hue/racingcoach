@@ -25,9 +25,10 @@ MIN_BAND_SAMPLES = 200
 MIN_REFERENCE_LAPS = 3
 MIN_LAPS_FOR_POINT_SPREAD = 5
 Z_LIMIT = 2.5
-MAX_SPEED_DIFFERENCE = 5.
+MAX_SPEED_RELATIVE = .04
+MAX_LAT_ACCEL_ABS = .8
+MAX_LAT_ACCEL_RELATIVE = .10
 MAX_PEDAL_DIFFERENCE = .2
-MAX_STEER_RATIO = 1.5
 METHOD = 'personal_corner_phase_v2'
 REQUIRED = ('Speed', 'SteeringWheelAngle', 'YawRate', 'LatAccel', 'Brake', 'Throttle')
 PHASES = ('braking', 'rotation', 'drive')
@@ -136,10 +137,10 @@ def prepare_phase(raw, start_pct, end_pct, model):
 
 def _reference_at(reference, pct):
     """Interpolate only within one observed forward interval; overlaps are unknown."""
-    values = np.full((5, len(pct)), np.nan)
+    values = np.full((6, len(pct)), np.nan)
     seen = np.zeros(len(pct), dtype=int)
     local = reference['local']
-    columns = [reference['q'], *[local.channels[key] for key in ('Speed', 'SteeringWheelAngle', 'Brake', 'Throttle')]]
+    columns = [reference['q'], *[local.channels[key] for key in ('Speed', 'SteeringWheelAngle', 'Brake', 'Throttle', 'LatAccel')]]
     for span in reference['segments']:
         axis = local.pct[span]
         mask = ((pct >= max(axis[0], reference['start'])) & (pct <= min(axis[-1], reference['end'])))
@@ -168,18 +169,23 @@ def classify_phase(phase, references, model):
     predictions = []
     support = np.zeros(5, dtype=int)
     available = np.zeros(len(speed), dtype=int)
+    lateral_rejected = np.zeros(len(speed), dtype=int)
     for reference in references:
         if reference is None or reference is phase:
             continue
         support += reference['support']
-        q, rspeed, rsteer, rbrake, rthrottle = _reference_at(reference, local.pct)
+        q, rspeed, rsteer, rbrake, rthrottle, rlat = _reference_at(reference, local.pct)
         available += np.isfinite(q)
         comparable = ((np.searchsorted(model['edges_mps'], rspeed, side='right') == phase['bands'])
-                      & (abs(rspeed - speed) <= MAX_SPEED_DIFFERENCE)
+                      & (abs(rspeed - speed) <= MAX_SPEED_RELATIVE * speed)
                       & (abs(rbrake - brake) <= MAX_PEDAL_DIFFERENCE)
                       & (abs(rthrottle - throttle) <= MAX_PEDAL_DIFFERENCE)
-                      & (rsteer * steer > 0) & (abs(rsteer) <= MAX_STEER_RATIO * abs(steer))
-                      & (abs(steer) <= MAX_STEER_RATIO * abs(rsteer)))
+                      & (rsteer * steer > 0))
+        lat = local.channels['LatAccel']
+        lateral = ((rlat * lat > 0)
+                   & (abs(rlat - lat) <= np.maximum(MAX_LAT_ACCEL_ABS, MAX_LAT_ACCEL_RELATIVE * abs(lat))))
+        lateral_rejected += np.isfinite(q) & comparable & ~lateral
+        comparable &= lateral
         predictions.append(np.where(comparable, q, np.nan))
     baseline = np.full(len(speed), np.nan)
     log_baseline = np.full(len(speed), np.nan)
@@ -242,6 +248,8 @@ def classify_phase(phase, references, model):
             reasons.append('reference_samples_shortage')
         if np.all(np.isfinite(model['edges_mps'])) and np.any(required & (available >= MIN_REFERENCE_LAPS) & (matched < MIN_REFERENCE_LAPS)):
             reasons.append('inputs_not_comparable')
+        if np.any(required & (matched < MIN_REFERENCE_LAPS) & (lateral_rejected > 0)):
+            reasons.append('lateral_not_comparable')
         if np.any(required & (steer * yaw <= 0)):
             reasons.append('rotation_direction_not_comparable')
         if np.any(required & np.isfinite(baseline) & ~np.isfinite(spread)):
@@ -364,8 +372,9 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
             'noise_rules': {'z_limit': Z_LIMIT, 'min_ratio': [UNDER_B, OVER_B], 'spread': 'mad',
                             'min_laps_for_point_spread': MIN_LAPS_FOR_POINT_SPREAD},
             'coverage': dict(coverage), 'reference_rules': {'other_laps': MIN_REFERENCE_LAPS,
-                'samples_per_corner_phase_speed_band': MIN_BAND_SAMPLES, 'max_speed_difference_mps': MAX_SPEED_DIFFERENCE,
-                'max_pedal_difference': MAX_PEDAL_DIFFERENCE, 'max_steer_ratio': MAX_STEER_RATIO}}
+                'samples_per_corner_phase_speed_band': MIN_BAND_SAMPLES, 'max_speed_relative': MAX_SPEED_RELATIVE,
+                'max_lat_accel_abs': MAX_LAT_ACCEL_ABS, 'max_lat_accel_relative': MAX_LAT_ACCEL_RELATIVE,
+                'max_pedal_difference': MAX_PEDAL_DIFFERENCE}}
     if include_observations:
         # Only the offline release audit asks for per-lap facts; ordinary API payloads stay compact.
         result['observations'] = [{'corner_id': key[0], 'phase': key[1], **row}

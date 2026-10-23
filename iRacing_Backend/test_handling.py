@@ -35,7 +35,7 @@ def lap_wave(kind=None):
     elif kind == 'lift':
         yaw[(time >= 40.05) & (time < 40.4)] *= 1.3
     return RawLap(time, time / 100, {'Speed': speed, 'SteeringWheelAngle': steering, 'YawRate': yaw,
-                  'LatAccel': yaw * speed, 'Brake': brake, 'Throttle': throttle}, 1 / 60, 3000.)
+                  'LatAccel': .05 * .1 * speed * speed, 'Brake': brake, 'Throttle': throttle}, 1 / 60, 3000.)
 
 
 def analyzer(kinds, *, lmu=False, scale='MEASURED'):
@@ -397,6 +397,67 @@ class HandlingTests(unittest.TestCase):
             self.assertEqual(history.update(metadata, ('new', 1), {'method': METHOD, 'corners': [item]}), [])
             repeats = history.update(metadata, ('another', 1), {'method': METHOD, 'corners': [item]})
             self.assertEqual(repeats[0]['files'], 2)
+
+    def test_same_lateral_acceleration_and_speed_with_more_steering_is_detected(self):
+        for factor in (1.3, 1.7):
+            with self.subTest(steering_factor=factor):
+                target = lap_wave()
+                target.channels['SteeringWheelAngle'] *= factor
+                result = measure(target, .2, .25)
+                self.assertTrue(result['observed'])
+                self.assertEqual([event['kind'] for event in result['events']], ['understeer'])
+                self.assertAlmostEqual(result['b_median'], 1 / factor)
+
+    def test_incompatible_lateral_acceleration_is_excluded_and_explained(self):
+        for factor in (1.5, -1.):
+            with self.subTest(lateral_factor=factor):
+                references = [lap_wave() for _ in range(5)]
+                for reference in references:
+                    reference.channels['LatAccel'] *= factor
+                result = measure(reaction_scale(.7), .2, .25, references)
+                self.assertFalse(result['observed'])
+                self.assertIn('lateral_not_comparable', result['unknown_reasons'])
+                self.assertIn('inputs_not_comparable', result['unknown_reasons'])
+                self.assertEqual(result['events'], [])
+
+    def test_relative_speed_rejects_five_percent_even_within_same_quintile(self):
+        for speed, observed in ((20.79, True), (21., False)):
+            with self.subTest(reference_speed=speed):
+                target = lap_wave()
+                target.channels['Speed'][:] = 20.
+                references = [lap_wave() for _ in range(5)]
+                for reference in references:
+                    reference.channels['Speed'][:] = speed
+                model = {'edges_mps': np.array([5., 15., 30., 40.]), 'bands': []}
+                phase = prepare_phase(target, .2, .25, model)
+                refs = [prepare_phase(ref, .2, .25, model) for ref in references]
+                result = classify_phase(phase, refs, model)
+                self.assertEqual(result['observed'], observed)
+                if not observed:
+                    self.assertIn('inputs_not_comparable', result['unknown_reasons'])
+                    self.assertNotIn('lateral_not_comparable', result['unknown_reasons'])
+
+    def test_lateral_acceleration_uses_larger_absolute_or_relative_tolerance(self):
+        for target_ay, difference, expected in ((4., .79, True), (4., .81, False),
+                                               (12., 1.19, True), (12., 1.21, False)):
+            with self.subTest(target_ay=target_ay, difference=difference):
+                target = lap_wave()
+                target.channels['LatAccel'][:] = target_ay
+                references = [lap_wave() for _ in range(5)]
+                for reference in references:
+                    reference.channels['LatAccel'][:] = target_ay + difference
+                result = measure(target, .2, .25, references)
+                self.assertEqual(result['observed'], expected)
+                self.assertEqual('lateral_not_comparable' in result['unknown_reasons'], not expected)
+
+    def test_reference_rules_describe_speed_and_lateral_matching(self):
+        result = analyze_handling(analyzer([None] * 6), [CORNER])
+        rules = result['reference_rules']
+        self.assertEqual(rules['max_speed_relative'], .04)
+        self.assertEqual(rules['max_lat_accel_abs'], .8)
+        self.assertEqual(rules['max_lat_accel_relative'], .1)
+        self.assertNotIn('max_steer_ratio', rules)
+        self.assertNotIn('max_speed_difference_mps', rules)
 
 
 if __name__ == '__main__':
