@@ -3,11 +3,13 @@ import gzip
 import json
 import os
 import random
+import struct
 import tempfile
 import time
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import Mock, patch
 import io
 
 import drive_summary
@@ -36,6 +38,117 @@ def traffic_rows(count=300, seed=3):
         rows.append({'t': round(500 + i * .1, 3), 'own': [7, pct, round(rng.uniform(30, 70), 3), round(rng.random(), 3),
                      round(rng.random(), 3), round(rng.uniform(-.3, .3), 3), rng.choice([0, 1, 2]), 0], 'c': cars})
     return rows
+
+
+def write_recording(path, started, ended, closed=None):
+    """The small native IBT headers; no telemetry samples are needed for matching."""
+    header = bytearray(112)
+    struct.pack_into('<10i', header, 0, 2, 1, 60, 1, 1, 144, 1, 145, 1, 1)
+    path.write_bytes(header + struct.pack('<Qddii', int(started), 10., 10. + ended - started, 1, 60))
+    os.utime(path, (ended if closed is None else closed,) * 2)
+
+
+class RecordingAssociationTests(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+        self.start = 1_792_750_000.
+        self.identity = {'car_path': 'gt3', 'track_path': 'spa'}
+        self.run = {'started_at': self.start, 'ended_at': self.start + 600,
+                    'identity': self.identity, 'session_type': 'Race'}
+
+    def select(self, paths, metadata=None):
+        return extras.recordings_for(self.run, paths, lambda p: (metadata or {}).get(p, self.identity))
+
+    def test_adjacent_same_car_track_and_session_type_are_not_attached(self):
+        paths = [self.folder / f'{name}.ibt' for name in ('previous', 'own', 'next')]
+        write_recording(paths[0], self.start - 600, self.start - 20)
+        write_recording(paths[1], self.start, self.start + 610)
+        write_recording(paths[2], self.start + 620, self.start + 1200)
+        self.assertEqual(self.select(paths), [paths[1]])
+
+    def test_split_files_and_recording_started_before_first_call_are_kept(self):
+        paths = [self.folder / f'{name}.ibt' for name in ('first', 'second', 'third')]
+        write_recording(paths[0], self.start - 900, self.start + 200, closed=self.start + 9000)
+        write_recording(paths[1], self.start + 220, self.start + 400)
+        write_recording(paths[2], self.start + 420, self.start + 900)
+        self.assertEqual(self.select(list(reversed(paths))), paths)
+
+    def test_copying_or_renaming_an_old_recording_does_not_make_it_current(self):
+        old, own = self.folder / 'renamed.ibt', self.folder / 'own.ibt'
+        write_recording(old, self.start - 86400, self.start - 85000, closed=self.start + 100)
+        write_recording(own, self.start, self.start + 600, closed=self.start + 9000)
+        self.assertEqual(self.select([old, own]), [own])
+
+    def test_known_other_session_type_or_game_is_not_attached(self):
+        paths = [self.folder / f'{name}.ibt' for name in ('quali', 'race', 'other-game')]
+        for path in paths:
+            write_recording(path, self.start, self.start + 600)
+        meta = {paths[0]: {**self.identity, 'session_type': 'Open Qualify'},
+                paths[1]: {**self.identity, 'session_type': 'Race'},
+                paths[2]: {**self.identity, 'session_type': 'Race', 'game': 'lmu'}}
+        self.run['identity']['game'] = 'iracing'
+        self.assertEqual(self.select(paths, meta), [paths[1]])
+
+    def test_unknown_corrupt_or_missing_recording_time_is_not_guessed_from_mtime(self):
+        paths = [self.folder / f'{name}.ibt' for name in ('truncated', 'zero-date', 'backwards', 'nan')]
+        paths[0].write_bytes(b'x')
+        write_recording(paths[1], 0, 100)
+        write_recording(paths[2], self.start, self.start - 1)
+        write_recording(paths[3], self.start, float('nan'), closed=self.start + 100)
+        for path in paths:
+            os.utime(path, (self.start + 100,) * 2)
+        self.assertEqual(self.select(paths + [self.folder / 'missing.ibt']), [])
+
+    def test_missing_identity_does_not_attach_an_unidentified_file(self):
+        path = self.folder / 'unknown.ibt'
+        write_recording(path, self.start, self.start + 600)
+        self.assertEqual(self.select([path], {path: {}}), [])
+
+    def test_unrelated_recordings_are_not_indexed_or_analysed(self):
+        path = self.folder / 'other.ibt'
+        write_recording(path, self.start + 620, self.start + 1200)
+        metadata, analyze = Mock(), Mock()
+        made = extras.own_drive(lambda: [path], metadata, analyze)(self.run)
+        self.assertFalse(made.files)
+        self.assertEqual(made.info['reason'], 'no_recording')
+        metadata.assert_not_called()
+        analyze.assert_not_called()
+
+    def test_locked_file_is_not_attached(self):
+        with patch.object(Path, 'open', side_effect=PermissionError('locked')):
+            self.assertEqual(self.select([self.folder / 'locked.ibt']), [])
+
+    def test_newest_three_split_recordings_are_chosen_by_recorded_time(self):
+        paths = [self.folder / f'{i}.ibt' for i in range(4)]
+        for i, path in enumerate(paths):
+            write_recording(path, self.start + i * 100, self.start + i * 100 + 90,
+                            closed=self.start + (4 - i) * 1000)
+        self.assertEqual(self.select(list(reversed(paths))), paths[1:])
+
+    def test_native_lmu_times_work_without_ibt_headers_or_filename_timestamps(self):
+        from datetime import datetime, timezone
+        try:
+            import duckdb
+        except ImportError:
+            self.skipTest('optional LMU dependency is not installed')
+
+        paths = [self.folder / f'{name}.duckdb' for name in ('previous', 'own', 'next')]
+        for path, started in zip(paths, (self.start - 700, self.start, self.start + 620)):
+            with duckdb.connect(str(path)) as connection:
+                connection.execute('CREATE TABLE metadata (key VARCHAR, value VARCHAR)')
+                recorded = datetime.fromtimestamp(started, timezone.utc).strftime('%Y-%m-%dT%H_%M_%SZ')
+                connection.execute('INSERT INTO metadata VALUES (?, ?)', ['RecordingTime', recorded])
+                connection.execute('CREATE TABLE channelsList (channelName VARCHAR, frequency DOUBLE, unit VARCHAR)')
+                connection.execute('CREATE TABLE "GPS Time" (value DOUBLE)')
+                connection.execute('INSERT INTO "GPS Time" VALUES (50), (350), (650)')
+            os.utime(path, (self.start + 600,) * 2)
+        self.assertEqual(self.select(paths), [paths[1]])
+        self.assertEqual(extras.recording_window(paths[1]), (self.start, self.start + 600))
+        with duckdb.connect(str(paths[1])) as connection:
+            connection.execute('DELETE FROM metadata')
+        self.assertEqual(self.select([paths[1]]), [])
 
 
 class LogPackTests(unittest.TestCase):
@@ -90,14 +203,13 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(made.info['traffic']['rows'], 40)
         self.assertEqual(extras.nearby_cars(self.folder / 'none', None)(self.run).info['reason'], 'no_log')
 
-    def test_recordings_closed_during_the_run_with_the_same_car_and_track(self):
+    def test_recordings_overlapping_the_run_with_the_same_car_and_track(self):
         paths = {}
         for name, closed in (('before', self.run['started_at'] - 3600), ('during', self.run['ended_at'] - 60),
                              ('after', self.run['ended_at'] + 900), ('other_car', self.run['ended_at'] + 60),
                              ('much_later', self.run['ended_at'] + 7200)):
             path = self.folder / f'{name}.ibt'
-            path.write_bytes(b'x')
-            os.utime(path, (closed, closed))
+            write_recording(path, closed - 1200, closed)
             paths[name] = path
         meta = {path: {'car_path': 'othergt4' if name == 'other_car' else 'TestGT3', 'track_path': 'test gp'}
                 for name, path in paths.items()}
@@ -106,8 +218,7 @@ class ProviderTests(unittest.TestCase):
 
     def test_own_drive_waits_while_driving_and_packs_measured_values(self):
         path = self.folder / 'drive.ibt'
-        path.write_bytes(b'x')
-        os.utime(path, (self.run['ended_at'], self.run['ended_at']))
+        write_recording(path, self.run['started_at'], self.run['ended_at'])
         result = {'laps': [{'lap_number': 1, 'status': 'VALID', 'lap_time_s': 100.0, 'file_path': 'C:\\x'}],
                   'session': {'environment': {'track_temp_c': 30.0}},
                   'performance': {'corners': [{'id': 'C1', 'label': '1', 'entry_pct': .1, 'apex_pct': .12, 'exit_pct': .14}],

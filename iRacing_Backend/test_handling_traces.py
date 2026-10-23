@@ -165,7 +165,8 @@ class BudgetTests(unittest.TestCase):
         analyzer, summary = fixture()
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'private-file.ibt'
-            path.touch()
+            from test_session_log_extras import write_recording
+            write_recording(path, time.time() - 60, time.time())
             run = {'run_id': RUN, 'started_at': time.time() - 60, 'ended_at': time.time(), 'identity': {}}
             result = {'laps': [], 'performance': {'corners': summary['corners']}}
             callback = Mock(side_effect=lambda path, summary, seed: traces.groups(analyzer, summary, seed))
@@ -187,7 +188,8 @@ class BudgetTests(unittest.TestCase):
     def test_recording_changed_after_summary_is_not_mixed_with_new_samples(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'test.ibt'
-            path.touch()
+            from test_session_log_extras import write_recording
+            write_recording(path, time.time() - 60, time.time())
             provider = session_log_extras.own_drive(lambda: [path], lambda p: {}, lambda p: ({'laps': []}, {}, None),
                                                   traces=Mock(side_effect=AssertionError('changed source')))
             made = provider({'run_id': RUN, 'started_at': time.time() - 60, 'ended_at': time.time(), 'identity': {}})

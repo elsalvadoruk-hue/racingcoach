@@ -8,7 +8,9 @@ recorded for them, and they follow session_log's size rule (session_log.EXTRA_OR
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
+import struct
 import time
 
 import drive_summary
@@ -16,7 +18,7 @@ import log_pack
 from session_log import Deferred, Extra, scrub
 
 MAX_RECORDINGS = 3
-RECORDING_AFTER_S = 1800     # a recording is closed when the driver leaves the car, after the last call
+MAX_RECORDING_SECONDS = 7 * 86400
 
 
 def _header(path):
@@ -75,28 +77,90 @@ def nearby_cars(traffic_folder, timing_folder):
 
 
 def matches(identity, metadata):
-    """A recording belongs to the run when car and track agree wherever both are known."""
+    """A known run needs the same recorded car and track; missing identity is not a match."""
     for key in ('car_path', 'track_path'):
         want, have = (identity or {}).get(key), (metadata or {}).get(key)
-        if want and have and str(want).casefold() != str(have).casefold():
+        if want and (not have or str(want).casefold() != str(have).casefold()):
             return False
+    want, have = (identity or {}).get('game'), (metadata or {}).get('game')
+    if want and have and str(want).casefold() != str(have).casefold():
+        return False
     return True
 
 
+def recording_window(path):
+    """Native recording times, independent of a renamed/copied file's name and mtime.
+
+    IBT's disk subheader holds UTC start date and elapsed session times. LMU holds
+    UTC RecordingTime plus the GPS Time channel. Read no other sample channels.
+    Missing or corrupt clocks never fall back to the file's modification time.
+    """
+    path = Path(path)
+    try:
+        if path.suffix.casefold() == '.ibt':
+            with path.open('rb') as handle:
+                header = handle.read(144)
+            if len(header) != 144:
+                return None
+            version, _, tick_rate, _, _, _, num_vars, _, _, buffer_len = struct.unpack_from('<10i', header)
+            if min(version, tick_rate, num_vars, buffer_len) <= 0:
+                return None
+            started, first, last, _, count = struct.unpack_from('<Qddii', header, 112)
+            if count <= 0:
+                return None
+        elif path.suffix.casefold() == '.duckdb':
+            from lmu_lap_verdicts import _recording_start
+            from lmu_telemetry import LmuTelemetryReader, _quote
+            reader = LmuTelemetryReader(path)
+            with reader._connection() as connection:
+                tables = reader._tables(connection)
+                started = _recording_start(reader._metadata(connection, tables).get('recording_time'))
+                table = reader._table(tables, 'GPS Time')
+                if started is None or table is None or 'value' not in {c.casefold() for c in tables[table]}:
+                    return None
+                first = connection.execute(f'SELECT value FROM {_quote(table)} ORDER BY rowid LIMIT 1').fetchone()
+                last = connection.execute(f'SELECT value FROM {_quote(table)} ORDER BY rowid DESC LIMIT 1').fetchone()
+                if not first or not last:
+                    return None
+                first, last = float(first[0]), float(last[0])
+        else:
+            return None
+        if (not all(math.isfinite(v) for v in (started, first, last)) or started <= 0
+                or first < 0 or not 0 < last - first <= MAX_RECORDING_SECONDS):
+            return None
+        return started, started + last - first
+    except (OSError, ValueError, TypeError, struct.error, ImportError, RuntimeError):
+        return None
+
+
+def _session_kind(value):
+    kind = str(value or '').strip().casefold()
+    return 'qualifying' if kind in ('qualify', 'qualifying', 'open qualify', 'lone qualify') else kind
+
+
 def recordings_for(run, candidates, metadata_of):
-    """Recordings written during the run: closed between its start and RECORDING_AFTER_S after it."""
+    """Same car/track/session kind and recorded time overlapping this run's calls.
+
+    A recording may begin before the first call, finish after the last, or be one
+    of several files from the run. Its save time cannot attach an adjacent run.
+    """
     found = []
     for path in candidates:
+        window = recording_window(path)
+        if window is None or window[0] > run['ended_at'] or window[1] < run['started_at']:
+            continue
         try:
-            closed = Path(path).stat().st_mtime
-        except OSError:
+            metadata = metadata_of(path) or {}
+        except (OSError, ValueError):
             continue
-        if not run['started_at'] - 60 <= closed <= run['ended_at'] + RECORDING_AFTER_S:
+        if not matches(run.get('identity'), metadata):
             continue
-        if matches(run.get('identity'), metadata_of(path)):
-            found.append(Path(path))
-    found.sort(key=lambda p: p.stat().st_mtime)
-    return found[-MAX_RECORDINGS:]
+        want, have = _session_kind(run.get('session_type')), _session_kind(metadata.get('session_type'))
+        if want and have and want != have:
+            continue
+        found.append((window[0], Path(path)))
+    found.sort(key=lambda item: item[0])
+    return [path for _, path in found[-MAX_RECORDINGS:]]
 
 
 def own_drive(candidates, metadata_of, analyze, driving=lambda: False, defer=True, app_version='', traces=None):
