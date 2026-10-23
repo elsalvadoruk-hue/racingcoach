@@ -44,14 +44,16 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const standby = Boolean(audioOutput.standby);
   const output = useRef({ play, muted, volume, busy, specialists, audioBusy, level, recordDelivery, standby });
   output.current = { play, muted, volume, busy, specialists, audioBusy, level, recordDelivery, standby };
-  const logEvent = useCallback((event, status, reason = '') => {
+  const rendered = useRef(new Map()), lastView = useRef(0);
+  const logEvent = useCallback((event, status, reason = '', droppedParts) => {
     const radio = state.current.radio || {};
+    const omitted = droppedParts ?? rendered.current.get(event.id)?.droppedParts;
     output.current.recordDelivery?.({ event_id: event.id, run_id: event.run_id || '', key: event.key,
       engineer: event.engineer || 'spotter', text: event.spoken_text || event.text || '', session_time: radio.session_time,
-      lap_number: radio.lap_number, distance_pct: radio.distance_pct }, status, reason);
+      lap_number: radio.lap_number, distance_pct: radio.distance_pct,
+      ...(Number.isInteger(omitted) && omitted >= 0 ? { dropped_parts: omitted } : {}) }, status, reason);
   }, []);
   const radioQueue = useRef(new Map()), heard = useRef(new Set()), rendering = useRef(false), processing = useRef(new Set()), lastCall = useRef(0), resumed = useRef(new Map());
-  const rendered = useRef(new Map()), lastView = useRef(0);
   const disable = useCallback(() => {
     epoch.current += 1;
     state.current = { active: false };
@@ -223,22 +225,23 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       && radioQueue.current.has(event.id) && Date.now() < event.local_expires && Date.now() - lastFrame.current < 600;
     processing.current.add(event.id);
     try {
-      let audio, mime = 'audio/mpeg', text = event.text;
+      let audio, droppedParts, mime = 'audio/mpeg', text = event.text;
       if (event.cached) {
         const clip = clips.current?.[event.key];
         const variant = clip?.variants?.[event.variant] || clip;
         audio = variant?.audio_base64; text = variant?.text || text;
       } else if (rendered.current.has(event.id)) {
-        ({ audio, mime } = rendered.current.get(event.id));
+        ({ audio, mime, droppedParts } = rendered.current.get(event.id));
       } else if (!settings.muted && settings.volume > 0) {
         rendering.current = true;
         const response = await fetch(`${apiBase}/api/live-coach/spotter/radio/${encodeURIComponent(event.id)}/render`, { method: 'POST' });
         const result = await response.json();
         if (!response.ok) throw new Error(result.detail || '경기 안내 음성 준비 실패');
         if (result.busy || !result.event) return;
-        // Several whole sentences are played back to back as one call.
-        audio = result.audio_parts?.length > 1 ? result.audio_parts : result.audio_base64; mime = result.audio_mime || 'audio/mpeg';
-        if (audio) rendered.current.set(event.id, { audio, mime });
+        // Only retained whole sentences count toward the multipart playback rate.
+        audio = result.audio_parts?.length ? result.audio_parts : result.audio_base64; mime = result.audio_mime || 'audio/mpeg';
+        droppedParts = result.dropped_parts;
+        if (audio) rendered.current.set(event.id, { audio, mime, droppedParts });
       }
       if (!valid()) return;
       if (event.priority < 2 && (output.current.busy || !quietFor(event))) return;
@@ -257,7 +260,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         // Nothing here is cut once it has started: pit-box distances and traffic calls live for a
         // second or two, less than their own sentence, and were never heard to the end.
         onStatus: (status, reason) => {
-          logEvent(event, status, reason);
+          logEvent(event, status, reason, droppedParts);
           if (status === 'started') began = true;
           if (!began || !['completed', 'interrupted', 'failed'].includes(status)) return;
           const resumes = resumed.current.get(event.id) || 0;
@@ -272,7 +275,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       });
       if (!started || !valid()) return;
       heard.current.add(event.id);
-      if (silent) logEvent(event, 'muted', 'volume_or_mute');
+      if (silent) logEvent(event, 'muted', 'volume_or_mute', droppedParts);
       if (heard.current.size > 256) heard.current.delete(heard.current.values().next().value);
       lastCall.current = Date.now();
       setView((v) => ({ ...v, last_text: text, last_spoken_text: event.spoken_text || text, last_engineer: event.engineer }));

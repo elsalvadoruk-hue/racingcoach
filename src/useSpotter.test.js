@@ -2,6 +2,7 @@ import React from 'react';
 import { GameContext } from './lib/gameContext';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import useSpotter from './useSpotter';
+import useAudioOutput from './useAudioOutput';
 import { playBeep } from './drillBeeps';
 
 jest.mock('./drillBeeps', () => ({ ...jest.requireActual('./drillBeeps'), playBeep: jest.fn() }));
@@ -487,4 +488,117 @@ test.each([['lap_time', 'spotter', 'spotter', undefined], ['repair_detail', 'rac
   await enable(result);
   send(sockets[0], radioFrame([event]));
   await waitFor(() => expect(audio.play).toHaveBeenCalledWith(['first', 'second'], 'audio/mpeg', expect.objectContaining({ channel, rate })));
+});
+
+describe('partially prepared radio calls', () => {
+  const originalAudio = global.Audio;
+  let players;
+  beforeEach(() => {
+    players = [];
+    localStorage.setItem('iracing.voice.playback', JSON.stringify({ rate: 1.4, spotterRate: 1.05, pitwallRate: 1.2 }));
+    global.Audio = jest.fn((src) => {
+      const player = { src, pause: jest.fn(), play: jest.fn(async () => {}) };
+      players.push(player); return player;
+    });
+  });
+  afterEach(() => { global.Audio = originalAudio; });
+
+  test.each([
+    ['spotter', ['lap'], 1.05], ['race', ['lap'], 1.2], ['spotter', ['lap', 'position'], 1.4],
+  ])('%s plays the retained %j clips at the rate for their actual count and logs omissions', async (engineer, parts, rate) => {
+    const recordDelivery = jest.fn();
+    const event = radioEvent('lap_time', { engineer, speech_parts: ['lap', 'pace', 'position'] });
+    global.fetch = jest.fn(async url => ({ ok: true, json: async () => url.endsWith('/render')
+      ? { event, audio_parts: parts, audio_base64: 'unused-fallback', dropped_parts: 3 - parts.length } : manifest }));
+    const { result } = renderHook(() => useSpotter('http://test', useAudioOutput(), { recordDelivery }));
+    await enable(result);
+    send(sockets[0], radioFrame([event]));
+    await waitFor(() => expect(players[0]?.play).toHaveBeenCalledTimes(1));
+    expect(players[0].src).toBe('data:audio/mpeg;base64,lap');
+    expect(players[0].playbackRate).toBe(rate);
+    expect(players[0].preservesPitch).toBe(true);
+    await waitFor(() => expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({
+      event_id: event.id, dropped_parts: 3 - parts.length,
+    }), 'started', ''));
+    for (let index = 0; index < parts.length; index += 1) {
+      if (index > 0) {
+        await waitFor(() => expect(players[index]?.play).toHaveBeenCalledTimes(1));
+        expect(players[index].src).toBe(`data:audio/mpeg;base64,${parts[index]}`);
+        expect(players[index].playbackRate).toBe(rate);
+      }
+      await act(async () => players[index].onended());
+    }
+    expect(players).toHaveLength(parts.length);
+    expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({ dropped_parts: 3 - parts.length }), 'completed', '');
+    expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/ack'))).toHaveLength(1);
+  });
+});
+
+test('prepared omissions survive waiting, interruption retries, and a late completion after queue removal', async () => {
+  const recordDelivery = jest.fn(), event = radioEvent('lap_time', { brief: true });
+  let clock = 1000000;
+  const now = jest.spyOn(Date, 'now').mockImplementation(() => clock);
+  global.fetch = jest.fn(async url => ({ ok: true, json: async () => url.endsWith('/render')
+    ? { event, audio_parts: ['lap', 'position'], audio_base64: 'lap', dropped_parts: 1 } : manifest }));
+  const { result } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));
+  try {
+    await enable(result);
+    send(sockets[0], radioFrame([event], false));
+    await act(async () => {});
+    expect(audio.play).not.toHaveBeenCalled();
+    send(sockets[0], radioFrame([event]));
+    await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(1));
+    act(() => audio.play.mock.calls[0][2].onStatus('interrupted', 'preempted'));
+    clock += 2000;
+    send(sockets[0], radioFrame([event]));
+    await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(2));
+    send(sockets[0], radioFrame([]));
+    act(() => audio.play.mock.calls[1][2].onStatus('completed'));
+    expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/render'))).toHaveLength(1);
+    expect(recordDelivery.mock.calls.map(([details, status]) => [details.dropped_parts, status])).toEqual([
+      [1, 'started'], [1, 'interrupted'], [1, 'started'], [1, 'completed'],
+    ]);
+  } finally { now.mockRestore(); }
+});
+
+test('prepared omissions are retained when the driver mutes before playback', async () => {
+  const recordDelivery = jest.fn(), event = radioEvent('lap_time');
+  global.fetch = jest.fn(async url => ({ ok: true, json: async () => url.endsWith('/render')
+    ? { event, audio_parts: ['lap'], audio_base64: 'lap', dropped_parts: 2 } : manifest }));
+  const { result, rerender } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));
+  await enable(result);
+  send(sockets[0], radioFrame([event], false));
+  await act(async () => {});
+  audio.muted = true; rerender();
+  send(sockets[0], radioFrame([event]));
+  await waitFor(() => expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({ dropped_parts: 2 }), 'muted', 'volume_or_mute'));
+  expect(audio.play).not.toHaveBeenCalled();
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/render'))).toHaveLength(1);
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/ack'))).toHaveLength(1);
+});
+
+test('prepared omissions remain in cancelled delivery logs before any playback', async () => {
+  const recordDelivery = jest.fn(), event = radioEvent('lap_time');
+  global.fetch = jest.fn(async url => ({ ok: true, json: async () => url.endsWith('/render')
+    ? { event, audio_parts: ['lap'], audio_base64: 'lap', dropped_parts: 2 } : manifest }));
+  const { result } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));
+  await enable(result);
+  send(sockets[0], radioFrame([event], false));
+  await act(async () => {});
+  send(sockets[0], radioFrame([], false));
+  expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({ dropped_parts: 2 }), 'cancelled', 'condition_or_session_changed');
+  expect(audio.play).not.toHaveBeenCalled();
+});
+
+test('missing essential audio still fails preparation without playing or acknowledging', async () => {
+  const recordDelivery = jest.fn(), event = radioEvent('lap_time');
+  global.fetch = jest.fn(async url => ({ ok: !url.endsWith('/render'), json: async () => url.endsWith('/render')
+    ? { detail: '필수 랩타임 음성 없음' } : manifest }));
+  const { result } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));
+  await enable(result);
+  send(sockets[0], radioFrame([event]));
+  await waitFor(() => expect(result.current.error).toBe('필수 랩타임 음성 없음'));
+  expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({ event_id: event.id }), 'failed', 'audio_preparation');
+  expect(audio.play).not.toHaveBeenCalled();
+  expect(global.fetch.mock.calls.some(([url]) => url.endsWith('/ack'))).toBe(false);
 });

@@ -214,12 +214,12 @@ class PitWallIntegrationTests(unittest.TestCase):
         self.assertEqual(again['note']['reply'], first['note']['reply'])
         self.speech.synthesize.assert_not_called()
 
-    def test_audio_on_disk_needs_every_clip(self):
+    def test_audio_on_disk_needs_the_first_multipart_clip(self):
         cache = self.coach.fixed_audio
         cache.directory.mkdir(parents=True, exist_ok=True)
         cache.path('race', '앞차 0.7초. 줄고 있습니다.').write_bytes(b'ID3' + b'x' * 200)
         self.assertTrue(self.coach.audio_on_disk({'engineer': 'race', 'speech_text': '앞차 0.7초. 줄고 있습니다.'}))
-        self.assertFalse(self.coach.audio_on_disk({'engineer': 'race', 'speech_parts': ['앞차 0.7초. 줄고 있습니다.', '없는 문장입니다.']}))
+        self.assertTrue(self.coach.audio_on_disk({'engineer': 'race', 'speech_parts': ['앞차 0.7초. 줄고 있습니다.', '없는 문장입니다.']}))
         self.assertFalse(self.coach.audio_on_disk({'engineer': 'race', 'text': '합성해야 하는 답변'}))
         self.assertFalse(self.coach.audio_on_disk({'engineer': 'race', 'speech_key': 'no_such_call'}))
 

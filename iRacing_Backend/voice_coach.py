@@ -56,6 +56,7 @@ class RadioDeliveryEvent(BaseModel):
     lap_number: int | None = None
     distance_pct: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     at: float | None = Field(default=None, allow_inf_nan=False)
+    dropped_parts: int = Field(default=0, ge=0, strict=True)
 
 
 class RadioDeliveryBatch(BaseModel):
@@ -620,12 +621,15 @@ class VoiceCoach:
                     ack, warning = None, service_error(exc)
             return {'note': public_note(note), 'audio_base64': audio, 'audio_parts': parts, 'warning': warning, 'audio_stored': False, 'ack': ack}
 
-    def audio_on_disk(self, item):
-        """True when every clip a report or radio call needs is already cached: it can be played while a
-        question is using the cloud, because nothing has to be synthesized for it."""
+    def audio_on_disk(self, item, optional_parts=True):
+        """Whether the mandatory audio is cached and can play during a cloud question.
+
+        Multipart calls keep their first sentence; missing later sentences may be omitted.
+        """
         cache, role = self.fixed_audio, item.get('engineer')
         if item.get('speech_parts'):
-            return all(cache.cached(role, sentence) for sentence in item['speech_parts'])
+            sentences = item['speech_parts'][:1] if optional_parts else item['speech_parts']
+            return all(cache.cached(role, sentence) for sentence in sentences)
         if item.get('speech_text'):
             return cache.cached(role, item['speech_text'])
         if item.get('speech_key'):
@@ -635,6 +639,32 @@ class VoiceCoach:
             except (KeyError, IndexError, ValueError):
                 return False
         return False
+
+    def radio_audio_mode(self, item):
+        """(can bypass the cloud lock, omit cold optional clips).
+
+        An idle cloud still prepares first-use optional sentences. During a question,
+        a cached first sentence goes out immediately with whichever later clips exist.
+        """
+        on_disk = self.audio_on_disk(item)
+        cached_only = on_disk and self.cloud_lock.locked()
+        if on_disk and item.get('speech_parts') and not cached_only:
+            on_disk = all(self.fixed_audio.cached(item['engineer'], text) for text in item['speech_parts'][1:])
+        return on_disk, cached_only
+
+    async def radio_audio_parts(self, item, cached_only=False):
+        parts, dropped = [], 0
+        for index, sentence in enumerate(item['speech_parts']):
+            if index and cached_only and not self.fixed_audio.cached(item['engineer'], sentence):
+                dropped += 1
+                continue
+            try:
+                parts.append(await asyncio.to_thread(self.fixed_audio.phrase, item['engineer'], sentence))
+            except Exception:
+                if not index:
+                    raise
+                dropped += 1
+        return parts, dropped
 
     async def report(self, payload):
         options = {'reserve_laps': payload.reserve_laps, 'pit_loss_s': payload.pit_loss_s, 'fuel_save_mode': payload.fuel_save_mode}
@@ -677,7 +707,7 @@ class VoiceCoach:
                 self.pending_report = None
             audio, warning, parts = None, '', None
             if payload.speak:
-                on_disk = self.audio_on_disk(report)
+                on_disk = self.audio_on_disk(report, optional_parts=False)
                 if not on_disk and self.cloud_lock.locked():
                     return result           # it needs synthesis while a question is using the cloud: the next poll
                 try:
@@ -796,8 +826,8 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             event = coach.live.radio.get(identifier, coach.live.clock())
         if event is None:
             return {'event': None}
-        # A call whose clips are all on disk plays even while a question is using the cloud.
-        on_disk = coach.audio_on_disk(event)
+        # A cached mandatory sentence can play immediately during a cloud question.
+        on_disk, cached_only = coach.radio_audio_mode(event)
         if not on_disk and coach.cloud_lock.locked():
             return {'busy': True}
         async with (contextlib.nullcontext() if on_disk else coach.cloud_lock):
@@ -805,10 +835,10 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
                 event = coach.live.radio.get(identifier, coach.live.clock())
             if event is None:
                 return {'event': None}
-            parts = None
+            parts, dropped_parts = None, 0
             try:
                 if event.get('speech_parts'):
-                    parts = [await asyncio.to_thread(coach.fixed_audio.phrase, event['engineer'], sentence) for sentence in event['speech_parts']]
+                    parts, dropped_parts = await coach.radio_audio_parts(event, cached_only)
                     audio = parts[0]
                 elif event.get('speech_text'):
                     audio = await asyncio.to_thread(coach.fixed_audio.phrase, event['engineer'], event['speech_text'])
@@ -823,7 +853,7 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             if current is None:
                 return {'event': None}
             return {'event': {k: v for k, v in current.items() if k != 'condition'}, 'audio_base64': audio,
-                    'audio_parts': parts, 'audio_mime': 'audio/mpeg'}
+                    'audio_parts': parts, 'audio_mime': 'audio/mpeg', 'dropped_parts': dropped_parts}
 
     @router.post('/spotter/radio/{identifier}/ack')
     def acknowledge_radio(identifier: str):

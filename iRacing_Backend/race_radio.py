@@ -396,6 +396,10 @@ class RaceRadio:
                 self.quali_called, self.quali_lap = lap, None
                 parts, screen = list(timed['parts']) if timed else [], list(timed['screen']) if timed else []
                 if result:
+                    # The result is spoken by the race engineer. Its lap-time wording
+                    # uses the same prepared pieces as formation history in that voice.
+                    if timed:
+                        parts[0] = radio_phrases.build('form_lap', lap=timed['time'])['text']
                     built = radio_phrases.build(result[0], self.variant_counts.get(result[0], 0), **result[1])
                     self.variant_counts[result[0]] = self.variant_counts.get(result[0], 0) + 1
                     parts.append(built['text'])
@@ -511,7 +515,7 @@ class RaceRadio:
                     self.lap_position = position
                 if self.qualifying:
                     # The result of the lap (place and gap) joins the lap time in _results.
-                    self.quali_lap = {'lap': lap, 'parts': parts, 'screen': screen, 'key': key}
+                    self.quali_lap = {'lap': lap, 'parts': parts, 'screen': screen, 'key': key, 'time': last}
                 else:
                     # The time stays true until the next lap ends, so it may wait out a busy radio for most of the lap.
                     self.emit(key, now, ' '.join(screen), ttl=min(LAP_CALL_MAX_S, max(45., last * LAP_CALL_SHARE)),

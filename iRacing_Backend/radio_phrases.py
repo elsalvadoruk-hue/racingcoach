@@ -398,6 +398,9 @@ VOICE_PREFIX = 'ko-KR-Chirp3-HD-'
 EXTRA_VOICE_WORDINGS = {}     # was {'lap_time_read': 2} to save space; the driver asked for all six in every voice (2026-10-13)
 # Calls kept to one wording on purpose (each wording of a lap time is 3,900 clips).
 SINGLE_WORDING = ('form_lap',)
+# These race-engineer phrases also appear after spotter lap-time calls.
+# Keep their normal owner and prepare an additional copy in the chosen voice.
+ADDITIONAL_CATALOG_ROLES = {'pace_slower_by': ('spotter',), 'pace_faster_by': ('spotter',)}
 
 
 def spotter_voice():
@@ -432,5 +435,8 @@ def catalog():
             names = list(dict.fromkeys(PLACEHOLDER.findall(template)))
             for combination in itertools.product(*(ranges.get(name, RANGES.get(name, ())) for name in names)):
                 values = dict(zip(names, combination))
-                found[(role, PLACEHOLDER.sub(lambda match: FORMATS[match[1]](values[match[1]]), template))] = None
+                text = PLACEHOLDER.sub(lambda match: FORMATS[match[1]](values[match[1]]), template)
+                found[(role, text)] = None
+                for additional_role in ADDITIONAL_CATALOG_ROLES.get(key, ()):
+                    found[(additional_role, text)] = None
     return list(found)
