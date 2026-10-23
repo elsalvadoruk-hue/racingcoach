@@ -25,7 +25,7 @@ export default function Insights({ corner, corners, names, onJump, practice, onP
     const unknown = (corner.handling_coverage || []).reduce((sum, item) => sum + item.unknown, 0);
     return <section className="coaching-panel is-compact" data-corner={focus.id}><div className="panel-heading"><h2>{`${focus.id} · 비교 포인트`}</h2><span className="numeric">{signed(focus.delta_s)} s</span></div>
       <section className="comparison-facts" aria-label="선택한 두 랩 비교"><CornerPhases corner={corner} /></section>
-      {(handling.length > 0 || unknown > 0) && <div className="insight-mini-row"><span>차 거동</span>{handling.length ? <HandlingBadges items={handling} /> : <small>관측 없음</small>}{unknown > 0 && <small>{unknown}회 확인 필요</small>}</div>}
+      {(handling.length > 0 || unknown > 0) && <div className="insight-mini-row"><span>차 거동</span>{handling.length ? <HandlingBadges items={handling} /> : <small>관측 없음</small>}{unknown > 0 && <small>비교 자료 부족 {unknown}회</small>}</div>}
       <div className="insight-actions numbered-insights is-compact" aria-label="이 코너의 비교 포인트">{notes.length ? notes.slice(0, 3).map(item => <button key={item.key} data-testid={`insight-note-${item.id}`} data-note-key={item.key} aria-pressed={activeNote === item.id} disabled={!Number.isFinite(item.jumpAt)} onClick={() => onNote(item)}><i className="insight-number">{item.id}</i><span><b>{item.label}</b><strong>{item.value}</strong></span><ArrowRight size={14} /></button>) : <div className="insight-empty">관측된 큰 차이가 없습니다.</div>}
         {notes.length > 1 && <small className="insight-more">비교 포인트 모두 {notes.length}개 · 펼치면 전부 보입니다</small>}</div>
       {practiceButton}

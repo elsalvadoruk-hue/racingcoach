@@ -40,10 +40,19 @@ function HandlingObservation({ item }) {
     <div className="handling-observation-heading"><Badge variant={item.kind === 'countersteer' ? 'outline' : item.kind === 'understeer' ? 'handling-under' : 'handling-reference'}>{shortNames[item.kind]}{evidenceOf(item) === 'reference' ? ' · 참고' : ''}</Badge><strong>{phaseNames[item.phase]} 구간</strong></div>
     <dl className="handling-facts"><div><dt>관측된 랩</dt><dd>{item.of_laps}랩 중 {item.laps}랩</dd></div><div><dt>코너 시간 차이</dt><dd>{costText(item.time_cost_s)}</dd></div></dl>
     {withNames[item.with] && <small>함께 관측된 조작: {withNames[item.with]}</small>}
-    {item.observed_laps != null && item.observed_laps < item.of_laps && <small>{item.kind === 'countersteer' ? '반대 조향 관측 가능' : '비교 가능'} {item.observed_laps}랩 · 부분 구간에서 관측한 결과도 포함합니다.</small>}
+    {item.observed_laps != null && item.observed_laps < item.of_laps && <small>{item.kind === 'countersteer' ? `반대 조향을 끝까지 확인한 랩 ${item.observed_laps}랩` : `평소와 끝까지 비교한 랩 ${item.observed_laps}랩`} · 일부 구간만 비교한 랩의 결과도 포함합니다.</small>}
     {item.kind === 'countersteer' && <small>개인 기준과 별개로 관측했습니다.</small>}
     {evidenceOf(item) === 'reference' && <small data-evidence-note>{referenceNote}</small>}
     {item.approximate && <small>참고용(LMU는 회전량을 GPS로 추정)</small>}</article>;
+}
+
+function coverageText(known, unknown) {
+  const total = known + unknown;
+  if (!total) return '비교할 단계가 없습니다.';
+  const counted = `랩별 제동·회전·가속 ${total}번`;
+  if (!known) return `이 코너는 비슷하게 지난 내 다른 랩이 부족해서 평소와 비교하지 못했습니다(${counted} 중 0번 비교).`;
+  if (!unknown) return `${counted}을 모두 평소와 비교했습니다.`;
+  return `${counted} 중 ${known}번을 평소와 비교했습니다. 나머지 ${unknown}번은 비슷하게 지난 랩이 부족했습니다.`;
 }
 
 export function HandlingDetail({ items = [], coverage = [] }) {
@@ -54,7 +63,8 @@ export function HandlingDetail({ items = [], coverage = [] }) {
     <p className="handling-basis">핸들을 꺾은 정도에 비해 차가 덜 또는 더 돌아간 랩을 표시합니다. 같은 기록의 다른 유효 랩과 비교합니다.</p>
     <small>위에서 선택한 기준 랩·Garage61 비교와는 별개입니다.</small>
     <small>검증 전 초기값 · 체감 대조 전입니다.</small>
-    {coverage.length > 0 && <p className="handling-coverage">{known + unknown > 0 ? `개인 기준 비교 ${known}/${known + unknown}회${unknown > 0 ? ` · ${unknown}회 확인 필요` : ''}` : '비교 대상 단계가 없습니다.'}</p>}
+    {coverage.length > 0 && <p className="handling-coverage">{coverageText(known, unknown)}</p>}
+    {unknown > 0 && <small>랩마다 속도·페달·공략이 조금씩 달라서 흔히 생깁니다. 문제가 있다는 뜻도, 없다는 뜻도 아닙니다.</small>}
     <details className="handling-help"><summary>표시 뜻과 비교 범위</summary>
       <dl>{['understeer', 'oversteer', 'countersteer'].map(kind => <div key={kind}><dt>{shortNames[kind]}</dt><dd>{meanings[kind]}</dd></div>)}</dl>
       <p>같은 코너·같은 단계에서 비교합니다. 서로 다른 랩이나 단계에서 두 표시가 함께 나올 수 있습니다.</p>

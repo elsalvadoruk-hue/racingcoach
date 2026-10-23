@@ -13,7 +13,7 @@ test('the narrow comparison-point panel is a short summary and the wide one show
   expect(screen.queryByText('포인트 4')).not.toBeInTheDocument();
   expect(screen.getByText(/비교 포인트 모두 5개/)).toBeInTheDocument();
   expect(screen.queryByText('차 거동 · 내 다른 랩과 비교')).not.toBeInTheDocument();
-  expect(screen.getByText('29회 확인 필요')).toBeInTheDocument();
+  expect(screen.getByText('비교 자료 부족 29회')).toBeInTheDocument();
   fireEvent.click(screen.getByTestId('insight-note-2'));
   expect(props.onNote).toHaveBeenCalledWith(notes[1]);
   rerender(<Insights {...props} />);

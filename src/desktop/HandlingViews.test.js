@@ -27,7 +27,7 @@ test('detail reports measured frequency, cost and accompanying input without a c
 test('LMU approximation, missing cost and observed-lap coverage stay explicit', () => {
   render(<HandlingDetail items={[{ ...item, approximate: true, time_cost_s: null, observed_laps: 7, with: 'lift' }]} />);
   expect(screen.getByText(/시간 차이 확인 필요/)).toBeInTheDocument();
-  expect(screen.getByText(/비교 가능 7랩/)).toBeInTheDocument();
+  expect(screen.getByText(/평소와 끝까지 비교한 랩 7랩 · 일부 구간만 비교한 랩의 결과도 포함/)).toBeInTheDocument();
   expect(screen.getByText('참고용(LMU는 회전량을 GPS로 추정)')).toBeInTheDocument();
   expect(screen.getByText(/스로틀을 뗀 직후/)).toBeInTheDocument();
 });
@@ -64,7 +64,8 @@ test('countersteering is separate from the personal baseline and missing compari
   render(<><HandlingBadges items={[{ ...item, kind: 'countersteer' }]} /><HandlingDetail items={[{ ...item, kind: 'countersteer', time_cost_s: null }]} coverage={[{ classifiable: 0, unknown: 5 }]} /></>);
   expect(screen.getByLabelText('내 다른 랩 대비 차 거동').querySelector('[data-kind=countersteer]')).toHaveClass('text-foreground');
   expect(screen.getByRole('article', { name: '회전 · 반대 조향' })).toHaveTextContent('개인 기준과 별개로 관측했습니다.');
-  expect(screen.getByText('개인 기준 비교 0/5회 · 5회 확인 필요')).toBeInTheDocument();
+  expect(screen.getByText('이 코너는 비슷하게 지난 내 다른 랩이 부족해서 평소와 비교하지 못했습니다(랩별 제동·회전·가속 5번 중 0번 비교).')).toBeInTheDocument();
+  expect(screen.getByText(/문제가 있다는 뜻도, 없다는 뜻도 아닙니다/)).toBeInTheDocument();
 });
 
 test('oversteer is shown as a reference after better supported observations', () => {
@@ -83,4 +84,12 @@ test('a reference repeat never pushes a supported repeat out of the top three', 
   expect(rows).toHaveLength(3);
   expect(rows[0]).toHaveTextContent('덜 구간');
   expect(screen.queryByText(/참고 1/)).not.toBeInTheDocument();
+});
+
+test('partial and full comparison counts are written in plain words', () => {
+  const { rerender } = render(<HandlingDetail items={[item]} coverage={[{ classifiable: 12, unknown: 18 }]} />);
+  expect(screen.getByText('랩별 제동·회전·가속 30번 중 12번을 평소와 비교했습니다. 나머지 18번은 비슷하게 지난 랩이 부족했습니다.')).toBeInTheDocument();
+  rerender(<HandlingDetail items={[item]} coverage={[{ classifiable: 30, unknown: 0 }]} />);
+  expect(screen.getByText('랩별 제동·회전·가속 30번을 모두 평소와 비교했습니다.')).toBeInTheDocument();
+  expect(screen.queryByText(/문제가 있다는 뜻도/)).not.toBeInTheDocument();
 });

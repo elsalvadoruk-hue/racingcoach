@@ -104,3 +104,21 @@ test('the existing expert vehicle tab provides braking and channel diagnostics m
   expect(await screen.findByText('LMU 심화: summary')).toBeInTheDocument();
   expect(screen.getByText('LMU 심화: expert')).toBeInTheDocument();
 });
+
+test('a widened comparison panel stays widened when another section is picked from the lap timeline', async () => {
+  const second = { ...corner, id: 'C2', label: '둘째 구간', entry_pct: .5, apex_pct: .6, exit_pct: .7 };
+  activateSession({ ...session, corners: [corner, second], initialComparison: { ...session.initialComparison, corners: [corner, second] } });
+  render(<CornerLab game="lmu" onGameChange={jest.fn()} analysisWorkspace={{ game: 'lmu', adoptDesktopAnalysis: jest.fn() }} />);
+  const pick = name => { const button = screen.getByRole('button', { name }); fireEvent.mouseDown(button); fireEvent.click(button); };
+  pick('타임라인 C1 선택');
+  const panel = () => screen.getByRole('region', { name: '코너 설명과 메모' });
+  fireEvent.click(panel());
+  expect(panel()).toHaveAttribute('data-wide', 'true');
+  pick('타임라인 C2 선택');
+  await waitFor(() => expect(screen.getByRole('button', { name: '타임라인 C2 선택' })).toHaveAttribute('aria-pressed', 'true'));
+  expect(panel()).toHaveAttribute('data-wide', 'true');
+  pick('이전 코너');
+  expect(panel()).toHaveAttribute('data-wide', 'true');
+  fireEvent.mouseDown(document.body);
+  await waitFor(() => expect(panel()).toHaveAttribute('data-wide', 'false'));
+});
