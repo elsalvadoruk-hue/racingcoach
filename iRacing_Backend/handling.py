@@ -272,7 +272,108 @@ def _reference_at(reference, pct):
     return values
 
 
-def classify_phase(phase, references, model):
+def _classify_phases(phases, model):
+    """Share interpolation across targets, retaining only a small comparison batch.
+
+    The matrix budget is 16 MiB of float64 predictions. A single unusually long
+    phase still needs its original reference matrix, but phases are never joined
+    into an unbounded lap-by-lap array. No data survives this analysis call.
+    """
+    references = [phase for phase in phases if phase is not None]
+    point_limit = max(1, _REFERENCE_BATCH_VALUES // max(1, len(references)))
+    batch, points = [], 0
+    for phase in phases:
+        size = len(phase['local'].pct) if phase is not None else 0
+        if batch and points + size > point_limit:
+            yield from _classify_phase_batch(batch, references, model)
+            batch, points = [], 0
+        batch.append(phase)
+        points += size
+    if batch:
+        yield from _classify_phase_batch(batch, references, model)
+
+
+_REFERENCE_BATCH_VALUES = 2097152
+
+
+def _classify_phase_batch(phases, references, model):
+    targets = [phase for phase in phases if phase is not None]
+    if not targets:
+        for phase in phases:
+            yield classify_phase(phase, references, model)
+        return
+    pct = np.concatenate([phase['local'].pct for phase in targets])
+    speed, steer, brake, throttle, lat = (
+        np.concatenate([phase['local'].channels[key] for phase in targets])
+        for key in ('Speed', 'SteeringWheelAngle', 'Brake', 'Throttle', 'LatAccel'))
+    bands = np.concatenate([phase['bands'] for phase in targets])
+    bounds = np.cumsum([0, *[len(phase['local'].pct) for phase in targets]])
+    slices = defaultdict(list)
+    for phase, start, end in zip(targets, bounds[:-1], bounds[1:]):
+        slices[id(phase)].append(slice(start, end))
+    predictions = np.empty((len(references), len(pct)))
+    available = np.zeros(len(pct), dtype=int)
+    lateral_rejected = np.zeros(len(pct), dtype=int)
+    support = np.zeros(5, dtype=int)
+    for index, reference in enumerate(references):
+        support += reference['support']
+        # np.interp and the observed-segment masks are exactly the scalar path.
+        # Concatenating queries only removes repeated Python calls/allocations.
+        q, rspeed, rsteer, rbrake, rthrottle, rlat = _reference_at(reference, pct)
+        for span in slices.get(id(reference), ()):
+            q[span] = np.nan  # A target never supplies its own reference.
+        available += np.isfinite(q)
+        comparable = ((np.searchsorted(model['edges_mps'], rspeed, side='right') == bands)
+                      & (abs(rspeed - speed) <= MAX_SPEED_RELATIVE * speed)
+                      & (abs(rbrake - brake) <= MAX_PEDAL_DIFFERENCE)
+                      & (abs(rthrottle - throttle) <= MAX_PEDAL_DIFFERENCE)
+                      & (rsteer * steer > 0))
+        lateral = ((rlat * lat > 0)
+                   & (abs(rlat - lat) <= np.maximum(MAX_LAT_ACCEL_ABS, MAX_LAT_ACCEL_RELATIVE * abs(lat))))
+        lateral_rejected += np.isfinite(q) & comparable & ~lateral
+        predictions[index] = np.where(comparable & lateral, q, np.nan)
+    reference_counts = Counter(id(reference) for reference in references)
+    supports = [support - reference_counts[id(phase)] * phase['support'] for phase in targets]
+    baseline = np.full(len(pct), np.nan)
+    log_baseline = np.full(len(pct), np.nan)
+    spread = np.full(len(pct), np.nan)
+    matched = np.zeros(len(pct), dtype=int)
+    if np.all(np.isfinite(model['edges_mps'])):
+        logs = np.full_like(predictions, np.nan)
+        np.log(predictions, out=logs, where=np.isfinite(predictions) & (predictions > 0))
+        del predictions
+        matched = np.sum(np.isfinite(logs), axis=0)
+        point_support = np.concatenate([counts[phase['bands']] for phase, counts in zip(targets, supports)])
+        good = (matched >= MIN_REFERENCE_LAPS) & (point_support >= MIN_BAND_SAMPLES)
+        # A self-reference is NaN in its own target columns. Removing that row
+        # and ignoring its NaNs give exactly the same median and MAD; grouping
+        # columns avoids copying/sorting one small matrix for every target lap.
+        log_baseline[good] = np.nanmedian(logs[:, good], axis=0)
+        baseline[good] = np.exp(log_baseline[good])
+        point_spread = good & (matched >= MIN_LAPS_FOR_POINT_SPREAD)
+        if np.any(point_spread):
+            spread[point_spread] = 1.4826 * np.nanmedian(
+                abs(logs[:, point_spread] - log_baseline[point_spread]), axis=0)
+        # Noise borrowing remains restricted to this target's own phase.
+        for phase, start, end in zip(targets, bounds[:-1], bounds[1:]):
+            span = slice(start, end)
+            sources = (point_spread[span] & phase['inside'] & phase['eligible']
+                       & (phase['q_steer'] * phase['local'].channels['YawRate'] > 0))
+            if np.any(sources):
+                spread[span][good[span] & ~point_spread[span]] = np.median(spread[span][sources])
+    position = 0
+    for phase in phases:
+        if phase is None:
+            yield classify_phase(phase, references, model)
+            continue
+        span = slice(bounds[position], bounds[position + 1])
+        comparison = (baseline[span], spread[span], matched[span], supports[position],
+                      available[span], lateral_rejected[span])
+        yield classify_phase(phase, references, model, _comparison=comparison)
+        position += 1
+
+
+def classify_phase(phase, references, model, *, _comparison=None):
     """Other laps predict this phase's usual q at the same physical position.
 
     200 original reference samples are required per corner/phase/speed band,
@@ -286,47 +387,50 @@ def classify_phase(phase, references, model):
     local, raw = phase['local'], phase['raw']
     speed, steer, yaw, brake, throttle = (local.channels[key] for key in ('Speed', 'SteeringWheelAngle', 'YawRate', 'Brake', 'Throttle'))
     eligible, durations = phase['eligible'], phase['durations']
-    predictions = []
-    support = np.zeros(5, dtype=int)
-    available = np.zeros(len(speed), dtype=int)
-    lateral_rejected = np.zeros(len(speed), dtype=int)
-    for reference in references:
-        if reference is None or reference is phase:
-            continue
-        support += reference['support']
-        q, rspeed, rsteer, rbrake, rthrottle, rlat = _reference_at(reference, local.pct)
-        available += np.isfinite(q)
-        comparable = ((np.searchsorted(model['edges_mps'], rspeed, side='right') == phase['bands'])
-                      & (abs(rspeed - speed) <= MAX_SPEED_RELATIVE * speed)
-                      & (abs(rbrake - brake) <= MAX_PEDAL_DIFFERENCE)
-                      & (abs(rthrottle - throttle) <= MAX_PEDAL_DIFFERENCE)
-                      & (rsteer * steer > 0))
-        lat = local.channels['LatAccel']
-        lateral = ((rlat * lat > 0)
-                   & (abs(rlat - lat) <= np.maximum(MAX_LAT_ACCEL_ABS, MAX_LAT_ACCEL_RELATIVE * abs(lat))))
-        lateral_rejected += np.isfinite(q) & comparable & ~lateral
-        comparable &= lateral
-        predictions.append(np.where(comparable, q, np.nan))
-    baseline = np.full(len(speed), np.nan)
-    log_baseline = np.full(len(speed), np.nan)
-    spread = np.full(len(speed), np.nan)
-    matched = np.zeros(len(speed), dtype=int)
-    if predictions and np.all(np.isfinite(model['edges_mps'])):
-        matrix = np.asarray(predictions)
-        logs = np.full_like(matrix, np.nan)
-        np.log(matrix, out=logs, where=np.isfinite(matrix) & (matrix > 0))
-        matched = np.sum(np.isfinite(logs), axis=0)
-        good = (matched >= MIN_REFERENCE_LAPS) & (support[phase['bands']] >= MIN_BAND_SAMPLES)
-        log_baseline[good] = np.nanmedian(logs[:, good], axis=0)
-        baseline[good] = np.exp(log_baseline[good])
-        point_spread = good & (matched >= MIN_LAPS_FOR_POINT_SPREAD)
-        if np.any(point_spread):
-            spread[point_spread] = 1.4826 * np.nanmedian(
-                abs(logs[:, point_spread] - log_baseline[point_spread]), axis=0)
-            # Borrow only point spreads supported by five other laps in this phase.
-            sources = point_spread & phase['inside'] & eligible & (phase['q_steer'] * yaw > 0)
-            if np.any(sources):
-                spread[good & ~point_spread] = np.median(spread[sources])
+    if _comparison is None:
+        predictions = []
+        support = np.zeros(5, dtype=int)
+        available = np.zeros(len(speed), dtype=int)
+        lateral_rejected = np.zeros(len(speed), dtype=int)
+        for reference in references:
+            if reference is None or reference is phase:
+                continue
+            support += reference['support']
+            q, rspeed, rsteer, rbrake, rthrottle, rlat = _reference_at(reference, local.pct)
+            available += np.isfinite(q)
+            comparable = ((np.searchsorted(model['edges_mps'], rspeed, side='right') == phase['bands'])
+                          & (abs(rspeed - speed) <= MAX_SPEED_RELATIVE * speed)
+                          & (abs(rbrake - brake) <= MAX_PEDAL_DIFFERENCE)
+                          & (abs(rthrottle - throttle) <= MAX_PEDAL_DIFFERENCE)
+                          & (rsteer * steer > 0))
+            lat = local.channels['LatAccel']
+            lateral = ((rlat * lat > 0)
+                       & (abs(rlat - lat) <= np.maximum(MAX_LAT_ACCEL_ABS, MAX_LAT_ACCEL_RELATIVE * abs(lat))))
+            lateral_rejected += np.isfinite(q) & comparable & ~lateral
+            comparable &= lateral
+            predictions.append(np.where(comparable, q, np.nan))
+        baseline = np.full(len(speed), np.nan)
+        log_baseline = np.full(len(speed), np.nan)
+        spread = np.full(len(speed), np.nan)
+        matched = np.zeros(len(speed), dtype=int)
+        if len(predictions) and np.all(np.isfinite(model['edges_mps'])):
+            matrix = np.asarray(predictions)
+            logs = np.full_like(matrix, np.nan)
+            np.log(matrix, out=logs, where=np.isfinite(matrix) & (matrix > 0))
+            matched = np.sum(np.isfinite(logs), axis=0)
+            good = (matched >= MIN_REFERENCE_LAPS) & (support[phase['bands']] >= MIN_BAND_SAMPLES)
+            log_baseline[good] = np.nanmedian(logs[:, good], axis=0)
+            baseline[good] = np.exp(log_baseline[good])
+            point_spread = good & (matched >= MIN_LAPS_FOR_POINT_SPREAD)
+            if np.any(point_spread):
+                spread[point_spread] = 1.4826 * np.nanmedian(
+                    abs(logs[:, point_spread] - log_baseline[point_spread]), axis=0)
+                # Borrow only point spreads supported by five other laps in this phase.
+                sources = point_spread & phase['inside'] & eligible & (phase['q_steer'] * yaw > 0)
+                if np.any(sources):
+                    spread[good & ~point_spread] = np.median(spread[sources])
+    else:
+        baseline, spread, matched, support, available, lateral_rejected = _comparison
     ratio = np.full(len(speed), np.nan)
     np.divide(phase['q'], baseline, out=ratio,
               where=eligible & (phase['q_steer'] * yaw > 0) & np.isfinite(baseline) & (baseline > 0) & np.isfinite(spread))
@@ -479,8 +583,7 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
                 row['data'] = data
     for key, rows in prepared.items():
         references = [row['data'] for row in rows]
-        for row in rows:
-            measured = classify_phase(row['data'], references, model)
+        for row, measured in zip(rows, _classify_phases(references, model)):
             # Keep full sustained-sample values only during aggregation, never in API rows.
             for event in measured['events']:
                 event_z[(*key, event['kind'])].extend(event.pop('_z_samples', []))

@@ -84,6 +84,68 @@ def _project(path, position, point, bounds=None):
     return float(cross / math.sqrt(norm2[chosen]))
 
 
+def _supported_sections(path, starts, ends):
+    """Check independent clips in bulk, retaining _section's boundary rules."""
+    axis, _, valid = path
+    first = np.clip(np.searchsorted(axis, starts, side='right') - 1, 0, len(axis) - 1)
+    last = np.clip(np.searchsorted(axis, ends, side='left'), 0, len(axis) - 1)
+    missing = np.r_[0, np.cumsum(~valid)]
+    gaps = np.r_[0, np.cumsum(np.diff(axis) > WINDOW_M)]
+    supported = ((starts >= axis[0]) & (ends <= axis[-1]) & (starts <= ends)
+                 & (missing[last + 1] == missing[first]) & (gaps[last] == gaps[first]))
+    return first, last, supported
+
+
+def _alignment_samples(target, reference, positions):
+    """Project every straight sample using bounded batches of local segments.
+
+    This is the same clipped-polyline projection as _section/_project. The
+    masks reject each whole window before projection; neither missing GPS nor
+    a large observation gap becomes a new connecting segment.
+    """
+    if not len(positions):
+        return positions, np.empty(0)
+    _, _, supported = _supported_sections(target, positions, positions)
+    axis, xy, _ = reference
+    lower, upper = np.maximum(axis[0], positions - WINDOW_M), np.minimum(axis[-1], positions + WINDOW_M)
+    first, last, reference_supported = _supported_sections(reference, lower, upper)
+    selected = supported & reference_supported & (last > first)
+    positions, lower, upper, first, last = (values[selected] for values in (positions, lower, upper, first, last))
+    if not len(positions):
+        return positions, np.empty(0)
+    points = np.column_stack([np.interp(positions, target[0], target[1][:, dim]) for dim in range(2)])
+    selected_positions, offsets = [], []
+    # Also bound temporary arrays for unusually dense observed axes.
+    width = int(np.max(last - first))
+    batch_size = max(1, min(256, 65536 // width))
+    for start in range(0, len(positions), batch_size):
+        end = min(len(positions), start + batch_size)
+        indices = first[start:end, None] + np.arange(width)
+        present = indices < last[start:end, None]
+        indices = np.minimum(indices, last[start:end, None] - 1)
+        segment_starts = np.maximum(axis[indices], lower[start:end, None])
+        segment_ends = np.minimum(axis[indices + 1], upper[start:end, None])
+        starts = np.stack([np.interp(segment_starts, axis, xy[:, dim]) for dim in range(2)], axis=-1)
+        ends = np.stack([np.interp(segment_ends, axis, xy[:, dim]) for dim in range(2)], axis=-1)
+        vectors = ends - starts
+        norm2 = np.sum(vectors * vectors, axis=2)
+        usable = present & (norm2 > 1e-10)
+        point = points[start:end, None, :]
+        fraction = np.clip(np.sum((point - starts) * vectors, axis=2) / np.where(usable, norm2, 1), 0, 1)
+        residual = point - (starts + vectors * fraction[:, :, None])
+        distances = np.where(usable, np.sum(residual * residual, axis=2), np.inf)
+        chosen = np.argmin(distances, axis=1)
+        rows = np.arange(end - start)
+        keep = np.any(usable, axis=1)
+        cross = (vectors[rows, chosen, 0] * residual[rows, chosen, 1]
+                 - vectors[rows, chosen, 1] * residual[rows, chosen, 0])
+        selected_norm = norm2[rows, chosen][keep]
+        roots = np.fromiter((math.sqrt(value) for value in selected_norm), dtype=float, count=len(selected_norm))
+        selected_positions.extend(positions[start:end][keep])
+        offsets.extend(np.abs(cross[keep] / roots))
+    return np.asarray(selected_positions), np.asarray(offsets)
+
+
 def racing_line_context(target_grid, reference_grid, track_length_m, corner_ranges=()):
     """Prepare common coordinates and one lap-wide straight alignment check."""
     try:
@@ -120,18 +182,8 @@ def racing_line_context(target_grid, reference_grid, track_length_m, corner_rang
     outside = valid.copy()
     for start, end in corner_ranges:
         outside &= (axis < start * length) | (axis > end * length)
-    gaps = []
-    positions = []
     # Use every supported outside-corner sample; compute the median once per pair.
-    for index in np.flatnonzero(outside):
-        position = axis[index]
-        point = _section(target, position, position)
-        if point is None:
-            continue
-        offset = _project(reference, position, point[1][0])
-        if offset is not None:
-            gaps.append(abs(offset))
-            positions.append(position)
+    positions, gaps = _alignment_samples(target, reference, axis[outside])
     alignment = float(np.median(gaps)) if len(gaps) >= 3 and positions[-1] - positions[0] >= 20 else None
     return {'target': target, 'reference': reference, 'alignment_m': alignment, 'length': length}
 

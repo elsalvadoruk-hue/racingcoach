@@ -260,7 +260,8 @@ def register_routes(app, services: WorkspaceRoutesServices):
                             'setup_mode', 'pit_rule') if key in body})
                     # Browsing a file in an unconfirmed picker must not replace
                     # the active practice or voice context behind the visible UI.
-                    full = await services.load_analysis(request, update_current_analysis=not body.get('preview', False))
+                    full = await services.load_analysis(request, update_current_analysis=not body.get('preview', False),
+                                                        parsed_telemetry=telemetry)
                     selected = full.get('comparison') or {}
                     lap_selection = full.get('lap_selection') or {}
                     target = body.get('target_lap') if body.get('target_lap') is not None else selected.get('target_lap')

@@ -38,6 +38,17 @@ class TelemetryRepository:
         self._lock = threading.RLock()
         self._cache: OrderedDict[tuple[str, int, int], ParsedTelemetry] = OrderedDict()
 
+    def retain(self, parsed: ParsedTelemetry) -> bool:
+        """Keep an active request's parsed file after reference discovery evicts it."""
+        if file_signature(parsed.path) != parsed.signature:
+            return False
+        with self._lock:
+            self._cache[parsed.signature] = parsed
+            self._cache.move_to_end(parsed.signature)
+            while len(self._cache) > self.max_files:
+                self._cache.popitem(last=False)
+        return True
+
     def load(self, path: Path) -> ParsedTelemetry:
         try:
             signature = file_signature(path)

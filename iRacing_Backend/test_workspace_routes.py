@@ -151,6 +151,7 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
                                             'session_mode': 'ENDURANCE', **options})
             self.assertEqual(response.status_code, 200, response.text)
             request = load.call_args.args[0]
+            self.assertIs(load.call_args.kwargs['parsed_telemetry'], self.sources['baseline.ibt'])
             for key, value in options.items():
                 self.assertEqual(getattr(request, key), value)
             result = response.json()['analysisResult']

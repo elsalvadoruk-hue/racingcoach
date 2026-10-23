@@ -3934,7 +3934,8 @@ app = create_application(APP_VERSION, app_lifespan, overlay_controller)
 register_voice_routes(app, voice_coach, resolve_telemetry_file, repository, TelemetryAnalyzer, AnalyzeRequest)
 
 
-async def load_analysis(request: AnalyzeRequest, *, update_current_analysis: bool = True) -> dict[str, Any]:
+async def load_analysis(request: AnalyzeRequest, *, update_current_analysis: bool = True,
+                        parsed_telemetry: Optional[ParsedTelemetry] = None) -> dict[str, Any]:
     """Analyze one file; internal A/B calculations leave the displayed analysis and practice untouched."""
     request = request_with_structured_feedback(request)
     path = await asyncio.to_thread(resolve_telemetry_file, request.filename)
@@ -3946,7 +3947,16 @@ async def load_analysis(request: AnalyzeRequest, *, update_current_analysis: boo
             ),
         )
     try:
-        telemetry = await asyncio.to_thread(repository.load, path)
+        # Automatic reference discovery can evict the active file from the small
+        # repository. Keep this request's immutable recording and its analysis
+        # cache, but never reuse it after a file/signature change.
+        signature = await asyncio.to_thread(file_signature, path) if parsed_telemetry is not None else None
+        telemetry = (parsed_telemetry if parsed_telemetry is not None
+                     and parsed_telemetry.signature == signature
+                     and parsed_telemetry.path.resolve() == path.resolve()
+                     else await asyncio.to_thread(repository.load, path))
+        if telemetry is parsed_telemetry:
+            await asyncio.to_thread(repository.retain, telemetry)
         await asyncio.to_thread(telemetry_file_visibility, path, telemetry)
         def analyze_and_snapshot() -> tuple[dict[str, Any], dict[str, Any]]:
             analyzer = TelemetryAnalyzer(telemetry)

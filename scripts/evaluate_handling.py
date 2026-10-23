@@ -674,8 +674,8 @@ def native_evaluation(module, analyzer, corners, *, collect_points=True):
             result['_evaluation_name'] = bounds_names.get((result['start'], result['end']))
         return result
 
-    def classify(phase, references, model):
-        result = original_classify(phase, references, model)
+    def classify(phase, references, model, **kwargs):
+        result = original_classify(phase, references, model, **kwargs)
         captures.append((phase, references, model))
         if phase is not None and collect_points:
             name = phase['_evaluation_name'][1]

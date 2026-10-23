@@ -373,8 +373,8 @@ class HandlingTests(unittest.TestCase):
         for index, log_factor in enumerate((-.02, -.01, 0., .01, .02), start=3):
             yaw[index * 6001:(index + 1) * 6001] *= np.exp(log_factor)
         samples, medians = [], []
-        def capture(phase, references, model):
-            measured = classify_phase(phase, references, model)
+        def capture(phase, references, model, **kwargs):
+            measured = classify_phase(phase, references, model, **kwargs)
             for event in measured['events']:
                 if event['kind'] == 'understeer':
                     samples.extend(event['_z_samples'])

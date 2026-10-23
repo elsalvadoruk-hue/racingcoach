@@ -239,23 +239,27 @@ class CornerAnalysis:
         target: dict[str, np.ndarray[Any, Any]],
         reference: Optional[dict[str, np.ndarray[Any, Any]]],
         definitions: list[dict[str, int]],
+        *,
+        _details: bool = True,
     ) -> list[dict[str, Any]]:
         n = len(target["distance_pct"])
         delta = target["time_s"] - reference["time_s"] if reference else np.zeros(n)
         results: list[dict[str, Any]] = []
 
+        def coverage(grid: Optional[dict[str, Any]]) -> Optional[np.ndarray]:
+            if grid is None:
+                return None
+            mask = np.asarray(grid.get("_coverage", np.isfinite(grid["time_s"]) & np.isfinite(grid.get("speed_kph", np.full(n, np.nan)))), dtype=bool)
+            return mask & np.asarray(grid.get("_analysis_coverage", np.ones(n, dtype=bool)), dtype=bool)
+
+        target_coverage, reference_coverage = coverage(target), coverage(reference)
+
         for number, definition in enumerate(definitions, start=1):
             entry = definition["entry"]
             apex = definition["apex"]
             exit_idx = definition["exit"]
-            def supported(grid: Optional[dict[str, Any]]) -> bool:
-                if grid is None:
-                    return False
-                mask = np.asarray(grid.get("_coverage", np.isfinite(grid["time_s"]) & np.isfinite(grid.get("speed_kph", np.full(n, np.nan)))), dtype=bool)
-                mask = mask & np.asarray(grid.get("_analysis_coverage", np.ones(n, dtype=bool)), dtype=bool)
-                return bool(np.all(mask[entry:exit_idx + 1]))
-            target_supported = supported(target)
-            reference_supported = supported(reference)
+            target_supported = target_coverage is not None and bool(np.all(target_coverage[entry:exit_idx + 1]))
+            reference_supported = reference_coverage is not None and bool(np.all(reference_coverage[entry:exit_idx + 1]))
             measurement_usable = target_supported and (reference is None or reference_supported)
             local_delta = float(delta[exit_idx] - delta[entry]) if reference and measurement_usable else None
             target_metrics = self._corner_metrics(target, entry, apex, exit_idx)
@@ -301,6 +305,12 @@ class CornerAnalysis:
                 "drive_band": self.speed_band(target_metrics.get("drive_speed_time"), (reference_metrics or {}).get("drive_speed_time"), False) if measurement_usable else None,
             }
             results.append(result)
+
+        # Repetition only consumes the evidence above. Keep detailed enrichment
+        # for displayed corners and memory snapshots, without computing it for
+        # every lap merely to discard it during pattern aggregation.
+        if not _details:
+            return sorted(results, key=lambda item: item.get("delta_s") or -999, reverse=True)
 
         ordered = sorted(results, key=lambda item: item['entry_pct'])
         line_context = racing_line_context(target, reference, self.track_length_m,
@@ -544,7 +554,7 @@ class CornerAnalysis:
             if lap.lap_number == fastest.lap_number:
                 continue
             compared_laps += 1
-            analyzed = self._corner_analysis(self._lap_grid(lap), reference_grid, definitions)
+            analyzed = self._corner_analysis(self._lap_grid(lap), reference_grid, definitions, _details=False)
             for corner in analyzed:
                 if corner.get("issue_type") != "BALANCE_SUSPECT" or (corner.get("delta_s") or 0) < 0.02:
                     continue
