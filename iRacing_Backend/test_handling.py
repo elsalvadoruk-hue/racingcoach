@@ -61,10 +61,16 @@ CORNER = {'id': 'C1', 'label': '자동 구간 1', 'entry_pct': .1, 'apex_pct': .
 
 
 def measure(raw, start, end, references=None):
-    references = [lap_wave() for _ in range(3)] if references is None else references
+    references = [lap_wave() for _ in range(5)] if references is None else references
     model = learn_bands([raw, *references])
     target = prepare_phase(raw, start, end, model)
     return classify_phase(target, [target, *[prepare_phase(ref, start, end, model) for ref in references]], model)
+
+
+def reaction_scale(factor):
+    raw = lap_wave()
+    raw.channels['YawRate'] *= factor
+    return raw
 
 
 class HandlingTests(unittest.TestCase):
@@ -73,13 +79,13 @@ class HandlingTests(unittest.TestCase):
         self.model = learn_bands([self.neutral])
 
     def test_neutral_measured_reaction_has_no_tendency(self):
-        result = analyze_handling(analyzer([None] * 4), [CORNER])
+        result = analyze_handling(analyzer([None] * 6), [CORNER])
         self.assertEqual(result['corners'], [])
         self.assertEqual(result['source'], 'measured')
         self.assertTrue(all(band['samples'] >= 200 for band in result['k_bands']))
 
     def test_rotation_seventy_percent_yaw_is_understeer(self):
-        result = analyze_handling(analyzer(['understeer'] + [None] * 3), [CORNER])
+        result = analyze_handling(analyzer(['understeer'] + [None] * 5), [CORNER])
         self.assertTrue(any(item['kind'] == 'understeer' and item['phase'] == 'rotation' for item in result['corners']))
         self.assertIsNone(result['corners'][0]['time_cost_s'])
 
@@ -98,14 +104,14 @@ class HandlingTests(unittest.TestCase):
 
     def test_at_least_three_other_laps_and_two_hundred_local_samples(self):
         self.assertFalse(measure(self.neutral, .2, .25, references=[lap_wave()] * 2)['observed'])
-        self.assertFalse(measure(self.neutral, .2, .21)['observed'])
+        self.assertFalse(measure(self.neutral, .2, .205)['observed'])
         self.assertTrue(measure(self.neutral, .2, .25)['observed'])
 
     def test_repeated_braking_and_power_transients_are_the_personal_baseline(self):
         raw = lap_wave()
         t = raw.time_s
         raw.channels['YawRate'] *= 1.3 + .5 * np.sin(t / 2)
-        result = measure(raw, .1, .5, references=[raw] * 3)
+        result = measure(raw, .1, .5, references=[raw] * 5)
         self.assertTrue(result['observed'])
         self.assertAlmostEqual(result['b_median'], 1.)
         self.assertEqual(result['events'], [])
@@ -139,18 +145,18 @@ class HandlingTests(unittest.TestCase):
 
     def test_lmu_requires_measured_steering_and_marks_approximation(self):
         self.assertIsNone(analyze_handling(analyzer(['understeer'], lmu=True, scale='NOMINAL'), [CORNER]))
-        result = analyze_handling(analyzer(['understeer'] + [None] * 3, lmu=True), [CORNER])
+        result = analyze_handling(analyzer(['understeer'] + [None] * 5, lmu=True), [CORNER])
         self.assertTrue(result['approximate'])
         self.assertTrue(all(row['approximate'] for row in result['corners']))
 
     def test_missing_channels_do_not_classify(self):
-        subject = analyzer(['understeer'] + [None] * 3)
+        subject = analyzer(['understeer'] + [None] * 5)
         subject.channels.pop('YawRate')
         self.assertIsNone(analyze_handling(subject, [CORNER]))
 
     def test_comparison_attaches_handling_without_changing_diagnosis(self):
         from closed_loop_coach import detailed_corner_diagnosis
-        subject = analyzer(['understeer'] + [None] * 3)
+        subject = analyzer(['understeer'] + [None] * 5)
         grid = subject._lap_grid(subject.valid_laps[0])
         axis = grid['distance_pct']
         definition = dict(zip(('entry', 'apex', 'exit'), [int(np.argmin(abs(axis - value))) for value in (.1, .23, .5)]))
@@ -161,7 +167,7 @@ class HandlingTests(unittest.TestCase):
 
     def test_analysis_history_uses_explicit_temporary_path(self):
         import backend_api as api
-        subject = analyzer(['understeer'] + [None] * 3)
+        subject = analyzer(['understeer'] + [None] * 5)
         source = subject.telemetry
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'synthetic.ibt'
@@ -237,7 +243,7 @@ class HandlingTests(unittest.TestCase):
     def test_unknown_reasons_distinguish_lap_sample_and_input_shortages(self):
         few = measure(self.neutral, .2, .25, references=[lap_wave()] * 2)
         self.assertIn('reference_laps_shortage', few['unknown_reasons'])
-        short = measure(self.neutral, .2, .21)
+        short = measure(self.neutral, .2, .205)
         self.assertIn('reference_samples_shortage', short['unknown_reasons'])
         changed = lap_wave()
         changed.channels['Throttle'][1500:1800] = 1.
@@ -247,7 +253,7 @@ class HandlingTests(unittest.TestCase):
         self.assertEqual(measure(self.neutral, .2, .25)['unknown_reasons'], [])
 
     def test_per_lap_release_observations_are_explicit_and_preserve_detection(self):
-        subject = analyzer(['understeer'] + [None] * 3)
+        subject = analyzer(['understeer'] + [None] * 5)
         ordinary = analyze_handling(subject, [CORNER])
         detailed = analyze_handling(subject, [CORNER], include_observations=True)
         self.assertNotIn('observations', ordinary)
@@ -258,6 +264,139 @@ class HandlingTests(unittest.TestCase):
         missing = analyze_handling(analyzer([None] * 2), [CORNER])
         self.assertGreater(missing['unknown_reasons']['reference_laps_shortage'], 0)
         self.assertTrue(any(row['unknown_reasons'] for row in missing['phase_coverage']))
+
+    def test_high_reference_spread_suppresses_twenty_percent_differences(self):
+        references = [reaction_scale(np.exp(value)) for value in (-.25, -.12, 0., .12, .25)]
+        for factor in (.8, 1.2):
+            with self.subTest(factor=factor):
+                result = measure(reaction_scale(factor), .2, .25, references)
+                self.assertTrue(result['observed'])
+                self.assertEqual(result['events'], [])
+                self.assertLess(abs(result['z_median']), 2.5)
+
+    def test_low_reference_spread_detects_sixteen_percent_differences(self):
+        references = [reaction_scale(np.exp(value)) for value in (-.02, -.01, 0., .01, .02)]
+        for factor, kind in ((.84, 'understeer'), (1.16, 'oversteer')):
+            with self.subTest(factor=factor):
+                result = measure(reaction_scale(factor), .2, .25, references)
+                self.assertEqual([event['kind'] for event in result['events']], [kind])
+                self.assertAlmostEqual(result['events'][0]['z_median'], np.log(factor) / (1.4826 * .01))
+
+    def test_three_or_four_references_without_local_point_spread_are_unknown(self):
+        for count in (3, 4):
+            with self.subTest(count=count):
+                result = measure(reaction_scale(.7), .2, .25, [lap_wave() for _ in range(count)])
+                self.assertFalse(result['observed'])
+                self.assertEqual(result['known_fraction'], 0.)
+                self.assertEqual(result['events'], [])
+                self.assertIn('noise_unknown', result['unknown_reasons'])
+                self.assertNotIn('reference_laps_shortage', result['unknown_reasons'])
+
+    def test_three_or_four_references_borrow_same_phase_point_spread(self):
+        for count in (3, 4):
+            with self.subTest(count=count):
+                references = [reaction_scale(np.exp(value)) for value in (-.02, -.01, 0., .01, .02)]
+                for reference in references[count:]:
+                    reference.channels['Throttle'][(reference.pct >= .22) & (reference.pct <= .23)] = 1.
+                result = measure(reaction_scale(.84), .2, .25, references)
+                self.assertTrue(result['observed'])
+                self.assertEqual(result['unknown_reasons'], [])
+                self.assertEqual([event['kind'] for event in result['events']], ['understeer'])
+
+    def test_noise_fallback_does_not_borrow_from_boundary_padding(self):
+        references = [lap_wave() for _ in range(5)]
+        references[-1].channels['Throttle'][references[-1].pct >= .2] = 1.
+        result = measure(reaction_scale(.7), .2, .25, references)
+        self.assertFalse(result['observed'])
+        self.assertEqual(result['known_fraction'], 0.)
+        self.assertIn('noise_unknown', result['unknown_reasons'])
+        self.assertEqual(result['events'], [])
+
+    def test_zero_spread_uses_minimum_ratio_without_nonfinite_json(self):
+        for factor, expected in ((.86, []), (1.14, []), (.84, ['understeer']), (1.16, ['oversteer'])):
+            with self.subTest(factor=factor):
+                with np.errstate(divide='raise', invalid='raise'):
+                    result = measure(reaction_scale(factor), .2, .25)
+                self.assertTrue(result['observed'])
+                self.assertEqual([event['kind'] for event in result['events']], expected)
+                json.dumps(result, allow_nan=False)
+
+    def test_large_z_still_needs_minimum_ratio_difference(self):
+        references = [reaction_scale(np.exp(value)) for value in (-.002, -.001, 0., .001, .002)]
+        result = measure(reaction_scale(.9), .2, .25, references)
+        self.assertLess(result['z_median'], -2.5)
+        self.assertEqual(result['events'], [])
+
+    def test_borrowed_zero_noise_detects_events_and_missing_noise_preserves_countersteer(self):
+        raw = lap_wave('counter')
+        raw.channels['YawRate'][(raw.time_s >= 21) & (raw.time_s < 21.4)] *= .7
+        references = [lap_wave() for _ in range(5)]
+        for reference in references[3:]:
+            # Only the event has three matches; enough reference evidence elsewhere supplies noise.
+            reference.channels['Throttle'][(reference.time_s >= 21.1) & (reference.time_s < 21.3)] = 1.
+        # Noise is zero, so this borrowed-noise case remains detectable.
+        detected = measure(raw, .2, .3, references)
+        self.assertIn('understeer', [event['kind'] for event in detected['events']])
+        unknown = measure(raw, .2, .3, references[:3])
+        self.assertEqual([event['kind'] for event in unknown['events']], ['countersteer'])
+
+    def test_large_spread_breaks_sustained_runs(self):
+        raw = lap_wave()
+        raw.channels['YawRate'][(raw.time_s >= 21) & (raw.time_s < 21.4)] *= .7
+        references = [lap_wave() for _ in range(5)]
+        for reference, factor in zip(references, (.55, .7, 1., 1.3, 1.6)):
+            reference.channels['YawRate'][(reference.time_s >= 21.1) & (reference.time_s < 21.3)] *= factor
+        result = measure(raw, .2, .25, references)
+        self.assertTrue(result['observed'])
+        self.assertEqual(result['events'], [])
+
+    def test_noise_metadata_and_event_z_are_added_without_changing_existing_fields(self):
+        result = analyze_handling(analyzer(['understeer'] + [None] * 5), [CORNER], include_observations=True)
+        self.assertEqual(result['method'], 'personal_corner_phase_v2')
+        self.assertEqual(result['noise_rules'], {'z_limit': 2.5, 'min_ratio': [.85, 1.15],
+                                                'spread': 'mad', 'min_laps_for_point_spread': 5})
+        self.assertTrue(result['corners'])
+        self.assertTrue(all('z_median' in item for item in result['corners']))
+        self.assertTrue(all('z_median' in event for row in result['observations'] for event in row['events']))
+        self.assertNotIn('_z_samples', json.dumps(result))
+        json.dumps(result, allow_nan=False)
+
+    def test_summary_z_uses_all_sustained_samples_instead_of_lap_medians(self):
+        subject = analyzer(['understeer'] * 3 + [None] * 5)
+        raw = lap_wave()
+        baseline = raw.channels['YawRate']
+        yaw = subject.channels['YawRate']
+        for index in (0, 1):
+            values = baseline.copy()
+            values[(raw.time_s >= 21) & (raw.time_s < 21.4)] *= .6
+            yaw[index * 6001:(index + 1) * 6001] = values
+        for index, log_factor in enumerate((-.02, -.01, 0., .01, .02), start=3):
+            yaw[index * 6001:(index + 1) * 6001] *= np.exp(log_factor)
+        samples, medians = [], []
+        def capture(phase, references, model):
+            measured = classify_phase(phase, references, model)
+            for event in measured['events']:
+                if event['kind'] == 'understeer':
+                    samples.extend(event['_z_samples'])
+                    medians.append(event['z_median'])
+            return measured
+        with patch('handling.classify_phase', side_effect=capture):
+            result = analyze_handling(subject, [CORNER], include_observations=True)
+        item = next(row for row in result['corners'] if row['kind'] == 'understeer' and row['phase'] == 'rotation')
+        self.assertAlmostEqual(item['z_median'], np.median(samples))
+        self.assertNotAlmostEqual(item['z_median'], np.median(medians))
+        self.assertNotIn('_z_samples', json.dumps(result))
+
+    def test_history_never_mixes_v1_and_v2(self):
+        with tempfile.TemporaryDirectory() as folder:
+            history = HandlingHistory(Path(folder) / 'history.json')
+            metadata = {'car_path': 'test-car', 'track_platform_id': 1}
+            item = {**CORNER, 'corner_id': 'C1', 'kind': 'understeer', 'phase': 'rotation',
+                    'laps': 1, 'of_laps': 6, 'time_cost_s': None}
+            history.update(metadata, ('old', 1), {'method': 'personal_corner_phase_v1', 'corners': [item]})
+            self.assertEqual(history.update(metadata, ('new', 1), {'method': METHOD, 'corners': [item]}), [])
+            repeats = history.update(metadata, ('another', 1), {'method': METHOD, 'corners': [item]})
+            self.assertEqual(repeats[0]['files'], 2)
 
 
 if __name__ == '__main__':

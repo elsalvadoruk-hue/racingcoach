@@ -23,10 +23,12 @@ MIN_SPEED, MIN_STEER, COUNTER_YAW = 15., .03, .1
 MAX_STABLE_YAW_ACCEL = .3
 MIN_BAND_SAMPLES = 200
 MIN_REFERENCE_LAPS = 3
+MIN_LAPS_FOR_POINT_SPREAD = 5
+Z_LIMIT = 2.5
 MAX_SPEED_DIFFERENCE = 5.
 MAX_PEDAL_DIFFERENCE = .2
 MAX_STEER_RATIO = 1.5
-METHOD = 'personal_corner_phase_v1'
+METHOD = 'personal_corner_phase_v2'
 REQUIRED = ('Speed', 'SteeringWheelAngle', 'YawRate', 'LatAccel', 'Brake', 'Throttle')
 PHASES = ('braking', 'rotation', 'drive')
 
@@ -156,7 +158,7 @@ def classify_phase(phase, references, model):
     not per interpolated point. Each point also needs three independent laps.
     These reference matching guards, like the detection limits, are unvalidated.
     """
-    unknown = {'observed': False, 'counter_observed': False, 'b_median': None, 'events': [], 'known_fraction': 0.,
+    unknown = {'observed': False, 'counter_observed': False, 'b_median': None, 'z_median': None, 'events': [], 'known_fraction': 0.,
                'unknown_reasons': ['phase_unavailable']}
     if phase is None:
         return unknown
@@ -180,17 +182,36 @@ def classify_phase(phase, references, model):
                       & (abs(steer) <= MAX_STEER_RATIO * abs(rsteer)))
         predictions.append(np.where(comparable, q, np.nan))
     baseline = np.full(len(speed), np.nan)
+    log_baseline = np.full(len(speed), np.nan)
+    spread = np.full(len(speed), np.nan)
     matched = np.zeros(len(speed), dtype=int)
     if predictions and np.all(np.isfinite(model['edges_mps'])):
         matrix = np.asarray(predictions)
-        matched = np.sum(np.isfinite(matrix), axis=0)
+        logs = np.full_like(matrix, np.nan)
+        np.log(matrix, out=logs, where=np.isfinite(matrix) & (matrix > 0))
+        matched = np.sum(np.isfinite(logs), axis=0)
         good = (matched >= MIN_REFERENCE_LAPS) & (support[phase['bands']] >= MIN_BAND_SAMPLES)
-        baseline[good] = np.nanmedian(matrix[:, good], axis=0)
+        log_baseline[good] = np.nanmedian(logs[:, good], axis=0)
+        baseline[good] = np.exp(log_baseline[good])
+        point_spread = good & (matched >= MIN_LAPS_FOR_POINT_SPREAD)
+        if np.any(point_spread):
+            spread[point_spread] = 1.4826 * np.nanmedian(
+                abs(logs[:, point_spread] - log_baseline[point_spread]), axis=0)
+            # Borrow only point spreads supported by five other laps in this phase.
+            sources = point_spread & phase['inside'] & eligible & (steer * yaw > 0)
+            if np.any(sources):
+                spread[good & ~point_spread] = np.median(spread[sources])
     ratio = np.full(len(speed), np.nan)
     np.divide(phase['q'], baseline, out=ratio,
-              where=eligible & (steer * yaw > 0) & np.isfinite(baseline) & (baseline > 0))
-    under = _sustained(np.isfinite(ratio) & (ratio < UNDER_B), durations, UNDER_SECONDS)
-    over = _sustained(np.isfinite(ratio) & (ratio > OVER_B), durations, OVER_SECONDS)
+              where=eligible & (steer * yaw > 0) & np.isfinite(baseline) & (baseline > 0) & np.isfinite(spread))
+    delta = np.full(len(speed), np.nan)
+    np.log(ratio, out=delta, where=np.isfinite(ratio) & (ratio > 0))
+    z = np.full(len(speed), np.nan)
+    np.divide(delta, spread, out=z, where=np.isfinite(delta) & (spread > 0))
+    z[np.isfinite(delta) & (spread == 0) & (delta == 0)] = 0.
+    # With identical reference values the minimum ratio alone decides; z is undefined.
+    under = _sustained((delta < np.log(UNDER_B)) & ((spread == 0) | (z < -Z_LIMIT)), durations, UNDER_SECONDS)
+    over = _sustained((delta > np.log(OVER_B)) & ((spread == 0) | (z > Z_LIMIT)), durations, OVER_SECONDS)
     # Countersteering is a separate measured event, independent of personal q.
     counter = _sustained(eligible & (steer * yaw < 0) & (np.abs(yaw) > COUNTER_YAW), durations, COUNTER_SECONDS)
     events = []
@@ -198,7 +219,10 @@ def classify_phase(phase, references, model):
         if np.any(selected):
             indices = np.flatnonzero(selected)
             events.append({'kind': kind, 'with': _accompaniment(raw, indices + phase['offset'], durations[indices]),
-                           'seconds': float(np.sum(durations[selected]))})
+                           'seconds': float(np.sum(durations[selected])),
+                           '_z_samples': z[selected & np.isfinite(z)].tolist() if kind != 'countersteer' else [],
+                           'z_median': float(np.median(z[selected & np.isfinite(z)]))
+                               if kind != 'countersteer' and np.any(selected & np.isfinite(z)) else None})
     required = phase['inside'] & eligible & (durations > 0)
     known = required & np.isfinite(ratio)
     observed = bool(np.any(required) and np.all(np.isfinite(ratio[required])) and phase['complete'])
@@ -220,8 +244,11 @@ def classify_phase(phase, references, model):
             reasons.append('inputs_not_comparable')
         if np.any(required & (steer * yaw <= 0)):
             reasons.append('rotation_direction_not_comparable')
+        if np.any(required & np.isfinite(baseline) & ~np.isfinite(spread)):
+            reasons.append('noise_unknown')
     return {'observed': observed, 'counter_observed': bool(np.any(required) and phase['complete']),
             'b_median': float(np.median(ratio[known])) if np.any(known) else None,
+            'z_median': float(np.median(z[known & np.isfinite(z)])) if np.any(known & np.isfinite(z)) else None,
             'known_fraction': float(np.sum(durations[known]) / np.sum(durations[required])) if np.any(required) else 0.,
             'events': events, 'unknown_reasons': reasons}
 
@@ -242,6 +269,7 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
             laps.append((lap, grid, raw))
     model = learn_bands([raw for _, _, raw in laps])
     observations = defaultdict(list)
+    event_z = defaultdict(list)
     prepared = defaultdict(list)
     coverage = Counter(classifiable=0, not_applicable=0, partial=0,
                        total_slots=len(analyzer.valid_laps) * len(corners) * len(PHASES),
@@ -286,6 +314,9 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
         references = [row['data'] for row in rows]
         for row in rows:
             measured = classify_phase(row['data'], references, model)
+            # Keep full sustained-sample values only during aggregation, never in API rows.
+            for event in measured['events']:
+                event_z[(*key, event['kind'])].extend(event.pop('_z_samples', []))
             coverage['classifiable' if measured['observed'] else 'unknown'] += 1
             phase_counts[key]['classifiable' if measured['observed'] else 'unknown'] += 1
             coverage['partial'] += bool(0 < measured['known_fraction'] < 1)
@@ -305,10 +336,12 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
                 observation_key = 'counter_observed' if kind == 'countersteer' else 'observed'
                 other = [row['time_s'] for row in rows if row['lap'] not in hit_laps and row[observation_key] and row['time_s'] is not None]
                 votes = Counter(event['with'] for row in hits for event in row['events'] if event['kind'] == kind)
+                selected_z = event_z[(corner['id'], phase, kind)]
                 summaries.append({'corner_id': corner['id'], 'label': corner['label'], 'apex_pct': corner['apex_pct'],
                                   'phase': phase, 'kind': kind, 'with': votes.most_common(1)[0][0],
                                   'laps': len(hit_laps), 'of_laps': len(analyzer.valid_laps),
                                   'observed_laps': sum(row[observation_key] for row in rows),
+                                  'z_median': float(np.median(selected_z)) if selected_z else None,
                                   'time_cost_s': round(float(np.median(slower) - np.median(other)), 4)
                                       if len(slower) >= 3 and len(other) >= 3 else None,
                                   'approximate': approximate, 'method': METHOD,
@@ -328,6 +361,8 @@ def analyze_handling(analyzer, corners, *, include_observations=False):
                                 'unknown_reasons': dict(phase_reasons[key])}
                                for key, counts in phase_counts.items()],
             'unknown_reasons': dict(unknown_reasons),
+            'noise_rules': {'z_limit': Z_LIMIT, 'min_ratio': [UNDER_B, OVER_B], 'spread': 'mad',
+                            'min_laps_for_point_spread': MIN_LAPS_FOR_POINT_SPREAD},
             'coverage': dict(coverage), 'reference_rules': {'other_laps': MIN_REFERENCE_LAPS,
                 'samples_per_corner_phase_speed_band': MIN_BAND_SAMPLES, 'max_speed_difference_mps': MAX_SPEED_DIFFERENCE,
                 'max_pedal_difference': MAX_PEDAL_DIFFERENCE, 'max_steer_ratio': MAX_STEER_RATIO}}
