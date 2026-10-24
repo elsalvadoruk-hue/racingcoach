@@ -127,7 +127,8 @@ class RaceRadio:
 
     def reset(self, *, keep_run=False):
         retained = ({key: getattr(self, key) for key in
-                     ('run_id', 'briefed', 'briefing_delivered', 'position_said', '_position_delivery_serial', '_deliveries')}
+                     ('run_id', 'briefed', 'briefing_delivered', 'position_said', '_position_delivery_serial', '_deliveries',
+                      'result_called', 'result')}
                     if keep_run and self.run_id else {})
         briefing_at = self.sent.get('briefing') if retained else None
         self.run_id = None
@@ -498,10 +499,14 @@ class RaceRadio:
                           group='lap_time', speech_text=' '.join(parts), speech_parts=parts,
                           part_categories=categories, screen_parts=screen)
         position, old_lap = num(sample.get('class_position')), num(previous.get('lap_completed'))
+        native = sample.get('finish_status')
+        crossed = (int(sample.get('session_flags') or 0) & 0x1 and int(previous.get('session_flags') or 0) & 0x1
+                   and previous.get('on_track') is True and lap is not None and old_lap is not None and lap == old_lap + 1)
+        finished = native == 1 or (native is None and crossed)
         if (not self.result_called and str(self.metadata.get('session_type', '')).lower() == 'race'
-                and int(sample.get('session_flags') or 0) & 0x1 and int(previous.get('session_flags') or 0) & 0x1
-                and lap is not None and old_lap is not None and lap == old_lap + 1 and position is not None and position > 0):
-            # Crossing the line under the chequered flag: the race is over for this car.
+                and finished and not int(sample.get('session_flags') or 0) & 0x20000
+                and position is not None and position > 0):
+            # LMU confirms our own finish explicitly; other sims use a verified crossing.
             self.result_called = True
             self.result = {'class_position': position, 'at': now}      # kept for the history of this track (live_formation)
             self.say('race_result', now, {'pos': position}, ttl=40, delay=3, cooldown=3600, priority=2)

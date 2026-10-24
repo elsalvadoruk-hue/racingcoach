@@ -18,6 +18,7 @@ import numpy as np
 
 from analysis_numeric import file_signature
 from telemetry_channels import IRSDK_DTYPES
+from race_position_events import observe as observe_events, finalize as finalize_events
 
 MAX_FRAMES = 12000
 MAX_CARS = 128
@@ -81,7 +82,10 @@ def _lap_result(result):
     if not rows:
         return _empty('스타트·피니시 라인 통과를 확인할 수 있는 완료 랩 기록이 없습니다.')
     laps = [p[0] for row in rows for p in row['points'] if p[2] is not None]
-    return result | dict(series=rows, x_axis='lap', start_lap=min(laps), end_lap=max(laps),
+    # Show observed events in an unfinished/first lap without inventing a rank there.
+    event_x = [e[key] for row in rows for e in row.get('events', []) for key in ('x', 'end_x')
+               if isinstance(e.get(key), (int, float)) and math.isfinite(e[key]) and e[key] >= 0]
+    return result | dict(series=rows, x_axis='lap', start_lap=min(laps + event_x), end_lap=max(laps + event_x),
                          reason='각 차량의 완료 랩에서 관측한 순위입니다. 기록이 없는 랩은 연결하지 않습니다.')
 
 
@@ -135,6 +139,11 @@ def _native(telemetry):
             view = np.ndarray((n, header.count), dtype=dtype, buffer=mapping,
                               offset=telemetry.data_offset + header.offset, strides=(width, dtype.itemsize))
             return view[indices].copy()
+        def optional(name):
+            try:
+                return read(name)
+            except ValueError:
+                return None
         try:
             times = read('SessionTime')
             nums = read('SessionNum')
@@ -142,6 +151,11 @@ def _native(telemetry):
             classes = read('CarIdxClassPosition') if positions else read('PlayerCarClassPosition')
             laps = read('CarIdxLapCompleted') if positions else None
             own_laps = read('LapCompleted') if laps is None else None
+            pits, own_pits = optional('CarIdxOnPitRoad'), optional('OnPitRoad')
+            distances, own_distance = optional('CarIdxLapDistPct'), optional('LapDistPct')
+            bests, own_best = optional('CarIdxBestLapTime'), optional('LapBestLapTime')
+            lasts, own_last = optional('CarIdxLastLapTime'), optional('LapLastLapTime')
+            incidents = optional('PlayerCarMyIncidentCount')
         finally:
             mapping._mmap.close()
     if times is None or overall is None:
@@ -179,6 +193,12 @@ def _native(telemetry):
         driver = drivers.get(idx, {})
         row = _series(idx, driver.get('CarClassID'), driver.get('CarNumber'), idx == own,
                       driver.get('CarClassShortName') or driver.get('CarClassName'))
+        def value(array, scalar=None):
+            if array is not None and column < array.shape[1]:
+                return float(array[i, column])
+            return float(scalar[i, 0]) if idx == own and scalar is not None else None
+        has_events = (pits is not None or bests is not None or (idx == own and
+                      any(array is not None for array in (own_pits, own_best, incidents))))
         previous = previous_index = None
         for i in selected:
             at = float(times[i])
@@ -189,9 +209,15 @@ def _native(telemetry):
                          else float(own_laps[i, 0]) if idx == own and own_laps is not None else None)
             _append(row, at, overall_rank, class_rank, gap)
             _observe_lap(row, at, completed, overall_rank, class_rank, gap)
+            if has_events:
+                observe_events(row, at, completed, distance=value(distances, own_distance), pit=value(pits, own_pits),
+                               incidents=value(None, incidents), best=value(bests, own_best), last=value(lasts, own_last), gap=gap or class_rank is None)
             previous, previous_index = at, i
         series[str(idx)] = row
-    return _result(series, 'IBT', step)
+    result = _result(series, 'IBT', step)
+    result['_event_best_scope'] = bool(bests is not None and len(result.get('series', [])) == len(indices_by_car))
+    result['_event_start_index'] = int(indices[selected[0]])
+    return result
 
 
 def _clock(telemetry):
@@ -320,6 +346,8 @@ def _timing(telemetry, folder, database):
                 overall, class_rank = _rank(car.get('position')), _rank(car.get('class_position'))
                 _append(row, at, overall, class_rank, gap)
                 _observe_lap(row, at, car.get('lap_completed'), overall, class_rank, gap)
+                observe_events(row, at, car.get('lap_completed'), distance=car.get('distance_pct'),
+                               pit=car.get('on_pit_road'), gap=gap or class_rank is None)
             previous = at
     return _result(series, 'LOCAL_TIMING', step)
 
@@ -345,6 +373,7 @@ def _supplement(native, timing):
     if not supplemented:
         return native
     result = _result(rows, 'IBT+LOCAL_TIMING', max(native['sample_interval_s'], timing['sample_interval_s']))
+    result['_event_start_index'] = native.get('_event_start_index', 0)
     result['reason'] += ' 다른 차량은 앱이 기록한 구간만 표시합니다.'
     return result
 
@@ -372,4 +401,4 @@ def read_history(telemetry, *, timing_folder=None, voice_database=None):
         result = _supplement(result, timing)
     if file_signature(telemetry.path) != before:
         raise ValueError('주행 기록이 바뀌었습니다. 파일을 다시 선택하세요.')
-    return _lap_result(result) or _empty('순위 이력이 저장되지 않은 기록입니다. 앱을 켜고 기록한 다음 경기부터 확인할 수 있습니다.')
+    return _lap_result(finalize_events(result, telemetry)) or _empty('순위 이력이 저장되지 않은 기록입니다. 앱을 켜고 기록한 다음 경기부터 확인할 수 있습니다.')

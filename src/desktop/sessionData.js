@@ -119,6 +119,11 @@ export const finite = Number.isFinite;
 export const number = (value, digits = 1) => finite(value) ? value.toFixed(digits) : '—';
 export const signed = (value, digits = 3) => finite(value) ? `${value > 0 ? '+' : ''}${value.toFixed(digits)}` : '—';
 export const lapTime = value => finite(value) ? `${Math.floor(value / 60)}:${(value % 60).toFixed(3).padStart(6, '0')}` : '—';
+export function durationTime(value) {
+  if (!finite(value) || value < 0) return '—';
+  const seconds = Math.floor(value);
+  return `${Math.floor(seconds / 3600)}:${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
 const difference = (a, b) => finite(a) && finite(b) ? a - b : null;
 export const distanceDifference = (a, b) => { const delta = difference(a, b); return finite(delta) ? delta * length : null; };
 export const CHANNELS = [

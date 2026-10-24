@@ -1,11 +1,21 @@
 import { act, renderHook } from '@testing-library/react';
 import useRadioDiagnostics from './useRadioDiagnostics';
+import packageInfo from '../package.json';
 
 beforeEach(() => {
   jest.useFakeTimers();
   global.fetch = jest.fn().mockResolvedValue({ ok: true });
 });
 afterEach(() => { jest.useRealTimers(); jest.restoreAllMocks(); });
+
+test('queued feedback retains the loaded frontend and originating backend versions', async () => {
+  const { result } = renderHook(() => useRadioDiagnostics('http://synthetic'));
+  act(() => result.current({ event_id: 'old-frame', backend_version: '2.1.2' }, 'completed'));
+  await act(async () => jest.advanceTimersByTime(1000));
+  const [event] = JSON.parse(fetch.mock.calls[0][1].body).events;
+  expect(event.frontend_version).toBe(packageInfo.version);
+  expect(event.backend_version).toBe('2.1.2');
+});
 
 test('setting playback starts notify the HUD immediately while ordinary logs stay batched', async () => {
   const { result } = renderHook(() => useRadioDiagnostics('http://synthetic'));

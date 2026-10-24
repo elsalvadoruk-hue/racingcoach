@@ -58,6 +58,8 @@ class RadioDeliveryEvent(BaseModel):
     distance_pct: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     at: float | None = Field(default=None, allow_inf_nan=False)
     dropped_parts: int = Field(default=0, ge=0, strict=True)
+    frontend_version: str | None = Field(default=None, max_length=64, pattern=r'^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')
+    backend_version: str | None = Field(default=None, max_length=64, pattern=r'^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')
 
 
 class RadioDeliveryBatch(BaseModel):
@@ -582,7 +584,8 @@ class VoiceCoach:
                     role = 'strategy'
                 if review_question(text):
                     role = 'coach'
-                context = {**context, 'engineer': role, 'analysis_mode': payload.analysis_mode}
+                context = {**context, 'engineer': role, 'analysis_mode': payload.analysis_mode,
+                           'backend_version': getattr(self, 'app_version', None)}
             except Exception as exc:
                 if payload.audio_base64 and not payload.text:
                     self.speech.recognition_state = 'FAILED'
@@ -745,7 +748,8 @@ class VoiceCoach:
                 selected = self.live.pit_wall.select(current, latest['snapshot'], selection_level, cached_audio=True)
                 if not selected or selected['key'] != report['key'] or selected['token'] != report['token'] or selected['text'] != report['text'] or selected.get('speech_key') != report.get('speech_key'):
                     return result
-            note_context = {**context, 'engineer': report['engineer'], 'pit_wall': view, 'report_key': report['key'], 'report_delivery': 'PREPARED',
+            note_context = {**context, 'backend_version': getattr(self, 'app_version', None),
+                            'engineer': report['engineer'], 'pit_wall': view, 'report_key': report['key'], 'report_delivery': 'PREPARED',
                             'spoken_text': report.get('spoken_text'), 'speech_source': 'FIXED_CACHE'}
             note = await asyncio.to_thread(self.store.save, '자동 보고 · ' + ROLES[report['engineer']]['label'], note_context, 'AUTO_REPORT')
             note = await asyncio.to_thread(self.store.update, note['id'], reply=report['text'], reply_source='LOCAL' if report['engineer'] == 'coach' else 'MEASURED', service_error=warning)
@@ -775,6 +779,8 @@ class VoiceCoach:
 
 
 def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, analyze_request_type):
+    backend_version = getattr(app, 'version', None)
+    coach.app_version = backend_version
     router = APIRouter(prefix='/api/live-coach')
     spotter_audio = SpotterAudio(coach.speech, lambda: role_voice('spotter'))
 
@@ -891,13 +897,13 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
         serial = view['serial']
         sent_at, signature = time.monotonic(), None
         try:
-            await socket.send_json({'type': 'ready', **view, 'events': []})
+            await socket.send_json({'type': 'ready', **view, 'events': [], 'backend_version': backend_version})
             while True:
                 view = coach.live.spotter_status(after=serial)
                 serial = view['serial']
                 current = (view['active'], view['raw_state'], view['state'], view['run_id'])
                 if current != signature or view['events'] or time.monotonic() - sent_at >= .1:
-                    await socket.send_json({'type': 'spotter', **view})
+                    await socket.send_json({'type': 'spotter', **view, 'backend_version': backend_version})
                     sent_at, signature = time.monotonic(), current
                 await asyncio.sleep(.02)
         except (WebSocketDisconnect, RuntimeError, OSError):

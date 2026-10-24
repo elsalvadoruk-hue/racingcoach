@@ -8,6 +8,7 @@ import { NativeSelect } from './ui/native-select';
 import { Input } from './ui/input';
 import { Switch } from './ui/switch';
 import React from 'react';
+import { STANDBY_MESSAGE } from '../audioHost';
 import { readGameItem } from '../lib/gameStorage';
 import { useGame } from '../lib/gameContext';
 import { readAlerts } from '../lib/voiceAlerts';
@@ -52,7 +53,7 @@ export function PitWallSettings({ preferences, onChange, view, provider = 'iRaci
   );
 }
 
-export default function PitWall({ enabled, onToggle, preferences, onChange, view, engineers, onTestVoice, busy, speaking, provider = 'iRacing', capabilities = {}, statusText }) {
+export default function PitWall({ enabled, onToggle, preferences, onChange, view, engineers, onTestVoice, busy, speaking, standby = false, provider = 'iRacing', capabilities = {}, statusText }) {
   const lmu = provider === 'LMU';
   const { selectedGame } = useGame();
   const roleDescription = key => !lmu ? ENGINEERS[key].description : ({
@@ -63,7 +64,7 @@ export default function PitWall({ enabled, onToggle, preferences, onChange, view
   return <Card asChild><section aria-label="레이스 피트월" className="coach-panel">
     <LiveHeader title="레이스 피트월" topic="pitWall" icon={RadioTower} description="주행 코치 · 레이스 엔지니어 · 전략 엔지니어"
       action={<Button variant={enabled ? 'outline' : 'default'} aria-pressed={enabled} onClick={onToggle}>{enabled ? <Square data-icon="inline-start" /> : <Play data-icon="inline-start" />}{enabled ? '자동 보고 중지' : '자동 보고 시작'}</Button>} />
-    <p role="status" className="text-sm text-muted-foreground">{statusText || (enabled && preferences.level !== 'off' ? speaking ? '엔지니어 발화 중 · 다음 보고는 순서대로 전달' : view?.active ? '자동 보고 활성 · 상황 변화를 확인 중' : '자동 보고 활성 · 진행 중인 Race 세션 대기' : lmu ? '자동 보고 꺼짐 · 질문 기능은 아직 지원하지 않습니다.' : '자동 보고 꺼짐 · 음성 또는 텍스트 질문은 사용 가능')}</p>
+    <p role="status" className="text-sm text-muted-foreground">{statusText || (enabled && preferences.level !== 'off' ? standby ? STANDBY_MESSAGE : speaking ? '엔지니어 발화 중 · 다음 보고는 순서대로 전달' : view?.active ? '자동 보고 활성 · 상황 변화를 확인 중' : '자동 보고 활성 · 진행 중인 Race 세션 대기' : lmu ? '자동 보고 꺼짐 · 질문 기능은 아직 지원하지 않습니다.' : '자동 보고 꺼짐 · 음성 또는 텍스트 질문은 사용 가능')}</p>
     <details className="voice-basic-settings"><summary>연료·발화 설정</summary>
     <PitWallSettings preferences={preferences} onChange={onChange} view={view} provider={provider} capabilities={capabilities} />
     </details>

@@ -139,6 +139,17 @@ def _zip(manifest, radio, reports, extras):
     return buffer.getvalue()
 
 
+def _collection_versions(radio):
+    """Observed at collection, never guessed from the app exporting an older run."""
+    result = {}
+    for component in ('frontend', 'backend'):
+        values = [event.get(f'{component}_version') for event in radio]
+        known = [value for value in values if isinstance(value, str) and value]
+        result[component] = sorted(set(known))
+        result[f'unknown_{component}_events'] = len(values) - len(known)
+    return result
+
+
 def export(store, run_id, app_version, include_questions=False, extras=(), limit=None):
     """(file name, zip bytes) for one session, or None when that session left nothing.
 
@@ -183,6 +194,7 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
         entry[label] = entry.get(label, 0) + 1
     manifest = {
         'format': FORMAT, 'format_version': FORMAT_VERSION, 'app_version': app_version, 'exported_at': time.time(),
+        'export_app_version': app_version, 'collection_versions': _collection_versions(radio),
         'run_id': run_id, 'game': identity.get('game'), 'started_at': started, 'ended_at': ended, 'minutes': round((ended - started) / 60, 1),
         'track': identity.get('track_name'), 'track_path': identity.get('track_path'), 'track_config': identity.get('track_config'),
         'car': identity.get('car_name'), 'car_path': identity.get('car_path'), 'session_type': session_type,

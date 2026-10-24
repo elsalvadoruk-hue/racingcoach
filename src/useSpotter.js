@@ -54,6 +54,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const radio = state.current.radio || {};
     const omitted = droppedParts ?? rendered.current.get(event.id)?.droppedParts;
     output.current.recordDelivery?.({ event_id: event.id, run_id: event.run_id || '', key: event.key,
+      backend_version: event.backend_version || null,
       engineer: event.engineer || 'spotter', text: event.spoken_text || event.text || '', session_time: radio.session_time,
       lap_number: radio.lap_number, distance_pct: radio.distance_pct,
       ...(Number.isInteger(omitted) && omitted >= 0 ? { dropped_parts: omitted } : {}) }, status, reason);
@@ -86,7 +87,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     epoch.current += 1;
     state.current = { active: false };
     overlapPending.current = null;
-    for (const event of radioQueue.current.values()) if (!heard.current.has(event.id)) logEvent(event, 'cancelled', 'spotter_disabled');
+    for (const event of radioQueue.current.values()) if (!output.current.standby && !heard.current.has(event.id)) logEvent(event, 'cancelled', 'spotter_disabled');
     radioQueue.current.clear(); heard.current.clear(); rendered.current.clear();
     clearTimeout(release.current);
     cancelPriority?.();
@@ -183,12 +184,14 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeGame, apiBase, cancelPriority]);
   const announce = useCallback(async (key, valid, variant = null, onStatus) => {
+    if (output.current.standby) return false;
     if (key !== 'test' && !voiceEventAllowed({ key }, applied.current.alerts)) return false;
     const choices = clips.current?.[key]?.variants;
     const selected = choices?.length ? choices[(variant ?? 0) % choices.length] : clips.current?.[key];
     const audio = selected?.audio_base64;
     const settings = output.current;
-    const event = { id: `${state.current.run_id || 'local'}:overlap:${Date.now()}:${key}`, run_id: state.current.run_id, key, text: selected?.text };
+    const event = { id: `${state.current.run_id || 'local'}:overlap:${Date.now()}:${key}`, run_id: state.current.run_id,
+      backend_version: state.current.backend_version, key, text: selected?.text };
     const status = (value, reason) => { logEvent(event, value, reason); onStatus?.(value, reason); };
     if (audio && !settings.muted && settings.volume > 0) {
       try { return await settings.play(audio, 'audio/mpeg', { priority: 3, channel: 'spotter', valid, onStatus: status }); }
@@ -198,6 +201,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     return false;
   }, [logEvent]);
   const pumpOverlap = useCallback(() => {
+    if (output.current.standby) return;
     const pending = overlapPending.current;
     if (!pending || pending.inFlight || pending.delivered || !pending.valid() || Date.now() < pending.retryAt) return;
     if (output.current.muted || output.current.volume === 0) {
@@ -250,7 +254,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     if (!event || (!event.cached && rendering.current)) return;
     const ticket = epoch.current;
     const revision = alertRevision.current;
-    const valid = () => mounted.current && ticket === epoch.current && state.current.radio?.connected
+    const valid = () => mounted.current && !output.current.standby && ticket === epoch.current && state.current.radio?.connected
       && revision === alertRevision.current && voiceEventAllowed(event, applied.current.alerts, output.current.wallAlerts)
       && state.current.radio.run_id === event.run_id && !occupied(state.current, applied.current.alerts)
       && (output.current.wallAlerts || output.current.specialists || event.engineer === 'spotter' || event.key?.startsWith('drill_'))
@@ -332,7 +336,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       const wasActive = state.current.active || state.current.radio?.connected;
       state.current = { active: false };
       overlapPending.current = null;
-      for (const event of radioQueue.current.values()) if (!heard.current.has(event.id)) logEvent(event, 'cancelled', 'connection_lost');
+      for (const event of radioQueue.current.values()) if (!output.current.standby && !heard.current.has(event.id)) logEvent(event, 'cancelled', 'connection_lost');
       radioQueue.current.clear(); rendered.current.clear();
       // Side-by-side calls stop with the data; a sentence already being spoken (the race result
       // as the driver leaves the car) is allowed to finish.
@@ -375,9 +379,10 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
             delivery_status: replaced ? null : current?.delivery_status }));
         }
         const nextQueue = new Map((frame.radio?.events || []).map((event) => [event.id, { ...event,
+          backend_version: event.backend_version || frame.backend_version || null,
           local_expires: now + Math.min(120000, event.expires_in_ms) }]));
         for (const event of radioQueue.current.values()) {
-          if (!nextQueue.has(event.id) && !heard.current.has(event.id)) {
+          if (!output.current.standby && !nextQueue.has(event.id) && !heard.current.has(event.id)) {
             const expired = now >= event.local_expires;
             logEvent(event, expired ? 'expired' : 'cancelled', expired ? 'no_playback_window' : 'condition_or_session_changed');
           }

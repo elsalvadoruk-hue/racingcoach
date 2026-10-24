@@ -100,6 +100,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const standbyRef = useRef(false); standbyRef.current = Boolean(audioOutput.standby);
   const recordDelivery = useRadioDiagnostics(apiBase);
   const deliveryEvent = useCallback((note, spokenText) => ({ event_id: String(note.id), run_id: note.context?.snapshot?.run_id || '',
+    backend_version: note.context?.backend_version || null,
     key: note.context?.report_key || 'answer', engineer: note.context?.engineer || 'coach', text: spokenText || note.reply || '',
     session_time: note.context?.snapshot?.session_time, lap_number: note.context?.snapshot?.lap_number,
     distance_pct: note.context?.snapshot?.distance_pct }), []);
@@ -387,7 +388,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     replay: lastAudio ? () => { stopSpeaking(); play(lastAudio, lastMime.current, { channel: lastChannel.current }); } : null });
   return <section id="live-coach" hidden={!visible} aria-label="실시간 음성 코치" className="flex flex-col gap-5">
     <SpotterPanel spotter={spotter} muted={muted} volume={volume} audioError={outputMessage} />
-    <PitWall enabled={wallEnabled} onToggle={toggleWall} preferences={wallPreferences} onChange={changeWallPreferences} view={wallView} engineers={status?.engineers} onTestVoice={testVoice} busy={phase !== 'idle'} speaking={isPlaying} />
+    <PitWall enabled={wallEnabled} onToggle={toggleWall} preferences={wallPreferences} onChange={changeWallPreferences} view={wallView} engineers={status?.engineers} onTestVoice={testVoice} busy={phase !== 'idle'} speaking={isPlaying} standby={audioOutput.standby} />
     {visible && <Card asChild><section aria-label="엔지니어 음성 준비" className="coach-panel"><CardContent className="p-0"><RadioAudioPrepare apiBase={apiBase} /></CardContent></section></Card>}
     <CornerCoach coach={status?.corner_coach} controls={status?.controls} connected={!!status?.connected} />
     <RadioDiagnostics apiBase={apiBase} />

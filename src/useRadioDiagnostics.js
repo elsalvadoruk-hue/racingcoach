@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef } from 'react';
+import packageInfo from '../package.json';
 
 // Batched independently from the audio path; no recordings or credentials.
 export default function useRadioDiagnostics(apiBase) {
   const queue = useRef([]);
   const notifyStarted = useRef(null);
   const record = useCallback((event, status, reason = '') => {
-    queue.current.push({ ...event, status, reason, at: Date.now() / 1000 });
+    queue.current.push({ ...event, frontend_version: packageInfo.version, status, reason, at: Date.now() / 1000 });
     if (queue.current.length > 512) queue.current.shift();
     if (status === 'started' && event.key?.startsWith('control_')) notifyStarted.current?.();
   }, []);

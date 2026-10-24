@@ -4,6 +4,8 @@ import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyContent } from '../components/ui/empty';
 import { Alert, AlertDescription } from '../components/ui/alert';
+import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
+import { chartEvents, EVENT_TYPES, RaceEventTraces, RaceEventLabels } from './RacePositionEvents';
 import { PanBar } from '../components/LapOverlay';
 import { labRequest } from './sessionData';
 import { PLOT, pointAt, rankAt, lapTicks, positionPath, positionMarkers, positionX, positionY, raceClock } from './racePositionGeometry';
@@ -25,6 +27,7 @@ export default function RacePositionChart({ filename, onClose, load = requestHis
   const [attempt, setAttempt] = useState(0);
   const [windowRange, setWindowRange] = useState([0, 1]), [history, setHistory] = useState([]);
   const [selected, setSelected] = useState(''), [hover, setHover] = useState(null), [drag, setDrag] = useState(null);
+  const [shownEvents, setShownEvents] = useState(['events', 'records']);
   const svg = useRef(null), scroller = useRef(null), gesture = useRef(null);
   useEffect(() => {
     const controller = new AbortController();
@@ -60,6 +63,22 @@ export default function RacePositionChart({ filename, onClose, load = requestHis
   const renderedPaths = [...paths.filter(row => !row.own && row.id !== highlighted && row.id !== compared),
     ...paths.filter(row => row.own && row.id !== highlighted && row.id !== compared),
     ...paths.filter(row => row.id === compared), ...paths.filter(row => row.id === highlighted)];
+  const selectedRow = paths.find(row => row.id === selected);
+  const events = useMemo(() => isLap ? chartEvents(selectedRow, shownEvents) : [], [selectedRow, shownEvents, isLap]);
+  const eventLanes = isLap && Boolean(selectedRow?.events?.length);
+  const plotBottom = positionY(maxRank) + PLOT.top;
+  const canvasHeight = plotBottom;
+  const revealedCar = useRef('');
+  useEffect(() => {
+    if (revealedCar.current === selected) return;
+    revealedCar.current = selected;
+    const element = scroller.current, point = selectedRow?.dots.find(p => Number.isFinite(p[2]));
+    if (!element?.clientHeight || !point) return;
+    const y = positionY(point[2]);
+    if (y < element.scrollTop + 12 || y > element.scrollTop + element.clientHeight - 12) {
+      element.scrollTop = Math.max(0, y - element.clientHeight / 2);
+    }
+  }, [selected, selectedRow]);
   const ticks = isLap ? lapTicks(range) : Array.from({ length: 7 }, (_, i) => range[0] + (range[1] - range[0]) * i / 6);
   const reset = () => { setWindowRange([0, 1]); setHistory([]); setHover(null); setSelected(''); };
   const zoomBack = () => { setWindowRange(history[history.length - 1] || [0, 1]); setHistory(previous => previous.slice(0, -1)); };
@@ -120,9 +139,14 @@ export default function RacePositionChart({ filename, onClose, load = requestHis
     {loading ? <div className="race-position-state" role="status">순위 기록을 불러오는 중…</div> : error ? <div className="race-position-state"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert><Button variant="outline" onClick={() => setAttempt(value => value + 1)}>다시 시도</Button></div>
       : payload?.status !== 'READY' ? <Empty className="race-position-state"><EmptyHeader><EmptyTitle>순위 이력이 없습니다.</EmptyTitle><EmptyDescription>{payload?.reason}</EmptyDescription></EmptyHeader><EmptyContent><Button variant="outline" onClick={onClose}>분석으로 돌아가기</Button></EmptyContent></Empty> : <>
         <div className="race-position-toolbar"><Badge variant="secondary">{payload.classes?.find(item => String(item.id) === String(ownClass))?.label || '내 클래스'} · 클래스 순위</Badge>
-          <Badge variant="outline">{series.length}대</Badge><span className="race-position-range" data-testid="race-position-range">{axisLabel(range[0])} – {axisLabel(range[1])}</span>
+          <Badge variant="outline">{series.length}대</Badge>
+          <ToggleGroup type="multiple" size="sm" className="race-position-event-toggles" value={shownEvents} onValueChange={setShownEvents} aria-label="그래프 표시">
+            <ToggleGroupItem value="events" aria-label="주행 사건 표시">주행 사건</ToggleGroupItem><ToggleGroupItem value="records" aria-label="랩 기록 표시">랩 기록</ToggleGroupItem>
+          </ToggleGroup>
+          <span className="race-position-range" data-testid="race-position-range">{axisLabel(range[0])} – {axisLabel(range[1])}</span>
           <Button variant="ghost" size="sm" disabled={!history.length && windowRange[0] === 0 && windowRange[1] === 1} onClick={zoomBack}>이전 범위</Button><Button variant="outline" size="sm" onClick={reset}><RotateCcw />전체 보기</Button></div>
-        <div className="race-position-body"><div className="race-position-plot">
+        <div className="race-position-body"><div className={`race-position-plot${eventLanes ? ' has-events' : ''}`}>
+          <div className="race-position-event-key" aria-label="사건 표시 색상">{['incident', 'pit_in', 'invalid', 'personal', 'fastest'].map(kind => <span key={kind} data-kind={kind}><i />{kind === 'pit_in' ? '피트' : EVENT_TYPES[kind].label}</span>)}</div>
           {/* HTML labels keep the app font's proportions when the SVG stretches. */}
           <div className="race-position-axis" aria-hidden="true">{ticks.map(value =>
             <span key={value} style={{ left: `${positionX(value, range) / PLOT.width * 100}%` }}>{axisLabel(value)}</span>)}</div>
@@ -130,18 +154,20 @@ export default function RacePositionChart({ filename, onClose, load = requestHis
             <div className="race-position-canvas">
             <div className="race-position-ranks" aria-hidden="true">{Array.from({ length: maxRank }, (_, i) =>
               <span key={i} style={{ top: positionY(i + 1) }}>{i + 1}</span>)}</div>
-            <svg ref={svg} viewBox={`0 0 ${PLOT.width} ${positionY(maxRank) + PLOT.top}`} style={{ height: positionY(maxRank) + PLOT.top }} preserveAspectRatio="none" role="img" aria-label={`${isLap ? '각 차량의 완료 랩' : '기록 경과 시간'}에 따른 내 클래스 차량별 순위. 1위가 위쪽입니다.`}
+            <svg ref={svg} viewBox={`0 0 ${PLOT.width} ${canvasHeight}`} style={{ height: canvasHeight }} preserveAspectRatio="none" role="img" aria-label={`${isLap ? '각 차량의 완료 랩' : '기록 경과 시간'}에 따른 내 클래스 차량별 순위. 1위가 위쪽입니다.`}
               onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); const hit = hitAt(event); event.currentTarget.setPointerCapture?.(event.pointerId); gesture.current = { x: event.clientX, y: event.clientY, pct: xAt(event.clientX), pointerId: event.pointerId, car: hit.id }; setDrag({ from: xAt(event.clientX), to: xAt(event.clientX) }); }}
               onPointerMove={move} onPointerUp={release} onPointerCancel={stopDrag} onLostPointerCapture={stopDrag} onPointerLeave={() => { if (!gesture.current) setHover(null); }}>
               {Array.from({ length: maxRank }, (_, i) => <line key={i} x1={PLOT.left} x2={PLOT.width - PLOT.right} y1={positionY(i + 1)} y2={positionY(i + 1)} className="race-position-grid" />)}
               {renderedPaths.map(row => <PositionTrace key={row.id} row={row} isLap={isLap} active={row.id === highlighted} compared={row.id === compared} dimmed={Boolean(highlighted && row.id !== highlighted && row.id !== compared)} />)}
+              {eventLanes && <RaceEventTraces row={selectedRow} events={events} range={range} bottom={plotBottom} />}
               {hover && <line x1={positionX(hover.time, range)} x2={positionX(hover.time, range)} y1="0" y2={positionY(maxRank) + PLOT.top} className="race-position-cursor" />}
               {drag && <rect x={positionX(range[0] + Math.min(drag.from, drag.to) * (range[1] - range[0]), range)} y="0" width={Math.abs(drag.to - drag.from) * (PLOT.width - PLOT.left - PLOT.right)} height={positionY(maxRank) + PLOT.top} className="race-position-selection" />}
             </svg></div></div>
+          {eventLanes && <div className="race-position-event-strip"><RaceEventLabels row={selectedRow} events={events} range={range} bottom={0} /></div>}
           <PanBar range={windowRange} onChange={value => { setWindowRange(value); setHover(null); }} wheelPan={false} controls="race-position-chart" />
           <output className="race-position-readout">{hover ? `${axisLabel(activePoint?.[0] ?? hover.time)}${active ? ` · ${active.label}${active.own ? ' · 내 차량' : ''} · ${activePoint?.[metric] ?? '—'}위` : ''}` : selected ? `${series.find(row => row.id === selected)?.label || ''} 강조 고정 · 다른 차량을 클릭하면 변경 · 전체 보기로 해제` : '점을 찍은 완료 랩의 순위입니다. 선이나 참가 차량을 클릭하면 강조가 고정됩니다.'}</output>
         </div><aside className="race-position-legend" aria-label="차량 강조 선택"><strong>참가 차량</strong>{series.map(row => <Button key={row.id} variant={selected === row.id ? 'secondary' : 'ghost'} size="sm" aria-pressed={selected === row.id} onClick={() => { setSelected(row.id); setHover(null); }}><i style={{ background: row.color }} /><span>{row.label}</span>{row.own && <Badge variant="outline">나</Badge>}</Button>)}</aside></div>
-        <p className="race-position-source">{payload.reason} · {payload.source === 'IBT' ? 'IBT 순위 채널' : payload.source === 'IBT+LOCAL_TIMING' ? 'IBT + 이 PC의 경기 타이밍 기록' : '이 PC의 경기 타이밍 기록'} · {isLap ? '가로축: 각 차량의 스타트·피니시 라인 통과 완료 랩' : '가로축: 기록 시작부터의 경과 시간'}</p>
+        <p className="race-position-source">{payload.reason} · {payload.source === 'IBT' ? 'IBT 순위 채널' : payload.source === 'IBT+LOCAL_TIMING' ? 'IBT + 이 PC의 경기 타이밍 기록' : '이 PC의 경기 타이밍 기록'} · {isLap ? '가로축: 각 차량의 스타트·피니시 라인 통과 완료 랩' : '가로축: 기록 시작부터의 경과 시간'} · 선택한 차량의 확인된 사건만 표시 · 개인 베스트는 선택한 기록의 유효 랩 기준</p>
       </>}
   </section>;
 }
