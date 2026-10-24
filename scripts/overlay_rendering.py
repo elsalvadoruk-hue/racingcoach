@@ -74,8 +74,12 @@ class OverlayRendering:
         self.gear_item = None
         self.card_ticket = None
         self.notice_ticket = None
+        self.race_ticket = None
         self.celebration_item = None
         if self.display_mode == 'live':
+            if self.live_view.get('race_result'):
+                self.draw_race_result()
+                return
             practice = self.live_view.get('practice') or {}
             self.live_labels = {
                 'reference': self.text(6, 146, '', size=10, color='muted', anchor='sw'),
@@ -192,6 +196,11 @@ class OverlayRendering:
 
     def draw_footer_notice(self, card):
         """Temporarily replace only the existing footer; keep the graph intact."""
+        recommendation=self.live_view.get('control_recommendation') if self.display_mode=='live' else None
+        urgent = card and card.get('color') == 'warning'
+        if recommendation and not urgent:
+            self.draw_control_recommendation(recommendation)
+            return
         if not card:
             if self.notice_ticket is not None:
                 self.canvas.delete('footer-notice')
@@ -217,6 +226,61 @@ class OverlayRendering:
             size -= 1
         self.text(195, 146, self.fit_text(text, 366, size, True), size=size,
                   color=color, bold=True, anchor='s', tags=('footer-notice',))
+
+    def draw_control_recommendation(self, item):
+        from math import sin, pi
+        from time import time
+        age=max(0,time()-item['shown_at'])
+        self.canvas.delete('footer-notice')
+        self.background_canvas.delete('footer-notice')
+        self.notice_ticket=('control',item['id'])
+        for name in ('reference','detail'):
+            if name in self.live_labels:self.canvas.itemconfigure(self.live_labels[name],text='')
+        self.rect(6,131,378,18,'#123039',radius=3,tags=('footer-notice',))
+        bright=age<4 and sin(age*2*pi/1.3)>=0
+        color='#00f0ff' if bright else '#b7faff'
+        self.canvas.create_rectangle(self.x(6),self.y(131),self.x(384),self.y(149),
+                                     outline=color if age<4 else '#2d5969',width=1,tags=('footer-notice',))
+        when=('예약 완료' if item.get('state')=='reserved' else '다음 피트') if item.get('timing')=='pit' else '주행 중'
+        self.text(12,145,when,size=9,color='#96d5df',anchor='sw',tags=('footer-notice',))
+        self.text(73,145,item['name'],size=10,bold=True,anchor='sw',tags=('footer-notice',))
+        unit=item.get('unit','')
+        current=item.get('current');target=item.get('target')
+        current=f'{current:g}{unit}' if type(current) in (int,float) else '—'
+        target=f'{target:g}{unit}' if type(target) in (int,float) else item.get('direction','확인')
+        # Reserve the right side by measured text width, including direction-only advice.
+        target_size=12 if type(item.get('target')) in (int,float) else 10
+        target_width=self.font(target_size,True).measure(target)/max(self.scale_x,.1)
+        arrow_x=366-target_width
+        self.text(arrow_x-18,145,current,size=10,color='muted',anchor='se',tags=('footer-notice',))
+        self.text(arrow_x,145,'→',size=10,color='muted',anchor='se',tags=('footer-notice',))
+        self.text(376,146,target,size=target_size,color=color,bold=True,anchor='se',tags=('footer-notice',))
+
+    def draw_race_result(self,now=None):
+        now=monotonic() if now is None else now
+        result=self.live_view.get('race_result')
+        if not result:return
+        identifier=result['id']
+        eligible=(result.get('status')=='FINISHED' and result.get('finish_position') in (1,2,3)
+                  and not result.get('provisional'))
+        if eligible and identifier not in self.race_celebrations:
+            self.race_celebrations[identifier]=now
+            if len(self.race_celebrations)>32:self.race_celebrations.pop(next(iter(self.race_celebrations)))
+        started=self.race_celebrations.get(identifier)
+        elapsed=max(0,now-started) if started is not None else 6.
+        reduced=bool(getattr(self,'reduced_motion',False))
+        static=not eligible or elapsed>=6 or reduced
+        ticket=(repr(sorted(result.items())),self.scale_x,self.scale_y,elapsed<6 and eligible)
+        if static and getattr(self,'race_ticket',None)==ticket:return
+        self.race_ticket=ticket if static else None
+        self.canvas.itemconfigure('all',state='hidden')
+        self.background_canvas.itemconfigure('all',state='hidden')
+        if not self.background_canvas.find_withtag('race-backdrop'):
+            self.rect(0,0,390,150,'#090d13',background=True,tags=('race-backdrop',))
+        self.background_canvas.itemconfigure('race-backdrop',state='normal')
+        frame=self.race_result_renderer.frame(result,elapsed,self.scale_x,self.scale_y,eligible,
+                                               reduced)
+        self.native.present_image(self.root,frame,(0,0),self.content_opacity.get(),self.hud_visible)
 
     def draw_live_result(self, practice):
         for x, label in ((6, '이전'), (145, '이번'), (276, '목표')):
@@ -322,6 +386,8 @@ class OverlayRendering:
 
     def draw_trace(self, now=None):
         """Present complete RGBA frames without color-key edge artifacts."""
+        if self.display_mode=='live' and self.live_view.get('race_result'):
+            return
         if self.display_mode == 'live' and (self.live_view.get('practice') or {}).get('phase') == 'RESULT':
             return
         basic = self.display_mode == 'live' and not self.live_view.get('practice')

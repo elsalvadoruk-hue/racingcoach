@@ -202,6 +202,18 @@ class ShareManifestTests(unittest.TestCase):
         for name in expected:
             self.assertTrue((make_share_copy.ROOT / "scripts" / name).is_file(), name)
 
+    def test_result_renderer_and_trophies_survive_sharing_and_update_selection(self):
+        self.assertIn('overlay_race_result.py',make_share_copy.SCRIPTS)
+        asset='scripts/assets/podium-trophies.png'
+        self.assertTrue((make_share_copy.ROOT/asset).is_file())
+        self.assertIn(asset,make_patch.choose({}, {asset:'synthetic-hash'}))
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(make_share_copy,'ROOT',Path(directory)), \
+                patch.object(make_share_copy,'overlay_runtime_scripts',return_value=set()), \
+                patch.object(make_share_copy,'root_bat_scripts',return_value=set()):
+            with self.assertRaisesRegex(RuntimeError,'트로피 이미지'):
+                make_share_copy.validate_share_inputs()
+
     def test_overlay_dependency_is_installed_by_the_normal_installer(self):
         requirements = (make_share_copy.ROOT / "iRacing_Backend" / "requirements_core.txt").read_text(encoding="utf-8").splitlines()
         self.assertTrue(any(line.strip().lower().startswith("pillow") for line in requirements))

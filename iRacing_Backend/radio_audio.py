@@ -176,6 +176,8 @@ def fixed_catalog():
     from radio_phrases import ACKS
     found = {(CALLS[key][0], text): None for key in CALLS for text in texts(key)}
     found.update({(role, text): None for role in ('coach', 'race', 'strategy') for text in ACKS})
+    from setup_advisor import PHRASES
+    found.update({('coach', text): None for text in PHRASES.values()})
     return list(found)
 
 
@@ -211,6 +213,12 @@ class RadioAudioCache:
     def clip(self, key):
         base, _, index = key.partition('#')
         return self.phrase(CALLS[base][0], texts(base)[int(index or 0)])
+
+    def read_prepared(self, role, text):
+        """Read an existing whole-sentence clip; never repair or synthesize it."""
+        data=self.path(role,text).read_bytes()
+        if len(data)<100:raise ValueError('Prepared audio is missing or incomplete.')
+        return base64.b64encode(data).decode('ascii')
 
     def phrase(self, role, text):
         """One whole call as a single clip, synthesized once per voice and wording."""

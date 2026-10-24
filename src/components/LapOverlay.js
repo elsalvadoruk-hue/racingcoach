@@ -93,7 +93,7 @@ function AddLaps({ otherFiles, references, loadLaps, onAdd, full }) {
 const WHEEL_STEP = 0.15;
 // One wheel notch (deltaY 100) moves 15 % of the window; touchpads send small deltas and move less.
 export const wheelShift = (delta) => Math.max(-0.3, Math.min(0.3, delta / 667));
-export function PanBar({ range, onChange }) {
+export function PanBar({ range, onChange, wheelPan = true, controls = 'lap-overlay-chart' }) {
   const trackRef = useRef(null);
   const dragRef = useRef(null);
   const rangeRef = useRef(range);
@@ -105,7 +105,7 @@ export function PanBar({ range, onChange }) {
   onChangeRef.current = onChange;
   useEffect(() => {
     const track = trackRef.current;
-    if (!track) return undefined;
+    if (!track || !wheelPan) return undefined;
     // A native listener: React's wheel handler is passive, and the page must not scroll while panning.
     const onWheel = (event) => {
       const [from, to] = rangeRef.current;
@@ -118,7 +118,7 @@ export function PanBar({ range, onChange }) {
     };
     track.addEventListener('wheel', onWheel, { passive: false });
     return () => track.removeEventListener('wheel', onWheel);
-  }, []);
+  }, [wheelPan]);
   const pctAt = (clientX) => {
     const box = trackRef.current?.getBoundingClientRect();
     return box && box.width && Number.isFinite(clientX) ? (clientX - box.left) / box.width : null;
@@ -130,7 +130,7 @@ export function PanBar({ range, onChange }) {
   };
   return (
     <div className="mt-2 flex items-center gap-2" data-testid="lap-overlay-pan">
-      <div ref={trackRef} role="scrollbar" aria-label="그래프 좌우 이동" aria-orientation="horizontal" aria-controls="lap-overlay-chart"
+      <div ref={trackRef} role="scrollbar" aria-label="그래프 좌우 이동" aria-orientation="horizontal" aria-controls={controls}
         aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(range[0] * 100)} tabIndex={0}
         onKeyDown={(event) => {
           if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
@@ -139,17 +139,19 @@ export function PanBar({ range, onChange }) {
           }
         }}
         onPointerDown={(event) => {
+          if (event.button !== 0) return;
           const at = pctAt(event.clientX);
           if (at == null) return;
           if (at >= range[0] && at <= range[1]) {
-            dragRef.current = { x: event.clientX, from: range[0] };
+            dragRef.current = { x: event.clientX, from: range[0], pointerId: event.pointerId };
             event.currentTarget.setPointerCapture?.(event.pointerId);
           } else {
             move(clamp(at - span / 2));                       // jump so the click is in the middle
           }
         }}
-        onPointerMove={(event) => { const next = dragTo(event.clientX); if (next != null) move(next); }}
+        onPointerMove={(event) => { if (!(event.buttons & 1) || event.pointerId !== dragRef.current?.pointerId) { dragRef.current = null; return; } const next = dragTo(event.clientX); if (next != null) move(next); }}
         onPointerUp={(event) => { const next = dragTo(event.clientX); dragRef.current = null; if (next != null) move(next); }}
+        onPointerCancel={() => { dragRef.current = null; }} onLostPointerCapture={() => { dragRef.current = null; }}
         className={`relative h-4 flex-1 cursor-pointer rounded-full bg-muted ${span >= 0.999 ? 'opacity-50' : ''}`}>
         <div className="absolute inset-y-0 rounded-full border border-primary/60 bg-primary/40"
           style={{ left: `${range[0] * 100}%`, width: `${Math.max(1.5, span * 100)}%` }} />

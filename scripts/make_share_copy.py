@@ -41,9 +41,9 @@ SCRIPTS = ("launch_app.py", "install_ui.py", "serve_ui.py", "prepare_radio_audio
            "find_python.bat",
            # The web settings tab and the driving overlay run this window process.
            "overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
-           "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py")
+           "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py", "overlay_race_result.py")
 REQUIRED_OVERLAY_SCRIPTS = ("overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
-                            "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py")
+                            "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py", "overlay_race_result.py")
 DATA_FILES = ("corner-definitions.json", "pit-knowledge.json")
 TEXT_SUFFIXES = {".py", ".js", ".json", ".md", ".txt", ".bat", ".ps1", ".html", ".css", ".map", ".svg", ".yml", ".yaml", ".cfg", ".ini"}
 
@@ -278,6 +278,8 @@ def validate_share_inputs() -> None:
                if name not in SCRIPTS or not (ROOT / "scripts" / name).is_file()]
     if missing:
         raise RuntimeError("공유본에 필요한 오버레이 파일이 없습니다: " + ", ".join(missing))
+    if not (ROOT / 'scripts' / 'assets' / 'podium-trophies.png').is_file():
+        raise RuntimeError('공유본에 필요한 포디움 트로피 이미지가 없습니다.')
     requirements = ROOT / "iRacing_Backend" / "requirements_core.txt"
     try:
         lines = requirements.read_text(encoding="utf-8").splitlines()
@@ -335,6 +337,8 @@ def main() -> int:
     (out / "scripts").mkdir()
     for name in SCRIPTS:
         shutil.copy2(ROOT / "scripts" / name, out / "scripts" / name)
+    (out/'scripts'/'assets').mkdir(exist_ok=True)
+    shutil.copy2(ROOT/'scripts'/'assets'/'podium-trophies.png',out/'scripts'/'assets'/'podium-trophies.png')
 
     source, data = app_settings.data_dir(), out / "data"
     data.mkdir()

@@ -518,11 +518,11 @@ class ControlAdviceTests(unittest.TestCase):
         laps(advisor, 1, start_lap=5, clock=clock, tc_setting=6)
         self.assertFalse(advisor.view()['ready'])  # evidence from the old setting is dropped
 
-    def test_quiet_laps_only_offer_a_test_and_volunteer_nothing(self):
+    def test_quiet_laps_hold_settings_and_volunteer_nothing(self):
         advisor = ControlAdvisor()
         laps(advisor, 4)
         advice = self.advice(advisor)
-        self.assertEqual({k: v['action'] for k, v in advice.items()}, {'brake_bias': 'rearward_test', 'tc': 'less_test', 'abs': 'hold'})
+        self.assertEqual({k: v['action'] for k, v in advice.items()}, {'brake_bias': 'hold', 'tc': 'hold', 'abs': 'hold'})
         self.assertTrue(all(item['call'] is None for item in advice.values()))
         self.assertEqual(advisor.view()['abs_duty_pct'], 20)
 
@@ -546,7 +546,7 @@ class ControlAdviceTests(unittest.TestCase):
         self.assertEqual(advice['brake_bias']['action'], 'hold')
         no_tc = ControlAdvisor()
         laps(no_tc, 4, abs_share=.7, tc_setting=None)
-        self.assertEqual({k: v['action'] for k, v in self.advice(no_tc).items()}, {'brake_bias': 'rearward_test', 'abs': 'driver'})
+        self.assertEqual({k: v['action'] for k, v in self.advice(no_tc).items()}, {'brake_bias': 'hold', 'abs': 'driver'})
         self.assertIn('읽지 못해', control_answer(no_tc.view(), 'TC 어떻게 해?'))
         beside = ControlAdvisor()
         clock = laps(beside, 3)
@@ -566,7 +566,7 @@ class ControlAdviceTests(unittest.TestCase):
             context = {'connected': True, 'snapshot': {}, 'controls': advisor.view(), 'engineer': 'race', 'pit_wall': {'active': True}}
             answer, source = coach.answer('TC 어떻게 해야 해?', context)
             self.assertEqual(source, 'MEASURED')
-            self.assertIn('TC 개입을 한 단계 줄여', answer)
+            self.assertIn('티씨는 현재 설정을 유지', answer)
 
     def test_live_telemetry_volunteers_repeated_instability_once(self):
         now = [0.]

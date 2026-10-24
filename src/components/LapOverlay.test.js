@@ -184,7 +184,7 @@ describe('the scroll bar under the chart', () => {
   test('dragging the thumb moves the chart as it goes and a click beside it jumps there', () => {
     const { bar, onChange } = setup([0.2, 0.3]);
     // jsdom has no PointerEvent: a MouseEvent under the pointer event's name carries the position.
-    const pointer = (type, clientX) => act(() => { bar.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX })); });
+    const pointer = (type, clientX) => act(() => { bar.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX, button: 0, buttons: type === 'pointerup' ? 0 : 1 })); });
     pointer('pointerdown', 250);                                  // on the thumb (200-300)
     pointer('pointermove', 350);
     expect(onChange.mock.calls[0][0][0]).toBeCloseTo(0.3);       // while still held
@@ -193,6 +193,17 @@ describe('the scroll bar under the chart', () => {
     const before = onChange.mock.calls.length;
     pointer('pointerdown', 800);                                  // beside it: centred on the click
     expect(onChange.mock.calls[before][0][0]).toBeCloseTo(0.75);
+  });
+
+  test('race chart pan bar leaves the wheel to vertical scrolling', () => {
+    const onChange = jest.fn();
+    render(<PanBar range={[.2, .4]} onChange={onChange} wheelPan={false} controls="race-position-chart" />);
+    const bar = screen.getByRole('scrollbar');
+    fireEvent.wheel(bar, { deltaY: 150 });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(bar).toHaveAttribute('aria-controls', 'race-position-chart');
+    fireEvent.keyDown(bar, { key: 'ArrowRight' });
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 });
 

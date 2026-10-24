@@ -352,6 +352,7 @@ class VoiceCoach:
         self.pending_report = None
         self.radio_audio = OrderedDict()
         self.fixed_audio = RadioAudioCache(self.speech, self.store.path.parent / 'radio_audio')
+        self.live.setup_audio_ready=lambda text:self.fixed_audio.cached('coach',text)
         self._report_notes = (None, [])
         self.audio_preparation = AudioPreparation(self.fixed_audio)
 
@@ -775,6 +776,9 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
         with live.lock:
             run_id, identity = live.run_id, dict(live.identity)
             session_type = (live.pit_wall.race or {}).get('session_type')
+            for event in payload.events:
+                if event.run_id==run_id and getattr(live,'control_recommendations',None) is not None:
+                    live.control_recommendations.delivery(event.event_id,event.status,live.clock())
         session = {key: identity.get(key) for key in ('game', 'track_name', 'track_path', 'track_config', 'car_name', 'car_path')}
         session['session_type'] = session_type
         events = [{**e.model_dump(), **({'session': session} if run_id and e.run_id == run_id else {})} for e in payload.events]
@@ -828,6 +832,10 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             return {'event': None}
         # A cached mandatory sentence can play immediately during a cloud question.
         on_disk, cached_only = coach.radio_audio_mode(event)
+        if event.get('control_recommendation',{}).get('setup') and not on_disk:
+            # Setup advice uses prepared clips only. Never turn a deleted or
+            # missing cache file into an automatic paid synthesis.
+            return {'event':None}
         if not on_disk and coach.cloud_lock.locked():
             return {'busy': True}
         async with (contextlib.nullcontext() if on_disk else coach.cloud_lock):
@@ -837,7 +845,9 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
                 return {'event': None}
             parts, dropped_parts = None, 0
             try:
-                if event.get('speech_parts'):
+                if event.get('control_recommendation',{}).get('setup'):
+                    audio=await asyncio.to_thread(coach.fixed_audio.read_prepared,event['engineer'],event['speech_text'])
+                elif event.get('speech_parts'):
                     parts, dropped_parts = await coach.radio_audio_parts(event, cached_only)
                     audio = parts[0]
                 elif event.get('speech_text'):

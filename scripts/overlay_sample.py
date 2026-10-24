@@ -44,10 +44,12 @@ if __package__:
     from .overlay_demo_data import GOALS, GOAL_BY_KEY, help_text, inputs
     from .overlay_trace import TraceRenderer
     from .overlay_celebration import CelebrationRenderer
+    from .overlay_race_result import RaceResultRenderer, animations_enabled
 else:
     from overlay_demo_data import GOALS, GOAL_BY_KEY, help_text, inputs
     from overlay_trace import TraceRenderer
     from overlay_celebration import CelebrationRenderer
+    from overlay_race_result import RaceResultRenderer, animations_enabled
 
 
 class OverlaySample(OverlayRendering, OverlayCommands):
@@ -114,6 +116,9 @@ class OverlaySample(OverlayRendering, OverlayCommands):
         self.gear_item = None
         self.attempts = (False, True, False, True, True)
         self.celebration_renderer = CelebrationRenderer()
+        self.race_result_renderer = RaceResultRenderer()
+        self.reduced_motion = not animations_enabled()
+        self.race_celebrations = {}
         self.celebration_started = None
         self.celebration_item = None
         self.background = tk.Toplevel(self.root)
@@ -252,9 +257,14 @@ class OverlaySample(OverlayRendering, OverlayCommands):
                          practice.get('result_id'), tuple(practice.get('states') or []),
                          None,  # Footer notices never change the graph's structure.
                          self.live_view.get('run_id'), (self.live_view.get('session') or {}).get('kind'))
+            result=self.live_view.get('race_result')
+            if result:
+                structure=(*structure[:-1],(structure[-1],result.get('id')))
             if visible and structure != self.live_structure:
                 self.live_structure = structure
                 self.draw()
+            elif visible and result:
+                self.draw_race_result()
             elif visible and self.celebration_started is None:
                 # Paint this observed snapshot while processing its packet.
                 # Waiting for the independent animation timer adds irregular
@@ -365,6 +375,8 @@ class OverlaySample(OverlayRendering, OverlayCommands):
             return
         if self.celebration_started is not None:
             self.draw_celebration(started)
+        elif self.display_mode == 'live' and self.live_view.get('race_result'):
+            self.draw_race_result(started)
         elif self.display_mode == 'live':
             if (self.live_view.get('practice') or {}).get('phase') != 'RESULT':
                 self.draw_trace(started)

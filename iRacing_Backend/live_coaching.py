@@ -7,6 +7,7 @@ from live_pit import COLD_TYRE_S
 from live_drill import VOICE_KINDS as DRILL_VOICE
 from radio_audio import CALLS as FIXED_CALLS
 from live_damage import damage_parts, repair_parts
+from radio_policy import speech_ok
 logger=logging.getLogger('iRacingLive')
 
 
@@ -41,13 +42,48 @@ class LiveCoaching:
                     self.radio.emit('corner_focus', now, focus['text'], role='coach', ttl=CALL_EARLY_S, cooldown=20, group='corner_focus',
                                     condition=('corner_ahead', (focus['until_pct'], focus['margin_pct'], self.corners.revision)), speech_text=texts[focus['fits']])
             self.controls.ingest(sample)
-            newest = self.controls.laps[-1]['lap'] if self.controls.laps else None
-            if newest != self._control_lap:
-                # Judge once per completed clean lap; only repeated instability is volunteered.
-                self._control_lap = newest
-                for item in self.controls.view()['advice']:
-                    if item['call']:
-                        self.radio.say(item['call'], now, role='coach', ttl=30, cooldown=600, delay=8, group='control_advice')
+            self.setup_advisor.ingest(identity,sample)
+            self.radio.setup_advice_allowed=len(self.setup_advisor.laps)>=3 and sample.get('setup_fixed') is False
+            controls_view=self.controls.view()
+            self.radio.control_advice_allowed=controls_view.get('ready',False)
+            dispatch = self.control_recommendations
+            capabilities = dispatch.capabilities(sample)
+            dispatch.observe(sample, now, {e['id'] for e in self.radio.pending
+                                          if e['expires_at'] > now and e['run_id'] == self.run_id})
+            # Reconsider deferred candidates; enqueue only one and charge its cooldown
+            # when the browser confirms that playback really began.
+            completed_lap = self.controls.laps[-1]['lap'] if self.controls.laps else None
+            if completed_lap != self._control_lap or now-getattr(self, '_control_checked_at', -1e9)>=1:
+                self._control_lap = completed_lap
+                self._control_checked_at=now
+                setup_view=self.setup_advisor.view(sample)
+                item=dispatch.choose(controls_view['advice']+setup_view['advice'],sample,capabilities,now)
+                if item:
+                    if item.get('setup'):
+                        if (sample.get('on_pit_road') is not False or sample.get('session_state')!=4
+                                or self.radio.result or self.radio.qualifying or not speech_ok(sample)):
+                            return
+                        if item.get('straight_only'):
+                            from radio_policy import quiet_window
+                            if not quiet_window(sample):return
+                        if not self.setup_audio_ready(item['text']):
+                            dispatch.present(item,now)
+                            return
+                        self.radio.control_advice_allowed=True
+                    before=self.radio.serial
+                    field=item.get('field')
+                    condition=('control_setting',(item['control'],item.get('initial',item['current']),field))
+                    if item.get('setup'):
+                        self.radio.emit(item['call'],now,item['text'],role='coach',ttl=30,cooldown=0,delay=8,
+                                        group='control_advice',condition=condition,speech_text=item['text'])
+                    else:
+                        self.radio.say(item['call'], now, role='coach', ttl=30, cooldown=0, delay=8, group='control_advice',
+                                       condition=condition)
+                    event=next((e for e in self.radio.pending if e['serial']>before and e['group']=='control_advice'),None)
+                    if event:
+                        if not item.get('setup'):item['initial']=item['current']
+                        event['control_recommendation']=dict(item)
+                        dispatch.queued(event,item)
         except Exception:
             if not self._corner_failure:
                 self._corner_failure = True

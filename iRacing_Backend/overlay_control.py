@@ -225,6 +225,8 @@ class OverlayController:
                                         'feedback': view.get('feedback'),
                                         'gear_comparison': view.get('gear_comparison'),
                                         'card': card,
+                                        'race_result': view.get('race_result'),
+                                        'control_recommendation': view.get('control_recommendation'),
                                         'comparison': view.get('comparison')})
             else:
                 self.cards.reset()

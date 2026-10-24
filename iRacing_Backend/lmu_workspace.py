@@ -246,6 +246,10 @@ class LmuWorkspace:
         self.services.dependency_check()
         file_id = body.get('filename')
         reader = self.reader(file_id)
+        if route == 'race-positions':
+            from lmu_ibt import LmuIbtReader
+            from race_positions import read_history
+            return read_history(LmuIbtReader(reader.path).parse())
         if route == 'references':
             summary = reader.summary()
             eligible = [lap for lap in summary.laps if _eligible(lap)]

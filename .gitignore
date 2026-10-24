@@ -71,6 +71,10 @@
 !/scripts/overlay_theme.py
 !/scripts/overlay_rendering.py
 !/scripts/overlay_commands.py
+!/scripts/overlay_race_result.py
+!/scripts/assets/
+/scripts/assets/*
+!/scripts/assets/podium-trophies.png
 !/scripts/test_make_patch.py
 !/scripts/make_release_assets.py
 !/scripts/python_runtime.json

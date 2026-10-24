@@ -174,7 +174,7 @@ def register_routes(app, services: LmuRoutesServices = LmuRoutesServices()):
     register_history_routes(app, history_workspace, services.history_store)
 
     @app.post('/api/lmu/workspace/{route}')
-    async def lmu_workspace_request(request: Request, route: Literal['files', 'file-laps', 'references', 'session', 'comparison', 'overlay', 'setup-plan'],
+    async def lmu_workspace_request(request: Request, route: Literal['files', 'file-laps', 'references', 'session', 'comparison', 'overlay', 'setup-plan', 'race-positions'],
                                     body: dict[str, Any] = Body(default_factory=dict)):
         shared = getattr(request.app.state, 'workspace_request', None)
         if shared is not None:

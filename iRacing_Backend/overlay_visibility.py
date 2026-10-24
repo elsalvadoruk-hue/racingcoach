@@ -14,7 +14,12 @@ def preparing(view):
 
 
 def driving(view):
-    return preparing(view) and (view.get('snapshot') or {}).get('on_track') is True
+    sample = view.get('snapshot') or {}
+    result = bool(view.get('race_result'))
+    eligible = preparing(view) or (result and view.get('connected') is True
+                                  and sample.get('is_replay') is False
+                                  and sample.get('session_state') == 6)
+    return eligible and (sample.get('on_track') is True or result)
 
 
 class VisibilityStore:

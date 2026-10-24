@@ -455,6 +455,7 @@ class LmuIrsdk:
             'VirtualEnergyPct': virtual_energy_pct(s.get('virtual_energy_raw')),
             'PlayerTrackSurface': _surface(player_row, s) if player_row else None,
             'PlayerCarPosition': s.get('overall_position'), 'PlayerCarClassPosition': s.get('class_position'),
+            'PlayerFinishStatus': s.get('finish_status'),
             'EngineWarnings': warnings, 'BrakeABSactive': s.get('abs_active'), 'YawRate': s.get('yaw_rate'),
             'TrackWetness': _wetness(wetness),
             'WeatherDeclaredWet': (None if wetness is None and rain is None

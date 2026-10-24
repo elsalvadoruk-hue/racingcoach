@@ -24,6 +24,11 @@ class LiveViews:
                 'view': {'connected': True, 'run_id': repr((key, sample.get('session_num'))),
                          'identity': dict(identity), 'snapshot': snapshot, 'points': [],
                          'practice': None, 'corner_pass': None, 'track_length_m': length}}
+            same=all(str(identity.get(k) or '')==str(self.identity.get(k) or '')
+                     for k in ('session_id','subsession_id','car_id','track_id','game'))
+            if same and sample.get('session_num')==self.identity.get('session_num'):
+                self.overlay_preparation['view']['race_result']=self.race_result.view()
+                self.overlay_preparation['view']['run_id']=self.run_id
 
     def overlay_state(self):
         """Read-only HUD view using existing timing/engineer measurements; no audio or store access."""
@@ -58,6 +63,8 @@ class LiveViews:
             panel = session_panel(kind, latest, self.lap_sectors.delta(), race)
             practice = self.practice.view(latest, self.drill, self.run_id) if panel['kind'] in ('PRACTICE', 'LIVE') else None
             return {'connected': True, 'run_id': self.run_id, 'identity': dict(self.identity),
+                    'race_result': self.race_result.view(),
+                    'control_recommendation': self.control_recommendations.view(),
                     # Samples are immutable after append. Keep the bounded history in
                     # this process so slow laps can fill a distance-aligned graph.
                     # Only the selected graph window goes over the native pipe.
@@ -111,6 +118,7 @@ class LiveViews:
                     'fuel_feedback': list(self.fuel_feedback),
                     'corner_coach': self.corners.view(),
                     'controls': self.controls.view(),
+                    'setup_controls': self.setup_advisor.view(latest),
                     'radio': {'briefing': self.radio.briefing(), 'capabilities': self.radio.capabilities(),
                               'pit_speed_limit_kph': self.radio.metadata.get('pit_speed_limit_kph'),
                               'recent_laps': list(self.radio.laps),

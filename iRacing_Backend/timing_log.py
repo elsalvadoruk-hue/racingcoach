@@ -3,8 +3,8 @@
 Once a second during a race session every car's lap, lap position, F2Time, EstTime, pit road flag and
 positions are appended to a gzip'd JSON-lines file in the data folder (timing-logs/). Nothing is said
 from it; scripts/read_timing_log.py compares the F2Time gaps with the app's own estimates afterwards.
-No driver names are written: cars are their SDK index and class only. The files stay on this computer
-(not in the session log export, the share copy or a patch).
+No driver names are written: cars use their SDK index, number and class. The files stay local unless
+the user sends a session log; they are excluded from share copies and patches.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import json
 import math
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
@@ -41,7 +42,7 @@ class TimingLog:
         self.rows: list[str] = []
         self.last_time: Optional[float] = None
 
-    def record(self, race: dict[str, Any], run_id: str, session_time: float) -> None:
+    def record(self, race: dict[str, Any], run_id: str, session_time: float, *, identity=None, wall_time=None) -> None:
         if self.folder is None or not race or str(race.get('session_type') or '').lower() != 'race':
             return
         if run_id != self.run_id:
@@ -52,7 +53,12 @@ class TimingLog:
         self.last_time = session_time
         if self.path is None:
             self.path = self._new_file(race)
-            self.rows.append(json.dumps(self._header(race, run_id), ensure_ascii=False))
+            header = self._header(race, run_id)
+            if identity and isinstance(wall_time, (int, float)) and math.isfinite(wall_time):
+                header['identity'] = {key: identity.get(key) for key in ('game', 'car_path', 'track_path')}
+                header['identity']['session_type'] = race.get('session_type')
+                header['session_utc_offset'] = round(wall_time - session_time, 3)
+            self.rows.append(json.dumps(header, ensure_ascii=False))
         cars = [[_value(key, car.get(key)) for key in FIELDS] for car in race.get('cars') or []]
         self.rows.append(json.dumps({'t': round(session_time, 3), 'state': race.get('state'), 'flags': race.get('flags'),
                                      'own': race.get('player_idx'), 'remain_s': _value('time_remaining_s', race.get('time_remaining_s')),
@@ -76,7 +82,10 @@ class TimingLog:
                 classes[str(car['class_id'])] = {'name': car.get('class_name'), 'est_lap_s': car.get('class_est_lap_s')}
         return {'format': FORMAT, 'version': VERSION, 'run_id': run_id, 'track': race.get('track_name'),
                 'track_length_m': race.get('track_length_m'), 'session_duration_s': race.get('session_duration_s'),
-                'total_laps': race.get('total_laps'), 'classes': classes, 'fields': FIELDS, 'written': time.strftime('%Y-%m-%d %H:%M:%S')}
+                'total_laps': race.get('total_laps'), 'classes': classes, 'fields': FIELDS,
+                'entries': [{'idx': c.get('idx'), 'number': c.get('number'), 'is_pace_car': bool(c.get('is_pace_car'))}
+                            for c in (race.get('cars') or [])[:128]],
+                'written': time.strftime('%Y-%m-%d %H:%M:%S')}
 
     def _new_file(self, race):
         self.folder.mkdir(parents=True, exist_ok=True)
@@ -84,7 +93,7 @@ class TimingLog:
         for old in files[:max(0, len(files) - KEEP_FILES + 1)]:
             old.unlink(missing_ok=True)
         track = re.sub(r'[^\w-]+', '-', str(race.get('track_name') or 'track')).strip('-')[:40] or 'track'
-        return self.folder / f"timing-{time.strftime('%Y%m%d-%H%M%S')}-{track}.jsonl.gz"
+        return self.folder / f"timing-{time.strftime('%Y%m%d-%H%M%S')}-{track}-{uuid.uuid4().hex[:8]}.jsonl.gz"
 
 
 def read(path: Path | str) -> tuple[dict[str, Any], list[dict[str, Any]]]:

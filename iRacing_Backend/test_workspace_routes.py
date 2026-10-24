@@ -81,6 +81,19 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
     def post(self, route, body=None):
         return self.client.post('/api/workspace/' + route, json=body or {'filename': 'baseline.ibt'})
 
+    def test_position_chart_is_read_only_and_shared_by_both_games(self):
+        before = dict(self.state)
+        response = {'status': 'UNAVAILABLE', 'series': [], 'classes': [], 'reason': '기록 없음'}
+        with patch('race_positions.read_history', return_value=response) as history:
+            for prefix in ('/api/workspace/', '/api/lmu/workspace/'):
+                result = self.client.post(prefix + 'race-positions', json={'filename': 'baseline.ibt'})
+                self.assertEqual(result.status_code, 200, result.text)
+                self.assertEqual(result.json()['status'], 'UNAVAILABLE')
+            self.assertEqual(history.call_count, 2)
+        self.assertEqual(self.state, before)
+        for name, code in (('../secret.ibt', 422), ('missing.ibt', 404)):
+            self.assertEqual(self.post('race-positions', {'filename': name}).status_code, code)
+
     def test_session_uses_real_selection_and_updates_practice_context_without_implicit_memory_save(self):
         response = self.post('session', {'filename': 'baseline.ibt', 'target_lap': 3, 'reference_lap': 2, 'session_mode': 'ENDURANCE'})
         self.assertEqual(response.status_code, 200, response.text)

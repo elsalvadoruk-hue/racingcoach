@@ -185,7 +185,7 @@ def register_routes(app, services: WorkspaceRoutesServices):
         return analysis_progress.status(job_id) or {'percent': None, 'stage': 'unknown'}
 
     @app.post('/api/workspace/{route}')
-    async def workspace_request(route: Literal['files', 'session', 'file-laps', 'references', 'overlay', 'comparison', 'setup-plan', 'setup-compare'],
+    async def workspace_request(route: Literal['files', 'session', 'file-laps', 'references', 'overlay', 'comparison', 'setup-plan', 'setup-compare', 'race-positions'],
                                 body: dict[str, Any] = Body(default_factory=dict)):
         async with request_lock:
             progress = analysis_progress.start(body.get('progress_id')) if route in ('session', 'comparison') else None
@@ -208,7 +208,10 @@ def register_routes(app, services: WorkspaceRoutesServices):
                     response = await services.compare_setup_experiments(payload)
                     return services.json_safe({**response['comparison'], 'memory_record': response.get('memory_record')})
                 telemetry = await asyncio.to_thread(_recording, services, body.get('filename'))
-                if route == 'file-laps':
+                if route == 'race-positions':
+                    from race_positions import read_history
+                    result = await asyncio.to_thread(read_history, telemetry)
+                elif route == 'file-laps':
                     result = services.file_laps_payload(telemetry)
                 elif route == 'references':
                     try:

@@ -25,6 +25,10 @@ from live_corners import LiveCornerCoach, call_seconds, CALL_EARLY_S
 from live_formation import FormationBrief, RaceHistory, history_facts
 from radio_audio import shown_text
 from live_controls import ControlAdvisor
+from control_recommendations import ControlRecommendations
+from setup_advisor import SetupAdvisor
+from setup_capabilities import read_setup_channels,session_setup_values,fixed_setup
+from race_result import RaceResultTracker
 from live_drill import CornerDrill, VOICE_KINDS as DRILL_VOICE
 from practice_live import LivePractice
 from overlay_session import session_panel
@@ -83,6 +87,7 @@ CHANNELS = {
     'abs_active': 'BrakeABSactive', 'yaw_rate': 'YawRate',
     'track_wetness': 'TrackWetness', 'declared_wet': 'WeatherDeclaredWet', 'tire_compound': 'PlayerTireCompound',
     'pit_sv_fuel': 'PitSvFuel', 'pit_sv_flags': 'PitSvFlags',
+    'finish_status': 'PlayerFinishStatus',
 }
 
 
@@ -123,6 +128,10 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.radio = RaceRadio()
         self.corners = LiveCornerCoach()
         self.controls = ControlAdvisor()
+        self.control_recommendations = ControlRecommendations()
+        self.setup_advisor = SetupAdvisor()
+        self.setup_audio_ready = lambda text:False
+        self.race_result = RaceResultTracker()
         self._corner_failure = False
         self._control_lap = None
         self._corner_call = (None, [])
@@ -163,6 +172,14 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         if self.thread:
             self.thread.join(timeout=3)
         self.traffic_log.close()
+        with self.lock:
+            self._flush_timing()
+
+    def _flush_timing(self):
+        try:
+            self.timing_log.flush()
+        except OSError:
+            logger.exception('Could not flush the final race timing samples')
 
     def ingest(self, identity, sample, race=None):
         """Also used by isolated tests. Never accepts telemetry through an HTTP endpoint."""
@@ -190,6 +207,11 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.radio.reset()
                 self.corners.reset()
                 self.controls.reset()
+                self.control_recommendations.reset()
+                self.setup_advisor.reset()
+                self.race_result.reset()
+                self._control_lap = None
+                self._control_checked_at = -1e9
                 self.lap_sectors.reset()
                 self.overlay_laps.reset()
                 self.rival_sectors.reset()
@@ -209,7 +231,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             if race is not None:
                 self.pit_wall.ingest(race, self.run_id, session_time)
                 try:
-                    self.timing_log.record(race, self.run_id, session_time)
+                    self.timing_log.record(race, self.run_id, session_time, identity=identity, wall_time=now)
                 except Exception:
                     if not self._briefed.get('timing_log_failed'):
                         self._briefed['timing_log_failed'] = True
@@ -226,6 +248,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             else:
                 self.spotter.ingest(sample, self.run_id, now)
             self.radio.ingest(sample, self.run_id, now, race)
+            self.race_result.ingest(sample, self.radio.metadata, self.run_id, now)
             self._coach_corners(identity, sample, now)
             try:
                 expected = (self.drill.plan or {}).get('identity')
@@ -365,6 +388,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
 
     def _reset_live(self, reason):
         with self.lock:
+            self._flush_timing()
             self.overlay_preparation = None
             self.spotter.reset()
             self.alongside.reset()
@@ -372,6 +396,9 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self.drill.stop(reason)
             self.practice.reset(reason)
             self.overlay_laps.reset()
+            self.control_recommendations.cancel()
+            self.controls.reset()
+            self.setup_advisor.reset()
 
     def _tick(self, sdk):
         """One read of whichever game is connected (iRacing SDK or the LMU adapter)."""
@@ -397,7 +424,19 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             if sample.get('is_replay') or not sample.get('on_track'):
                 self._note_link('REPLAY' if sample.get('is_replay') else 'OFF_TRACK', sdk)
                 weekend = sdk['WeekendInfo'] or {}
-                self.prepare_overlay(session_identity(weekend, sdk['DriverInfo'] or {}), sample,
+                identity = {**session_identity(weekend, sdk['DriverInfo'] or {}), 'game': self.game}
+                same = all(identity.get(k)==self.identity.get(k) for k in identity)
+                if (same and sample.get('session_num')==self.identity.get('session_num')
+                        and sample.get('is_replay') is False and self.run_id
+                        and (self.race_result.result or sample.get('finish_status') in (1,2,3))
+                        and self.clock()-self._race_read_at>=1):
+                    self.race_result.ingest(sample, read_race(sdk,names,sample.get('session_num')),
+                                            self.run_id,self.clock())
+                    self._race_read_at=self.clock()
+                self.control_recommendations.cancel()
+                self.controls.reset()
+                self.setup_advisor.reset()
+                self.prepare_overlay(identity, sample,
                                      parse_measure(weekend.get('TrackLength'), 'distance'))
                 with self.lock:
                     self.spotter.reset()
@@ -412,6 +451,18 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 weekend, drivers = sdk['WeekendInfo'] or {}, sdk['DriverInfo'] or {}
                 identity = session_identity(weekend, drivers)
                 identity['game'] = self.game
+                setup_key=(self.game,identity.get('car_path'),identity.get('subsession_id'),sample.get('session_num'))
+                if setup_key!=getattr(self,'_setup_cache_key',None) or self.clock()-getattr(self,'_setup_read_at',-1e9)>=1:
+                    try:setup=sdk['CarSetup'] or {}
+                    except (KeyError,TypeError):setup={}
+                    self._setup_values=session_setup_values(setup) if self.game=='iracing' else {}
+                    self._setup_cache_key=setup_key;self._setup_read_at=self.clock()
+                sample.update(self._setup_values)
+                sample.update(read_setup_channels(sdk,names))
+                sample['setup_fixed']=fixed_setup(weekend) if self.game=='iracing' else None
+                # CarSetup is a garage snapshot, not proof of post-stop installation.
+                # No current adapter confirms installed wing/cold pressures.
+                sample['setup_values_verified']=False
                 sample['side_closing_mps'] = self._side_closing(sdk, names, sample, weekend, drivers)
                 sample['side_relative_mps'] = (number(sdk['SideRelativeMps']) if 'SideRelativeMps' in names
                                                else self.alongside.relative if self.game == 'iracing' else None)

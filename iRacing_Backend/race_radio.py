@@ -133,6 +133,8 @@ class RaceRadio:
         self.last_sample = None
         self.sent = {}
         self.result = None
+        self.control_advice_allowed = False
+        self.setup_advice_allowed = False
         self.car_calls = {}
         self.laps = deque(maxlen=5)
         self.briefed = False
@@ -652,6 +654,16 @@ class RaceRadio:
             return False
         s = self.latest
         kind, value = event.get('condition') or (None, None)
+        if kind == 'control_setting':
+            from control_recommendations import FIELDS
+            field=(value[2] if len(value)>2 else None) or FIELDS.get(value[0])
+            is_setup=event.get('control_recommendation',{}).get('setup') is True
+            ready=(self.setup_advice_allowed and s.get('setup_fixed') is False) if is_setup else self.control_advice_allowed
+            if event.get('control_recommendation',{}).get('straight_only'):
+                from radio_policy import quiet_window
+                if not quiet_window(s):return False
+            return (ready and s.get(field) == value[1] and s.get('on_pit_road') is False
+                    and s.get('session_state') == 4 and not self.result)
         if kind == 'quali_traffic':
             if (not self.open_qualifying or not self.traffic_enabled or s.get('lap_number') != value[0]
                     or not self.quali_traffic.current(s, now)):

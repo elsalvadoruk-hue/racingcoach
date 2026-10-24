@@ -90,7 +90,7 @@ def read_race(sdk, names, session_num):
         idx = driver.get('CarIdx')
         if not isinstance(idx, int) or idx < 0 or driver.get('IsSpectator'):
             continue
-        car = {'idx': idx, 'name': driver.get('UserName') or f'차량 {idx}', 'class_id': driver.get('CarClassID'),
+        car = {'idx': idx, 'name': driver.get('UserName') or f'차량 {idx}', 'number': driver.get('CarNumber'), 'class_id': driver.get('CarClassID'),
                'is_pace_car': bool(driver.get('CarIsPaceCar')),
                'class_name': driver.get('CarClassShortName') or driver.get('CarClassName'),
                'class_est_lap_s': positive(driver.get('CarClassEstLapTime')),
