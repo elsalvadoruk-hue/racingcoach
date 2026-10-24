@@ -57,7 +57,8 @@ class LiveCoaching:
                 self._control_lap = completed_lap
                 self._control_checked_at=now
                 setup_view=self.setup_advisor.view(sample)
-                item=dispatch.choose(controls_view['advice']+setup_view['advice'],sample,capabilities,now)
+                choices=[a for a in controls_view['advice']+setup_view['advice'] if not a.get('call') or self.radio.allows(a['call'])]
+                item=dispatch.choose(choices,sample,capabilities,now)
                 if item:
                     if item.get('setup'):
                         if (sample.get('on_pit_road') is not False or sample.get('session_state')!=4

@@ -188,6 +188,25 @@ class PitWallIntegrationTests(unittest.TestCase):
         self.assertEqual(len(self.store.list()), 1)
         self.assertEqual(recent_conversation(self.store, self.live.context()), [])
 
+    def test_individual_choices_filter_reports_and_do_not_keep_the_old_priority_gate(self):
+        first = asyncio.run(self.coach.report(ReportRequest(speak=False)))['report']
+        key = first['note']['context']['report_key']
+        from voice_alerts import IDS
+        choices = dict.fromkeys(IDS['pitwall'], False)
+        self.assertIsNone(asyncio.run(self.coach.report(ReportRequest(alerts=choices, speak=False)))['report'])
+        self.assertIsNone(self.coach.pending_report)
+        # A normal report explicitly enabled must pass even if an old client retained "important".
+        report = dict(key='battle_ahead', token='synthetic', text='합성 간격 안내', spoken_text='합성 간격 안내',
+                      speech_text='합성 간격 안내', engineer='race', priority=1, cooldown=1)
+        with patch.object(self.live.pit_wall, 'candidates', return_value=[report]):
+            selected = asyncio.run(self.coach.report(ReportRequest(level='important', alerts={'battle': True}, speak=False)))['report']
+        self.assertEqual('battle_ahead', selected['note']['context']['report_key'])
+        self.assertNotEqual(key, 'battle_ahead')
+        with patch.object(self.live.pit_wall, 'candidates', return_value=[{**report, 'key': 'class_traffic'}]):
+            selected = asyncio.run(self.coach.report(ReportRequest(level='important', alerts={'class_traffic': True}, basic_spotter=True, speak=False)))['report']
+        self.assertEqual('class_traffic', selected['note']['context']['report_key'])
+        self.speech.synthesize.assert_not_called()
+
     def test_text_only_off_and_busy_do_not_call_cloud(self):
         self.assertIsNone(asyncio.run(self.coach.report(ReportRequest(level='off')))['report'])
         result = asyncio.run(self.coach.report(ReportRequest(speak=False)))

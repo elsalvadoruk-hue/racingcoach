@@ -94,6 +94,18 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
         for name, code in (('../secret.ibt', 422), ('missing.ibt', 404)):
             self.assertEqual(self.post('race-positions', {'filename': name}).status_code, code)
 
+    def test_position_chart_flushes_pending_timing_before_reading_for_both_games(self):
+        order = []
+        def history(_):
+            order.append('read')
+            return {'status': 'UNAVAILABLE', 'series': []}
+        with patch.object(api.live_telemetry, 'flush_race_timing', side_effect=lambda: order.append('flush')), \
+             patch('race_positions.read_history', side_effect=history):
+            for prefix in ('/api/workspace/', '/api/lmu/workspace/'):
+                response = self.client.post(prefix + 'race-positions', json={'filename': 'baseline.ibt'})
+                self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(order, ['flush', 'read', 'flush', 'read'])
+
     def test_session_uses_real_selection_and_updates_practice_context_without_implicit_memory_save(self):
         response = self.post('session', {'filename': 'baseline.ibt', 'target_lap': 3, 'reference_lap': 2, 'session_mode': 'ENDURANCE'})
         self.assertEqual(response.status_code, 200, response.text)

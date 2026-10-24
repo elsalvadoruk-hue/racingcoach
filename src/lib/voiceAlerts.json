@@ -1,0 +1,666 @@
+{
+  "spotter": [
+    {
+      "id": "nearby",
+      "title": "주변 차량",
+      "items": [
+        {
+          "id": "overlap",
+          "label": "좌우 차량",
+          "description": "옆에 차량이 들어오거나 양쪽에 나란히 있을 때",
+          "example": "왼쪽 차량.",
+          "keys": [
+            "left",
+            "right",
+            "both",
+            "two_left",
+            "two_right",
+            "left_only",
+            "right_only",
+            "left_one",
+            "right_one",
+            "unavailable"
+          ]
+        },
+        {
+          "id": "clear",
+          "label": "클리어",
+          "description": "안내했던 옆 차량이 빠져나갔을 때",
+          "example": "왼쪽 클리어.",
+          "keys": [
+            "clear_left",
+            "clear_right",
+            "clear_all"
+          ]
+        },
+        {
+          "id": "repeat",
+          "label": "옆 차량 반복 안내",
+          "description": "차량이 계속 옆에 있을 때 다시 알려주기",
+          "example": "계속 왼쪽.",
+          "keys": [
+            "hold_*",
+            "hold"
+          ]
+        },
+        {
+          "id": "class_approach",
+          "label": "다른 클래스 접근",
+          "description": "빠른 클래스가 다가오거나 느린 클래스를 따라잡을 때",
+          "example": "뒤에서 빠른 클래스 접근.",
+          "keys": [
+            "traffic_faster_behind",
+            "traffic_slower_ahead"
+          ]
+        },
+        {
+          "id": "lapping",
+          "label": "랩핑 차량 접근",
+          "description": "한 랩 이상 앞서거나 뒤처진 차량과 만날 때",
+          "example": "뒤에서 한 랩 이상 앞선 차량 접근.",
+          "keys": [
+            "traffic_lapping_behind",
+            "traffic_lapped_ahead"
+          ]
+        },
+        {
+          "id": "close",
+          "label": "바로 뒤 차량",
+          "description": "뒤차가 매우 가까이 붙었을 때",
+          "example": "뒤에 바로 붙었습니다.",
+          "keys": [
+            "close_behind"
+          ]
+        },
+        {
+          "id": "hazard",
+          "label": "전방 위험 차량",
+          "description": "전방에 멈추거나 매우 느린 차량을 확인했을 때",
+          "example": "전방 느린 차량. 주의.",
+          "keys": [
+            "hazard_off_ahead",
+            "hazard_slow_ahead"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "flags",
+      "title": "깃발·출발 신호",
+      "items": [
+        {
+          "id": "start",
+          "label": "출발·그린 플래그",
+          "description": "출발 준비와 대기, 경기 시작 신호",
+          "example": "그린 플래그.",
+          "keys": [
+            "green",
+            "one_to_green",
+            "start_ready",
+            "start_set",
+            "race_started"
+          ]
+        },
+        {
+          "id": "yellow",
+          "label": "옐로 플래그",
+          "description": "게임에서 옐로 플래그 신호를 받았을 때",
+          "example": "옐로 플래그. 전방 주의.",
+          "keys": [
+            "yellow"
+          ]
+        },
+        {
+          "id": "caution",
+          "label": "풀코스 옐로·레드 플래그",
+          "description": "코션 또는 경기 중단 신호",
+          "example": "풀코스 옐로. 게임 지시를 따르세요.",
+          "keys": [
+            "caution",
+            "red"
+          ]
+        },
+        {
+          "id": "blue",
+          "label": "블루 플래그",
+          "description": "게임에서 블루 플래그 신호를 받았을 때",
+          "example": "블루 플래그. 뒤쪽 차량 확인.",
+          "keys": [
+            "blue"
+          ]
+        },
+        {
+          "id": "debris",
+          "label": "노면 주의",
+          "description": "데브리 플래그 신호",
+          "example": "데브리 플래그. 노면 주의.",
+          "keys": [
+            "debris"
+          ]
+        },
+        {
+          "id": "finish",
+          "label": "마지막 랩·체커",
+          "description": "화이트 플래그와 경기 종료 표시",
+          "example": "체커드 플래그. 경기 종료 표시 확인.",
+          "keys": [
+            "white",
+            "finish"
+          ]
+        },
+        {
+          "id": "penalty",
+          "label": "페널티·수리 지시",
+          "description": "블랙 플래그, 실격, 수리 지시 표시",
+          "example": "블랙 플래그. 패널티 지시 확인.",
+          "keys": [
+            "black",
+            "dq",
+            "repair"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pit",
+      "title": "피트·차량 경고",
+      "items": [
+        {
+          "id": "pit_entry",
+          "label": "피트 진입·출구",
+          "description": "피트로드 진입과 트랙 합류",
+          "example": "피트로드 진입. 제한속도 확인.",
+          "keys": [
+            "pit_enter",
+            "pit_exit"
+          ]
+        },
+        {
+          "id": "pit_speed",
+          "label": "피트 과속·리미터",
+          "description": "피트 제한속도 초과 또는 리미터 꺼짐",
+          "example": "피트 제한속도 초과. 감속하세요.",
+          "keys": [
+            "pit_speed",
+            "limiter_off"
+          ]
+        },
+        {
+          "id": "pit_box",
+          "label": "피트박스 카운트다운",
+          "description": "추정 피트박스 위치까지 남은 거리",
+          "example": "피트박스 약 백미터.",
+          "keys": [
+            "pit_box_*"
+          ]
+        },
+        {
+          "id": "service",
+          "label": "피트 작업·정차 위치",
+          "description": "작업 시작·완료와 정차 위치 보정",
+          "example": "피트 작업 완료. 출구 차량 확인.",
+          "keys": [
+            "service_*",
+            "stall_*",
+            "tow"
+          ]
+        },
+        {
+          "id": "engine",
+          "label": "차량 이상·연료 부족",
+          "description": "수온·유온·압력·수리 표시와 낮은 연료 잔량",
+          "example": "냉각수 온도 경고.",
+          "keys": [
+            "water_temp",
+            "oil_temp",
+            "oil_pressure",
+            "fuel_pressure",
+            "mandatory_repair",
+            "optional_repair",
+            "fuel_low"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "session",
+      "title": "랩·경기 정보",
+      "items": [
+        {
+          "id": "lap_time",
+          "label": "매 랩 랩타임",
+          "description": "완료한 랩의 기록을 읽어주기",
+          "example": "이번 랩 기록을 안내합니다.",
+          "keys": [
+            "lap_time"
+          ]
+        },
+        {
+          "id": "best",
+          "label": "개인 베스트 랩",
+          "description": "이번 세션의 개인 최고 기록을 갱신했을 때",
+          "example": "개인 베스트입니다.",
+          "keys": [
+            "personal_best"
+          ]
+        },
+        {
+          "id": "position",
+          "label": "클래스 순위 변화",
+          "description": "변경된 클래스 순위가 유지될 때",
+          "example": "클래스 순위가 올라갔습니다.",
+          "keys": [
+            "position",
+            "brief:position"
+          ]
+        },
+        {
+          "id": "remaining",
+          "label": "남은 시간·랩",
+          "description": "경기 종료까지의 주요 시점",
+          "example": "다섯 랩 남았습니다.",
+          "keys": [
+            "time_*",
+            "laps_*",
+            "ten_laps",
+            "five_laps",
+            "brief:time"
+          ]
+        },
+        {
+          "id": "formation",
+          "label": "경기 전·포메이션",
+          "description": "경기 전 브리핑과 포메이션 랩 설명",
+          "example": "오늘 경기의 주요 사항을 안내합니다.",
+          "keys": [
+            "briefing",
+            "formation_*"
+          ]
+        },
+        {
+          "id": "incident",
+          "label": "인시던트 누적",
+          "description": "인시던트 점수가 늘었을 때",
+          "example": "인시던트가 추가됐습니다.",
+          "keys": [
+            "incident",
+            "incident_limit"
+          ]
+        },
+        {
+          "id": "quali",
+          "label": "오픈 퀄리 간격·결과",
+          "description": "플라잉 랩을 준비할 간격과 완료한 랩 결과",
+          "example": "앞차와 간격을 더 벌리세요.",
+          "keys": [
+            "quali_gap_*",
+            "quali_result",
+            "quali_p1",
+            "quali_alone"
+          ]
+        },
+        {
+          "id": "result",
+          "label": "완주 결과",
+          "description": "본인 차량의 완주를 확인한 뒤 결과 안내",
+          "example": "수고하셨습니다. 경기 결과를 확인하세요.",
+          "keys": [
+            "race_result"
+          ]
+        },
+        {
+          "id": "consistency",
+          "label": "꾸준한 랩 페이스",
+          "description": "깨끗한 랩의 기록 차이가 작을 때",
+          "example": "일정한 페이스를 유지하고 있습니다.",
+          "keys": [
+            "consistent"
+          ]
+        }
+      ]
+    }
+  ],
+  "pitwall": [
+    {
+      "id": "setup",
+      "title": "차량 설정 추천",
+      "items": [
+        {
+          "id": "abs",
+          "label": "ABS 조절",
+          "description": "깨끗한 랩에서 반복된 제동 상태에 따른 제안",
+          "example": "ABS 개입을 조금 늘려 보세요.",
+          "keys": [
+            "control_abs_*"
+          ]
+        },
+        {
+          "id": "tc",
+          "label": "TC 조절",
+          "description": "반복되는 탈출 불안정에 따른 제안",
+          "example": "TC 개입을 조금 늘려 보세요.",
+          "keys": [
+            "control_tc_*"
+          ]
+        },
+        {
+          "id": "bbal",
+          "label": "브레이크 바이어스 조절",
+          "description": "반복되는 제동 불안정에 따른 제안",
+          "example": "브레이크 바이어스를 조금 앞으로 옮겨 보세요.",
+          "keys": [
+            "control_bias_*"
+          ]
+        },
+        {
+          "id": "arb",
+          "label": "앞·뒤 ARB 조절",
+          "description": "차량별 지원과 반복된 거동을 확인한 뒤 제안",
+          "example": "다음 피트에서 앞 안티롤바를 조금 부드럽게 해 보세요.",
+          "keys": [
+            "setup_front_arb_*",
+            "setup_rear_arb_*"
+          ],
+          "games": [
+            "iracing"
+          ]
+        },
+        {
+          "id": "wing",
+          "label": "리어 윙 조절",
+          "description": "지원 차량·실제 장착값과 비교 근거가 확인된 경우의 제안",
+          "example": "다음 피트에서 리어 윙을 조금 줄여 보세요.",
+          "keys": [
+            "setup_wing_*"
+          ],
+          "games": [
+            "iracing"
+          ]
+        },
+        {
+          "id": "pressure",
+          "label": "공기압 조절",
+          "description": "지원 차량·실제 장착값과 비교 근거가 확인된 경우의 제안",
+          "example": "다음 피트에서 앞 왼쪽 공기압을 조금 낮춰 보세요.",
+          "keys": [
+            "setup_pressure_*"
+          ],
+          "games": [
+            "iracing"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "fuel",
+      "title": "연료·피트 전략",
+      "items": [
+        {
+          "id": "fuel_critical",
+          "label": "연료 긴급·피트 진입",
+          "description": "다음 랩을 달릴 연료가 부족해 피트가 필요할 때",
+          "example": "이번 랩에 피트로 들어오세요.",
+          "keys": [
+            "fuel_critical"
+          ]
+        },
+        {
+          "id": "fuel_short",
+          "label": "완주 연료 부족",
+          "description": "현재 소비량으로 완주 연료가 부족할 때",
+          "example": "완주 연료가 부족합니다. 절약이 필요합니다.",
+          "keys": [
+            "fuel_short"
+          ]
+        },
+        {
+          "id": "reserve",
+          "label": "안전 여유 연료",
+          "description": "완주는 가능하지만 설정한 여유분이 부족할 때",
+          "example": "안전 여유 연료가 부족합니다.",
+          "keys": [
+            "fuel_reserve"
+          ],
+          "legacyImportant": false
+        },
+        {
+          "id": "feedback",
+          "label": "매 랩 연료 절약 평가",
+          "description": "완료한 랩의 소비량을 절약 목표와 비교",
+          "example": "연료 절약 목표를 유지했습니다.",
+          "keys": [
+            "fuel_feedback"
+          ],
+          "legacyImportant": false
+        },
+        {
+          "id": "pit_prepare",
+          "label": "피트 시점·준비",
+          "description": "피트가 다가오거나 피트 가능 구간이 열릴 때",
+          "example": "곧 피트에 들어갈 준비를 하세요.",
+          "keys": [
+            "pit_soon",
+            "pit_two",
+            "pit_window"
+          ]
+        },
+        {
+          "id": "fuel_plan",
+          "label": "급유량·급유 예약 확인",
+          "description": "필요 급유량과 예약량 부족 확인",
+          "example": "급유 예약량을 확인하세요.",
+          "keys": [
+            "pit_fuel_plan",
+            "pit_fuel_check"
+          ]
+        },
+        {
+          "id": "tyres",
+          "label": "다음 피트 타이어 계획",
+          "description": "기록과 작업 방식으로 판단한 타이어 교체 안내",
+          "example": "다음 피트에서 타이어 교체를 준비하세요.",
+          "keys": [
+            "tyre_plan"
+          ]
+        },
+        {
+          "id": "finish_distance",
+          "label": "예상 경기 거리 변경",
+          "description": "종료 예상 랩이 늘어나 연료 계획이 달라질 때",
+          "example": "경기가 한 랩 더 길어질 수 있습니다.",
+          "keys": [
+            "finish_laps"
+          ]
+        },
+        {
+          "id": "rejoin",
+          "label": "피트 복귀 순위·상대 스틴트",
+          "description": "측정 가능한 상대 주행과 피트 손실을 비교",
+          "example": "피트 복귀 때 앞차와 가까워질 수 있습니다.",
+          "keys": [
+            "brief:rejoin",
+            "brief:stint_*"
+          ],
+          "legacyImportant": false
+        }
+      ]
+    },
+    {
+      "id": "race",
+      "title": "경쟁 상황·코칭",
+      "items": [
+        {
+          "id": "battle",
+          "label": "앞뒤 차량 페이스·간격",
+          "description": "같은 클래스 차량과의 페이스 차이와 접근",
+          "example": "뒤차가 더 빠른 페이스로 접근하고 있습니다.",
+          "keys": [
+            "battle_*",
+            "approach",
+            "pace_detail",
+            "brief:rival_*",
+            "brief:catch",
+            "brief:defend",
+            "brief:gap_*",
+            "pace_*"
+          ],
+          "legacyImportant": false
+        },
+        {
+          "id": "rival_pit",
+          "label": "앞뒤 차량 피트 진입",
+          "description": "같은 클래스 앞차나 뒤차가 피트로 들어갈 때",
+          "example": "앞차가 피트로 들어갔습니다.",
+          "keys": [
+            "pit_ahead",
+            "pit_behind"
+          ],
+          "legacyImportant": false
+        },
+        {
+          "id": "class_traffic",
+          "label": "다른 클래스 상황 설명",
+          "description": "다른 클래스 차량의 접근 상황을 추가로 설명",
+          "example": "다른 클래스 차량이 뒤에 있습니다.",
+          "keys": [
+            "class_traffic"
+          ],
+          "legacyImportant": false
+        },
+        {
+          "id": "race_stage",
+          "label": "마지막 랩 조언",
+          "description": "경기 진행 상황과 마지막 랩의 공격·방어 조언",
+          "example": "마지막 랩입니다. 끝까지 집중하세요.",
+          "keys": [
+            "last_lap"
+          ]
+        },
+        {
+          "id": "corner",
+          "label": "코너·직선 코칭",
+          "description": "비교 가능한 구간의 손실과 다음 조작을 안내",
+          "example": "다음 코너는 제동을 조금 더 부드럽게 해 보세요.",
+          "keys": [
+            "corner_focus",
+            "brief:corner",
+            "brief:delta"
+          ],
+          "legacyImportant": false
+        },
+        {
+          "id": "reminder",
+          "label": "반복 실수·메모 조언",
+          "description": "반복된 인시던트나 직접 남긴 코너 메모를 바탕으로 조언",
+          "example": "다음 랩은 조금 더 여유를 두고 달려 보세요.",
+          "keys": [
+            "coach_reminder",
+            "incident_coaching"
+          ],
+          "legacyImportant": false
+        },
+        {
+          "id": "halfway",
+          "label": "경기 중반 순위",
+          "description": "경기 중반의 클래스 순위 안내",
+          "example": "경기 절반입니다. 현재 순위를 유지하세요.",
+          "keys": [
+            "halfway"
+          ],
+          "legacyImportant": false
+        },
+        {
+          "id": "lap_summary",
+          "label": "스틴트·이론상 베스트·상대 랩",
+          "description": "직선에서 측정한 랩 기록을 요약",
+          "example": "스틴트 평균 기록을 안내합니다.",
+          "keys": [
+            "brief:theoretical",
+            "brief:stint",
+            "brief:leader_lap",
+            "brief:ahead_lap"
+          ],
+          "legacyImportant": false
+        },
+        {
+          "id": "damage",
+          "label": "손상·수리 상태 설명",
+          "description": "관측된 수리 상태와 속도 변화 안내",
+          "example": "필수 수리 표시가 없습니다.",
+          "keys": [
+            "damage_check",
+            "repair_check",
+            "no_repair",
+            "*_detail"
+          ]
+        },
+        {
+          "id": "weather",
+          "label": "노면·날씨·타이어 전환",
+          "description": "실제 노면 변화와 장착 타이어를 확인한 안내",
+          "example": "노면이 젖기 시작했습니다.",
+          "keys": [
+            "track_temp_*",
+            "track_wet_start",
+            "track_drying",
+            "track_very_wet",
+            "rain_*",
+            "slick_box"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "energy",
+      "title": "LMU 버추얼 에너지",
+      "games": [
+        "lmu"
+      ],
+      "items": [
+        {
+          "id": "energy_critical",
+          "label": "에너지 긴급·스틴트 한도",
+          "description": "에너지가 부족하거나 연료보다 먼저 떨어질 때",
+          "example": "에너지가 얼마 남지 않았습니다.",
+          "keys": [
+            "ve_critical",
+            "ve_laps_left",
+            "ve_limits_stint"
+          ]
+        },
+        {
+          "id": "energy_save",
+          "label": "에너지 절약·피트 필요",
+          "description": "완주 에너지 목표와 추가 피트 필요 안내",
+          "example": "에너지 절약이 필요합니다.",
+          "keys": [
+            "ve_save",
+            "ve_need_stop"
+          ]
+        },
+        {
+          "id": "energy_status",
+          "label": "에너지 중간·완주 여유",
+          "description": "스틴트 에너지와 완주 여유 안내",
+          "example": "완주 에너지는 충분합니다.",
+          "keys": [
+            "ve_half",
+            "ve_finish_ok",
+            "ve_spare"
+          ],
+          "legacyImportant": false
+        },
+        {
+          "id": "energy_lap",
+          "label": "랩별 에너지 사용 평가",
+          "description": "관측한 랩 사용량과 목표 비교",
+          "example": "방금 랩의 에너지 사용량을 확인하세요.",
+          "keys": [
+            "ve_lap"
+          ],
+          "legacyImportant": false
+        }
+      ]
+    }
+  ]
+}

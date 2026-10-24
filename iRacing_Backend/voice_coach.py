@@ -34,6 +34,7 @@ from radio_policy import HOLD_DEFAULT_S
 from instant_answers import instant_answer
 from radio_phrases import ACKS
 from live_controls import control_answer
+from voice_alerts import reports_enabled, category
 
 
 VOCABULARY = ['언더스티어', '오버스티어', '브레이크 바이어스', '안티롤바', '리어 윙', '디퍼렌셜',
@@ -70,6 +71,8 @@ class SpotterOptions(BaseModel):
     clear_delay: float = Field(default=.15, ge=.15, le=.5, allow_inf_nan=False)
     traffic_enabled: bool = True
     pit_box_enabled: bool = False
+    alerts: dict[str, bool] | None = Field(default=None, max_length=80)
+    wall_alerts: dict[str, bool] | None = Field(default=None, max_length=80)
 
 
 def speech_region():
@@ -214,6 +217,7 @@ class NoteEdit(BaseModel):
 
 
 class ReportRequest(BaseModel):
+    alerts: dict[str, bool] | None = Field(default=None, max_length=80)
     level: str = Field(default='important', pattern='^(off|important|all)$')
     reserve_laps: float = Field(default=.5, ge=0, le=3, allow_inf_nan=False)
     pit_loss_s: float | None = Field(default=None, gt=0, le=600, allow_inf_nan=False)
@@ -669,6 +673,7 @@ class VoiceCoach:
 
     async def report(self, payload):
         options = {'reserve_laps': payload.reserve_laps, 'pit_loss_s': payload.pit_loss_s, 'fuel_save_mode': payload.fuel_save_mode}
+        selection_level = 'all' if payload.alerts is not None and payload.level != 'off' else payload.level
         self.race_options = options
         with self.live.lock:
             self.live.race_options = dict(self.race_options)
@@ -692,10 +697,13 @@ class VoiceCoach:
                 snapshot = context['snapshot']
                 candidates = self.live.pit_wall.candidates(view, snapshot, context, notes)
                 if payload.basic_spotter:
-                    owned = ('yellow', 'finish', 'class_traffic') if self.live.radio.traffic_enabled else ('yellow', 'finish')
+                    owned = ('yellow', 'finish', 'class_traffic') if payload.alerts is None and self.live.radio.traffic_enabled else ('yellow', 'finish')
                     candidates = [c for c in candidates if c['key'] not in owned]
-                report = self.live.pit_wall.select(candidates, snapshot, payload.level, cached_audio=True)
+                candidates = reports_enabled(candidates, payload.alerts)
+                report = self.live.pit_wall.select(candidates, snapshot, selection_level, cached_audio=True)
             if not report:
+                with self.lock:
+                    self.pending_report = None
                 return result
             with self.lock:
                 pending = self.pending_report
@@ -703,7 +711,7 @@ class VoiceCoach:
                         and 0 <= snapshot['session_time'] - pending['at'] <= 15
                         and pending['decision']['key'] == report['key'] and pending['decision']['token'] == report['token']
                         and pending['decision']['text'] == report['text']
-                        and pending['speak'] == payload.speak and pending['options'] == options):
+                        and pending['speak'] == payload.speak and pending['options'] == options and pending.get('alerts') == payload.alerts):
                     return {**result, 'pit_wall': view, 'report': pending['response']}
                 self.pending_report = None
             audio, warning, parts = None, '', None
@@ -731,9 +739,10 @@ class VoiceCoach:
                 current_view = self.live.race_view(**options)
                 current = self.live.pit_wall.candidates(current_view, latest['snapshot'], latest, notes)
                 if payload.basic_spotter:
-                    owned = ('yellow', 'finish', 'class_traffic') if self.live.radio.traffic_enabled else ('yellow', 'finish')
+                    owned = ('yellow', 'finish', 'class_traffic') if payload.alerts is None and self.live.radio.traffic_enabled else ('yellow', 'finish')
                     current = [c for c in current if c['key'] not in owned]
-                selected = self.live.pit_wall.select(current, latest['snapshot'], payload.level, cached_audio=True)
+                current = reports_enabled(current, payload.alerts)
+                selected = self.live.pit_wall.select(current, latest['snapshot'], selection_level, cached_audio=True)
                 if not selected or selected['key'] != report['key'] or selected['token'] != report['token'] or selected['text'] != report['text'] or selected.get('speech_key') != report.get('speech_key'):
                     return result
             note_context = {**context, 'engineer': report['engineer'], 'pit_wall': view, 'report_key': report['key'], 'report_delivery': 'PREPARED',
@@ -741,12 +750,13 @@ class VoiceCoach:
             note = await asyncio.to_thread(self.store.save, '자동 보고 · ' + ROLES[report['engineer']]['label'], note_context, 'AUTO_REPORT')
             note = await asyncio.to_thread(self.store.update, note['id'], reply=report['text'], reply_source='LOCAL' if report['engineer'] == 'coach' else 'MEASURED', service_error=warning)
             response = {'note': public_note(note), 'audio_base64': audio, 'audio_parts': parts, 'warning': warning,
+                        'alert_categories': report.get('alert_categories') or [category(report['key'])],
                         'engineer': report['engineer'], 'priority': report['priority'],
                         'brief': True, 'spoken_text': report.get('spoken_text'), 'speech_source': 'FIXED_CACHE',
                         'audio_mime': 'audio/mpeg'}
             with self.lock:
                 self.pending_report = {'run_id': snapshot['run_id'], 'at': snapshot['session_time'],
-                    'decision': report, 'response': response, 'speak': payload.speak, 'options': options}
+                    'decision': report, 'response': response, 'speak': payload.speak, 'options': options, 'alerts': payload.alerts}
             return {**result, 'pit_wall': view, 'report': response}
 
     def acknowledge_report(self, note_id):
@@ -777,6 +787,8 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             run_id, identity = live.run_id, dict(live.identity)
             session_type = (live.pit_wall.race or {}).get('session_type')
             for event in payload.events:
+                if event.run_id == run_id and callable(getattr(live, 'radio_delivery', None)):
+                    live.radio_delivery(event.event_id, event.status, dropped_parts=event.dropped_parts)
                 if event.run_id==run_id and getattr(live,'control_recommendations',None) is not None:
                     live.control_recommendations.delivery(event.event_id,event.status,live.clock())
         session = {key: identity.get(key) for key in ('game', 'track_name', 'track_path', 'track_config', 'car_name', 'car_path')}

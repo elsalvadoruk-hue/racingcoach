@@ -29,7 +29,7 @@ export function LogSendSwitch({ apiBase }) {
     <Button size="sm" variant={on ? 'default' : 'outline'} aria-pressed={on} aria-label="로그 자동 보내기" disabled={auto.busy}
       className={`runtime-toggle log-send-toggle${on ? ' runtime-toggle-on log-send-on' : ''}`} onClick={() => auto.toggle(!on)}
       title={on ? '주행이 끝나면 세션 로그를 자동으로 보냅니다 (iRacing·LMU)' : '세션 로그 자동 보내기 꺼짐'}>
-      <CloudUpload data-icon="inline-start" /><span className="log-send-label">로그 보내기</span>
+      <CloudUpload data-icon="inline-start" aria-hidden="true" />{!on && <span className="log-send-label">로그 보내기</span>}
     </Button>
     <ConsentDialog auto={auto} />
   </>;

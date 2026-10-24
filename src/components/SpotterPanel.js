@@ -4,9 +4,11 @@ import { LiveHeader } from './LivePrimitives';
 import { ArrowLeft, ArrowRight, CarFront, Headphones } from 'lucide-react';
 import { Button } from './ui/button';
 import { NativeSelect } from './ui/native-select';
-import { Switch } from './ui/switch';
 import React from 'react';
 import { SPOTTER_VOICES } from '../useSpotter';
+import { useGame } from '../lib/gameContext';
+import { spotterAlertPatch } from '../lib/voiceAlerts';
+import VoiceAlertSettings from './VoiceAlertSettings';
 
 export function SpotterSettings({ settings, onChange: changeSettings, disabled = false, capabilities = {}, idPrefix = 'spotter' }) {
   const supported = key => capabilities[key] !== false;
@@ -14,12 +16,9 @@ export function SpotterSettings({ settings, onChange: changeSettings, disabled =
   return <FieldSet disabled={disabled} className="spotter-settings mt-6 border-t pt-5"><FieldLegend>스포터 안내 설정</FieldLegend>
     <FieldGroup className="grid gap-4 sm:grid-cols-2">
       {supported('voice') && <Field><FieldLabel htmlFor={id('voice')}>스포터 목소리</FieldLabel><NativeSelect id={id('voice')} aria-label="스포터 목소리" value={settings.voice || 'Fenrir'} onChange={e => changeSettings({ voice: e.target.value })}>{SPOTTER_VOICES.map(([name, label]) => <option key={name} value={name}>{name} · {label}</option>)}</NativeSelect></Field>}
-      {supported('formation') && <Field><FieldLabel htmlFor={id('formation')}>포메이션 랩 안내 개수</FieldLabel><NativeSelect id={id('formation')} aria-label="포메이션 랩 안내 개수" value={settings.formation_calls ?? 5} onChange={e => changeSettings({ formation_calls: Number(e.target.value) })}>{[0, 1, 2, 3, 4, 5, 6, 7, 8].map(n => <option key={n} value={n}>{n === 0 ? '끔' : `${n}개`}</option>)}</NativeSelect></Field>}
-      {capabilities.repeat_toggle && <Field orientation="horizontal"><FieldLabel htmlFor={id('repeat-enabled')}>옆 차량 반복 안내</FieldLabel><Switch id={id('repeat-enabled')} disabled={disabled} checked={settings.repeat_enabled !== false} onCheckedChange={value => changeSettings({ repeat_enabled: value })} /></Field>}
+      {supported('formation') && <Field><FieldLabel htmlFor={id('formation')}>포메이션 랩 안내 개수</FieldLabel><NativeSelect id={id('formation')} aria-label="포메이션 랩 안내 개수" value={settings.formation_calls || 5} onChange={e => changeSettings({ formation_calls: Number(e.target.value) })}>{[1, 2, 3, 4, 5, 6, 7, 8].map(n => <option key={n} value={n}>{`${n}개`}</option>)}</NativeSelect></Field>}
       <Field data-disabled={disabled || (capabilities.repeat_toggle && settings.repeat_enabled === false) || undefined}><FieldLabel htmlFor={id('repeat')}>옆 차량 반복 간격</FieldLabel><NativeSelect id={id('repeat')} aria-label="옆 차량 반복 간격" disabled={disabled || (capabilities.repeat_toggle && settings.repeat_enabled === false)} value={settings.repeat_seconds} onChange={e => changeSettings({ repeat_seconds: Number(e.target.value) })}>{(capabilities.repeat_toggle ? [2, 3, 5, 8, 10] : [2, 3, 5]).map(n => <option key={n} value={n}>{n}초</option>)}</NativeSelect></Field>
       <Field><FieldLabel htmlFor={id('clear')}>클리어 확인 시간</FieldLabel><NativeSelect id={id('clear')} aria-label="클리어 확인 시간" disabled={disabled} value={settings.clear_delay} onChange={e => changeSettings({ clear_delay: Number(e.target.value) })}>{[.15, .3, .5].map(n => <option key={n} value={n}>{n * 1000}ms</option>)}</NativeSelect></Field>
-      {supported('traffic') && <Field orientation="horizontal"><input id={id('traffic')} type="checkbox" checked={settings.traffic_enabled} onChange={e => changeSettings({ traffic_enabled: e.target.checked })} /><FieldLabel htmlFor={id('traffic')}>다중 클래스·랩핑 접근, 바로 뒤 차량 안내</FieldLabel></Field>}
-      {supported('pit_box') && <Field orientation="horizontal"><input id={id('pit-box')} type="checkbox" checked={settings.pit_box_enabled} onChange={e => changeSettings({ pit_box_enabled: e.target.checked })} /><FieldLabel htmlFor={id('pit-box')}>피트박스 카운트다운 (추정)</FieldLabel></Field>}
     </FieldGroup>
     {capabilities.repeat_toggle && <p className="text-xs leading-relaxed text-muted-foreground">반복 안내를 끄면 옆에 계속 있는 차량의 반복 음성만 멈춥니다. 새 좌우 겹침과 클리어 안내는 유지합니다. 클리어는 겹침이 없는 상태를 설정한 시간 동안 확인한 뒤 안내합니다.</p>}
     {supported('formation') && <p className="text-xs leading-relaxed text-muted-foreground">포메이션 랩 안내는 레이스의 포메이션 랩을 도는 동안 경기 길이, 연료, 출발 요령 등을 정한 개수만큼 고르게 나눠 말하고, 마지막 인사는 랩의 80% 지점쯤에 합니다. 포메이션 랩이 없는 경기에서는 나오지 않습니다.</p>}
@@ -29,6 +28,7 @@ export function SpotterSettings({ settings, onChange: changeSettings, disabled =
 
 export default function SpotterPanel({ spotter, muted, volume, audioError }) {
   const { enabled, preparing, view, voice, error, toggle, test, settings, settingsBusy, changeSettings } = spotter;
+  const { selectedGame } = useGame();
   const side = view?.raw_state;
   const traffic = view?.radio?.traffic;
   const box = view?.radio?.pit_box;
@@ -54,7 +54,7 @@ export default function SpotterPanel({ spotter, muted, volume, audioError }) {
     })}</div>}
     {enabled && hazard && <p role="status" className="mt-3 rounded-lg border border-warning bg-warning/10 p-3 text-sm text-warning">{hazard.kind === 'hazard_off_ahead' ? '전방 트랙 밖 차량' : '전방 매우 느린 차량'} · {hazard.name || '차량'} · 거리 환산 약 {hazard.gap_estimate_s}초</p>}
     {enabled && box && (box.ready || box.reason !== '피트 진입 대기') && <p className="mt-3 rounded-lg border border-success/30 p-3 text-sm text-success">{box.ready ? `피트박스까지 약 ${box.distance_estimate_m}m (추정)` : box.reason}{!box.enabled && ' · 음성 카운트다운 꺼짐'}</p>}
-    {settings && <SpotterSettings settings={settings} onChange={changeSettings} disabled={preparing || settingsBusy} />}
+    {settings && <details className="voice-basic-settings"><summary>목소리·반복 설정</summary><SpotterSettings settings={settings} onChange={changeSettings} disabled={preparing || settingsBusy} /></details>}
     {enabled && <Button variant="outline" type="button" onClick={test} disabled={view?.occupied} className="mt-3  border  px-3 py-2 text-sm  disabled:opacity-40">스포터 목소리 듣기</Button>}
     {error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
     {enabled && audioError && <p role="alert" className="mt-3 text-sm text-warning">{audioError}</p>}
@@ -63,5 +63,6 @@ export default function SpotterPanel({ spotter, muted, volume, audioError }) {
     {!!view?.radio?.history?.length && <details className="mt-3 rounded-xl border border-border p-3"><summary className="text-sm text-foreground">최근 무전 기록</summary><div className="mt-3 flex flex-col gap-2">{view.radio.history.slice(0, 8).map((item) => <p key={item.id} className="text-xs leading-relaxed text-foreground"><span className="text-success">{({ spotter: '스포터', race: '레이스', strategy: '전략', coach: '코치' })[item.engineer]}</span> · {item.text}</p>)}</div></details>}
     <p className="mt-3 text-xs leading-relaxed text-success">켜면 네 명의 자동 안내를 함께 시작합니다. 플래그는 스포터가 저장된 음성으로 전담합니다. 블루 플래그·화이트 플래그처럼 안내하며 AI 답변 토큰을 사용하지 않습니다. 엔지니어 자동 보고는 아래에서 별도로 중지할 수 있습니다.</p>
     <p className="mt-3 text-xs leading-relaxed text-muted-foreground">마이크와 자동 보고를 켜지 않아도 작동합니다. 아래 출력장치와 볼륨을 함께 사용합니다. 앱 페이지를 열어두세요. iRacing 또는 Crew Chief 스포터와 중복되지 않게 한 곳만 켜세요. 페이지를 다시 열면 스포터 켜기를 눌러주세요.</p>
+    {settings && <VoiceAlertSettings scope="spotter" game={selectedGame} alerts={settings.alerts} disabled={preparing || settingsBusy} onChange={alerts => changeSettings(spotterAlertPatch(settings, alerts))} />}
   </section></Card>;
 }

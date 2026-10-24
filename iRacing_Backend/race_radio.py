@@ -1,6 +1,7 @@
 """Measured basic race calls, variant selection, expiry and specialist handoffs."""
 from collections import deque
 import math
+import logging
 import statistics
 from radio_policy import quiet_window, speech_ok
 from spotter_context import TrafficApproach, PitBoxGuide, HazardWatch, progress
@@ -8,6 +9,7 @@ from radio_audio import speech_fields
 import radio_phrases
 import radio_variations
 from qualifying_traffic import QualifyingTraffic, is_open_qualifying
+from voice_alerts import category, clean, allowed, event_allowed
 
 
 STATIC_CALLS = {
@@ -113,6 +115,7 @@ class RaceRadio:
     """Only real changes produce calls; uncertain gaps establish a new baseline."""
     POSITION_SETTLE_S = 5   # a place must hold this long before it is said
     def __init__(self):
+        self.alerts, self.wall_alerts = {}, {}
         self.traffic_enabled = True
         self.pit_box_enabled = False
         self.qualifying = False
@@ -122,7 +125,11 @@ class RaceRadio:
         self.history = deque(maxlen=20)
         self.reset()
 
-    def reset(self):
+    def reset(self, *, keep_run=False):
+        retained = ({key: getattr(self, key) for key in
+                     ('run_id', 'briefed', 'briefing_delivered', 'position_said', '_position_delivery_serial', '_deliveries')}
+                    if keep_run and self.run_id else {})
+        briefing_at = self.sent.get('briefing') if retained else None
         self.run_id = None
         self.corner_revision = None
         self.fuel_low_stage = 0
@@ -138,6 +145,7 @@ class RaceRadio:
         self.car_calls = {}
         self.laps = deque(maxlen=5)
         self.briefed = False
+        self.briefing_delivered = False
         self.start_armed = False   # the race's grid/formation was seen; green is said once, at the start
         self.history.clear()
         self.tainted = False
@@ -146,6 +154,8 @@ class RaceRadio:
         self.position_since = None
         self.position_changed = False
         self.position_said = None
+        self._position_delivery_serial = -1
+        self._deliveries = {}
         self.lap_position = None
         self.quali_lap = None
         self.qualifying = False
@@ -161,9 +171,38 @@ class RaceRadio:
         self.traffic = TrafficApproach()
         self.hazard = HazardWatch()
         self.pit_box = PitBoxGuide()
+        self.__dict__.update(retained)
+        if briefing_at is not None:
+            self.sent['briefing'] = briefing_at
+
+    def configure_alerts(self, spotter=None, pitwall=None):
+        old = (self.alerts, self.wall_alerts)
+        new = (clean('spotter', spotter) if spotter is not None else self.alerts,
+               clean('pitwall', pitwall) if pitwall is not None else self.wall_alerts)
+        changed = {f'{scope}.{key}' for scope, before, after in zip(('spotter', 'pitwall'), old, new)
+                   for key in before.keys() | after.keys() if before.get(key, True) != after.get(key, True)}
+        if 'spotter.overlap' in changed:
+            changed.update(('spotter.clear', 'spotter.repeat'))
+        self.alerts, self.wall_alerts = new
+        # Remove the whole old composition, including in-flight render sources. Re-enabling cannot revive it.
+        self.pending = deque((e for e in self.pending if not changed.intersection(e.get('alert_categories') or [category(e['key'])])), maxlen=48)
+
+    def allows(self, key):
+        return allowed(category(key), self.alerts, self.wall_alerts)
 
     def emit(self, key, now, text=None, role='spotter', priority=1, ttl=18, condition=None, cooldown=30, group=None, delay=0, speech_key=None, speech_text=None,
-             speech_parts=None):
+             speech_parts=None, part_categories=None, screen_parts=None, alert_category=None):
+        names = [alert_category or category(key)]
+        if part_categories is not None:
+            retained = [i for i, name in enumerate(part_categories) if allowed(name, self.alerts, self.wall_alerts)]
+            if not retained:
+                return
+            speech_parts = [speech_parts[i] for i in retained]
+            speech_text = ' '.join(speech_parts)
+            text = ' '.join((screen_parts or speech_parts)[i] for i in retained) if screen_parts else speech_text
+            names = list(dict.fromkeys(part_categories[i] for i in retained))
+        elif not allowed(names[0], self.alerts, self.wall_alerts):
+            return
         # Lone/unknown qualifying retains its original filter. Shared-track warnings and
         # the measured gap advisor are enabled ONLY for an explicitly Open Qualify session.
         silent_flags = ('one_to_green', 'start_ready', 'start_set') if self.open_qualifying else QUALI_SILENT_FLAGS
@@ -196,8 +235,54 @@ class RaceRadio:
                              'engineer': role, 'priority': priority, 'at': now, 'not_before': now + delay,
                              'expires_at': now + ttl + delay, 'condition': condition, 'group': group,
                              'run_id': self.run_id, 'cached': key in STATIC_CALLS,
+                             'alert_categories': names,
                              'brief': bool(speech['spoken_text']) or key in ('lap_time', 'personal_best', 'position') or key.startswith(('time_', 'laps_')),
                              **speech})
+        event = self.pending[-1]
+        if key in ('position', 'briefing') or (part_categories is not None and category('position') in names):
+            self.track_delivery(event, position=num(self.latest.get('class_position')) if key != 'briefing' else None)
+        return event
+
+    def track_delivery(self, event, *, position=None, brief=None):
+        """Bounded receipts survive acknowledgement and a short same-run data gap."""
+        if event is None:
+            return
+        self._deliveries[event['id']] = {'run_id': event['run_id'], 'serial': event['serial'],
+                                        'key': event['key'], 'position': num(position), 'brief': brief, 'completed': False}
+        while len(self._deliveries) > 128:
+            del self._deliveries[next(iter(self._deliveries))]
+
+    def delivery(self, identifier, status, *, dropped_parts=0):
+        receipt = self._deliveries.get(identifier)
+        if not receipt or receipt['run_id'] != self.run_id or receipt['completed']:
+            return None
+        if (receipt['key'] == 'straight_brief' and not receipt.get('diagnosed')
+                and (status in ('cancelled', 'expired', 'interrupted', 'failed') or dropped_parts)):
+            receipt['diagnosed'] = True
+            s = self.latest
+            # Local backend log only: the latest sample when feedback arrives, not a replay
+            # of the original decision. No speech, names or new session-export fields.
+            logging.getLogger(__name__).info(
+                'Straight briefing latest_at_feedback: status=%s t=%s pct=%s workload_s=%s '
+                'hold_s=%s steer_rad=%s steer_lock=%s brake=%s throttle=%s brief_quiet=%s dropped=%s',
+                status, num(s.get('session_time')), num(s.get('distance_pct')), num(s.get('workload_in_s')),
+                num(s.get('speech_hold_s')), num(s.get('steering_rad')), num(s.get('steering_lock_ratio')),
+                num(s.get('brake')), num(s.get('throttle')), speech_ok(s, brief=True), dropped_parts)
+        position = receipt['position']
+        if position is not None and receipt['serial'] >= self._position_delivery_serial:
+            if status == 'completed' and not dropped_parts:
+                self.position_said = position
+                self._position_delivery_serial = receipt['serial']
+            elif status == 'interrupted':
+                # The driver may have heard only part of the number or its direction.
+                self.position_said = None
+                self._position_delivery_serial = receipt['serial']
+        if status != 'completed' or dropped_parts:
+            return None
+        receipt['completed'] = True
+        if receipt['key'] == 'briefing':
+            self.briefing_delivered = True
+        return receipt
 
     def wording(self, phrase, **values):
         """The next wording of a spoken sentence; the screen text of the event stays as it is."""
@@ -213,7 +298,7 @@ class RaceRadio:
     def ingest(self, sample, run_id, now, metadata=None):
         if (self.run_id != run_id or self.last_sample is not None and
                 (now - self.last_sample > .5 or sample['session_time'] < self.latest.get('session_time', 0))):
-            self.reset()
+            self.reset(keep_run=self.run_id == run_id and sample['session_time'] >= self.latest.get('session_time', 0))
         self.run_id = run_id
         if metadata is not None:
             self.metadata = dict(metadata)
@@ -397,6 +482,7 @@ class RaceRadio:
             if result or timed:
                 self.quali_called, self.quali_lap = lap, None
                 parts, screen = list(timed['parts']) if timed else [], list(timed['screen']) if timed else []
+                categories = list(timed['categories']) if timed else []
                 if result:
                     # The result is spoken by the race engineer. Its lap-time wording
                     # uses the same prepared pieces as formation history in that voice.
@@ -406,9 +492,11 @@ class RaceRadio:
                     self.variant_counts[result[0]] = self.variant_counts.get(result[0], 0) + 1
                     parts.append(built['text'])
                     screen.append(built['text'])
+                    categories.append(category(result[0]))
                 # One call: the lap time, then where it stands.
                 self.emit(result[0] if result else timed['key'], now, ' '.join(screen), role='race' if result else 'spotter', ttl=40, cooldown=0,
-                          group='lap_time', speech_text=' '.join(parts), speech_parts=parts)
+                          group='lap_time', speech_text=' '.join(parts), speech_parts=parts,
+                          part_categories=categories, screen_parts=screen)
         position, old_lap = num(sample.get('class_position')), num(previous.get('lap_completed'))
         if (not self.result_called and str(self.metadata.get('session_type', '')).lower() == 'race'
                 and int(sample.get('session_flags') or 0) & 0x1 and int(previous.get('session_flags') or 0) & 0x1
@@ -444,7 +532,7 @@ class RaceRadio:
 
     def welcome(self, now):
         # Enabling late on the grid should still give a current briefing.
-        if (self.latest.get('session_state') in (1, 2, 3)
+        if (not self.briefing_delivered and self.latest.get('session_state') in (1, 2, 3)
                 and str(self.metadata.get('session_type', '')).lower() == 'race'
                 and self.last_sample is not None and 0 <= now - self.last_sample < .5
                 and not any(e['key'] == 'briefing' and self.valid(e, now) for e in self.pending)):
@@ -501,28 +589,31 @@ class RaceRadio:
                           and old_best is not None and best < old_best - .01)
                 key = 'personal_best' if record else 'lap_time'
                 parts = [self.wording('personal_best_read' if record else 'lap_time_read', lap=last)]
+                categories = [category(key)]
                 screen = [f'이번 세션 최고 기록입니다. {duration(last)}.' if record else f'{int(lap)}랩, {duration(last)}입니다.']
                 if completed['clean'] and not record and len(self.laps) >= 3:
                     delta = last - statistics.median(l['time'] for l in self.laps)
                     if abs(delta) >= .7:
                         parts.append(self.wording('pace_slower_by' if delta > 0 else 'pace_faster_by', loss=abs(delta)))
+                        categories.append(category('pace_detail'))
                         screen.append(f'이전 {len(self.laps)}개 완주랩의 중앙 기록보다 {abs(delta):.2f}초 {"느립니다" if delta > 0 else "빠릅니다"}.')
                 position = num(s.get('class_position'))
                 racing = str(self.metadata.get('session_type', '')).lower() == 'race' and s.get('session_state') == 4
                 if (racing and position and position > 0 and self.lap_position is not None and position != self.lap_position
                         and now - self.sent.get('position', -math.inf) > 60 and s.get('on_pit_road') is False):
                     parts.append(self.wording('position_now', pos=position))
+                    categories.append(category('position'))
                     screen.append(f'현재 클래스 {int(position)}위입니다.')
                 if racing and position:
                     self.lap_position = position
                 if self.qualifying:
                     # The result of the lap (place and gap) joins the lap time in _results.
-                    self.quali_lap = {'lap': lap, 'parts': parts, 'screen': screen, 'key': key, 'time': last}
+                    self.quali_lap = {'lap': lap, 'parts': parts, 'screen': screen, 'key': key, 'time': last, 'categories': categories}
                 else:
                     # The time stays true until the next lap ends, so it may wait out a busy radio for most of the lap.
                     self.emit(key, now, ' '.join(screen), ttl=min(LAP_CALL_MAX_S, max(45., last * LAP_CALL_SHARE)),
                               condition=('lap', lap), group='lap_time', cooldown=0,
-                              speech_text=' '.join(parts), speech_parts=parts)
+                              speech_text=' '.join(parts), speech_parts=parts, part_categories=categories, screen_parts=screen)
                 if completed['clean']:
                     self.laps.append({'lap': lap, 'time': last, 'incidents': incidents})
                     wet = num(s.get('track_wetness'))
@@ -558,17 +649,21 @@ class RaceRadio:
             self.position_candidate, self.position_since = position, now
             if old is not None:
                 self.position_changed = True
-            elif self.position_said is None:
-                self.position_said = position  # the place held when watching began
         elif s.get('on_pit_road') is True:
             # Places fall one after another during a stop; the place is said once, back on track.
             self.position_since = now
         elif now - self.position_since >= self.POSITION_SETTLE_S and getattr(self, 'position_changed', False):
-            self.position_changed = False
-            said, self.position_said = self.position_said, position
+            if not self.allows('position'):
+                self.position_changed = False
+                return
+            if now - self.sent.get('position', -math.inf) < 15:
+                return
+            said = self.position_said
             wording = 'position_now' if said is None or said == position else 'position_up' if position < said else 'position_down'
-            self.emit('position', now, (f'현재 클래스 {int(position)}위입니다.', f'클래스 순위, {int(position)}위입니다.'), condition=('position', position), group='position', cooldown=15, ttl=POSITION_CALL_S,
-                      speech_text=self.wording(wording, pos=position))
+            event = self.emit('position', now, (f'현재 클래스 {int(position)}위입니다.', f'클래스 순위, {int(position)}위입니다.'), condition=('position', position), group='position', cooldown=15, ttl=POSITION_CALL_S,
+                              speech_text=self.wording(wording, pos=position))
+            if event is not None:
+                self.position_changed = False
 
     def _warnings(self, s, p, now):
         warning, old = num(s.get('engine_warnings')), num(p.get('engine_warnings'))
@@ -648,6 +743,8 @@ class RaceRadio:
                  condition=('quali_traffic', (sample.get('lap_number'), dict(result))))
 
     def valid(self, event, now):
+        if not event_allowed(event, self.alerts, self.wall_alerts):
+            return False
         if (self.last_sample is None or not 0 <= now - self.last_sample < .5 or
                 self.latest.get('on_track') is not True or self.latest.get('is_replay') is not False
                 or event['run_id'] != self.run_id or not event['not_before'] <= now < event['expires_at']):
@@ -734,6 +831,8 @@ class RaceRadio:
     def ack(self, identifier, now):
         event = self.get(identifier, now)
         if event:
+            if event['key'] == 'briefing':
+                self.briefing_delivered = True
             if event.get('group') == 'quali_traffic':
                 self.quali_traffic_lap = self.latest.get('lap_number')
             if event.get('car'):

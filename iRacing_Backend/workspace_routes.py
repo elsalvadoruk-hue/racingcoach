@@ -45,6 +45,7 @@ class WorkspaceRoutesServices:
     setup_exploration_candidate: Callable[..., Any]
     json_safe: Callable[..., Any]
     align_reference_grid: Callable[..., Any]
+    flush_race_timing: Callable[..., Any] | None = None
 
 
 def _filename(name):
@@ -210,6 +211,8 @@ def register_routes(app, services: WorkspaceRoutesServices):
                 telemetry = await asyncio.to_thread(_recording, services, body.get('filename'))
                 if route == 'race-positions':
                     from race_positions import read_history
+                    if services.flush_race_timing is not None:
+                        await asyncio.to_thread(services.flush_race_timing)
                     result = await asyncio.to_thread(read_history, telemetry)
                 elif route == 'file-laps':
                     result = services.file_laps_payload(telemetry)

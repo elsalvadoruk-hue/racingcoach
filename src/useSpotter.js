@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGame, useGameSettings } from './lib/gameContext';
 import { readGameItem, writeGameItem } from './lib/gameStorage';
 import { RESUMABLE, MAX_RESUMES, DEFAULT_RATE } from './voiceAudio';
 import { eventSound, playBeep } from './drillBeeps';
+import { readAlerts, voiceEventAllowed } from './lib/voiceAlerts';
 
 const SETTINGS_KEY = 'iracing.spotter.settings';
 export const SPOTTER_VOICES = [['Fenrir', '남성 · 기본'], ['Algieba', '남성'], ['Schedar', '남성'], ['Aoede', '여성']];
@@ -10,17 +11,20 @@ const DEFAULT_SETTINGS = { voice: 'Fenrir', formation_calls: 5, repeat_seconds: 
 const savedSettings = game => {
   try {
     const saved = JSON.parse(readGameItem(SETTINGS_KEY, game));
-    return { voice: SPOTTER_VOICES.some(([name]) => name === saved?.voice) ? saved.voice : 'Fenrir',
+    return { alerts: readAlerts('spotter', game, saved || {}), voice: SPOTTER_VOICES.some(([name]) => name === saved?.voice) ? saved.voice : 'Fenrir',
       formation_calls: Number.isInteger(saved?.formation_calls) && saved.formation_calls >= 0 && saved.formation_calls <= 8 ? saved.formation_calls : 5,
       repeat_seconds: [2, 3, 5].includes(saved?.repeat_seconds) ? saved.repeat_seconds : 3,
       clear_delay: [.15, .3, .5].includes(saved?.clear_delay) ? saved.clear_delay : .15,
       traffic_enabled: saved?.traffic_enabled !== false, pit_box_enabled: saved?.pit_box_enabled === true };
-  } catch { return DEFAULT_SETTINGS; }
+  } catch { return { ...DEFAULT_SETTINGS, alerts: readAlerts('spotter', game) }; }
 };
 
 const storeSettings = (game, value) => writeGameItem(SETTINGS_KEY, game, JSON.stringify(value));
 
-export default function useSpotter(apiBase, audioOutput, { busy = false, specialists = true, level = 'all', recordDelivery } = {}) {
+const occupied = (frame, alerts) => frame.occupied && alerts?.overlap !== false;
+export default function useSpotter(apiBase, audioOutput, { busy = false, specialists = true, level = 'all', wallAlerts: requestedWallAlerts, recordDelivery } = {}) {
+  const wallAlerts = useMemo(() => !requestedWallAlerts || specialists ? requestedWallAlerts
+    : Object.fromEntries(Object.keys(requestedWallAlerts).map(key => [key, false])), [requestedWallAlerts, specialists]);
   const { selectedGame, activeGame } = useGame();
   const { play, setPriorityGate, cancelPriority, audioBusy } = audioOutput;
   const { muted, volume, outputId } = audioOutput.applied || audioOutput;
@@ -42,8 +46,9 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const clips = useRef(null), epoch = useRef(0), mounted = useRef(true);
   const state = useRef({ active: false }), lastFrame = useRef(0), release = useRef(null);
   const standby = Boolean(audioOutput.standby);
-  const output = useRef({ play, muted, volume, busy, specialists, audioBusy, level, recordDelivery, standby });
-  output.current = { play, muted, volume, busy, specialists, audioBusy, level, recordDelivery, standby };
+  const output = useRef(null);
+  output.current = { play, muted, volume, busy, specialists, audioBusy, level, wallAlerts, recordDelivery, standby };
+  const alertRevision = useRef(0);
   const rendered = useRef(new Map()), lastView = useRef(0);
   const logEvent = useCallback((event, status, reason = '', droppedParts) => {
     const radio = state.current.radio || {};
@@ -54,6 +59,29 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       ...(Number.isInteger(omitted) && omitted >= 0 ? { dropped_parts: omitted } : {}) }, status, reason);
   }, []);
   const radioQueue = useRef(new Map()), heard = useRef(new Set()), rendering = useRef(false), processing = useRef(new Set()), lastCall = useRef(0), resumed = useRef(new Map());
+  const previousWallAlerts = useRef(wallAlerts);
+  useEffect(() => {
+    const wallChanged = previousWallAlerts.current !== wallAlerts;
+    previousWallAlerts.current = wallAlerts;
+    alertRevision.current += 1;
+    rendered.current.clear();
+    if (overlapPending.current && !voiceEventAllowed({ key: overlapPending.current.key }, applied.current.alerts, wallAlerts)) overlapPending.current = null;
+    for (const event of radioQueue.current.values()) {
+      if (!voiceEventAllowed(event, applied.current.alerts, wallAlerts)) {
+        heard.current.add(event.id); radioQueue.current.delete(event.id);
+      }
+    }
+    if (applied.current.alerts?.overlap === false) { cancelPriority?.(3); setPriorityGate?.(false); }
+    if (!wallChanged || !enabled || readyGame !== activeGame) return;
+    let cancelled = false;
+    fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...applied.current, wall_alerts: wallAlerts }) })
+      .then(response => { if (!response.ok) throw new Error('음성 안내 설정을 적용하지 못했습니다.'); })
+      .catch(failure => { if (!cancelled && mounted.current) setError(failure.message); });
+    return () => { cancelled = true; };
+    // Enabling and a game transition apply all values in their existing handlers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appliedSettings.alerts, wallAlerts]);
   const disable = useCallback(() => {
     epoch.current += 1;
     state.current = { active: false };
@@ -75,7 +103,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     try {
       if (!clips.current) {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(applied.current) });
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...applied.current, wall_alerts: output.current.wallAlerts }) });
         const manifest = await response.json();
         if (!response.ok) throw new Error(manifest.detail || '스포터 음성 준비 실패');
         if (!manifest.clips?.test?.audio_base64) throw new Error('스포터 음성을 확인하지 못했습니다.');
@@ -84,7 +112,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         setVoice((manifest.voice || 'Fenrir').replace('ko-KR-Chirp3-HD-', ''));
       } else {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT',
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(applied.current) });
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...applied.current, wall_alerts: output.current.wallAlerts }) });
         if (!response.ok) throw new Error('스포터 설정을 적용하지 못했습니다.');
         if (!mounted.current || ticket !== epoch.current) return;
       }
@@ -97,13 +125,14 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const next = { ...settings, ...patch }, ticket = epoch.current;
     setSettings(next);
     if (selectedGame !== activeGame) return;
+    applied.current = next;
     setSettingsBusy(true);
     try {
       if ('voice' in patch && patch.voice !== settings.voice) {
         // Another voice is another set of clips: fetched now when the spotter is on, at the next start otherwise.
         if (enabled) {
           const response = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
-            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...next, wall_alerts: output.current.wallAlerts }) });
           const manifest = await response.json();
           if (!response.ok || !manifest.clips?.test?.audio_base64) throw new Error(manifest.detail || '이 목소리의 스포터 음성을 준비하지 못했습니다.');
           if (!mounted.current || ticket !== epoch.current) return;
@@ -112,7 +141,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         setVoice(next.voice);
       } else if (enabled) {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT',
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...next, wall_alerts: output.current.wallAlerts }) });
         if (!response.ok) throw new Error('스포터 설정을 적용하지 못했습니다.');
       }
       if (!mounted.current || ticket !== epoch.current) return;
@@ -133,12 +162,12 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       setSettingsBusy(true);
       try {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT',
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(applied.current) });
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...applied.current, wall_alerts: output.current.wallAlerts }) });
         if (!response.ok) throw new Error('스포터 설정을 적용하지 못했습니다.');
         if (!mounted.current || ticket !== epoch.current) return;
         if (enabled) {
           const prepared = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
-            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(applied.current) });
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...applied.current, wall_alerts: output.current.wallAlerts }) });
           const manifest = await prepared.json();
           if (!prepared.ok || !manifest.clips?.test?.audio_base64) throw new Error('스포터 음성을 확인하지 못했습니다.');
           if (!mounted.current || ticket !== epoch.current) return;
@@ -154,6 +183,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeGame, apiBase, cancelPriority]);
   const announce = useCallback(async (key, valid, variant = null, onStatus) => {
+    if (key !== 'test' && !voiceEventAllowed({ key }, applied.current.alerts)) return false;
     const choices = clips.current?.[key]?.variants;
     const selected = choices?.length ? choices[(variant ?? 0) % choices.length] : clips.current?.[key];
     const audio = selected?.audio_base64;
@@ -202,12 +232,13 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const settings = output.current, current = state.current;
     // A standby tab neither renders nor acknowledges: the speaking tab owns every call.
     if (settings.standby) return;
-    if (!current.radio?.connected || current.occupied || Date.now() - lastFrame.current > 600) return;
+    if (!current.radio?.connected || occupied(current, applied.current.alerts) || Date.now() - lastFrame.current > 600) return;
     const events = [...radioQueue.current.values()].filter((event) => !heard.current.has(event.id)
       && !processing.current.has(event.id) && Date.now() < event.local_expires
+      && voiceEventAllowed(event, applied.current.alerts, settings.wallAlerts)
       // The corner drill's warm-up voice is part of a drill the driver started: always played.
-      && (event.key?.startsWith('drill_') || settings.level === 'all' || !['pace_detail', 'incident_coaching', 'corner_focus', 'straight_brief'].includes(event.key))
-      && (settings.specialists || event.engineer === 'spotter' || event.key?.startsWith('drill_')))
+      && (settings.wallAlerts || event.key?.startsWith('drill_') || settings.level === 'all' || !['pace_detail', 'incident_coaching', 'corner_focus', 'straight_brief'].includes(event.key))
+      && (settings.wallAlerts || settings.specialists || event.engineer === 'spotter' || event.key?.startsWith('drill_')))
       .sort((a, b) => b.priority - a.priority || a.serial - b.serial);
     const workloadFor = (e) => e.brief ? (state.current.radio?.brief_quiet ?? state.current.radio?.quiet) : state.current.radio?.quiet;
     // The server applies the driver's hold (no start while braking/steering or shortly before it).
@@ -218,9 +249,11 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       && ((!e.cached && !rendered.current.has(e.id)) || quietFor(e)) && Date.now() - lastCall.current > 1200));
     if (!event || (!event.cached && rendering.current)) return;
     const ticket = epoch.current;
+    const revision = alertRevision.current;
     const valid = () => mounted.current && ticket === epoch.current && state.current.radio?.connected
-      && state.current.radio.run_id === event.run_id && !state.current.occupied
-      && (output.current.specialists || event.engineer === 'spotter' || event.key?.startsWith('drill_'))
+      && revision === alertRevision.current && voiceEventAllowed(event, applied.current.alerts, output.current.wallAlerts)
+      && state.current.radio.run_id === event.run_id && !occupied(state.current, applied.current.alerts)
+      && (output.current.wallAlerts || output.current.specialists || event.engineer === 'spotter' || event.key?.startsWith('drill_'))
       && (event.priority >= 2 || !output.current.busy)
       && radioQueue.current.has(event.id) && Date.now() < event.local_expires && Date.now() - lastFrame.current < 600;
     processing.current.add(event.id);
@@ -255,7 +288,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         rate: event.key === 'formation_brief' ? DEFAULT_RATE : undefined,
         priority: event.priority, interrupt: event.priority >= 2,
         valid: () => valid() && (event.priority >= 2 || quietFor(event)),
-        workloadValid: event.key.startsWith('pit_box_') || event.key.startsWith('traffic_') ? valid : event.priority < 2 ? () => workloadFor(event) && !state.current.occupied
+        workloadValid: event.key.startsWith('pit_box_') || event.key.startsWith('traffic_') ? valid : event.priority < 2 ? () => workloadFor(event) && !occupied(state.current, applied.current.alerts)
           && Date.now() - lastFrame.current < 600 : undefined,
         // Nothing here is cut once it has started: pit-box distances and traffic calls live for a
         // second or two, less than their own sentence, and were never heard to the end.
@@ -352,9 +385,9 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         radioQueue.current = nextQueue;
         for (const id of rendered.current.keys()) if (!radioQueue.current.has(id)) rendered.current.delete(id);
         clearTimeout(release.current);
-        if (frame.occupied) setPriorityGate?.(true);
-        else if (previous.occupied || frame.events?.length) {
-          release.current = setTimeout(() => { if (!state.current.occupied) setPriorityGate?.(false); }, 700);
+        if (occupied(frame, applied.current.alerts)) setPriorityGate?.(true);
+        else if (occupied(previous, applied.current.alerts) || frame.events?.length) {
+          release.current = setTimeout(() => { if (!occupied(state.current, applied.current.alerts)) setPriorityGate?.(false); }, 700);
         } else setPriorityGate?.(false);
         pumpRadio();
         if (frame.drill) {
@@ -376,15 +409,17 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         lastSerial = Math.max(lastSerial, frame.serial ?? -1);
         // The newest authoritative state replaces pending/playing old calls.
         const event = events.at(-1);
-        if (!event || event.state !== frame.raw_state || event.state !== frame.state
+        if (!event || !voiceEventAllowed(event, applied.current.alerts) || event.state !== frame.raw_state || event.state !== frame.state
           || event.run_id !== frame.run_id || !(event.expires_in_ms > 0)) { pumpOverlap(); return; }
         const expires = now + Math.min(600, event.expires_in_ms);
         setView((current) => ({ ...current, last_text: clips.current?.[event.key]?.variants?.[event.variant ?? 0]?.text || clips.current?.[event.key]?.text || event.text, last_spoken_text: null, last_engineer: 'spotter' }));
-        overlapPending.current = { key: event.key, variant: event.variant, delivered: false, inFlight: false,
-          retryAt: 0, attempts: 0, valid: () => !stopped && ticket === epoch.current && state.current.active
+        const pending = { key: event.key, variant: event.variant, delivered: false, inFlight: false,
+          retryAt: 0, attempts: 0, valid: () => overlapPending.current === pending && !stopped && ticket === epoch.current && state.current.active
+            && voiceEventAllowed(event, applied.current.alerts)
             && state.current.state === event.state && state.current.run_id === event.run_id
             && (state.current.raw_state === event.state || (event.state > 1 && state.current.raw_state === 1))
             && (event.state > 1 || Date.now() < expires) && Date.now() - lastFrame.current < 600 };
+        overlapPending.current = pending;
         pumpOverlap();
       };
       socket.onclose = () => { if (!stopped) { lost(); retry = setTimeout(connect, 1000); } };

@@ -63,4 +63,8 @@ test('the top-bar toggle is a boxed button that lights up when on and asks befor
   fireEvent.click(screen.getByRole('button', { name: '동의하고 켜기' }));
   await waitFor(() => expect(screen.getByRole('button', { name: '로그 자동 보내기' })).toHaveAttribute('aria-pressed', 'true'));
   expect(screen.getByRole('button', { name: '로그 자동 보내기' })).toHaveClass('log-send-on');
+  expect(toggle).not.toHaveTextContent('로그 보내기');
+  fireEvent.click(toggle);
+  await waitFor(() => expect(toggle).toHaveAttribute('aria-pressed', 'false'));
+  expect(toggle).toHaveTextContent('로그 보내기');
 });

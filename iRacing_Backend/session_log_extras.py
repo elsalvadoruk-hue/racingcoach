@@ -54,11 +54,13 @@ def is_race(run):
     return str(run.get('session_type') or '').lower() == 'race'
 
 
-def nearby_cars(traffic_folder, timing_folder):
+def nearby_cars(traffic_folder, timing_folder, *, prepare=None):
     """Extra provider: the run's traffic and timing logs, packed without loss."""
     def provider(run):
         if not is_race(run):
             return Extra('nearby_cars', info={'reason': 'not_race'})
+        if prepare is not None:
+            prepare(run['run_id'])
         files, info = {}, {}
         for key, folder, pattern in (('traffic', traffic_folder, 'traffic-*.jsonl.gz'),
                                      ('timing', timing_folder, 'timing-*.jsonl.gz')):

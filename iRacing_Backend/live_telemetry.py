@@ -140,6 +140,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.history_lookup = None               # the last analysed session at a track, when the app provides it
         self._history_saved = None
         self._briefed = {}
+        self._brief_attempts = {}
         self._stint = {}
         self.lap_sectors = LapSectors()
         self.rival_sectors = RivalSectors()
@@ -181,6 +182,22 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         except OSError:
             logger.exception('Could not flush the final race timing samples')
 
+    def flush_race_timing(self, run_id=None):
+        """Synchronize the partial batch before a local export or graph read."""
+        with self.lock:
+            if run_id is None or self.timing_log.run_id == run_id:
+                self.timing_log.flush()
+
+    def radio_delivery(self, identifier, status, *, dropped_parts=0):
+        with self.lock:
+            receipt = self.radio.delivery(identifier, status, dropped_parts=dropped_parts)
+            if receipt and receipt.get('brief'):
+                commit = dict(receipt['brief'])
+                average = commit.pop('stint_average', None)
+                self._briefed.update(commit)
+                if average is not None and self._stint.get('average') == average:
+                    self._stint['average'] = None
+
     def ingest(self, identity, sample, race=None):
         """Also used by isolated tests. Never accepts telemetry through an HTTP endpoint."""
         sample = {key: (None if isinstance(value, float) and not math.isfinite(value) else value) for key, value in sample.items()}
@@ -221,6 +238,8 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.pit_loss.reset()
                 self._tyres_fitted = None
                 self._stint = {}
+                self._briefed = {}
+                self._brief_attempts = {}
                 self.run_id = str(uuid.uuid4())
                 self.identity = identity
             self.last_clock = session_time
@@ -312,6 +331,10 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
 
     def configure_spotter(self, settings):
         with self.lock:
+            self.radio.configure_alerts(settings.get('alerts'), settings.get('wall_alerts'))
+            if self.spotter.alerts != self.radio.alerts:
+                self.spotter.events.clear()
+                self.spotter.alerts = dict(self.radio.alerts)
             self.spotter.repeat_seconds = settings['repeat_seconds']
             if 'formation_calls' in settings:
                 self.formation.calls = settings['formation_calls']
@@ -392,7 +415,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self.overlay_preparation = None
             self.spotter.reset()
             self.alongside.reset()
-            self.radio.reset()
+            self.radio.reset(keep_run=True)
             self.drill.stop(reason)
             self.practice.reset(reason)
             self.overlay_laps.reset()
@@ -440,7 +463,8 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                                      parse_measure(weekend.get('TrackLength'), 'distance'))
                 with self.lock:
                     self.spotter.reset()
-                    self.radio.reset()
+                    self._flush_timing()
+                    self.radio.reset(keep_run=True)
                     self.drill.current = self.drill.prev = None
                     self.practice.pause()
                     self.overlay_laps.reset()

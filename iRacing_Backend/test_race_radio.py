@@ -309,6 +309,18 @@ class RadioRouteTests(unittest.TestCase):
             result = client.post(f'/api/live-coach/spotter/radio/{identifier}/render').json()
         self.assertEqual(result, {'event': None})
 
+    def test_disabling_during_render_discards_audio_and_cannot_revive_the_event(self):
+        identifier = self.emit()
+        def disable(*_, **__):
+            self.live.radio.configure_alerts({'position': False})
+            self.live.radio.configure_alerts({'position': True})
+            return base64.b64encode(b'ID3' + b'x' * 500).decode()
+        self.speech.synthesize.side_effect = disable
+        with TestClient(self.app) as client:
+            response = client.post(f'/api/live-coach/spotter/radio/{identifier}/render')
+            self.assertEqual(200, response.status_code)
+            self.assertEqual({'event': None}, response.json())
+
 
 if __name__ == '__main__':
     unittest.main()

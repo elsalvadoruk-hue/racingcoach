@@ -23,13 +23,16 @@ class StraightBriefTests(unittest.TestCase):
         self.live.pit_wall.paces = {i: deque([100.] * 3) for i in range(3)}
 
     def brief(self, seconds=0., **updates):
-        """Move the clock, feed one sample of a learned stretch and return the line queued for it."""
+        """Feed a learned stretch and complete playback of its queued report."""
         self.clock[0] += seconds
         s = sample(self.clock[0] - 1000., **{'workload_in_s': 12., **updates})
         self.live.radio.latest, self.live.radio.last_sample = dict(s), self.clock[0]
         self.live.radio.pending.clear()
         self.live._brief_straight(s, self.clock[0])
-        return next((e for e in self.live.radio.pending if e['key'] == 'straight_brief'), None)
+        event = next((e for e in self.live.radio.pending if e['key'] == 'straight_brief'), None)
+        if event:
+            self.live.radio_delivery(event['id'], 'completed')
+        return event
 
     def test_a_long_straight_gets_one_measured_line_and_lines_rotate(self):
         self.assertIsNone(self.brief(workload_in_s=5.))        # not a long straight

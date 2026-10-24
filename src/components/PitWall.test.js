@@ -65,7 +65,8 @@ test('editing an inactive game microphone preserves the active recorder and next
 test('three male voices, preferences and automatic reports use the common audio output', async () => {
   render(<LiveCoach apiBase="http://test" visible />);
   const panel = screen.getByRole('region', { name: '레이스 피트월' });
-  expect(within(panel).getByLabelText('자동 보고 범위')).toBeVisible();
+  expect(within(panel).getByRole('region', { name: '피트월 상황별 음성 안내' })).toBeVisible();
+  expect(within(panel).queryByLabelText('자동 보고 범위')).not.toBeInTheDocument();
   expect(within(panel).getByText(/Algenib/)).toBeVisible();
   expect(within(panel).getByText(/Charon/)).toBeVisible();
   expect(within(panel).getByText(/Orus/)).toBeVisible();

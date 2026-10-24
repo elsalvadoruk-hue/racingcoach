@@ -14,6 +14,7 @@ import { encodeWav, VoiceRecorder, RESUMABLE, MAX_RESUMES, DEFAULT_RATE, MULTIPA
 import useAudioOutput from '../useAudioOutput';
 import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import PitWall, { ENGINEERS, PIT_WALL_KEY, readPitPreferences } from './PitWall';
+import { voiceEventAllowed } from '../lib/voiceAlerts';
 import useSpotter from '../useSpotter';
 import SpotterPanel from './SpotterPanel';
 import useRadioDiagnostics from '../useRadioDiagnostics';
@@ -108,7 +109,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const blocked = useRef(null), busyAudio = useRef(null), reportResumes = useRef(new Map());
   blocked.current = audioOutput.isPriorityBlocked; busyAudio.current = audioOutput.audioBusy;
   const recorder = useRef(null), microphoneEpoch = useRef(0), state = useRef({ phase: 'idle', armed: false });
-  const spotter = useSpotter(apiBase, audioOutput, { busy: phase !== 'idle', specialists: wallEnabled && appliedWall.level !== 'off', level: appliedWall.level, recordDelivery });
+  const spotter = useSpotter(apiBase, audioOutput, { busy: phase !== 'idle', specialists: wallEnabled && appliedWall.level !== 'off', level: appliedWall.level, wallAlerts: appliedWall.alerts, recordDelivery });
   useEffect(() => { if (spotter.enabled) setWallEnabled(true); }, [spotter.enabled]);
   const turn = useRef(null), stopRequested = useRef(false), timeout = useRef(null);
   const mounted = useRef(true), options = useRef({ mode, speak }), saved = useRef(onSaved);
@@ -243,6 +244,9 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
         setWallView(response.pit_wall);
         if (!response.report || state.current.phase !== 'idle' || playing.current || isPriorityBlocked?.()) return;
         const { note, warning } = response.report;
+        const reportAllowed = () => voiceEventAllowed({ key: note.context?.report_key || '',
+          alert_categories: response.report.alert_categories }, {}, wallOptions.current.alerts);
+        if (!reportAllowed()) return;
         const audio = response.report.audio_parts?.length > 1 ? response.report.audio_parts : response.report.audio_base64;
         setNotes((current) => [note, ...current.filter((n) => n.id !== note.id)].slice(0, 200));
         if (warning) setError(warning);
@@ -269,7 +273,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
           let finish;
           const finished = new Promise((resolve) => { finish = resolve; });
           const started = await play(audio, mime, {
-            valid: () => !stopped && mounted.current && epoch === reportEpoch.current
+            valid: () => !stopped && mounted.current && epoch === reportEpoch.current && reportAllowed()
               && (urgent ? reportCurrent() : workloadValid()),
             workloadValid: urgent ? undefined : workloadValid,
             onStatus: (status, reason) => {

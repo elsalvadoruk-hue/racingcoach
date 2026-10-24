@@ -8,6 +8,7 @@ from radio_policy import report_window
 from radio_audio import CALLS, speech_fields
 from spotter_context import estimated_gap_s
 import radio_phrases
+from voice_alerts import category
 
 # LMU virtual energy calls. The unit (0-1 fraction, lmu_irsdk.virtual_energy_pct) was checked
 # against TinyPedal and LMU's own recordings; the user turned the calls on (2026-10-21).
@@ -483,6 +484,8 @@ class RaceEngineer:
                 spoken = ' '.join(sentences)
                 speech = {'speech_key': None, 'spoken_text': spoken, 'speech_text': spoken}
                 speech['speech_specs'] = [('phrase', name, dict(values)) for name, values in (phrase, *also)]
+                speech['part_categories'] = [category('brief:rejoin') if name == 'pit_rejoin' else category(key)
+                                             for name, _ in (phrase, *also)]
                 if len(sentences) > 1:
                     speech['speech_parts'] = sentences
                 text = text or spoken

@@ -1,7 +1,7 @@
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from './ui/card';
 import { Field, FieldGroup, FieldSet, FieldLegend, FieldLabel } from './ui/field';
 import { Separator } from './ui/separator';
-import { LiveHeader, LiveMetric } from './LivePrimitives';
+import { LiveHeader } from './LivePrimitives';
 import { Play, RadioTower, Square, Volume2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { NativeSelect } from './ui/native-select';
@@ -9,6 +9,9 @@ import { Input } from './ui/input';
 import { Switch } from './ui/switch';
 import React from 'react';
 import { readGameItem } from '../lib/gameStorage';
+import { useGame } from '../lib/gameContext';
+import { readAlerts } from '../lib/voiceAlerts';
+import VoiceAlertSettings from './VoiceAlertSettings';
 
 export const ENGINEERS = {
   coach: { label: '주행 코치', voice: 'Algenib', style: 'border-primary/30 bg-primary/10 text-primary', description: '코너 느낌과 다음 주행 행동' },
@@ -20,24 +23,21 @@ export const PIT_WALL_KEY = 'iracing.voice.pitWall.v1';
 export function readPitPreferences(storageKey = PIT_WALL_KEY, game = 'iracing') {
   try {
     const saved = JSON.parse(readGameItem(storageKey, game));
-    return { level: ['important', 'all', 'off'].includes(saved?.level) ? saved.level : 'important',
+    return { alerts: readAlerts('pitwall', game, saved || {}), level: saved?.level === 'all' ? 'all' : 'important',
       fuel_save_mode: ['off', 'finish', 'reserve'].includes(saved?.fuel_save_mode) ? saved.fuel_save_mode : 'finish',
       reserve_laps: typeof saved?.reserve_laps === 'number' && saved.reserve_laps >= 0 && saved.reserve_laps <= 3 ? saved.reserve_laps : .5,
       pit_loss_s: typeof saved?.pit_loss_s === 'number' && saved.pit_loss_s > 0 && saved.pit_loss_s <= 600 ? saved.pit_loss_s : null,
       pit_rule: ['CONCURRENT', 'SEQUENTIAL'].includes(saved?.pit_rule) ? saved.pit_rule : 'UNKNOWN',
       hold_enabled: saved?.hold_enabled !== false,
       hold_lead_s: typeof saved?.hold_lead_s === 'number' && saved.hold_lead_s >= 0 && saved.hold_lead_s <= 5 ? saved.hold_lead_s : 1 };
-  } catch { return { level: 'important', reserve_laps: .5, pit_loss_s: null, fuel_save_mode: 'finish', pit_rule: 'UNKNOWN', hold_enabled: true, hold_lead_s: 1 }; }
+  } catch { return { alerts: readAlerts('pitwall', game), level: 'important', reserve_laps: .5, pit_loss_s: null, fuel_save_mode: 'finish', pit_rule: 'UNKNOWN', hold_enabled: true, hold_lead_s: 1 }; }
 }
-const value = (number, unit = '', digits = 1) => number == null ? '수집 중' : `${Number(number).toFixed(digits)}${unit}`;
-
 export function PitWallSettings({ preferences, onChange, view, provider = 'iRacing', capabilities = {} }) {
   const lmu = provider === 'LMU';
   const unavailable = key => capabilities[key] === false;
   return (
     <FieldSet><FieldLegend>보고와 연료 전략</FieldLegend>
       <FieldGroup className="coach-live-fields">
-        <Field><FieldLabel htmlFor="wall-level">자동 보고 범위</FieldLabel><NativeSelect id="wall-level" aria-label="자동 보고 범위" value={preferences.level} onChange={e => onChange({ level: e.target.value })}><option value="important">중요한 것만</option><option value="all">일반 보고 포함</option><option value="off">{lmu ? '자동 보고 끄기' : '질문에만 답변'}</option></NativeSelect></Field>
         <Field><FieldLabel htmlFor="wall-fuel-mode">연료 절약 목표</FieldLabel><NativeSelect id="wall-fuel-mode" disabled={unavailable('fuel_strategy') || unavailable('finish_prediction')} aria-label="연료 절약 목표" value={preferences.fuel_save_mode || 'finish'} onChange={e => onChange({ fuel_save_mode: e.target.value })}><option value="finish">무급유 완주</option><option value="reserve">무급유 완주 + 안전 여유</option><option value="off">절약 피드백 끄기</option></NativeSelect></Field>
         <Field><FieldLabel htmlFor="wall-reserve">완주 여유 연료 · 랩</FieldLabel><Input id="wall-reserve" disabled={unavailable('fuel_strategy')} aria-label="완주 여유 연료 랩" type="number" min="0" max="3" step="0.1" value={preferences.reserve_laps} onChange={e => { const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n) && n >= 0 && n <= 3) onChange({ reserve_laps: n }); }} /></Field>
         <Field><FieldLabel htmlFor="wall-pit-loss">예상 피트 총손실 · 초</FieldLabel><Input id="wall-pit-loss" disabled={unavailable('pit_strategy')} aria-label="예상 피트 총손실 초" type="number" min="1" max="600" step="1" placeholder={view?.pit_loss_auto_s != null ? `자동 ${Math.round(view.pit_loss_auto_s)}초` : '진입 + 작업 + 복귀'} value={preferences.pit_loss_s ?? ''} onChange={e => { const n = Number(e.target.value); if (e.target.value === '') onChange({ pit_loss_s: null }); else if (Number.isFinite(n) && n > 0 && n <= 600) onChange({ pit_loss_s: n }); }} /></Field>
@@ -54,43 +54,19 @@ export function PitWallSettings({ preferences, onChange, view, provider = 'iRaci
 
 export default function PitWall({ enabled, onToggle, preferences, onChange, view, engineers, onTestVoice, busy, speaking, provider = 'iRacing', capabilities = {}, statusText }) {
   const lmu = provider === 'LMU';
-  const unsupported = (key, reason, content) => lmu && capabilities[key] === false ? `미지원 · ${reason}` : content;
+  const { selectedGame } = useGame();
   const roleDescription = key => !lmu ? ENGINEERS[key].description : ({
     coach: '코너 코칭은 기준 구간 연결 대기',
     race: '랩타임·클래스 순위·경기 시간',
     strategy: '현재 연료·관측 소비량·연료 경고',
   })[key];
-  const target = preferences.fuel_save_mode === 'off' ? '피드백 꺼짐' : view?.fuel_save_target_l_per_lap == null
-    ? view?.fuel_l_per_lap != null && view?.remaining_laps != null ? view?.fuel_save_feasible === false ? '절약으로는 불가 · 급유 필요' : '현재 계산상 절약 불필요' : '완주 거리·소비량 수집 중'
-    : value(view.fuel_save_target_l_per_lap, 'L/랩', 2);
   return <Card asChild><section aria-label="레이스 피트월" className="coach-panel">
     <LiveHeader title="레이스 피트월" topic="pitWall" icon={RadioTower} description="주행 코치 · 레이스 엔지니어 · 전략 엔지니어"
       action={<Button variant={enabled ? 'outline' : 'default'} aria-pressed={enabled} onClick={onToggle}>{enabled ? <Square data-icon="inline-start" /> : <Play data-icon="inline-start" />}{enabled ? '자동 보고 중지' : '자동 보고 시작'}</Button>} />
     <p role="status" className="text-sm text-muted-foreground">{statusText || (enabled && preferences.level !== 'off' ? speaking ? '엔지니어 발화 중 · 다음 보고는 순서대로 전달' : view?.active ? '자동 보고 활성 · 상황 변화를 확인 중' : '자동 보고 활성 · 진행 중인 Race 세션 대기' : lmu ? '자동 보고 꺼짐 · 질문 기능은 아직 지원하지 않습니다.' : '자동 보고 꺼짐 · 음성 또는 텍스트 질문은 사용 가능')}</p>
-    <div className="coach-pit-metrics">
-      {[['클래스 순위', value(view?.class_position, '위', 0)], ['예상 남은 거리', unsupported('finish_prediction', '종료 랩 확인 필요', view?.remaining_laps == null ? '수집 중' : `${Number(view.remaining_laps).toFixed(1)}랩${view?.finish_may_extend ? ' · 한 랩 늘 수 있음' : view?.finish_may_shorten ? ' · 한 랩 줄 수 있음' : ''}`)], ['다음 급유 · 여유분 포함', unsupported('finish_prediction', '완주 거리 미확인', view?.fuel_next_stop_full ? `가득${view?.stops_needed > 1 ? ` · 급유 약 ${view.stops_needed}번` : ''}` : value(view?.fuel_next_stop_l ?? view?.fuel_to_add_l, 'L'))], ['피트 복귀 예상', unsupported('rival_strategy', '상대 전략 미연결', view?.rejoin_class_position_estimate == null ? '조건 확인 필요' : `약 ${view.rejoin_class_position_estimate}위`)]].map(([label, content]) => <LiveMetric key={label} label={label} value={content} />)}
-    </div>
-    <Separator className="my-6" />
+    <details className="voice-basic-settings"><summary>연료·발화 설정</summary>
     <PitWallSettings preferences={preferences} onChange={onChange} view={view} provider={provider} capabilities={capabilities} />
-    <div className="coach-fuel-grid">
-      <LiveMetric label="현재 절약 목표 소비량" value={unsupported('finish_prediction', '완주 거리 미확인', target)} />
-      <LiveMetric label="최근 깨끗한 완료 랩 소비량" value={value(view?.fuel_last_lap?.use_l, 'L', 2)} note={view?.fuel_last_lap?.target_l != null ? `해당 랩 시작 목표 ${value(view.fuel_last_lap.target_l, 'L', 2)}` : '완료 랩에서 계산합니다.'} />
-      <LiveMetric label="무급유 완주 목표 · 여유분 없음" value={unsupported('finish_prediction', '완주 거리 미확인', value(view?.fuel_target_l_per_lap, 'L/랩', 2))} note={view?.fuel_save_feasible === false ? '절약으로는 닿지 않는 거리입니다.' : view?.fuel_save_pct > 0 ? `필요한 절약 ${view.fuel_save_pct}%` : '현재 관측 소비량 기준'} />
-      <LiveMetric label="완주까지 부족 · 여유분 제외" value={unsupported('finish_prediction', '완주 거리 미확인', value(view?.fuel_finish_shortfall_l, 'L'))} tone="warning" />
-      <LiveMetric label="설정한 안전 여유분" value={value(view?.fuel_reserve_l, 'L')} />
-      {lmu && <>
-        <LiveMetric label="버추얼 에너지" value={view?.energy_pct != null ? `${Number(view.energy_pct).toFixed(1)}%` : '측정 중'} note="스틴트 에너지 한도 중 남은 양" />
-        <LiveMetric label="에너지 랩당 사용" value={view?.energy_pct_per_lap != null ? `${Number(view.energy_pct_per_lap).toFixed(1)}%` : '측정 중'} note={view?.energy_target_pct_per_lap != null ? `완주 목표 랩당 ${Number(view.energy_target_pct_per_lap).toFixed(1)}%` : '깨끗한 랩 3개 이상에서 계산합니다.'} />
-        <LiveMetric label="에너지로 갈 수 있는 랩" value={view?.energy_laps != null ? `${Number(view.energy_laps).toFixed(1)}랩` : '측정 중'} note={view?.energy_limits_stint ? '이번 스틴트는 연료보다 에너지가 먼저 떨어집니다.' : undefined} tone={view?.energy_limits_stint ? 'warning' : undefined} />
-      </>}
-      <LiveMetric label="경기 종료 예상" value={view?.finish_total_laps != null ? `내 기준 ${view.finish_total_laps}랩` : lmu ? '종료 랩 확인 필요' : '시간제 레이스에서 계산'}
-        note={view?.finish_total_laps != null ? `선두가 종료 시각과 ${value(view?.finish_leader_margin_s, '초', 0)} · 내가 선두 피니시와 ${value(view?.finish_own_margin_s, '초', 0)} 차이${view?.fuel_next_stop_longer_l != null ? ` · 한 랩 늘면 급유 ${Math.ceil(view.fuel_next_stop_longer_l)}L` : ''}` : lmu ? '선두 종료 랩이 확인되기 전에는 완주 거리를 계산하지 않습니다.' : '선두가 시간 종료 뒤 처음 결승선을 지나면 끝납니다.'} />
-      <LiveMetric label="예상 피트 총손실" value={unsupported('pit_strategy', '피트 손실 학습 미연결', preferences.pit_loss_s != null ? `${preferences.pit_loss_s}초 · 직접 입력` : view?.pit_loss_auto_s != null ? `${Math.round(view.pit_loss_auto_s)}초 · 자동` : '자료 없음')}
-        note={view?.pit_transit_loss_s != null ? `이 트랙의 피트 통과 손실 ${Math.round(view.pit_transit_loss_s)}초${view?.pit_stall_estimate_s != null ? ` + 정차 ${Math.round(view.pit_stall_estimate_s)}초` : ''}` : lmu ? 'LMU 피트 통과 손실 학습은 아직 연결되지 않았습니다.' : '이 트랙에서 피트한 기록이 생기면 자동으로 채워집니다.'} />
-      <LiveMetric label="타이어 계획" value={unsupported('tyre_strategy', '장착 타이어·마모 미확인', ({ keep: '그대로', change: '교체' })[view?.tyre_decision] || '안내 없음')}
-        note={view?.tyre_wear_pct_per_lap != null ? `마모 랩당 ${Number(view.tyre_wear_pct_per_lap).toFixed(2)}%${view?.tyre_laps_on_set != null ? ` · 지금 세트 ${view.tyre_laps_on_set}랩${view?.tyre_stints_on_set ? ` (${view.tyre_stints_on_set}번째 스틴트)` : ''}` : ''}` : lmu ? '장착 타이어 종류를 추측하지 않습니다.' : '마모 기록이 생기면 표시됩니다.'} />
-      <LiveMetric label="보고 구간 학습" value={capabilities.speech_learning === false || capabilities.speech_policy === false ? '미지원' : view?.speech_learned_laps >= 2 ? '학습됨' : `${view?.speech_learned_laps || 0} / 2랩`} note={view?.speech_window_s != null ? `발화 여유 약 ${value(view.speech_window_s, '초')}` : lmu ? 'LMU는 현재 조작 부담으로 발화 시점을 판단합니다.' : '깨끗한 랩에서 발화 구간을 확인합니다.'} />
-    </div>
+    </details>
     <Separator className="my-6" />
     <h3 className="text-sm font-medium">엔지니어 목소리</h3>
     <div className="coach-role-grid">{Object.entries(ENGINEERS).map(([key, role]) => <Card key={key} className="bg-muted/40 shadow-none"><CardHeader className="p-4 pb-3"><CardTitle className="text-sm">{role.label}</CardTitle><CardDescription>{roleDescription(key)}</CardDescription></CardHeader><CardContent className="p-4 pt-0">
@@ -101,5 +77,6 @@ export default function PitWall({ enabled, onToggle, preferences, onChange, view
       <p>{lmu ? '일반 보고는 조작 부담이 적을 때 전달합니다. 좌우 스포터는 피트월보다 우선합니다. 피트월 설정은 LMU용으로 따로 저장됩니다.' : '일반 보고는 제동·조향 부담이 적을 때 전달합니다. 질문·녹음·옆 차량 접근 중에는 기다리고, 깃발은 스포터가 안내합니다. 페이지를 다시 열면 자동 보고를 켜세요.'}</p>
       <p>{lmu ? '연료·완주 거리·피트 전략은 현재 측정 가능한 항목만 표시합니다. 시간제 경기의 선두 종료 랩이나 상대 피트 계획을 알 수 없으면 추측하지 않습니다.' : '시간제 경기는 종료 뒤 마지막 랩까지 계산합니다. 연료 목표와 복귀 순위는 추정이며, 상대 피트 계획·추월·교통 변화는 반영하지 않습니다.'}</p>
     </div>
+    <VoiceAlertSettings scope="pitwall" game={selectedGame} alerts={preferences.alerts} onChange={alerts => onChange({ alerts, level: preferences.level === 'off' ? 'all' : preferences.level })} />
   </section></Card>;
 }

@@ -41,6 +41,7 @@ class TimingLog:
         self.path: Optional[Path] = None
         self.rows: list[str] = []
         self.last_time: Optional[float] = None
+        self.finish_marker = None
 
     def record(self, race: dict[str, Any], run_id: str, session_time: float, *, identity=None, wall_time=None) -> None:
         if self.folder is None or not race or str(race.get('session_type') or '').lower() != 'race':
@@ -48,6 +49,7 @@ class TimingLog:
         if run_id != self.run_id:
             self.flush()
             self.run_id, self.path, self.last_time = run_id, None, None
+            self.finish_marker = None
         if self.last_time is not None and session_time <= self.last_time:
             return
         self.last_time = session_time
@@ -63,7 +65,14 @@ class TimingLog:
         self.rows.append(json.dumps({'t': round(session_time, 3), 'state': race.get('state'), 'flags': race.get('flags'),
                                      'own': race.get('player_idx'), 'remain_s': _value('time_remaining_s', race.get('time_remaining_s')),
                                      'c': cars}, separators=(',', ':')))
-        if len(self.rows) >= FLUSH_ROWS:
+        state = race.get('state')
+        marker = None
+        if state in (5, 6):
+            own = next((car for car in race.get('cars') or [] if car.get('idx') == race.get('player_idx')), {})
+            marker = (state, _value('lap_completed', own.get('lap_completed')))
+        finished = marker is not None and marker != self.finish_marker
+        self.finish_marker = marker
+        if len(self.rows) >= FLUSH_ROWS or finished:
             self.flush()
 
     def flush(self) -> None:

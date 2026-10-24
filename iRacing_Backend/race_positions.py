@@ -52,6 +52,39 @@ def _append(series, at, overall, class_rank, gap=False):
         points.append(point)
 
 
+def _observe_lap(row, at, completed, overall, class_rank, gap=False):
+    """The first observed sample after a confirmed per-car lap increment.
+
+    The first counter value is a baseline, not a finish-line observation. After
+    a dropout, reset or skipped counter, wait for the next confirmed crossing.
+    """
+    value = _number(completed)
+    lap = int(value) if value is not None and value.is_integer() and value >= 0 else None
+    previous = row.get('_previous_lap')
+    points = row.setdefault('lap_points', [])
+    if gap or lap is None or class_rank is None or (previous is not None and lap not in (previous, previous + 1)):
+        row['_lap_broken'] = True
+    if (not gap and lap is not None and previous is not None and lap == previous + 1
+            and class_rank is not None and (not points or lap > points[-1][0])):
+        if points and row.get('_lap_broken'):
+            points.append([lap - .5, None, None, round(at, 3)])
+        points.append([lap, overall, class_rank, round(at, 3)])
+        row['_lap_broken'] = False
+    row['_previous_lap'] = lap
+
+
+def _lap_result(result):
+    if not result or result.get('status') != 'READY':
+        return result
+    rows = [{key: value for key, value in row.items() if not key.startswith('_') and key not in ('points', 'lap_points')}
+            | {'points': row['lap_points']} for row in result['series'] if row.get('lap_points')]
+    if not rows:
+        return _empty('스타트·피니시 라인 통과를 확인할 수 있는 완료 랩 기록이 없습니다.')
+    laps = [p[0] for row in rows for p in row['points'] if p[2] is not None]
+    return result | dict(series=rows, x_axis='lap', start_lap=min(laps), end_lap=max(laps),
+                         reason='각 차량의 완료 랩에서 관측한 순위입니다. 기록이 없는 랩은 연결하지 않습니다.')
+
+
 def _result(series, source, step):
     own = next((row for row in series.values() if row['own']), None)
     if own is None or own['class_id'] is None:
@@ -107,6 +140,8 @@ def _native(telemetry):
             nums = read('SessionNum')
             overall = read('CarIdxPosition') if positions else read('PlayerCarPosition')
             classes = read('CarIdxClassPosition') if positions else read('PlayerCarClassPosition')
+            laps = read('CarIdxLapCompleted') if positions else None
+            own_laps = read('LapCompleted') if laps is None else None
         finally:
             mapping._mmap.close()
     if times is None or overall is None:
@@ -148,8 +183,12 @@ def _native(telemetry):
         for i in selected:
             at = float(times[i])
             gap = previous is not None and (i != previous_index + 1 or at - previous > max(3., step * 2.5))
-            _append(row, at, _rank(float(overall[i, column])),
-                    _rank(float(classes[i, column])) if classes is not None and column < classes.shape[1] else None, gap)
+            overall_rank = _rank(float(overall[i, column]))
+            class_rank = _rank(float(classes[i, column])) if classes is not None and column < classes.shape[1] else None
+            completed = (float(laps[i, column]) if laps is not None and column < laps.shape[1]
+                         else float(own_laps[i, 0]) if idx == own and own_laps is not None else None)
+            _append(row, at, overall_rank, class_rank, gap)
+            _observe_lap(row, at, completed, overall_rank, class_rank, gap)
             previous, previous_index = at, i
         series[str(idx)] = row
     return _result(series, 'IBT', step)
@@ -203,8 +242,10 @@ def _old_run_matches(database, run_id, telemetry, clock):
 
 def _timing(telemetry, folder, database):
     from timing_log import FORMAT
+    if not folder.is_dir():
+        return None
     clock = _clock(telemetry)
-    if clock is None or not folder.is_dir():
+    if clock is None:
         return None
     anchor, first, last = clock
     candidates = []
@@ -212,7 +253,7 @@ def _timing(telemetry, folder, database):
         try:
             with gzip.open(path, 'rt', encoding='utf-8') as handle:
                 header = json.loads(handle.readline(262144))
-            if header.get('format') != FORMAT:
+            if not isinstance(header, dict) or header.get('format') != FORMAT:
                 continue
             recorded_anchor = _number(header.get('session_utc_offset'))
             matches = (_identity_matches(header.get('identity'), telemetry) and recorded_anchor is not None
@@ -227,16 +268,23 @@ def _timing(telemetry, folder, database):
         return None
     path, header = candidates[0]
     fields = header.get('fields') or []
+    entries, classes = header.get('entries', []), header.get('classes', {})
+    if (not isinstance(fields, list) or any(not isinstance(field, str) for field in fields)
+            or not isinstance(entries, list) or not isinstance(classes, dict)
+            or any(not isinstance(value, dict) for value in classes.values())):
+        raise ValueError('경기 타이밍 기록의 차량 정보 형식이 올바르지 않습니다.')
     if not {'idx', 'position'}.issubset(fields):
         return None
     series = {}
-    cars = {str(c['idx']): c for c in header.get('entries', []) if isinstance(c, dict) and 'idx' in c}
+    cars = {str(c['idx']): c for c in entries if isinstance(c, dict) and 'idx' in c}
     step = max(1., (last - first) / MAX_FRAMES)
     previous = None
     with gzip.open(path, 'rt', encoding='utf-8') as handle:
         next(handle, None)
         for line in handle:
             item = json.loads(line)
+            if not isinstance(item, dict):
+                raise ValueError('경기 타이밍 기록의 표본 형식이 올바르지 않습니다.')
             if item.get('format') == FORMAT:
                 return None  # Multiple runs inside one old file cannot be safely joined.
             at = _number(item.get('t'))
@@ -245,7 +293,12 @@ def _timing(telemetry, folder, database):
             if previous is not None and at - previous < step:
                 continue
             observed = {}
-            for values in (item.get('c') or [])[:MAX_CARS]:
+            recorded_cars = item.get('c') or []
+            if not isinstance(recorded_cars, list):
+                raise ValueError('경기 타이밍 기록의 차량 표본 형식이 올바르지 않습니다.')
+            for values in recorded_cars[:MAX_CARS]:
+                if not isinstance(values, list):
+                    raise ValueError('경기 타이밍 기록의 차량 표본 형식이 올바르지 않습니다.')
                 car = dict(zip(fields, values))
                 idx = car.get('idx')
                 if type(idx) is int and 0 <= idx < MAX_CARS and not cars.get(str(idx), {}).get('is_pace_car'):
@@ -259,14 +312,41 @@ def _timing(telemetry, folder, database):
                 if idx not in series:
                     entry = cars.get(idx, {})
                     cls = str(car.get('class_id')) if car.get('class_id') is not None else None
-                    label = (header.get('classes', {}).get(cls) or {}).get('name')
+                    label = (classes.get(cls) or {}).get('name')
                     series[idx] = _series(idx, cls, entry.get('number'), car.get('idx') == item.get('own'), label)
             gap = previous is not None and at - previous > max(3, step * 2.5)
             for idx, row in series.items():
                 car = observed.get(idx, {})
-                _append(row, at, _rank(car.get('position')), _rank(car.get('class_position')), gap)
+                overall, class_rank = _rank(car.get('position')), _rank(car.get('class_position'))
+                _append(row, at, overall, class_rank, gap)
+                _observe_lap(row, at, car.get('lap_completed'), overall, class_rank, gap)
             previous = at
     return _result(series, 'LOCAL_TIMING', step)
+
+
+def _supplement(native, timing):
+    """Keep IBT observations and add only verified local competitors, without interpolation."""
+    if not timing or timing.get('status') != 'READY':
+        return native
+    if not native or native.get('status') != 'READY':
+        return timing
+    own = next((row for row in native['series'] if row['own']), None)
+    logged_own = next((row for row in timing['series'] if row['own']), None)
+    if not own or not logged_own or (own['id'], own['class_id']) != (logged_own['id'], logged_own['class_id']):
+        return native
+    rows = {row['id']: row for row in native['series']}
+    supplemented = False
+    for row in timing['series']:
+        if row['class_id'] == own['class_id']:
+            existing = rows.get(row['id'])
+            if existing is None or (not existing.get('lap_points') and row.get('lap_points')):
+                rows[row['id']] = row
+                supplemented = True
+    if not supplemented:
+        return native
+    result = _result(rows, 'IBT+LOCAL_TIMING', max(native['sample_interval_s'], timing['sample_interval_s']))
+    result['reason'] += ' 다른 차량은 앱이 기록한 구간만 표시합니다.'
+    return result
 
 
 def read_history(telemetry, *, timing_folder=None, voice_database=None):
@@ -277,11 +357,19 @@ def read_history(telemetry, *, timing_folder=None, voice_database=None):
     if telemetry.path.with_name(telemetry.path.name + '.wal').exists():
         raise ValueError('아직 기록 중인 파일입니다. 기록이 종료된 뒤 다시 확인하세요.')
     result = _native(telemetry)
-    if not result or result.get('status') != 'READY':
+    if (not result or result.get('status') != 'READY'
+            or not {'CarIdxPosition', 'CarIdxClassPosition', 'CarIdxLapCompleted'}.issubset(telemetry.variables)):
         from app_settings import data_dir
         folder = Path(timing_folder) if timing_folder is not None else Path(os.getenv('IRACING_TIMING_LOG_DIR') or data_dir() / 'timing-logs')
         database = Path(voice_database) if voice_database is not None else Path(os.getenv('IRACING_VOICE_DB_PATH') or os.getenv('IRACING_TUNER_DB_PATH') or os.getenv('IRACING_MEMORY_DB_PATH') or data_dir() / 'iracing_tuner.sqlite3')
-        result = _timing(telemetry, folder, database) or result
+        try:
+            timing = _timing(telemetry, folder, database)
+        except (OSError, ValueError, EOFError):
+            # An optional damaged log must not hide a valid IBT's own history.
+            if not result or result.get('status') != 'READY':
+                raise
+            timing = None
+        result = _supplement(result, timing)
     if file_signature(telemetry.path) != before:
         raise ValueError('주행 기록이 바뀌었습니다. 파일을 다시 선택하세요.')
-    return result or _empty('순위 이력이 저장되지 않은 기록입니다. 앱을 켜고 기록한 다음 경기부터 확인할 수 있습니다.')
+    return _lap_result(result) or _empty('순위 이력이 저장되지 않은 기록입니다. 앱을 켜고 기록한 다음 경기부터 확인할 수 있습니다.')

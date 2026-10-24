@@ -299,7 +299,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "2.1.2"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "2.2.0"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -3905,7 +3905,8 @@ def session_log_extras(defer: bool = False):
         analyzer = TelemetryAnalyzer(repository.load(Path(path)))
         yield from handling_traces.groups(analyzer, summary, seed)
 
-    return (extras.nearby_cars(live_telemetry.traffic_log.folder, live_telemetry.timing_log.folder),
+    return (extras.nearby_cars(live_telemetry.traffic_log.folder, live_telemetry.timing_log.folder,
+                              prepare=live_telemetry.flush_race_timing),
             extras.own_drive(candidates, metadata_of, analyze, driving=lambda: getattr(live_telemetry, "_link", None) == "DRIVING",
                              defer=defer, app_version=APP_VERSION, traces=trace_groups))
 
@@ -4416,6 +4417,7 @@ _handlers = register_workspace_routes(app, WorkspaceRoutesServices(
     setup_exploration_candidate=lambda *args, **kwargs: setup_exploration_candidate(*args, **kwargs),
     json_safe=lambda *args, **kwargs: json_safe(*args, **kwargs),
     align_reference_grid=lambda *args, **kwargs: _on_distance_axis(*args, **kwargs),
+    flush_race_timing=lambda: live_telemetry.flush_race_timing(),
 ))
 workspace_request = _handlers.workspace_request
 # LMU recordings run through the same analysis workspace (lmu_routes).

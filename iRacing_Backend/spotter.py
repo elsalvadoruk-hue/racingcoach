@@ -76,6 +76,7 @@ class Spotter:
     WE_PASS_MPS = .5        # slower than us by more than this: we are passing it (measurement noise below)
 
     def __init__(self):
+        self.alerts = {}
         self.repeat_seconds, self.clear_delay = 3., .15
         self.serial = 0
         self.events = deque(maxlen=64)
@@ -175,6 +176,10 @@ class Spotter:
         return STATE_KEYS[new]
 
     def _emit(self, key, now):
+        from voice_alerts import category, allowed
+        self.last_call = now
+        if not allowed(category(key), self.alerts):
+            return
         self.serial += 1
         self.last_call = now
         variant = self.variants.get(key, 0) % len(VARIANTS[key])
@@ -183,17 +188,19 @@ class Spotter:
                             'state': self.confirmed, 'run_id': self.run_id, 'at': now})
 
     def view(self, now, after=0, connected=True):
+        from voice_alerts import category, allowed
         active = bool(connected and self.last_sample is not None
                       and 0 <= now - self.last_sample < self.FRESH_SECONDS and self.raw in SIDES)
         events = [{**e, 'expires_in_ms': max(0, round((self.EVENT_SECONDS - (now - e['at'])) * 1000))}
                   for e in self.events if active and e['serial'] > after
+                  and allowed(category(e['key']), self.alerts)
                   and e['state'] == self.raw == self.confirmed and e['run_id'] == self.run_id
                   and 0 <= now - e['at'] < self.EVENT_SECONDS]
         return {'active': active, 'state': self.confirmed if active else None,
                 'sent_at': now,
                 'raw_state': self.raw if active else None, 'run_id': self.run_id if active else None,
                 'occupied': active and (self.raw != 1 or self.confirmed in STATE_KEYS), 'serial': self.serial, 'events': events,
-                'current_key': STATE_KEYS.get(self.confirmed) if active and self.raw == self.confirmed else None,
+                'current_key': STATE_KEYS.get(self.confirmed) if active and self.raw == self.confirmed and self.alerts.get('overlap') is not False else None,
                 'state_label': PHRASES.get(STATE_KEYS.get(self.raw), '주변 차량 겹침 없음') if active else '차량 데이터 대기'}
 
 

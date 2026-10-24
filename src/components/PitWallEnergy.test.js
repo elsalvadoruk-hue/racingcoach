@@ -1,21 +1,19 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import PitWall, { readPitPreferences } from './PitWall';
+import { GameContext } from '../lib/gameContext';
 
 const props = { enabled: false, onToggle: () => {}, onChange: () => {}, onTestVoice: () => {}, engineers: {}, preferences: readPitPreferences() };
 
-test('LMU shows measured virtual energy, and "측정 중" until laps are measured', () => {
-  const { rerender } = render(<PitWall {...props} provider="LMU" view={{ energy_pct: 62.44, energy_pct_per_lap: 3.18, energy_laps: 19.6, energy_target_pct_per_lap: 2.9, energy_limits_stint: true }} />);
-  expect(screen.getByText('62.4%')).toBeInTheDocument();
-  expect(screen.getByText('3.2%')).toBeInTheDocument();
-  expect(screen.getByText('19.6랩')).toBeInTheDocument();
-  expect(screen.getByText(/완주 목표 랩당 2.9%/)).toBeInTheDocument();
-  expect(screen.getByText('이번 스틴트는 연료보다 에너지가 먼저 떨어집니다.')).toBeInTheDocument();
-  rerender(<PitWall {...props} provider="LMU" view={{ energy_pct: 80 }} />);
-  expect(screen.getAllByText('측정 중')).toHaveLength(2);
+test('LMU replaces calculation cards with individual energy choices', () => {
+  render(<GameContext.Provider value={{ selectedGame: 'lmu' }}><PitWall {...props} view={{ energy_pct: 62.44 }} /></GameContext.Provider>);
+  expect(screen.queryByText('62.4%')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('에너지 긴급·스틴트 한도')).toBeInTheDocument();
+  expect(screen.getByLabelText('랩별 에너지 사용 평가')).toBeInTheDocument();
+  expect(screen.queryByLabelText('앞·뒤 ARB 조절')).not.toBeInTheDocument();
 });
 
 test('iRacing has no energy fields at all', () => {
   render(<PitWall {...props} view={{ energy_pct: 62 }} />);
-  expect(screen.queryByText('버추얼 에너지')).not.toBeInTheDocument();
+  expect(screen.queryByText('LMU 버추얼 에너지')).not.toBeInTheDocument();
 });

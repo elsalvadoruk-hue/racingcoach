@@ -55,7 +55,7 @@ test('only explicit enable prepares clips and starts a dedicated websocket witho
   expect(global.fetch).not.toHaveBeenCalled(); expect(sockets).toHaveLength(0);
   await enable(result);
   expect(global.fetch).toHaveBeenCalledWith('http://test/api/live-coach/spotter/prepare', expect.objectContaining({ method: 'POST',
-    body: JSON.stringify({ voice: 'Fenrir', formation_calls: 5, repeat_seconds: 3, clear_delay: .15, traffic_enabled: true, pit_box_enabled: false }) }));
+    body: JSON.stringify(result.current.settings) }));
   expect(global.WebSocket).toHaveBeenCalledWith('ws://test/api/live-coach/spotter/events');
   expect(result.current.voice).toBe('Fenrir');
   send(sockets[0], frame(2, 'left'));
@@ -66,6 +66,46 @@ test('only explicit enable prepares clips and starts a dedicated websocket witho
   send(sockets[0], frame(3, 'right', { serial: 2, events: [{ serial: 2, key: 'right', state: 3, run_id: 'run', expires_in_ms: 500 }] }));
   expect(valid()).toBe(false);
   expect(result.current.view.last_text).toBe('right');
+});
+
+test('disabling overlap retains the visual picture and releases the priority gate without replaying a suppressed serial', async () => {
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  await act(async () => result.current.changeSettings({ alerts: { ...result.current.settings.alerts, overlap: false } }));
+  send(sockets[0], frame(2, 'left'));
+  expect(result.current.view.raw_state).toBe(2);
+  expect(audio.play).not.toHaveBeenCalled();
+  expect(audio.setPriorityGate).toHaveBeenLastCalledWith(false);
+  await act(async () => result.current.changeSettings({ alerts: { ...result.current.settings.alerts, overlap: true } }));
+  send(sockets[0], frame(2, 'left'));
+  expect(audio.play).not.toHaveBeenCalled();
+  expect(sockets).toHaveLength(1);
+});
+
+test('a setting change rejects in-flight multipart audio even after the switch is enabled again', async () => {
+  let wallAlerts = { battle: true }, finish;
+  const { result, rerender } = renderHook(() => useSpotter('http://test', audio, { wallAlerts }));
+  await enable(result);
+  global.fetch.mockImplementation(async (url) => url.endsWith('/render') ? new Promise(resolve => { finish = resolve; }) : { ok: true, json: async () => ({}) });
+  const event = { id: 'run:10', key: 'lap_time', engineer: 'spotter', priority: 2, serial: 10, run_id: 'run', expires_in_ms: 10000,
+    alert_categories: ['spotter.lap_time', 'pitwall.battle'] };
+  send(sockets[0], frame(1, null, { radio: { connected: true, run_id: 'run', quiet: true, events: [event] } }));
+  expect(finish).toBeDefined();
+  wallAlerts = { battle: false }; rerender();
+  wallAlerts = { battle: true }; rerender();
+  await act(async () => finish({ ok: true, json: async () => ({ event, audio_parts: ['lap-audio', 'pace-audio'] }) }));
+  expect(audio.play).not.toHaveBeenCalled();
+  expect(sockets).toHaveLength(1);
+});
+
+test('spotter-owned results remain selectable when pitwall is stopped, regardless of the speaking role', async () => {
+  const { result } = renderHook(() => useSpotter('http://test', audio, { specialists: false, wallAlerts: { battle: true } }));
+  await enable(result);
+  const event = { id:'run:11', key:'race_result', engineer:'race', priority:2, serial:11, run_id:'run', expires_in_ms:10000,
+    alert_categories:['spotter.result'] };
+  global.fetch.mockImplementation(async () => ({ok:true,json:async()=>({event,audio_base64:'result-audio'})}));
+  await act(async () => send(sockets[0], frame(1,null,{radio:{connected:true,run_id:'run',quiet:true,events:[event]}})));
+  expect(audio.play).toHaveBeenCalledWith('result-audio','audio/mpeg',expect.any(Object));
 });
 
 test('stale, mismatched and duplicate events cannot replay old directions', async () => {

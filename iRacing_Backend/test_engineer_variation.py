@@ -343,6 +343,9 @@ class RadioCallTests(unittest.TestCase):
     def test_places_lost_during_a_pit_stop_are_said_once_back_on_track(self):
         self.tick(class_position=3)
         self.wait(6)
+        heard = self.radio.emit('position', self.now, '현재 클래스 3위입니다.', cooldown=0)
+        self.radio.delivery(heard['id'], 'completed')
+        self.radio.ack(heard['id'], self.now)
         self.tick(on_pit_road=True)
         for place in (4, 6, 9):
             self.tick(class_position=place)
@@ -404,7 +407,8 @@ class RadioCallTests(unittest.TestCase):
         self.tick(class_position=4)
         self.wait(5.2)
         down = self.events()['position']
-        self.assertEqual((down['speech_text'], down['text']), ('클래스 4위로 내려갔습니다.', '현재 클래스 4위입니다.'))
+        self.assertEqual((down['speech_text'], down['text']), ('현재 클래스 4위입니다.', '현재 클래스 4위입니다.'))
+        self.radio.delivery(down['id'], 'completed')
         self.wait(16)
         self.tick(class_position=3)
         self.wait(5.2)

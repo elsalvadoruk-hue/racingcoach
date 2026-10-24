@@ -7,6 +7,7 @@ import radio_phrases
 from live_formation import history_facts, rating_goal, strength_of_field
 from live_sectors import place_name
 from radio_audio import shown_text
+from voice_alerts import category
 logger=logging.getLogger('iRacingLive')
 
 
@@ -205,16 +206,16 @@ class LiveReporting:
                     or int(sample.get('session_flags') or 0) & 0xC119
                     or any(self.radio.valid(event, now) for event in self.radio.pending)):
                 return
-            options, _ = self._brief_options(sample, ahead)
+            options, view = self._brief_options(sample, ahead)
             if self.radio.qualifying:
                 options = [o for o in options if o[0] in self.QUALI_BRIEFS]
             fits = lambda count: ahead >= self.BRIEF_STRAIGHT_S + self.BRIEF_SENTENCE_S * (count - 1)
-            options = [o for o in options if now - self._briefed.get(o[0], -math.inf) >= self.BRIEF_REPEAT_S.get(o[0], 0)
+            options = [o for o in options if self.radio.allows('brief:' + o[0]) and now - self._briefed.get(o[0], -math.inf) >= self.BRIEF_REPEAT_S.get(o[0], 0)
                        and fits(len(o[2][0]))]
             if not options:
                 return
-            # The line that has waited longest; in a tie the earlier one in the list (the lap's own review first).
-            name, role, groups = min(options, key=lambda o: self._briefed.get(o[0], -math.inf))
+            # Rotate attempts too, so a cancelled topic cannot starve the other measured reports.
+            name, role, groups = min(options, key=lambda o: self._brief_attempts.get(o[0], -math.inf))
             chosen = []
             for group in groups:   # as many whole groups as this straight has room for
                 if chosen and not fits(len(chosen) + len(group)):
@@ -222,27 +223,34 @@ class LiveReporting:
                 chosen.extend(group)
             parts = [part if isinstance(part, str) else self.radio.wording(part[0], **part[1]) for part in chosen]
             text = ' '.join(parts)
-            self.radio.emit('straight_brief', now, text, role=role, ttl=4, cooldown=0, group='straight_brief',
-                            condition=('straight', 5. + self.BRIEF_SENTENCE_S * (len(parts) - 1)), speech_text=text, speech_parts=parts)
-            self._briefed.update({'at': now, name: now})
+            event = self.radio.emit('straight_brief', now, text, role=role, ttl=4, cooldown=0, group='straight_brief',
+                            condition=('straight', 5. + self.BRIEF_SENTENCE_S * (len(parts) - 1)), speech_text=text, speech_parts=parts,
+                            alert_category=category('brief:' + name))
+            if event is None:
+                return
+            self._briefed['at'] = now  # attempts remain spaced out even when no driving window opens
+            self._brief_attempts[name] = now
+            receipt = {name: now}
             keys = [part[0] for part in chosen if not isinstance(part, str)]
             if name == 'corner':
-                self._briefed['corner_lap'] = self.corners.review['lap']
+                receipt['corner_lap'] = self.corners.review['lap']
             elif name == 'delta':
-                self._briefed['delta_lap'] = sample.get('lap_number')
+                receipt['delta_lap'] = sample.get('lap_number')
             elif name == 'theoretical':
-                self._briefed['theoretical_lap_s'] = self.lap_sectors.theoretical()['lap_s']
+                receipt['theoretical_lap_s'] = self.lap_sectors.theoretical()['lap_s']
             elif name == 'stint':
-                self._stint['average'] = None
+                receipt['stint_average'] = self._stint.get('average')
             elif name in ('stint_ahead', 'stint_behind'):
                 # Once for each stint of that car, unless the comparison turns round.
                 car = (self.pit_wall.view(sample) or {}).get(name.split('_')[1]) or {}
                 own_stint = self.pit_wall.view(sample).get('own_stint_laps')
                 if car and own_stint is not None and car.get('stint_laps') is not None:
-                    self._briefed[f'{name}_told'] = (car['idx'], car.get('stint_since'), own_stint - car['stint_laps'] > 0)
+                    receipt[f'{name}_told'] = (car['idx'], car.get('stint_since'), own_stint - car['stint_laps'] > 0)
             elif name.startswith('rival_'):
                 told = [key for key in keys if key.endswith(('_faster_at', '_slower_at'))]
-                self._briefed[f'{name}_told'] = 'faster' if told and told[-1].endswith('_faster_at') else 'slower'
+                receipt[f'{name}_told'] = 'faster' if told and told[-1].endswith('_faster_at') else 'slower'
+            self.radio.track_delivery(event, position=view.get('class_position') if name == 'position' else None,
+                                      brief=receipt)
         except Exception:
             if not self._briefed.get('failed'):
                 self._briefed['failed'] = True
