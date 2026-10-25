@@ -41,6 +41,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const [error, setError] = useState('');
   const [storedSettings, setSettings, storedApplied] = useGameSettings(savedSettings, storeSettings);
   const library = useVoiceLibrary(apiBase);
+  const trackSelection = library.trackSelection;
   const settings = cleanVoiceSettings(storedSettings), appliedSettings = cleanVoiceSettings(storedApplied);
   const applied = useRef(appliedSettings); applied.current = appliedSettings;
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -54,13 +55,14 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const choices = voiceSelections(applied.current);
     if (!Object.keys(choices).length) return undefined;
     const controller = new AbortController(); setSettingsBusy(true);
-    fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT', signal: controller.signal,
+    trackSelection(() => fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT', signal: controller.signal,
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...applied.current, voice_packs: choices }) })
       .then(async response => { const v = await response.json(); if (!response.ok) throw Error(typeof v.detail === 'string' ? v.detail : '저장한 목소리를 적용하지 못했습니다.'); })
+    )
       .catch(e => { if (!controller.signal.aborted) setError(e.message); })
       .finally(() => { if (!controller.signal.aborted) setSettingsBusy(false); });
     return () => controller.abort();
-  }, [apiBase]);
+  }, [apiBase, trackSelection]);
   const state = useRef({ active: false }), lastFrame = useRef(0), release = useRef(null);
   const standby = Boolean(audioOutput.standby);
   const output = useRef(null);
@@ -148,6 +150,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     try {
       if (('voice' in patch && patch.voice !== settings.voice) || ('custom_pack' in patch && patch.custom_pack !== settings.custom_pack) || ('voice_packs' in patch && JSON.stringify(patch.voice_packs) !== JSON.stringify(settings.voice_packs))) {
         // Another voice is another set of clips: fetched now when the spotter is on, at the next start otherwise.
+        await library.trackSelection(async () => {
         if (enabled) {
           const response = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
             headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...next, wall_alerts: output.current.wallAlerts }) });
@@ -161,6 +164,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
           const result = await response.json();
           if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : '목소리 선택을 적용하지 못했습니다.');
         }
+        });
         setVoice(next.custom_pack || next.voice);
       } else if (enabled) {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT',
@@ -184,8 +188,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const apply = async () => {
       setSettingsBusy(true);
       try {
-        const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT',
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...applied.current, wall_alerts: output.current.wallAlerts }) });
+        const response = await library.trackSelection(() => fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...applied.current, wall_alerts: output.current.wallAlerts }) }));
         if (!response.ok) throw new Error('스포터 설정을 적용하지 못했습니다.');
         if (!mounted.current || ticket !== epoch.current) return;
         if (enabled) {

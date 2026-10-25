@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowRight, CarFront, Headphones } from 'lucide-react';
 import { Button } from './ui/button';
 import { NativeSelect } from './ui/native-select';
 import React from 'react';
+import VoicePackProgress from './VoicePackProgress';
 import { SPOTTER_VOICES } from '../useSpotter';
 import { useGame } from '../lib/gameContext';
 import { spotterAlertPatch } from '../lib/voiceAlerts';
@@ -57,7 +58,9 @@ export default function SpotterPanel({ spotter, muted, volume, audioError, apiBa
     {enabled && hazard && <p role="status" className="mt-3 rounded-lg border border-warning bg-warning/10 p-3 text-sm text-warning">{hazard.kind === 'hazard_off_ahead' ? '전방 트랙 밖 차량' : '전방 매우 느린 차량'} · {hazard.name || '차량'} · 거리 환산 약 {hazard.gap_estimate_s}초</p>}
     {enabled && box && (box.ready || box.reason !== '피트 진입 대기') && <p className="mt-3 rounded-lg border border-success/30 p-3 text-sm text-success">{box.ready ? `피트박스까지 약 ${box.distance_estimate_m}m (추정)` : box.reason}{!box.enabled && ' · 음성 카운트다운 꺼짐'}</p>}
     {spotter.library?.view?.packs?.some(p => p.updates?.newCount > 0) && <p role="status" className="mt-3 text-sm text-warning">설치한 음성팩에 앱 업데이트 후 추가된 대본이 있습니다. 음성팩 설치·관리에서 추가 제작 목록을 저장하세요.</p>}
-    {settings && <details className="voice-basic-settings"><summary>목소리·반복 설정</summary><SpotterSettings library={spotter.library} settings={settings} onChange={changeSettings} disabled={preparing || settingsBusy} voiceDisabled={enabled || voiceLocked} /></details>}
+    {settings && <details className="voice-basic-settings"><summary>목소리·반복 설정{settingsBusy ? ' · 목소리 적용 중' : ''}</summary>
+      <VoicePackProgress operation={spotter.library?.operation?.kind === 'selection' ? spotter.library.operation : settingsBusy ? {kind:'selection',state:'RUNNING',stage:'applying',done:0} : null} />
+      <SpotterSettings library={spotter.library} settings={settings} onChange={changeSettings} disabled={preparing || settingsBusy} voiceDisabled={enabled || voiceLocked} /></details>}
     {settings && <CustomVoicePacks library={spotter.library} settings={settings} disabled={enabled || preparing || settingsBusy || voiceLocked} />}
     {enabled && <Button variant="outline" type="button" onClick={test} disabled={view?.occupied} className="mt-3  border  px-3 py-2 text-sm  disabled:opacity-40">스포터 목소리 듣기</Button>}
     {error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}

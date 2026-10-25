@@ -58,4 +58,40 @@ class Packs(unittest.TestCase):
             self.assertEqual(client.put('/api/live-coach/spotter/settings',json={'custom_pack':None}).status_code,200)
             self.assertIsNone(coach.custom_packs.selected)
             self.assertFalse(list(coach.custom_packs.root.glob('.upload-*')))
+    def test_install_status_is_responsive_and_duplicate_upload_is_rejected(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        from unittest.mock import patch
+        entered,release=threading.Event(),threading.Event()
+        def blocked(row,data):entered.set();self.assertTrue(release.wait(5))
+        coach=VoiceCoach(LiveTelemetry(),VoiceNoteStore(self.root/'progress.db'),speech=MagicMock())
+        coach.custom_packs=self.manager
+        app=FastAPI();register_voice_routes(app,coach,None,None,None,None)
+        data=self.pack().read_bytes()
+        with TestClient(app) as client,ThreadPoolExecutor(max_workers=1) as pool,patch('custom_voice_packs.decode_audio',side_effect=blocked):
+            future=pool.submit(client.post,'/api/live-coach/custom-voice-packs/upload?operation_id=progress-test',content=data)
+            try:
+                self.assertTrue(entered.wait(3))
+                view=client.get('/api/live-coach/custom-voice-packs/install-status').json()
+                self.assertEqual((view['id'],view['state'],view['stage']),('progress-test','RUNNING','checking'))
+                self.assertEqual(client.post('/api/live-coach/custom-voice-packs/upload',content=data).status_code,409)
+            finally:release.set()
+            self.assertEqual(future.result(timeout=5).status_code,200)
+            view=client.get('/api/live-coach/custom-voice-packs/install-status').json()
+            self.assertEqual(view['state'],'COMPLETE');self.assertEqual(view['imported']['key'],'test@1')
+            self.assertEqual(view['done'],1)
+            self.assertFalse(list(self.manager.root.glob('.upload-*')))
+    def test_bad_upload_is_visible_and_retry_selection_verifies_real_files(self):
+        coach=VoiceCoach(LiveTelemetry(),VoiceNoteStore(self.root/'retry.db'),speech=MagicMock());coach.custom_packs=self.manager
+        app=FastAPI();register_voice_routes(app,coach,None,None,None,None)
+        with TestClient(app) as client:
+            self.assertEqual(client.post('/api/live-coach/custom-voice-packs/upload',content=b'not a zip').status_code,422)
+            failed=client.get('/api/live-coach/custom-voice-packs/install-status').json()
+            self.assertEqual(failed['state'],'FAILED');self.assertTrue(failed['error'])
+            self.assertFalse(list(self.manager.root.glob('.upload-*')))
+            self.assertEqual(client.post('/api/live-coach/custom-voice-packs/import',json={'path':str(self.pack())}).status_code,200)
+            self.assertEqual(client.put('/api/live-coach/spotter/settings',json={'voice_packs':{'spotter':'test@1'}}).status_code,200)
+            selected=client.get('/api/live-coach/custom-voice-packs/install-status').json()
+            self.assertEqual((selected['state'],selected['kind'],selected['done']),('COMPLETE','selection',1))
+            coach.speech.synthesize.assert_not_called()
 if __name__=='__main__':unittest.main()

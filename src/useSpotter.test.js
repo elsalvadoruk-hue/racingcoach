@@ -3,7 +3,7 @@ import { GameContext } from './lib/gameContext';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import useSpotter from './useSpotter';
 // Radio timing tests isolate the independently tested installation-list request.
-jest.mock('./lib/voiceLibrary', () => ({ ...jest.requireActual('./lib/voiceLibrary'), __esModule: true, default: () => ({ revision: 0 }) }));
+jest.mock('./lib/voiceLibrary', () => ({ ...jest.requireActual('./lib/voiceLibrary'), __esModule: true, default: () => ({ revision: 0, trackSelection: action => action() }) }));
 import useAudioOutput from './useAudioOutput';
 import { playBeep } from './drillBeeps';
 

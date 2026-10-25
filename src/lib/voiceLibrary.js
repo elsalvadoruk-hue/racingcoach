@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { readGameItem, writeGameItem } from './gameStorage';
+import useVoicePackInstall from './voicePackInstall';
 
 export const VOICE_ROLES = { spotter: '스포터', coach: '주행 코치', race: '레이스 엔지니어', strategy: '전략 엔지니어' };
 const PACK = /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}@[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
@@ -37,8 +38,9 @@ export default function useVoiceLibrary(apiBase) {
     const r = await fetch(`${apiBase}/api/live-coach/custom-voice-packs/${path}`, { method: 'POST', headers: { 'Content-Type': upload ? 'application/zip' : 'application/json' }, body: upload || JSON.stringify(body) });
     const v = await r.json(); if (!r.ok) throw Error(typeof v.detail === 'string' ? v.detail : '음성팩 요청을 완료하지 못했습니다.'); return v;
   };
-  return { view, error, revision, reload,
-    install: async (path, file) => { if (file?.size > 2 * 1024 ** 3) throw Error('팩은 최대 2GiB입니다.'); const r = await post(file ? 'upload' : 'import', { path }, file); removed.delete(r.imported.key); await reload(); return r.imported; },
+  const installation = useVoicePackInstall(apiBase, reload, post);
+  return { view, error, revision, reload, operation: installation.operation, trackSelection: installation.trackSelection,
+    install: async (path, file) => { const r = await installation.install(path, file); removed.delete(r.imported.key); await reload(); return r.imported; },
     preview: key => post('preview', { key }), updates: key => post('updates', { key }),
     remove: async (key, deleteFiles) => { await post('remove', { key, delete: deleteFiles }); forget(key); await reload(); },
   };

@@ -817,15 +817,28 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
         except (OSError,ValueError,KeyError,TypeError) as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
 
     @router.post('/custom-voice-packs/import')
-    async def custom_pack_import(payload: dict):
+    async def custom_pack_import(payload: dict, operation_id: str | None = None):
         source=payload.get('path')
         if not isinstance(source,str) or not 1<=len(source)<=2000:
             raise HTTPException(status_code=422,detail='팩 ZIP 또는 폴더 경로를 입력하세요.')
+        from voice_pack_installation import InstallBusy
+        status=coach.custom_packs.installation
+        try:ident=status.begin(operation_id)
+        except InstallBusy as exc:raise HTTPException(status_code=409,detail=str(exc)) from exc
+        except ValueError as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
         try:
-            info=await asyncio.to_thread(coach.custom_packs.install,source)
+            info=await asyncio.to_thread(status.install,ident,coach.custom_packs,source)
             return {'imported':info,**coach.custom_packs.list()}
         except (OSError,ValueError,KeyError,zipfile.BadZipFile) as exc:
+            status.fail(ident,exc)
             raise HTTPException(status_code=422,detail=str(exc)) from exc
+        except Exception as exc:
+            status.fail(ident,'설치를 완료하지 못했습니다. 서버 로그를 확인하세요.')
+            raise
+
+    @router.get('/custom-voice-packs/install-status')
+    def custom_pack_install_status():
+        return coach.custom_packs.installation.snapshot()
 
     @router.post('/custom-voice-packs/preview')
     def custom_pack_preview(payload: dict):
@@ -836,21 +849,36 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             raise HTTPException(status_code=422,detail=str(exc)) from exc
 
     @router.post('/custom-voice-packs/upload')
-    async def custom_pack_upload(request: Request):
+    async def custom_pack_upload(request: Request, operation_id: str | None = None):
         from custom_voice_pack_format import MAX_BYTES
         import tempfile
-        coach.custom_packs.root.mkdir(parents=True,exist_ok=True)
+        from voice_pack_installation import InstallBusy
+        status=coach.custom_packs.installation
+        try:ident=status.begin(operation_id,'uploading')
+        except InstallBusy as exc:raise HTTPException(status_code=409,detail=str(exc)) from exc
+        except ValueError as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
         temp=None
         try:
+            coach.custom_packs.root.mkdir(parents=True,exist_ok=True)
+            content_length=request.headers.get('content-length','')
+            total=int(content_length) if content_length.isdigit() else None
+            if total is not None and total>MAX_BYTES:raise ValueError('팩은 최대 2 GiB입니다. WAV 구형 팩은 512 MiB입니다.')
             with tempfile.NamedTemporaryFile(dir=coach.custom_packs.root,suffix='.zip',prefix='.upload-',delete=False) as f:
                 temp=Path(f.name);size=0
                 async for chunk in request.stream():
                     size+=len(chunk)
                     if size>MAX_BYTES:raise ValueError('팩은 최대 2 GiB입니다. WAV 구형 팩은 512 MiB입니다.')
                     f.write(chunk)
-            return {'imported':await asyncio.to_thread(coach.custom_packs.install,temp),**coach.custom_packs.list()}
+                    status.update(ident,'uploading',done=size,total=total,bytes_done=size)
+            ready=temp;temp=None  # The worker owns cleanup even if this request disconnects.
+            info=await asyncio.to_thread(status.install,ident,coach.custom_packs,ready,True)
+            return {'imported':info,**coach.custom_packs.list()}
         except (OSError,ValueError,KeyError,zipfile.BadZipFile) as exc:
+            status.fail(ident,exc)
             raise HTTPException(status_code=422,detail=str(exc)) from exc
+        except Exception:
+            status.fail(ident,'파일 전송 또는 설치가 중단됐습니다. 연결 상태를 확인하고 다시 시도하세요.')
+            raise
         finally:
             if temp is not None:temp.unlink(missing_ok=True)
 
@@ -892,7 +920,14 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             else:selections.pop('spotter',None)
         if selections==coach.custom_packs.selections:return
         if coach.audio_preparation.running():raise ValueError('진행 중인 음성 미리 합성을 먼저 중단하세요.')
-        coach.custom_packs.configure(selections)
+        status=coach.custom_packs.installation
+        ident=status.begin(stage='applying',kind='selection')
+        try:
+            coach.custom_packs.configure(selections,lambda stage,**values:status.update(ident,stage,**values))
+            status.complete(ident,selections=dict(coach.custom_packs.selections))
+        except Exception as exc:
+            status.fail(ident,exc)
+            raise
         with coach.lock:coach.pending_report=None
 
     @router.post('/spotter/prepare')

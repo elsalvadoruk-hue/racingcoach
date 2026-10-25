@@ -36,3 +36,14 @@ test('preview does not select or apply a pack',async()=>{
   fireEvent.click(screen.getByRole('button',{name:'미리 듣기'}));expect(await screen.findByText('미리 듣기 문장')).toBeInTheDocument();
   expect(lib.preview).toHaveBeenCalledWith('coach@1');expect(lib.remove).not.toHaveBeenCalled();expect(lib.install).not.toHaveBeenCalled();
 });
+
+test('running installation shows real work and suppresses the empty-library instruction',()=>{
+  const lib=library();lib.view={packs:[]};lib.operation={kind:'install',state:'RUNNING',stage:'checking',done:1234,elapsed_s:61,observedAt:Date.now()};
+  render(<CustomVoicePacks library={lib} settings={{}}/>);
+  fireEvent.click(screen.getByText('음성팩 설치·관리 · 설치 중'));
+  expect(screen.getByRole('status',{name:'음성팩 설치 현황'})).toHaveTextContent('1,234개 확인');
+  expect(screen.getByRole('status',{name:'음성팩 설치 현황'})).toHaveTextContent('1분 1초');
+  expect(screen.getByRole('progressbar')).not.toHaveAttribute('value');
+  expect(screen.getByRole('button',{name:'ZIP 파일 설치'})).toBeDisabled();
+  expect(screen.queryByText('설치된 음성팩이 없습니다. ZIP 파일을 설치하세요.')).not.toBeInTheDocument();
+});

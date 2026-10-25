@@ -2,6 +2,7 @@
 import base64,hashlib,io,json,shutil,threading,uuid,zipfile
 from pathlib import Path
 from custom_voice_pack_format import inspect_pack,check_audio,audio_mime,validate_manifest,MAX_MANIFEST,ID,ROLES,binding_signature
+from voice_pack_installation import InstallProgress
 
 def decode_audio(row,data):
     if not row['audio'].endswith('.ogg'):return
@@ -21,7 +22,7 @@ def decode_audio(row,data):
 class MissingCustomAudio(ValueError):pass
 class CustomVoicePacks:
     def __init__(self,root):
-        self.root=Path(root);self.lock=threading.RLock();self.selections={};self.loaded={}
+        self.root=Path(root);self.lock=threading.RLock();self.selections={};self.loaded={};self.installation=InstallProgress()
     @property
     def selected(self):return next(iter(self.selections.values()),None)
     @property
@@ -38,23 +39,38 @@ class CustomVoicePacks:
         file=self._folder(key)/'manifest.json'
         if file.is_symlink() or file.stat().st_size>MAX_MANIFEST:raise ValueError('팩 설명 파일을 확인하세요.')
         return validate_manifest(json.loads(file.read_text(encoding='utf-8')))
-    def install(self,source):
+    def install(self,source,progress=None):
         source=Path(source)
+        report=progress or (lambda *args,**kwargs:None)
+        def counter(stage,total=None,decode=False):
+            done=size=0
+            def checked(row,data):
+                nonlocal done,size
+                if decode:decode_audio(row,data)
+                done+=1;size+=len(data)
+                report(stage,done=done,total=total,bytes_done=size)
+            return checked
         with self.lock:
-            m=inspect_pack(source,decode_audio);key=self._key(m);dest=self._folder(key)
+            report('checking',done=0)
+            m=inspect_pack(source,counter('checking',decode=True));key=self._key(m);dest=self._folder(key)
+            total=len({row['audio'] for row in m['entries']})
+            report('checking',name=m['name'],done=total,total=total)
             if dest.exists():
-                old=inspect_pack(dest)
+                report('verifying',done=0,total=total)
+                old=inspect_pack(dest,counter('verifying',total))
                 if old!=m:raise ValueError('동일 ID / 버전의 다른 팩이 있습니다. 새 버전으로 내보내세요.')
                 return self.describe(old)
             self.root.mkdir(parents=True,exist_ok=True);temp=self.root/('.import-'+uuid.uuid4().hex);temp.mkdir()
             try:
                 (temp/'manifest.json').write_text(json.dumps(m,ensure_ascii=False,indent=2),encoding='utf-8')
+                report('copying',done=0,total=total);copied=counter('copying',total)
                 with zipfile.ZipFile(source) if source.is_file() else _Directory(source) as container:
                     for r in m['entries']:
                         target=temp/r['audio'];target.parent.mkdir(parents=True,exist_ok=True)
                         if not target.exists():
-                            data=container.read(r['audio']);check_audio(r,data);target.write_bytes(data)
-                inspect_pack(temp);temp.rename(dest)
+                            data=container.read(r['audio']);check_audio(r,data);target.write_bytes(data);copied(r,data)
+                report('verifying',done=0,total=total)
+                inspect_pack(temp,counter('verifying',total));temp.rename(dest)
             finally:
                 if temp.exists():shutil.rmtree(temp)
             return self.describe(m)
@@ -79,13 +95,17 @@ class CustomVoicePacks:
         if not key:return self.configure({})
         m=self._manifest(key)
         return self.configure({r['role']:key for r in m['entries']})
-    def configure(self,selections):
+    def configure(self,selections,progress=None):
         with self.lock:
             if not isinstance(selections,dict) or set(selections)-ROLES or any(not isinstance(v,str) for v in selections.values()):raise ValueError('역할별 목소리 선택이 올바르지 않습니다.')
-            loaded={}
+            loaded={};done=0
+            def checked(row,data):
+                nonlocal done
+                done+=1
+                if progress:progress('checking',done=done)
             for key in set(selections.values()):
                 if key in self.loaded:loaded[key]=self.loaded[key];continue
-                m=inspect_pack(self._folder(key));loaded[key]=(m,{(r['role'],r['sourceText']):r for r in m['entries']})
+                m=inspect_pack(self._folder(key),checked if progress else None);loaded[key]=(m,{(r['role'],r['sourceText']):r for r in m['entries']})
             for role,key in selections.items():
                 if not any(r['role']==role for r in loaded[key][0]['entries']):raise ValueError('이 팩에는 선택한 역할의 음성이 없습니다.')
             self.loaded,self.selections=loaded,dict(selections)
