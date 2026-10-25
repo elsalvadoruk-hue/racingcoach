@@ -47,6 +47,10 @@ class OverlayCommands:
                 action, values = command.get("action"), command.get("values", {})
                 if action == 'display':
                     self.display(values)
+                elif action == 'studio':
+                    self.studio_config = values['config']
+                    self.studio_session = values['session']
+                    self.draw()
                 elif action == "settings":
                     if self.settings_fixed.get():
                         raise ValueError("설정이 고정되어 있습니다. 먼저 고정을 해제하세요.")

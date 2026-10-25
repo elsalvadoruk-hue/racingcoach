@@ -41,9 +41,9 @@ SCRIPTS = ("launch_app.py", "install_ui.py", "serve_ui.py", "prepare_radio_audio
            "find_python.bat",
            # The web settings tab and the driving overlay run this window process.
            "overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
-           "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py", "overlay_race_result.py")
+           "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py", "overlay_race_result.py", "overlay_studio_view.py", "overlay_preview.py")
 REQUIRED_OVERLAY_SCRIPTS = ("overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
-                            "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py", "overlay_race_result.py")
+                            "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py", "overlay_race_result.py", "overlay_studio_view.py", "overlay_preview.py")
 DATA_FILES = ("corner-definitions.json", "pit-knowledge.json")
 TEXT_SUFFIXES = {".py", ".js", ".json", ".md", ".txt", ".bat", ".ps1", ".html", ".css", ".map", ".svg", ".yml", ".yaml", ".cfg", ".ini"}
 

@@ -385,7 +385,8 @@ class WorkerTests(unittest.TestCase):
         controller.command = Mock()
         garage = live(on_track=False, on_pit_road=True, session_state=1)
         controller.sync(garage)
-        reference.observe.assert_called_once_with(garage, True)
+        reference.observe.assert_called_once_with({**garage, 'reference_source': 'auto',
+                                                 'graph_options': controller.content()['graph']}, True)
         controller._start_child.assert_not_called()
         controller.command.assert_not_called()
 

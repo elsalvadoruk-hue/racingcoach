@@ -23,9 +23,11 @@ test('production settings preserve actual native settings and all Garage61 colle
   const w = { refreshExternalReferences: jest.fn(), startGarage61Collection: jest.fn(), cancelGarage61Collection: jest.fn(),
     applyExternalReferences: jest.fn(), setSelectedExternalReferences: jest.fn(), toggleExternalReference: jest.fn(),
     externalReferenceStatus: { recommended_selection: ['one.csv', 'two.csv'], display_limit: 1 }, selectedExternalReferences: ['one.csv'] };
-  render(<UtilityWorkspace workspace="settings" runtime={runtime()} analysisWorkspace={w} />);
+  const onNavigate = jest.fn();
+  render(<UtilityWorkspace workspace="settings" runtime={runtime()} analysisWorkspace={w} onNavigate={onNavigate} />);
   expect(screen.getByTestId('settings-base')).toHaveTextContent('http://localhost:24158');
-  expect(screen.getByTestId('overlay-base')).toHaveTextContent('http://localhost:24158');
+  fireEvent.click(screen.getByRole('button', {name:'오버레이 설정 열기'}));
+  expect(onNavigate).toHaveBeenCalledWith('overlay');
   expect(screen.queryByRole('group', { name: /읽기 전용/ })).not.toBeInTheDocument();
   mockReferenceProps.onCollect(); mockReferenceProps.onForceCollect(); mockReferenceProps.onCancelCollect();
   mockReferenceProps.onAutoSelect(); mockReferenceProps.onApply();

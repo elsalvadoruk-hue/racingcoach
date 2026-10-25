@@ -18,6 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from overlay_preferences import PreferencesStore, default_path, settings_path, car_key
 from overlay_visibility import VisibilityStore, driving, preparing
 from overlay_cards import SessionCards
+from overlay_studio import StudioStore, CoachingDashboard, normalize, session_id
+from overlay_presentation import CoachingPresentation
+from overlay_preview import OverlayPreview
 
 ROOT = Path(__file__).resolve().parents[1]
 # The SDK reader produces live samples at 30 Hz.  Keeping the HUD transport at
@@ -47,6 +50,10 @@ class OverlayController:
         self.settings_target = None
         self.selected_game = 'iracing'
         self.car_name = None
+        self.studio = None
+        self.dashboard = CoachingDashboard()
+        self.presentation = CoachingPresentation()
+        self.preview_session = 'practice'
 
     def _target(self, identity):
         game = identity.get('game') or ('iracing' if car_key(identity) else self.selected_game)
@@ -62,6 +69,9 @@ class OverlayController:
             old_game = (self.settings_target or ('iracing', None))[0]
             self.settings_target = target
             self.cards.reset()
+            self.studio = None
+            self.dashboard.reset()
+            self.presentation.reset()
             if target[0] != old_game:
                 self.auto_show = None
         self.car_name = identity.get('car_name') or identity.get('car_path')
@@ -106,7 +116,48 @@ class OverlayController:
                     "visible": bool(running and self.current and self.current.get('visible')),
                     "reference": self.reference.status() if self.reference else None,
                     "practice": self.latest.get('practice'), "session": self.latest.get('session'),
+                    "content_readiness": {
+                        "connected": self.latest.get('connected') is True,
+                        "corner_count": len(self.latest['corner_zones'])
+                        if isinstance(self.latest.get('corner_zones'), list) else None},
+                    "studio": self.content(), "preview_session": self.preview_session,
+                    "diagnostics_version": 1,
+                    "automatic_version": 1,
                     "error": self.error or store.load_error}
+
+    def studio_store(self):
+        return StudioStore(self.store().path, (self.settings_target or (self.selected_game, None))[0])
+
+    def content(self):
+        if self.studio is None:
+            self.studio = self.studio_store().load()
+            self.preview_session = self.studio['manual_session']
+        return self.studio
+
+    def studio_status(self):
+        return {**self.status(), 'game_default': self.studio_store().load('game')}
+
+    def save_studio(self, config, scope, target):
+        with self.operation_lock:
+            current = self.status()['settings_target']
+            if target != {k: current[k] for k in ('game', 'car_key')}:
+                raise RuntimeError('차량 또는 게임이 바뀌었습니다. 설정을 다시 불러오세요.')
+            if scope == 'car' and not current['car_key']:
+                raise RuntimeError('현재 차량을 확인한 뒤 차량 설정을 저장하세요.')
+            self.studio_store().save(config, scope)
+            self.studio = self.studio_store().load()
+            self.preview_session = self.studio['manual_session']
+            if self.process is not None and self.process.poll() is None:
+                self.command('studio', {'config': self.content(), 'session': self.preview_session})
+            return self.studio_status()
+
+    def select_preview_session(self, session):
+        with self.operation_lock:
+            self.content()
+            self.preview_session = session
+            if self.preview and self.process is not None and self.process.poll() is None:
+                self.command('studio', {'config': self.content(), 'session': session})
+            return self.status()
 
     def _read(self, process):
         try:
@@ -168,6 +219,7 @@ class OverlayController:
                 raise RuntimeError('현재 선택한 게임에서 오버레이를 여세요.')
             self._select_target(self.latest.get('identity') or {})
             self._start_child()
+            self.command('studio', {'config': self.content(), 'session': self.preview_session})
             self.command('display', {'mode': 'preview', 'visible': True})
             self.preview = True
             return self.status()
@@ -205,6 +257,8 @@ class OverlayController:
             if self.preview and not running:
                 self.preview = False
             self._select_target(view.get('identity') or {})
+            config = self.content()
+            view = {**view, 'reference_source': config['source'], 'graph_options': config['graph']}
             running = self.process is not None and self.process.poll() is None
             show = self.enabled() and driving(view)
             if self.reference:
@@ -216,9 +270,14 @@ class OverlayController:
                 if self.reference:
                     view = self.reference.enrich(view)
                 card = self.cards.select(view)
+                dashboard = self.dashboard.build(view)
+                selected_session = dashboard['session'] if config['auto'] else config['manual_session']
+                dashboard['presentation'] = self.presentation.build(view, dashboard, config, selected_session)
                 self._start_child()
                 self.command('display', {'mode': 'live', 'visible': True,
                                         'run_id': view.get('run_id'), 'snapshot': view.get('snapshot'),
+                                        'studio': config, 'studio_session': selected_session,
+                                        'dashboard': dashboard,
                                         'points': view.get('points', []),
                                         'practice': view.get('practice'), 'session': view.get('session'),
                                         'reference_status': view.get('reference_status'),
@@ -230,6 +289,8 @@ class OverlayController:
                                         'comparison': view.get('comparison')})
             else:
                 self.cards.reset()
+                self.dashboard.reset()
+                self.presentation.reset()
                 if running and self.current and self.current.get('visible'):
                     self.command('display', {'mode': 'live', 'visible': False})
             return self.status()
@@ -346,8 +407,39 @@ class DemoBody(BaseModel):
     celebrate: bool = False
 
 
+class StudioBody(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    config: dict
+    scope: Literal['car', 'game']
+    target: dict
+
+
+class SessionBody(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    session: Literal['practice', 'qualify', 'race', 'formation']
+
+
+class PreviewAppearance(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    width: int = Field(100, ge=75, le=200)
+    height: int = Field(100, ge=75, le=200)
+    content_opacity: int = Field(100, ge=0, le=100)
+    background_opacity: int = Field(85, ge=0, le=100)
+
+
+class StudioPreviewBody(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    config: dict
+    session: Literal['practice', 'qualify', 'race', 'formation']
+    scene: Literal['start','before','after','lap','traffic','missing'] = 'start'
+    availability: Literal['none','personal','g61'] = 'personal'
+    appearance: PreviewAppearance = Field(default_factory=PreviewAppearance)
+    pixel_ratio: float = Field(1., ge=.5, le=3)
+
+
 def routes(controller, prefix="/api/overlay"):
     router = APIRouter(prefix=prefix)
+    preview = OverlayPreview()
 
     def call(game, operation, *args):
         try:
@@ -360,6 +452,33 @@ def routes(controller, prefix="/api/overlay"):
     @router.get("")
     def status(game: Literal['iracing', 'lmu'] = 'iracing'):
         return call(game, controller.status)
+
+    @router.get('/studio')
+    def studio_status(game: Literal['iracing', 'lmu'] = 'iracing'):
+        return call(game, controller.studio_status)
+
+    @router.post('/studio/render')
+    def studio_render(body: StudioPreviewBody, game: Literal['iracing','lmu'] = 'iracing'):
+        normalized = normalize(body.config, game)
+        if body.config != normalized:
+            raise HTTPException(status_code=422,detail='미리보기 설정의 항목과 범위를 확인하세요.')
+        try:
+            return preview.render({**body.model_dump(),'game':game})
+        except RuntimeError as error:
+            raise HTTPException(status_code=503,detail=str(error)) from error
+
+    @router.put('/studio')
+    def studio_save(body: StudioBody, game: Literal['iracing', 'lmu'] = 'iracing'):
+        normalized = normalize(body.config, game)
+        if 'selected' not in body.config:
+            normalized.pop('selected')  # Older screens can still save their four-item layout.
+        if body.config != normalized:
+            raise HTTPException(status_code=422, detail='표시 설정의 항목과 범위를 확인하세요.')
+        return call(game, controller.save_studio, body.config, body.scope, body.target)
+
+    @router.put('/studio/session')
+    def studio_session(body: SessionBody, game: Literal['iracing', 'lmu'] = 'iracing'):
+        return call(game, controller.select_preview_session, body.session)
 
     @router.post("/preview")
     def start(game: Literal['iracing', 'lmu'] = 'iracing'):

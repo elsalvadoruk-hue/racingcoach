@@ -8,10 +8,12 @@ if __package__:
     from .overlay_theme import COLORS
     from .overlay_demo_data import GOAL_BY_KEY
     from .overlay_trace import TraceRenderer
+    from .overlay_studio_view import coaching, draw_coaching, content, sample_graph
 else:
     from overlay_theme import COLORS
     from overlay_demo_data import GOAL_BY_KEY
     from overlay_trace import TraceRenderer
+    from overlay_studio_view import coaching, draw_coaching, content, sample_graph
 
 
 class OverlayRendering:
@@ -28,7 +30,9 @@ class OverlayRendering:
         return round(value * self.dpi_scale)
 
     def font(self, size, bold=False, mono=False):
-        return self.font_at_pixels(self.px(size), bold, mono)
+        config = content(self)[0]
+        factor = {'small': .9, 'large': 1.1}.get(config.get('size'), 1.) if config and not coaching(self) else 1.
+        return self.font_at_pixels(self.px(size*factor), bold, mono)
 
     def ui_font(self, size, bold=False, mono=False):
         return self.font_at_pixels(self.ui_px(size), bold, mono)
@@ -76,6 +80,17 @@ class OverlayRendering:
         self.notice_ticket = None
         self.race_ticket = None
         self.celebration_item = None
+        self.coaching_ticket = None
+        self.empty_trace_item = None
+        if coaching(self) and not (self.display_mode == 'live' and self.live_view.get('race_result')):
+            draw_coaching(self)
+            return
+        if content(self)[0] and not (self.display_mode == 'live' and self.live_view.get('race_result')):
+            self.live_labels = {
+                'reference': self.text(6, 146, '', size=10, color='muted', anchor='sw'),
+                'detail': self.text(384, 146, '', size=10, color='muted', anchor='se')}
+            self.draw_trace()
+            return
         if self.display_mode == 'live':
             if self.live_view.get('race_result'):
                 self.draw_race_result()
@@ -159,7 +174,7 @@ class OverlayRendering:
 
         reference = '속도 '+measured('speed_mps', 3.6, ' km/h')
         detail = f"브레이크 {measured('brake', 100, '%', 1)} · 가속 {measured('throttle', 100, '%', 1)}"
-        title = practice.get('title') or session.get('title') or ('Garage61 페달 비교' if comparison else '실시간 페달 입력')
+        title = practice.get('title') or session.get('title') or ('기준 입력 비교' if comparison else '실시간 페달 입력')
         if card:
             reference, detail = '', ''
         elif practice:
@@ -169,7 +184,8 @@ class OverlayRendering:
             elif practice.get('phase') == 'RESULT':
                 detail = '페이스 확인 전'
             elif comparison:
-                detail = ('내 랩' if status.get('source') == 'PERSONAL' else 'G61')+' · 기준 +2초'
+                future = (content(self)[0].get('graph') or {}).get('future', True)
+                detail = ('내 랩' if status.get('source') == 'PERSONAL' else 'G61')+(' · 기준 +2초' if future else ' · 기준 비교')
             elif status.get('state') == 'TASK_REFERENCE_MISSING':
                 detail = '과제 기준 확인 필요'
         elif comparison:
@@ -182,6 +198,9 @@ class OverlayRendering:
             else:
                 detail = '제동 시작 —'
         basic_feedback = not practice and not card and bool(comparison)
+        options = (content(self)[0].get('graph') or {})
+        if not options.get('feedback', True):
+            reference, detail = '', ''
         delta = (self.live_view.get('feedback') or {}).get('delta_s')
         delta_color = ('warning' if delta > .005 else 'success' if delta < -.005 else 'text') if type(delta) in (int, float) else 'muted'
         for name, value in (('title', self.fit_text(title, 290, 12, True)),
@@ -388,9 +407,12 @@ class OverlayRendering:
         """Present complete RGBA frames without color-key edge artifacts."""
         if self.display_mode=='live' and self.live_view.get('race_result'):
             return
-        if self.display_mode == 'live' and (self.live_view.get('practice') or {}).get('phase') == 'RESULT':
+        if coaching(self):
+            draw_coaching(self)
             return
-        basic = self.display_mode == 'live' and not self.live_view.get('practice')
+        if not content(self)[0] and self.display_mode == 'live' and (self.live_view.get('practice') or {}).get('phase') == 'RESULT':
+            return
+        basic = bool(content(self)[0]) or self.display_mode == 'live' and not self.live_view.get('practice')
         bounds = TraceRenderer.BASIC_BOUNDS if basic else TraceRenderer.BOUNDS
         top, height = (7, 116) if basic else (43, 80)
         goal = GOAL_BY_KEY[self.goal_key.get()]
@@ -403,12 +425,23 @@ class OverlayRendering:
             self.live_drawn = ticket
             comparison = self.live_view.get('comparison')
             rows = self.live_view.get('points', [])
-            steering = (self.live_view.get('practice') or {}).get('cause') == 'ROTATION_DEFICIT'
+            options = content(self)[0].get('graph') or {}
+            steering = options.get('steering', (self.live_view.get('practice') or {}).get('cause') == 'ROTATION_DEFICIT')
+            kwargs = {'steering': steering, 'basic': basic}
+            if options:
+                kwargs.update(options=options)
             if comparison:
-                frame, live = self.trace_renderer.comparison_frame(comparison, rows, self.scale_x, self.scale_y, COLORS, steering=steering, basic=basic)
+                frame, live = self.trace_renderer.comparison_frame(comparison, rows, self.scale_x, self.scale_y, COLORS, **kwargs)
             else:
-                frame, live = self.trace_renderer.live_frame(rows, self.scale_x, self.scale_y, COLORS, steering=steering, basic=basic)
+                frame, live = self.trace_renderer.live_frame(rows, self.scale_x, self.scale_y, COLORS, **kwargs)
             self.update_live_labels()
+        elif content(self)[0]:
+            options = content(self)[0].get('graph') or {}
+            comparison, rows = sample_graph(goal, position, options)
+            frame, live = self.trace_renderer.comparison_frame(comparison, rows, self.scale_x, self.scale_y, COLORS,
+                                                              steering=options.get('steering', False), basic=True, options=options)
+            self.canvas.itemconfigure(self.live_labels['reference'], text='가상 데이터 · 샘플')
+            self.canvas.itemconfigure(self.live_labels['detail'], text='C4 · −0.120초' if options.get('feedback') else '')
         else:
             frame, live = self.trace_renderer.frame(goal, position, self.scale_x, self.scale_y, COLORS)
         tag = ("trace",)
@@ -421,8 +454,12 @@ class OverlayRendering:
                 self.text(286, 27, "지금", size=8, color="muted", anchor="n", tags=tag)
         self.native.present_image(self.root, frame, (self.x(bounds[0]), self.y(bounds[1])),
                                   self.content_opacity.get(), self.hud_visible)
+        options = content(self)[0].get('graph') or {}
+        if options and not any(options.get(key) for key in ('throttle', 'brake', 'steering')) and self.empty_trace_item is None:
+            self.empty_trace_item = self.text(145, 60, '표시할 입력값을 선택하세요', size=12, color='muted', anchor='center')
         if basic:
-            self.draw_gear()
+            if (content(self)[0].get('graph') or {}).get('gear', True):
+                self.draw_gear()
             return
         for channel, x, label, value in (
             ("brake", 6, "제동", '미측정' if live['brake'] is None else f"{live['brake']*100:.0f}%"),

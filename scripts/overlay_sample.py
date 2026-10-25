@@ -257,6 +257,8 @@ class OverlaySample(OverlayRendering, OverlayCommands):
                          practice.get('result_id'), tuple(practice.get('states') or []),
                          None,  # Footer notices never change the graph's structure.
                          self.live_view.get('run_id'), (self.live_view.get('session') or {}).get('kind'))
+            if self.live_view.get('studio'):
+                structure = (*structure, json.dumps(self.live_view['studio'], sort_keys=True), self.live_view.get('studio_session'))
             result=self.live_view.get('race_result')
             if result:
                 structure=(*structure[:-1],(structure[-1],result.get('id')))

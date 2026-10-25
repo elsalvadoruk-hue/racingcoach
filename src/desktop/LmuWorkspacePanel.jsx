@@ -9,7 +9,6 @@ import { Switch } from '../components/ui/switch';
 import LmuSettingsPanel from './LmuSettingsPanel';
 import LmuComingSoon from './LmuComingSoon';
 import LmuHistoryPanel from './LmuHistoryPanel';
-import OverlaySettings from '../components/OverlaySettings';
 import { AudioPreferences } from './RuntimePreview';
 import { UserManual } from '../components/HelpGuide';
 import { LMU_SECTIONS } from '../components/helpLmu';
@@ -88,7 +87,7 @@ function LmuWorkspaceOverview({ workspace, onChooseSource, onNavigate, analysisW
       <LmuBridgePanel />
       <LmuSettingsPanel onChooseSource={onChooseSource} />
       {runtime?.supported !== false && <AudioPreferences runtime={runtime} />}
-      <Card id="overlay-settings"><CardHeader><CardTitle>오버레이</CardTitle><CardDescription>iRacing과 같은 HUD입니다. 주행 중 자동 표시와 크기·위치·불투명도를 설정합니다.</CardDescription></CardHeader><CardContent><OverlaySettings apiBase={API_BASE} /></CardContent></Card>
+      <Card id="overlay-settings"><CardHeader><CardTitle>오버레이</CardTitle><CardDescription>iRacing과 같은 HUD입니다. 주행 중 자동 표시와 크기·위치·불투명도를 설정합니다.</CardDescription></CardHeader><CardContent><Button variant="outline" onClick={() => onNavigate('overlay')}>오버레이 설정 열기</Button></CardContent></Card>
       <Card><CardHeader><CardTitle>화면 도움말</CardTitle></CardHeader><CardContent><Field orientation="horizontal"><FieldLabel htmlFor="desktop-hover-help">마우스 오버 설명</FieldLabel><Switch id="desktop-hover-help" checked={analysisWorkspace.hoverHelpEnabled !== false} onCheckedChange={analysisWorkspace.toggleHoverHelp} /></Field></CardContent></Card>
       <Card id="session-logs"><CardHeader><CardTitle>세션 로그</CardTitle><CardDescription>iRacing과 같은 기록입니다. 자동 보내기는 두 게임에 함께 적용됩니다.</CardDescription></CardHeader><CardContent><SessionLogExport apiBase={API_BASE} /></CardContent></Card>
       <Card id="app-update"><CardHeader><CardTitle>업데이트</CardTitle></CardHeader><CardContent><UpdateSettings apiBase={API_BASE} /></CardContent></Card>

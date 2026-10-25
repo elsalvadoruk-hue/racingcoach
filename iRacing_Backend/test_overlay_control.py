@@ -164,12 +164,15 @@ class VisibilityTests(unittest.TestCase):
         live.state = 'CONNECTED'
         for tick in range(301):
             live.samples.append({'wall_time': 90+tick/30, 'session_time': tick/30,
-                                 **active()['snapshot'], 'brake': .2, 'throttle': None})
+                                 **active()['snapshot'], 'brake': .2, 'throttle': None,
+                                 'workload_in_s': 12., 'corner_in_s': 14.})
         with patch.object(live, 'context', side_effect=AssertionError('heavy context')):
             view = live.overlay_state()
             self.assertTrue(driving(view))
             self.assertLessEqual(len(view['points']), 301)
             self.assertIsNone(view['points'][-1]['throttle'])
+            self.assertEqual(view['snapshot']['workload_in_s'], 12.)
+            self.assertEqual(view['snapshot']['corner_in_s'], 14.)
             now[0] = 101.
             self.assertFalse(live.overlay_state()['connected'])
             now[0] = 100.
@@ -183,6 +186,9 @@ class VisibilityTests(unittest.TestCase):
             controller.current = controller.current or {'settings': dict(DEFAULTS), 'visible': False}
 
         def command(action, values):
+            if action == 'studio':
+                self.assertIn('modes', values['config'])
+                return controller.status()
             self.assertEqual(action, 'display')
             controller.current.update(mode=values['mode'], visible=values['visible'])
             return controller.status()
@@ -204,6 +210,23 @@ class VisibilityTests(unittest.TestCase):
                 self.assertFalse(controller.current['visible'])
                 controller.sync(active())
                 self.assertTrue(controller.current['visible'])
+
+    def test_native_packets_use_frozen_straight_presentation_without_changing_measurements(self):
+        from test_overlay_automatic import AutomaticTests
+        with tempfile.TemporaryDirectory() as folder:
+            controller = OverlayController(Path(folder)/'overlay.json')
+            self.fake_child(controller)
+            for tick in range(150):
+                at = tick/30
+                controller.sync(AutomaticTests().view(at, .5 if at < 1 else 0, 0 if at < 1.6 else 1,
+                    steering_rad=0., car_left_right=0, session_flags=0, session_state=4))
+            packet = controller.command.call_args.args[1]
+            presented = packet['dashboard']['presentation']
+            self.assertEqual(presented['state'], 'holding')
+            self.assertEqual(presented['items']['live']['metric'], '0.60')
+            self.assertEqual(packet['dashboard']['items']['live']['metric'], '0.60')
+            controller.sync(AutomaticTests().view(5., .5, 0, steering_rad=.3, car_left_right=0, session_flags=0, session_state=4))
+            self.assertEqual(controller.command.call_args.args[1]['dashboard']['presentation']['state'], 'busy')
 
     def test_explicit_preview_overrides_driving_and_closing_returns_to_automatic(self):
         with tempfile.TemporaryDirectory() as folder:

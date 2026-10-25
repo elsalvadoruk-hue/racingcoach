@@ -16,6 +16,7 @@ import numpy as np
 import garage61_api_collector as g61
 from overlay_visibility import driving, preparing
 from overlay_feedback import corner_feedback
+from overlay_diagnostics import CornerDiagnostics
 from overlay_gear import gear_display, gear_value
 from overlay_timing import reference_clearance
 from overlay_reference_quality import check_csv, check_lap
@@ -31,13 +32,16 @@ def live_request(view):
     wet = None if wetness is None or not 1 <= wetness <= 7 else wetness > 1
     tire = finite(sample.get('tire_compound'))
     best = finite(sample.get('lap_best_s'))
+    game = identity.get('game') or 'iracing'
+    source = view.get('reference_source') or 'auto'
     return {
+        'game': game, 'identity': dict(identity), 'source': source,
         'car_platform_id': str(identity.get('car_id') or ''),
         'track_platform_id': str(identity.get('track_id') or ''),
         'car_name': identity.get('car_name'), 'track_name': identity.get('track_name'),
         'track_config': identity.get('track_config'), 'track_path': identity.get('track_path'),
         'current_best_lap_s': best if best is not None and best > 0 else None,
-        'pinned_reference': (view.get('practice') or {}).get('reference'),
+        'pinned_reference': (view.get('practice') or {}).get('reference') if game != 'lmu' and source == 'auto' else None,
         # PlayerTireCompound indexes the SDK's per-car DriverTires list. It is
         # not a Garage61 tireCompound code, even when the numbers happen to match.
         'sdk_tire_compound': int(tire) if tire is not None and tire >= 0 and tire.is_integer() else None,
@@ -185,6 +189,9 @@ class AlignedReference:
         return gear_value(float(gears[index]))
 
     def window(self, view):
+        options = view.get('graph_options') or {}
+        window = options.get('window', 10)
+        future = 2 if options.get('future', True) else 0
         sample = view.get('snapshot') or {}
         anchor, lap = self.at(sample.get('distance_pct')), finite(sample.get('lap_number'))
         if anchor is None or lap is None:
@@ -192,7 +199,7 @@ class AlignedReference:
         reference = []
         for shift in (-self.duration, 0, self.duration):
             offsets = self.times+shift-anchor
-            indices = np.flatnonzero(np.isfinite(offsets) & (offsets >= -10) & (offsets <= 2))
+            indices = np.flatnonzero(np.isfinite(offsets) & (offsets >= -window) & (offsets <= future))
             previous = None
             for index in indices:
                 row = {'offset': float(offsets[index]), 'break': bool(previous is None or index-previous > 1)}
@@ -243,9 +250,9 @@ class AlignedReference:
                     # must not reconnect to the new driving sequence.
                     if history is not None and not 0 < newer[0]-at <= .5:
                         break
-            if offset < -10:
+            if offset < -window:
                 break
-            if -10 <= offset <= .02:
+            if -window <= offset <= .02:
                 current.append({'offset': min(0, offset), 'brake': point.get('brake'),
                                 'throttle': point.get('throttle'), 'break': False,
                                 'steering_deg': abs(math.degrees(point['steering_rad'])) if finite(point.get('steering_rad')) is not None else None})
@@ -257,10 +264,11 @@ class AlignedReference:
 
 class OverlayReference:
     """One latest request, cancellable HTTP waits, no disk/network access in observe()."""
-    def __init__(self, reference_dir, loader, clock=time.monotonic, fetch=None, pinned_loader=None):
+    def __init__(self, reference_dir, loader, clock=time.monotonic, fetch=None, pinned_loader=None, personal_loader=None):
         self.directory = Path(reference_dir)
         self.loader, self.clock = loader, clock
         self.pinned_loader = pinned_loader
+        self.personal_loader = personal_loader
         self.fetch = fetch or self._fetch
         self.condition = threading.Condition()
         self.stopped = threading.Event()
@@ -269,6 +277,7 @@ class OverlayReference:
         self.last_lap = None
         self.pending = None
         self.reference = None
+        self.diagnostics = CornerDiagnostics()
         self.retry_at = 0
         self.network_retry_at = 0
         self.state = {'state': 'IDLE', 'message': '주행 대기'}
@@ -282,7 +291,7 @@ class OverlayReference:
         context = live_request(view)
         conditions = context['conditions']
         pinned = context.get('pinned_reference')
-        hard_key = (view.get('run_id'), context['car_platform_id'], context['track_platform_id'],
+        hard_key = (view.get('run_id'), context['game'], context['source'], context['car_platform_id'], context['track_platform_id'],
                     conditions['weather_declared_wet'], context['sdk_tire_compound'], json.dumps(pinned, sort_keys=True))
         def bucket(name, size):
             value = conditions.get(name)
@@ -297,17 +306,22 @@ class OverlayReference:
                 self.key = self.hard_key = self.pending = self.reference = None
                 self.state = {'state': 'UNAVAILABLE', 'message': '차량·트랙 확인 필요'}
                 return
-            if not pinned and conditions['weather_declared_wet'] is None:
+            if not pinned and conditions['weather_declared_wet'] is None and self.personal_loader is None:
                 self.key = self.hard_key = self.pending = self.reference = None
                 self.state = {'state': 'UNAVAILABLE', 'message': '노면 상태 확인 필요'}
                 return
             boundary = sample.get('lap_number') != self.last_lap
             self.last_lap = sample.get('lap_number')
             changed = hard_key != self.hard_key or (boundary and key != self.key)
+            suitable = True
+            if self.reference is not None and self.state.get('source') == 'PERSONAL' and not pinned:
+                from overlay_personal import compatible
+                suitable = compatible(context, self.reference.meta)
+                changed = changed or not suitable
             # Keep a suitable reference throughout a stint. A small fuel/temperature
             # bucket change must not clear or replace the graph at every lap boundary.
             if (self.reference is not None and hard_key == self.hard_key and driving(view)
-                    and sample.get('on_pit_road') is False and (pinned or matching(self.reference.meta, context))):
+                    and sample.get('on_pit_road') is False and (pinned or self.state.get('source') == 'PERSONAL' and suitable or matching(self.reference.meta, context))):
                 return
             if not changed and (self.reference is not None or self.clock() < self.retry_at):
                 return
@@ -315,7 +329,7 @@ class OverlayReference:
                 return
             self.key, self.hard_key = key, hard_key
             self.reference = None
-            self.state = {'state': 'LOADING', 'message': '과제 기준 읽는 중' if pinned else 'Garage61 기준 찾는 중'}
+            self.state = {'state': 'LOADING', 'message': '과제 기준 읽는 중' if pinned else '비교 기록 찾는 중'}
             self.retry_at = max(self.clock()+300, self.network_retry_at)
             self.pending = key, context, finite(view.get('track_length_m'))
             if self.worker is None:
@@ -330,9 +344,10 @@ class OverlayReference:
         if driving(view) and (view.get('snapshot') or {}).get('on_pit_road') is True:
             status = {**status, 'state': 'PIT', 'message': '피트로드 · 기준 준비 중' if reference is None else '피트로드 · 기준 준비됨'}
         return {**view, 'reference_status': status,
+                'diagnostics': self.diagnostics.build(reference, view),
                 'card_window': reference_clearance(reference, view) if reference and active else None,
                 'comparison': reference.window(view) if reference and active else None,
-                'feedback': corner_feedback(reference, view) if reference and active and not view.get('practice') else None,
+                'feedback': corner_feedback(reference, view) if reference and active else None,
                 'gear_comparison': gear_display((view.get('snapshot') or {}).get('gear') if driving(view) else None,
                                                reference.gear_at((view.get('snapshot') or {}).get('distance_pct')) if reference and active else None)}
 
@@ -399,7 +414,7 @@ class OverlayReference:
                          'similarity': candidate['similarity'], 'coverage': candidate['coverage'],
                          'condition_note': note, 'quality': quality}
 
-    def _prepare(self, key, context, length):
+    def _prepare_garage(self, key, context, length):
         if length is None or length <= 0:
             return None, {'state': 'UNAVAILABLE', 'message': '트랙 길이 확인 필요'}
         pinned = context.get('pinned_reference')
@@ -486,6 +501,29 @@ class OverlayReference:
                 continue
         return None, {'state': 'NO_MATCH', 'message': '비슷한 조건의 공개 기준 랩 없음'}
 
+    def _prepare(self, key, context, length):
+        if not self.personal_loader:
+            return self._prepare_garage(key, context, length)
+        if length is None or length <= 0:
+            return None, {'state': 'UNAVAILABLE', 'message': '트랙 길이 확인 필요'}
+        if context.get('game') == 'lmu' or context.get('source', 'auto') != 'auto':
+            context = {**context, 'pinned_reference': None}
+        pinned = context.get('pinned_reference')
+        if pinned:
+            return self._prepare_garage(key, context, length)
+        personal_only = context.get('game') == 'lmu' or context.get('source') == 'personal'
+        if not personal_only:
+            try:
+                result = self._prepare_garage(key, context, length)
+                if result[0] is not None or context.get('source') == 'garage61':
+                    return result
+            except (error.HTTPError, OSError, ValueError, KeyError):
+                if context.get('source') == 'garage61':
+                    raise
+        result = self.personal_loader(context, length, lambda: self._active(key))
+        return result or (None, {'state': 'NO_MATCH', 'source': 'PERSONAL',
+                                 'message': '조건에 맞는 내 기록 없음 · 내 입력만 표시합니다.'})
+
     def _work(self):
         while not self.stopped.is_set():
             with self.condition:
@@ -502,7 +540,7 @@ class OverlayReference:
                     ('ERROR', 'Garage61 연결 확인 필요'))
                 reference, status = None, {'state': state, 'message': message}
             except Exception:
-                reference, status = None, {'state': 'ERROR', 'message': 'Garage61 연결 확인 필요'}
+                reference, status = None, {'state': 'ERROR', 'message': '비교 기록 확인 필요'}
             with self.condition:
                 if self._active(key):
                     self.reference, self.state = reference, status

@@ -3,7 +3,6 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../co
 import { Button } from '../components/ui/button';
 import { UserManual } from '../components/HelpGuide';
 import AppSettings from '../components/AppSettings';
-import OverlaySettings from '../components/OverlaySettings';
 import SessionLogExport from '../components/SessionLogExport';
 import RadioAudioPrepare from '../components/RadioAudioPrepare';
 import { UpdateSettings } from '../components/UpdateCenter';
@@ -19,7 +18,7 @@ import { Field, FieldLabel } from '../components/ui/field';
 import { Switch } from '../components/ui/switch';
 import { GameSettingsNotice } from '../lib/gameContext';
 
-export const workspaceLabels = { summary: '주행 요약', corners: '코너 비교', laps: '랩 분석', expert: '전문가 보기', setup: '셋업 실험', live: '음성 코치', history: '기록', settings: '설정', guide: '사용 가이드' };
+export const workspaceLabels = { summary: '주행 요약', corners: '코너 비교', laps: '랩 분석', expert: '전문가 보기', setup: '셋업 실험', live: '음성 코치', overlay: '오버레이', history: '기록', settings: '설정', guide: '사용 가이드' };
 
 function ExistingPanel({ title, description, children, id, collapsible = false }) {
   if (collapsible) return <Card asChild id={id}><details>
@@ -70,7 +69,7 @@ export default function UtilityWorkspace({ workspace, runtime, onNavigate, analy
       <GameSettingsNotice />
       <ExistingPanel title="화면 도움말"><Field orientation="horizontal"><FieldLabel htmlFor="desktop-hover-help">마우스 오버 설명</FieldLabel><Switch id="desktop-hover-help" checked={w.hoverHelpEnabled !== false} onCheckedChange={w.toggleHoverHelp} /></Field></ExistingPanel>
       <AudioPreferences runtime={runtime} />
-      <ExistingPanel id="overlay-settings" title="오버레이" description="주행 중 자동 표시와 미리보기, 크기·위치·불투명도를 설정합니다."><OverlaySettings apiBase={apiBase} /></ExistingPanel>
+      <ExistingPanel id="overlay-settings" title="오버레이" description="주행 중 자동 표시와 미리보기, 크기·위치·불투명도를 설정합니다."><Button variant="outline" onClick={() => onNavigate('overlay')}>오버레이 설정 열기</Button></ExistingPanel>
       <ExistingPanel title="설치 설정"><AppSettings apiBase={apiBase} /></ExistingPanel>
       <ExistingPanel id="app-update" title="업데이트"><UpdateSettings apiBase={apiBase} /></ExistingPanel>
       <ExistingPanel id="external-reference" title="Garage61 기준·수집"><ReferenceSettings workspace={w} /></ExistingPanel>

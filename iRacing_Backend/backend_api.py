@@ -1139,11 +1139,11 @@ def cached_file_visibility(path: Path) -> Optional[dict[str, Any]]:
         return None
 
 
-def quick_file_visibility(path: Path) -> dict[str, Any]:
+def quick_file_visibility(path: Path, *, cache: bool = True) -> dict[str, Any]:
     """Read only the small IBT header/YAML; never scan sample channels for a list."""
     metadata: dict[str, Any] = {}
     try:
-        cached = cached_file_visibility(path)
+        cached = cached_file_visibility(path) if cache else None
         if cached is not None:
             return cached
         reader = IBTReader(path)
@@ -1173,10 +1173,11 @@ def quick_file_visibility(path: Path) -> dict[str, Any]:
         payload = {"eligible": False, "analyzable": False, "comparison_ready": False,
                    "status": "ERROR", "metadata_pending": False, "reason": str(exc), "error": str(exc),
                    "detected_laps": None, "complete_laps": None, "valid_laps": None, **metadata}
-    try:
-        _FILE_METADATA_INDEX.put(file_signature(path), payload)
-    except (OSError, sqlite3.Error):
-        logger.debug("File index update failed", exc_info=True)
+    if cache:
+        try:
+            _FILE_METADATA_INDEX.put(file_signature(path), payload)
+        except (OSError, sqlite3.Error):
+            logger.debug("File index update failed", exc_info=True)
     return payload
 
 
@@ -3859,8 +3860,21 @@ def load_task_overlay_reference(selection):
         raise ValueError('과제의 Garage61 비교 곡선이 없습니다.')
     return GridReference(grid, external['aggregate']['reference_median_time_s'])
 
+from overlay_personal import PersonalOverlayLoader
+
+
+def overlay_personal_paths(game):
+    if game == 'lmu':
+        from lmu_recordings import recordings
+        return recordings()
+    return _list_raw_ibt_files(None)
+
+
 overlay_controller = OverlayController(reference=OverlayReference(
-    EXTERNAL_REFERENCE_DIR, lambda path: Garage61ReferenceReader(path).parse(), pinned_loader=load_task_overlay_reference))
+    EXTERNAL_REFERENCE_DIR, lambda path: Garage61ReferenceReader(path).parse(), pinned_loader=load_task_overlay_reference,
+    personal_loader=PersonalOverlayLoader(overlay_personal_paths, lambda path: repository.load(path),
+                                         lambda path: repository.load(path).metadata if Path(path).suffix.lower() == '.duckdb'
+                                         else quick_file_visibility(path, cache=False), TelemetryAnalyzer)))
 
 
 def session_log_extras(defer: bool = False):

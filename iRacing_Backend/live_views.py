@@ -48,10 +48,11 @@ class LiveViews:
                     'distance_pct', 'lap_number', 'on_pit_road', 'lap_best_s',
                     'track_temp_c', 'air_temp_c', 'fuel_l', 'track_wetness', 'tire_compound', 'steering_rad', 'gear',
                     'speed_mps', 'session_flags', 'car_left_right', 'session_time_remaining_s',
-                    'pit_sv_fuel', 'pit_sv_flags')
+                    'workload_in_s', 'corner_in_s',
+                    'pit_sv_fuel', 'pit_sv_flags', 'incidents')
             points = []
             for point in reversed(self.samples):
-                if point['wall_time'] < now-10:
+                if point['wall_time'] < now-16:
                     break
                 if point.get('on_track') is not True or point.get('is_replay') is not False:
                     break
@@ -64,6 +65,7 @@ class LiveViews:
             practice = self.practice.view(latest, self.drill, self.run_id) if panel['kind'] in ('PRACTICE', 'LIVE') else None
             return {'connected': True, 'run_id': self.run_id, 'identity': dict(self.identity),
                     'race_result': self.race_result.view(),
+                    'damage_observation': self.damage.overlay_view(latest),
                     'control_recommendation': self.control_recommendations.view(),
                     # Samples are immutable after append. Keep the bounded history in
                     # this process so slow laps can fill a distance-aligned graph.

@@ -23,7 +23,7 @@ class TraceRenderer:
     def __init__(self):
         self.samples = {}
 
-    def live_frame(self, rows, scale_x, scale_y, colors, steering=False, basic=False):
+    def live_frame(self, rows, scale_x, scale_y, colors, steering=False, basic=False, options=None):
         """Render observed pedals only; unknown channels and gaps stay empty."""
         bounds = self.BASIC_BOUNDS if basic else self.BOUNDS
         origin_x, origin_y = round(bounds[0]*scale_x), round(bounds[1]*scale_y)
@@ -47,8 +47,12 @@ class TraceRenderer:
         for y in (43, 83, 123):
             draw.line((point(6, y), point(342, y)), fill=colors['border'], width=max(1, round(aa*min(scale_x, scale_y))))
         live = {channel: None for channel in ('brake', 'throttle')}
+        options = options or {}
+        window = options.get('window', 6)
         channels = [('throttle', 372), ('brake', 352)]+([('steering', None)] if steering else [])
         for channel, bar_x in channels:
+            if not options.get(channel, True):
+                continue
             segment, previous = [], None
 
             def paint():
@@ -60,10 +64,10 @@ class TraceRenderer:
                 if channel == 'steering':
                     angle = row.get('steering_rad')
                     value = min(1, abs(degrees(angle))/30) if known(angle) else None
-                if not known(value) or not 0 <= now-at <= 6 or (previous is not None and not 0 < at-previous <= .5):
+                if not known(value) or not 0 <= now-at <= window or (previous is not None and not 0 < at-previous <= .5):
                     paint(); segment = []
-                if known(value) and 0 <= now-at <= 6:
-                    segment.append(point(342-(now-at)/6*336, 123-max(0, min(1, value))*80))
+                if known(value) and 0 <= now-at <= window:
+                    segment.append(point(342-(now-at)/window*336, 123-max(0, min(1, value))*80))
                 previous = at
             paint()
             value = rows[-1].get(channel) if rows else None
@@ -89,7 +93,7 @@ class TraceRenderer:
             yield distance, stored[distance % len(stored)]
         yield end, inputs(goal, end, reference)
 
-    def comparison_frame(self, comparison, rows, scale_x, scale_y, colors, steering=False, basic=False):
+    def comparison_frame(self, comparison, rows, scale_x, scale_y, colors, steering=False, basic=False, options=None):
         """Real inputs and a real reference share a position-aligned reference time axis."""
         bounds = self.BASIC_BOUNDS if basic else self.BOUNDS
         origin_x, origin_y = round(bounds[0]*scale_x), round(bounds[1]*scale_y)
@@ -98,6 +102,9 @@ class TraceRenderer:
         frame = Image.new('RGBA', (width*aa, height*aa))
         draw = ImageDraw.Draw(frame)
         scale = min(scale_x, scale_y)
+        options = options or {}
+        window = options.get('window', 10)
+        future = 2 if options.get('future', True) else 0
         def point(x, y):
             if basic:
                 x = self.basic_x(x)
@@ -117,17 +124,18 @@ class TraceRenderer:
                 if channel == 'steering':
                     angle = row.get('steering_deg')
                     value = min(1, abs(angle)/30) if known(angle) else None
-                valid = known(offset) and -10 <= offset <= 2 and known(value) and 0 <= value <= 1
+                valid = known(offset) and -window <= offset <= future and known(value) and 0 <= value <= 1
                 if row.get('break') or not valid:
                     if len(segment) >= 2:
                         yield segment
                     segment = []
                 if valid:
-                    segment.append(point(6+(offset+10)/12*336, 123-value*80))
+                    segment.append(point(6+(offset+window)/(window+future)*336, 123-value*80))
             if len(segment) >= 2:
                 yield segment
 
         channels = ('throttle', 'brake', 'steering') if steering else ('throttle', 'brake')
+        channels = tuple(channel for channel in channels if options.get(channel, True))
         for channel in channels:
             for segment in segments(comparison['reference'], channel):
                 base_y = point(0, 123)[1]
@@ -137,12 +145,13 @@ class TraceRenderer:
             for segment in segments(comparison['current'], channel):
                 draw.line(segment, fill=colors[f'halo_{channel}'], width=thickness(4.2), joint='curve')
                 draw.line(segment, fill=colors[channel], width=thickness(2), joint='curve')
-        draw.line((point(286, 40), point(286, 123)), fill=colors['text'], width=thickness(1))
+        cursor = 6+window/(window+future)*336
+        draw.line((point(cursor, 40), point(cursor, 123)), fill=colors['text'], width=thickness(1))
         live = {}
         for channel, x in (('brake', 352), ('throttle', 372)):
             value = rows[-1].get(channel) if rows else None
             live[channel] = max(0, min(1, value)) if known(value) else None
-            if live[channel] is not None and live[channel] > 0:
+            if options.get(channel, True) and live[channel] is not None and live[channel] > 0:
                 draw.rectangle((point(x, 123-live[channel]*80), point(x+10, 123)), fill=colors[channel])
         if steering:
             angle = rows[-1].get('steering_rad') if rows else None

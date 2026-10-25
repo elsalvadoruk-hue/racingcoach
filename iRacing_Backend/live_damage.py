@@ -38,15 +38,21 @@ class DamageWatch:
         self.contact_lap = None
         self.previous = None
         self.result = None
+        self.observed = None  # HUD-only raw changes; audio thresholds and estimates stay separate.
+        self._observed_last = None
+        self._observed_after_lap = None
 
     def ingest(self, sample):
+        self._observe_continuity(sample)
         lap, speed = sample.get('lap_number'), finite(sample.get('speed_mps'))
         if sample.get('on_track') is not True or sample.get('is_replay') is not False or type(lap) not in (int, float) or speed is None:
             self.previous = None
+            self.observed = None
             return
         if sample.get('on_pit_road') is True:
             # A stop changes tyres, fuel and possibly the car: the stint before it is no reference any more.
             self.history.clear()
+            self.observed = None
             self.current, self.contact_lap, self.previous = None, None, None
             return
         if self.current is None or self.current['lap'] != lap:
@@ -71,6 +77,7 @@ class DamageWatch:
         signal = warnings is not None and old_warnings is not None and int(warnings) & 0x180 and not int(old_warnings) & 0x180
         if hit or signal:
             self.contact_lap, self.result = lap, None
+            self.observed = None
         self.previous = {'incidents': incidents, 'engine_warnings': warnings}
 
     def lap_done(self, seconds):
@@ -96,6 +103,15 @@ class DamageWatch:
         slower = seconds - statistics.median(times)
         vmax_loss = statistics.median(speeds) - entry['vmax']
         steer = abs(entry['steer'] - statistics.median(steers)) if steers and entry['steer'] is not None else None
+        eligible = [item for item in before if self._observed_after_lap is None or item['lap'] > self._observed_after_lap]
+        self.observed = None
+        if len(eligible) >= self.BASELINE_LAPS and (self._observed_after_lap is None or lap > self._observed_after_lap):
+            known_steers = [item['steer'] for item in eligible if item['steer'] is not None]
+            self.observed = {'lap': lap, 'baseline_laps': len(eligible),
+                             'time_delta_s': round(seconds-statistics.median(item['time'] for item in eligible), 3),
+                             'speed_delta_kph': round(entry['vmax']-statistics.median(item['vmax'] for item in eligible), 3),
+                             'steer_delta_deg': (round(entry['steer']-statistics.median(known_steers), 3)
+                                                 if len(known_steers) >= self.BASELINE_LAPS and entry['steer'] is not None else None)}
         slower = slower if slower >= self.SLOWER_S and seconds > max(times) + self.SLOWER_BEYOND_S else 0.
         vmax_loss = vmax_loss if vmax_loss >= self.VMAX_KPH and entry['vmax'] < min(speeds) - self.VMAX_BEYOND_KPH else 0.
         # Seconds a lap the damage costs: what the lap time shows, or what the lost top speed must cost.
@@ -108,6 +124,40 @@ class DamageWatch:
                 entry['steer'] > max(steers) + self.STEER_BEYOND_DEG or entry['steer'] < min(steers) - self.STEER_BEYOND_DEG) else 0.,
         }
         return self.result
+
+    def _observe_continuity(self, sample):
+        """Stricter HUD support, independent of the existing audio calculation."""
+        at, lap, pct = (finite(sample.get(key)) for key in ('session_time', 'lap_number', 'distance_pct'))
+        previous = self._observed_last
+        self._observed_last = (at, lap, pct)
+        supported = (at is not None and lap is not None and pct is not None and 0 <= pct < 1
+                     and sample.get('on_track') is True and sample.get('is_replay') is False
+                     and sample.get('on_pit_road') is False and finite(sample.get('speed_mps')) is not None
+                     and not int(sample.get('session_flags') or 0) & 0xC108
+                     and sample.get('car_left_right') not in (2, 3, 4, 5, 6))
+        if supported and previous and all(value is not None for value in previous):
+            old_at, old_lap, old_pct = previous
+            rollover = lap == old_lap+1 and old_pct > .9 and pct < .1
+            supported = 0 < at-old_at <= .5 and 0 <= pct-old_pct+(1 if rollover else 0) < .05 and (lap == old_lap or rollover)
+        else:
+            supported = False
+        if not supported:
+            # Exclude the partial/dirty lap and everything earlier from future HUD baselines.
+            if lap is not None:
+                self._observed_after_lap = lap
+            elif previous and previous[1] is not None:
+                self._observed_after_lap = previous[1]
+            self.observed = None
+
+    def overlay_view(self, sample):
+        """Read-only view. A signal is not proof of contact or a damaged part."""
+        if sample.get('on_track') is not True or sample.get('is_replay') is not False or sample.get('on_pit_road') is not False:
+            return {'measured': None, 'reason': '주행 중 깨끗한 랩에서 비교합니다.'}
+        known = finite(sample.get('incidents')) is not None or finite(sample.get('engine_warnings')) is not None
+        return {'measured': dict(self.observed) if self.observed else None,
+                'reason': ('이 게임의 접촉·손상 신호를 확인할 수 없습니다.' if not known else
+                           '접촉·손상 신호 이후 깨끗한 완료 랩을 기다립니다.' if self.contact_lap is not None else
+                           '접촉·손상 신호 전 2랩과 이후 깨끗한 1랩이 필요합니다.')}
 
 
 def damage_parts(result):

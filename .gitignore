@@ -70,6 +70,8 @@
 !/scripts/overlay_native.py
 !/scripts/overlay_theme.py
 !/scripts/overlay_rendering.py
+!/scripts/overlay_studio_view.py
+!/scripts/overlay_preview.py
 !/scripts/overlay_commands.py
 !/scripts/overlay_race_result.py
 !/scripts/assets/

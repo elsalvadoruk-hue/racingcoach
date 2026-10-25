@@ -2,14 +2,14 @@ const routes = {
   'practice-coach': ['summary', 'today-task-title'], 'closed-loop-coach': ['summary', 'next-run-title'], 'run-summary': ['summary'],
   'voice-review': ['history', 'voice-review'], 'voice-review-panel': ['history', 'voice-review-panel'],
   personalization: ['history', 'personalization'], memory: ['history', 'memory-history'],
-  'external-reference': ['settings', 'external-reference'], 'overlay-settings': ['settings', 'overlay-settings'],
+  'external-reference': ['settings', 'external-reference'], 'overlay-settings': ['overlay'],
   'live-coach': ['live'], 'user-guide': ['guide'], 'lap-overlay': ['expert'],
   'lap-time-use': ['laps'], 'lap-detail': ['laps'], 'corner-consistency': ['laps'],
   'corner-inputs': ['corners'], comparison: ['corners'], priorities: ['corners'], 'corner-table': ['corners'],
   'ab-manager': ['setup'], briefing: ['setup'], 'engineer-briefing': ['setup'], 'setup-decision': ['setup'],
   decision: ['setup'], 'tire-snapshot': ['setup'], 'ride-aero': ['setup'], 'damper-velocity': ['setup'], 'gg-diagram': ['setup'],
 };
-const workspaces = ['summary', 'corners', 'laps', 'expert', 'setup', 'live', 'history', 'settings', 'guide'];
+const workspaces = ['summary', 'corners', 'laps', 'expert', 'setup', 'live', 'overlay', 'history', 'settings', 'guide'];
 
 export function desktopDestination(section) {
   const id = typeof section === 'object' ? section?.id : section;
