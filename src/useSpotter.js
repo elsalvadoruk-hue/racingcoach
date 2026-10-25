@@ -3,6 +3,7 @@ import { useGame, useGameSettings } from './lib/gameContext';
 import { readGameItem, writeGameItem } from './lib/gameStorage';
 import { RESUMABLE, MAX_RESUMES, DEFAULT_RATE } from './voiceAudio';
 import { eventSound, playBeep } from './drillBeeps';
+import useVoiceLibrary, { cleanVoiceSettings, voiceSelections } from './lib/voiceLibrary';
 import { readAlerts, voiceEventAllowed } from './lib/voiceAlerts';
 
 const SETTINGS_KEY = 'iracing.spotter.settings';
@@ -12,6 +13,8 @@ const savedSettings = game => {
   try {
     const saved = JSON.parse(readGameItem(SETTINGS_KEY, game));
     return { alerts: readAlerts('spotter', game, saved || {}), voice: SPOTTER_VOICES.some(([name]) => name === saved?.voice) ? saved.voice : 'Fenrir',
+      voice_packs: saved?.voice_packs && typeof saved.voice_packs === 'object' && !Array.isArray(saved.voice_packs) ? voiceSelections(saved) : undefined,
+      custom_pack: typeof saved?.custom_pack === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,95}@[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/.test(saved.custom_pack) ? saved.custom_pack : null,
       formation_calls: Number.isInteger(saved?.formation_calls) && saved.formation_calls >= 0 && saved.formation_calls <= 8 ? saved.formation_calls : 5,
       repeat_seconds: [2, 3, 5].includes(saved?.repeat_seconds) ? saved.repeat_seconds : 3,
       clear_delay: [.15, .3, .5].includes(saved?.clear_delay) ? saved.clear_delay : .15,
@@ -36,14 +39,28 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const [preparing, setPreparing] = useState(false);
   const [view, setView] = useState(null);
   const [error, setError] = useState('');
-  const [settings, setSettings, appliedSettings] = useGameSettings(savedSettings, storeSettings);
+  const [storedSettings, setSettings, storedApplied] = useGameSettings(savedSettings, storeSettings);
+  const library = useVoiceLibrary(apiBase);
+  const settings = cleanVoiceSettings(storedSettings), appliedSettings = cleanVoiceSettings(storedApplied);
   const applied = useRef(appliedSettings); applied.current = appliedSettings;
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [readyGame, setReadyGame] = useState(activeGame);
   const previousGame = useRef(activeGame);
-  const [voice, setVoice] = useState(settings.voice);
+  const [voice, setVoice] = useState(settings.custom_pack || settings.voice);
   const overlapPending = useRef(null);
   const clips = useRef(null), epoch = useRef(0), mounted = useRef(true);
+  useEffect(() => { clips.current = null; }, [library.revision]);
+  useEffect(() => {
+    const choices = voiceSelections(applied.current);
+    if (!Object.keys(choices).length) return undefined;
+    const controller = new AbortController(); setSettingsBusy(true);
+    fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT', signal: controller.signal,
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...applied.current, voice_packs: choices }) })
+      .then(async response => { const v = await response.json(); if (!response.ok) throw Error(typeof v.detail === 'string' ? v.detail : '저장한 목소리를 적용하지 못했습니다.'); })
+      .catch(e => { if (!controller.signal.aborted) setError(e.message); })
+      .finally(() => { if (!controller.signal.aborted) setSettingsBusy(false); });
+    return () => controller.abort();
+  }, [apiBase]);
   const state = useRef({ active: false }), lastFrame = useRef(0), release = useRef(null);
   const standby = Boolean(audioOutput.standby);
   const output = useRef(null);
@@ -129,7 +146,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     applied.current = next;
     setSettingsBusy(true);
     try {
-      if ('voice' in patch && patch.voice !== settings.voice) {
+      if (('voice' in patch && patch.voice !== settings.voice) || ('custom_pack' in patch && patch.custom_pack !== settings.custom_pack) || ('voice_packs' in patch && JSON.stringify(patch.voice_packs) !== JSON.stringify(settings.voice_packs))) {
         // Another voice is another set of clips: fetched now when the spotter is on, at the next start otherwise.
         if (enabled) {
           const response = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
@@ -138,8 +155,13 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
           if (!response.ok || !manifest.clips?.test?.audio_base64) throw new Error(manifest.detail || '이 목소리의 스포터 음성을 준비하지 못했습니다.');
           if (!mounted.current || ticket !== epoch.current) return;
           clips.current = manifest.clips;
-        } else clips.current = null;
-        setVoice(next.voice);
+        } else {
+          clips.current = null;
+          const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...next, wall_alerts: output.current.wallAlerts }) });
+          const result = await response.json();
+          if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : '목소리 선택을 적용하지 못했습니다.');
+        }
+        setVoice(next.custom_pack || next.voice);
       } else if (enabled) {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT',
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...next, wall_alerts: output.current.wallAlerts }) });
@@ -174,7 +196,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
           if (!mounted.current || ticket !== epoch.current) return;
           clips.current = manifest.clips;
         }
-        if (mounted.current && ticket === epoch.current) { setVoice(applied.current.voice); setReadyGame(activeGame); setError(''); }
+        if (mounted.current && ticket === epoch.current) { setVoice(applied.current.custom_pack || applied.current.voice); setReadyGame(activeGame); setError(''); }
       } catch (failure) {
         if (mounted.current && ticket === epoch.current) { setError(failure.message); setEnabled(false); }
       } finally { if (mounted.current && ticket === epoch.current) { setSettingsBusy(false); setPreparing(false); } }
@@ -448,5 +470,5 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     return () => window.removeEventListener('beforeunload', ask);
   }, [enabled, readyGame, activeGame]);
 
-  return { enabled, preparing, view, error, voice, settings, settingsBusy, changeSettings, toggle: enable, test };
+  return { enabled, preparing, view, error, voice, settings, settingsBusy, library, changeSettings, toggle: enable, test };
 }

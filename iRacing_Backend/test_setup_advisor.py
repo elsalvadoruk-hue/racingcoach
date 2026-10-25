@@ -256,7 +256,7 @@ class DeliveryTests(unittest.TestCase):
             path=cache.path('coach',event['speech_text'])
             coach=SimpleNamespace(live=SimpleNamespace(lock=threading.RLock(),clock=lambda:1.,
                 radio=SimpleNamespace(get=lambda *args:event)),fixed_audio=cache,
-                speech=speech,radio_audio_mode=lambda e:(cache.cached('coach',e['speech_text']),False),cloud_lock=asyncio.Lock())
+                speech=speech,custom_packs=SimpleNamespace(has_selection=lambda role:False),radio_audio_mode=lambda e:(cache.cached('coach',e['speech_text']),False),cloud_lock=asyncio.Lock())
             app=FastAPI()
             with patch.object(voice_coach,'SpotterAudio'):
                 voice_coach.register_voice_routes(app,coach,None,None,None,None)

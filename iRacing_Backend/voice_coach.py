@@ -5,6 +5,7 @@ import asyncio
 import base64
 import contextlib
 from collections import OrderedDict
+from pathlib import Path
 import importlib.util
 import io
 import json
@@ -16,9 +17,10 @@ import threading
 import time
 import uuid
 import wave
+import zipfile
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Request
 from pydantic import BaseModel, Field
 
 from live_telemetry import live_facts, number
@@ -68,6 +70,8 @@ class RadioDeliveryBatch(BaseModel):
 
 class SpotterOptions(BaseModel):
     voice: Literal['Fenrir', 'Algieba', 'Schedar', 'Aoede'] = 'Fenrir'
+    custom_pack: str | None = Field(default=None,max_length=193,pattern=r'^[A-Za-z0-9][A-Za-z0-9._-]{0,95}@[A-Za-z0-9][A-Za-z0-9._-]{0,95}$')
+    voice_packs: dict[str,str] | None = Field(default=None,max_length=4)
     formation_calls: int = Field(default=5, ge=0, le=8)
     repeat_seconds: float = Field(default=3, ge=1.5, le=8, allow_inf_nan=False)
     clear_delay: float = Field(default=.15, ge=.15, le=.5, allow_inf_nan=False)
@@ -358,9 +362,12 @@ class VoiceCoach:
         self.pending_report = None
         self.radio_audio = OrderedDict()
         self.fixed_audio = RadioAudioCache(self.speech, self.store.path.parent / 'radio_audio')
+        from custom_voice_packs import CustomVoicePacks
+        self.custom_packs = CustomVoicePacks(self.store.path.parent / 'custom_voice_packs')
+        self.fixed_audio.custom_packs = self.custom_packs
         self.live.setup_audio_ready=lambda text:self.fixed_audio.cached('coach',text)
         self._report_notes = (None, [])
-        self.audio_preparation = AudioPreparation(self.fixed_audio)
+        self.audio_preparation = AudioPreparation(RadioAudioCache(self.speech,self.fixed_audio.directory))
 
     def report_notes(self):
         # Polled every couple of seconds; reread only after the store changed.
@@ -655,6 +662,8 @@ class VoiceCoach:
         a cached first sentence goes out immediately with whichever later clips exist.
         """
         on_disk = self.audio_on_disk(item)
+        if self.custom_packs.has_selection(item.get('engineer','spotter')):
+            return on_disk, True
         cached_only = on_disk and self.cloud_lock.locked()
         if on_disk and item.get('speech_parts') and not cached_only:
             on_disk = all(self.fixed_audio.cached(item['engineer'], text) for text in item['speech_parts'][1:])
@@ -784,6 +793,67 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
     router = APIRouter(prefix='/api/live-coach')
     spotter_audio = SpotterAudio(coach.speech, lambda: role_voice('spotter'))
 
+    @router.get('/custom-voice-packs')
+    def custom_pack_list():
+        from voice_catalog_diff import current_bindings
+        view=coach.custom_packs.list()
+        for row in view['packs']:
+            update=coach.custom_packs.updates(row['key'],current_bindings(),coach.app_version)
+            row['updates']={k:v for k,v in update.items() if k in ('baselineKnown','newCount','roles','appVersion')}
+        return view
+
+    @router.post('/custom-voice-packs/updates')
+    def custom_pack_updates(payload:dict):
+        from voice_catalog_diff import current_bindings
+        try:return coach.custom_packs.updates(payload['key'],current_bindings(),coach.app_version)
+        except (OSError,ValueError,KeyError,TypeError) as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
+
+    @router.post('/custom-voice-packs/remove')
+    def custom_pack_remove(payload:dict):
+        try:
+            if coach.audio_preparation.running():raise ValueError('기본 음성 준비를 먼저 중단하세요.')
+            if type(payload.get('delete',False)) is not bool:raise ValueError('삭제 방법을 선택하세요.')
+            return coach.custom_packs.remove(payload['key'],payload.get('delete',False))
+        except (OSError,ValueError,KeyError,TypeError) as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
+
+    @router.post('/custom-voice-packs/import')
+    async def custom_pack_import(payload: dict):
+        source=payload.get('path')
+        if not isinstance(source,str) or not 1<=len(source)<=2000:
+            raise HTTPException(status_code=422,detail='팩 ZIP 또는 폴더 경로를 입력하세요.')
+        try:
+            info=await asyncio.to_thread(coach.custom_packs.install,source)
+            return {'imported':info,**coach.custom_packs.list()}
+        except (OSError,ValueError,KeyError,zipfile.BadZipFile) as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
+
+    @router.post('/custom-voice-packs/preview')
+    def custom_pack_preview(payload: dict):
+        try:
+            if not isinstance(payload.get('key'),str):raise ValueError('먼저 들어볼 팩을 선택하세요.')
+            return coach.custom_packs.preview(payload['key'])
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
+
+    @router.post('/custom-voice-packs/upload')
+    async def custom_pack_upload(request: Request):
+        from custom_voice_pack_format import MAX_BYTES
+        import tempfile
+        coach.custom_packs.root.mkdir(parents=True,exist_ok=True)
+        temp=None
+        try:
+            with tempfile.NamedTemporaryFile(dir=coach.custom_packs.root,suffix='.zip',prefix='.upload-',delete=False) as f:
+                temp=Path(f.name);size=0
+                async for chunk in request.stream():
+                    size+=len(chunk)
+                    if size>MAX_BYTES:raise ValueError('팩은 최대 2 GiB입니다. WAV 구형 팩은 512 MiB입니다.')
+                    f.write(chunk)
+            return {'imported':await asyncio.to_thread(coach.custom_packs.install,temp),**coach.custom_packs.list()}
+        except (OSError,ValueError,KeyError,zipfile.BadZipFile) as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
+        finally:
+            if temp is not None:temp.unlink(missing_ok=True)
+
     @router.post('/radio-delivery')
     async def record_radio_delivery(payload: RadioDeliveryBatch):
         # Which game, track and car the call belonged to, so a session log names them even
@@ -811,26 +881,45 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
         # Read by role_voice wherever a spotter sentence is fetched; clips are kept per voice.
         os.environ['IRACING_TTS_SPOTTER_VOICE'] = radio_phrases.VOICE_PREFIX + name
         coach.audio_preparation._items = None            # the list of sentences to prepare depends on the voice
+        coach.audio_preparation._ready = (0., None)
+        coach.audio_preparation._known = set()
+
+    def select_custom_pack(payload):
+        selections=payload.voice_packs
+        if selections is None:
+            selections=dict(coach.custom_packs.selections)
+            if payload.custom_pack:selections['spotter']=payload.custom_pack
+            else:selections.pop('spotter',None)
+        if selections==coach.custom_packs.selections:return
+        if coach.audio_preparation.running():raise ValueError('진행 중인 음성 미리 합성을 먼저 중단하세요.')
+        coach.custom_packs.configure(selections)
+        with coach.lock:coach.pending_report=None
 
     @router.post('/spotter/prepare')
     async def prepare_spotter(payload: SpotterOptions | None = None):
-        if payload is not None:
-            use_spotter_voice(payload.voice)
-            coach.live.configure_spotter(payload.model_dump())
         async with coach.cloud_lock:
+            if payload is not None:
+                try:await asyncio.to_thread(select_custom_pack,payload)
+                except (OSError,ValueError) as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
+                use_spotter_voice(payload.voice)
+                coach.live.configure_spotter(payload.model_dump())
             try:
+                if coach.custom_packs.has_selection('spotter'):
+                    return await asyncio.to_thread(coach.custom_packs.spotter,spotter_audio)
                 return await asyncio.to_thread(spotter_audio.prepare)
             except Exception as exc:
                 raise HTTPException(status_code=422, detail=service_error(exc)) from exc
 
     @router.put('/spotter/settings')
     def configure_spotter(payload: SpotterOptions):
+        try:select_custom_pack(payload)
+        except (OSError,ValueError) as exc:raise HTTPException(status_code=422,detail=str(exc)) from exc
         use_spotter_voice(payload.voice)
         return {'settings': coach.live.configure_spotter(payload.model_dump())}
 
     @router.get('/radio-audio')
     def radio_audio_status():
-        return coach.audio_preparation.status()
+        return {**coach.audio_preparation.status(),'voice_packs':dict(coach.custom_packs.selections),'missingPolicy':'prepared-default'}
 
     @router.post('/radio-audio/prepare')
     def prepare_radio_audio():
@@ -850,6 +939,8 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             return {'event': None}
         # A cached mandatory sentence can play immediately during a cloud question.
         on_disk, cached_only = coach.radio_audio_mode(event)
+        if coach.custom_packs.has_selection(event.get('engineer','spotter')) and not on_disk:
+            return {'event':None,'missing_custom_audio':True}
         if event.get('control_recommendation',{}).get('setup') and not on_disk:
             # Setup advice uses prepared clips only. Never turn a deleted or
             # missing cache file into an automatic paid synthesis.
@@ -915,7 +1006,7 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
         # Context is retained server-side for /captures; polling only needs key edges.
         live_status['hotkey_events'] = [{k: v for k, v in event.items() if k != 'context'}
                                        for event in live_status['hotkey_events']]
-        return {**live_status, 'speech': coach.speech.status(), 'engineers': {k: {**v, 'voice': role_voice(k)} for k, v in ROLES.items()},
+        return {**live_status, 'speech': coach.speech.status(), 'engineers': {k: {**v, 'voice': coach.custom_packs.loaded[coach.custom_packs.selections[k]][0]['name'] if coach.custom_packs.has_selection(k) else role_voice(k)} for k, v in ROLES.items()},
                 'ai_available': coach.ai_client is not None, 'model': coach.model, 'storage_available': coach.store.available}
 
     @router.post('/captures')
@@ -959,6 +1050,9 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             raise HTTPException(status_code=404, detail='엔지니어를 확인하세요.')
         async with coach.cloud_lock:
             try:
+                if coach.custom_packs.has_selection(role):
+                    sample=await asyncio.to_thread(coach.custom_packs.preview,coach.custom_packs.selections[role],role)
+                    return {'engineer':role,**sample}
                 audio = await asyncio.to_thread(coach.fixed_audio.clip, 'preview_' + role)
                 return {'engineer': role, 'audio_base64': audio}
             except Exception as exc:

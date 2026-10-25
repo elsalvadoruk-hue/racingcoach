@@ -13,6 +13,7 @@ import { readGameItem } from '../lib/gameStorage';
 import { useGame } from '../lib/gameContext';
 import { readAlerts } from '../lib/voiceAlerts';
 import VoiceAlertSettings from './VoiceAlertSettings';
+import RoleVoiceSelect from './RoleVoiceSelect';
 
 export const ENGINEERS = {
   coach: { label: '주행 코치', voice: 'Algenib', style: 'border-primary/30 bg-primary/10 text-primary', description: '코너 느낌과 다음 주행 행동' },
@@ -53,7 +54,7 @@ export function PitWallSettings({ preferences, onChange, view, provider = 'iRaci
   );
 }
 
-export default function PitWall({ enabled, onToggle, preferences, onChange, view, engineers, onTestVoice, busy, speaking, standby = false, provider = 'iRacing', capabilities = {}, statusText }) {
+export default function PitWall({ enabled, onToggle, preferences, onChange, view, engineers, onTestVoice, busy, speaking, standby = false, provider = 'iRacing', capabilities = {}, statusText, spotter }) {
   const lmu = provider === 'LMU';
   const { selectedGame } = useGame();
   const roleDescription = key => !lmu ? ENGINEERS[key].description : ({
@@ -70,9 +71,9 @@ export default function PitWall({ enabled, onToggle, preferences, onChange, view
     </details>
     <Separator className="my-6" />
     <h3 className="text-sm font-medium">엔지니어 목소리</h3>
-    <div className="coach-role-grid">{Object.entries(ENGINEERS).map(([key, role]) => <Card key={key} className="bg-muted/40 shadow-none"><CardHeader className="p-4 pb-3"><CardTitle className="text-sm">{role.label}</CardTitle><CardDescription>{roleDescription(key)}</CardDescription></CardHeader><CardContent className="p-4 pt-0">
+    <div className="coach-role-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' }}>{Object.entries(ENGINEERS).map(([key, role]) => <Card key={key} className="min-w-0 bg-muted/40 shadow-none"><CardHeader className="p-4 pb-3"><CardTitle className="text-sm">{role.label}</CardTitle><CardDescription>{roleDescription(key)}</CardDescription></CardHeader><CardContent className="p-4 pt-0">
       {lmu && <Field orientation="horizontal"><FieldLabel htmlFor={`wall-role-${key}`}>{role.label} 보고</FieldLabel><Switch id={`wall-role-${key}`} checked={preferences.engineers?.includes(key) === true} onCheckedChange={enabled => onChange({ engineers: enabled ? [...(preferences.engineers || []), key] : preferences.engineers.filter(item => item !== key) })} /></Field>}
-      <p className="text-xs text-muted-foreground">{(engineers?.[key]?.voice || role.voice).replace('ko-KR-Chirp3-HD-', '')} · 남성 · 공통 재생 속도</p><Button variant="outline" size="sm" onClick={() => onTestVoice(key)} disabled={busy || capabilities.voice_test?.[key] === false || (lmu && !preferences.engineers?.includes(key))} className="mt-3"><Volume2 data-icon="inline-start" />목소리 들어보기</Button></CardContent></Card>)}</div>
+      {spotter?.library ? <RoleVoiceSelect role={key} library={spotter.library} settings={spotter.settings} onChange={spotter.changeSettings} disabled={busy || enabled || spotter.enabled || spotter.preparing || spotter.settingsBusy} defaults={[["", `기본 · ${role.voice}`]]} /> : <p className="text-xs text-muted-foreground">{(engineers?.[key]?.voice || role.voice).replace('ko-KR-Chirp3-HD-', '')} · 공통 재생 속도</p>}<Button variant="outline" size="sm" onClick={() => onTestVoice(key)} disabled={busy || capabilities.voice_test?.[key] === false || (lmu && !preferences.engineers?.includes(key))} className="mt-3"><Volume2 data-icon="inline-start" />목소리 들어보기</Button></CardContent></Card>)}</div>
     <div className="coach-live-info">
       <p>{lmu ? 'LMU는 준비된 고정 음성만 재사용하며 새로운 합성 요청을 보내지 않습니다. 질문·마이크·AI 답변은 아직 지원하지 않습니다.' : '자동 보고는 AI 토큰을 사용하지 않습니다. 고정 음성은 최초 합성 후 재사용하고, 정확한 수치는 화면과 기록에 남깁니다. 새 질문 답변의 음성 합성에는 비용이 발생할 수 있습니다.'}</p>
       <p>{lmu ? '일반 보고는 조작 부담이 적을 때 전달합니다. 좌우 스포터는 피트월보다 우선합니다. 피트월 설정은 LMU용으로 따로 저장됩니다.' : '일반 보고는 제동·조향 부담이 적을 때 전달합니다. 질문·녹음·옆 차량 접근 중에는 기다리고, 깃발은 스포터가 안내합니다. 페이지를 다시 열면 자동 보고를 켜세요.'}</p>

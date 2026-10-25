@@ -294,7 +294,7 @@ class VoiceCoachTests(unittest.TestCase):
             wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(16000); wav.writeframes(b'\0\0' * 8000)
         client = MagicMock()
         client.recognize.return_value.results = [MagicMock(alternatives=[MagicMock(transcript='앞이 밀려')])]
-        with patch.dict(os.environ, {'IRACING_AI_ENABLED': '1', 'IRACING_SPEECH_REGION': ''}), patch('google.cloud.speech_v2.SpeechClient', return_value=client) as factory:
+        with patch.dict(os.environ, {'IRACING_AI_ENABLED': '1', 'IRACING_SPEECH_REGION': '', 'GCP_PROJECT_ID':'synthetic-test-project'}), patch('google.cloud.speech_v2.SpeechClient', return_value=client) as factory:
             text = GoogleSpeech().recognize(base64.b64encode(stream.getvalue()).decode())
         self.assertEqual(text, '앞이 밀려')
         request = client.recognize.call_args.kwargs['request']

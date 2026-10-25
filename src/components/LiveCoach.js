@@ -387,8 +387,8 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     refreshNotes: async () => { const data = await request('/notes'); if (mounted.current) setNotes(data.notes || []); },
     replay: lastAudio ? () => { stopSpeaking(); play(lastAudio, lastMime.current, { channel: lastChannel.current }); } : null });
   return <section id="live-coach" hidden={!visible} aria-label="실시간 음성 코치" className="flex flex-col gap-5">
-    <SpotterPanel spotter={spotter} muted={muted} volume={volume} audioError={outputMessage} />
-    <PitWall enabled={wallEnabled} onToggle={toggleWall} preferences={wallPreferences} onChange={changeWallPreferences} view={wallView} engineers={status?.engineers} onTestVoice={testVoice} busy={phase !== 'idle'} speaking={isPlaying} standby={audioOutput.standby} />
+    <SpotterPanel voiceLocked={wallEnabled} apiBase={apiBase} spotter={spotter} muted={muted} volume={volume} audioError={outputMessage} />
+    <PitWall spotter={spotter} enabled={wallEnabled} onToggle={toggleWall} preferences={wallPreferences} onChange={changeWallPreferences} view={wallView} engineers={status?.engineers} onTestVoice={testVoice} busy={phase !== 'idle'} speaking={isPlaying} standby={audioOutput.standby} />
     {visible && <Card asChild><section aria-label="엔지니어 음성 준비" className="coach-panel"><CardContent className="p-0"><RadioAudioPrepare apiBase={apiBase} /></CardContent></section></Card>}
     <CornerCoach coach={status?.corner_coach} controls={status?.controls} connected={!!status?.connected} />
     <RadioDiagnostics apiBase={apiBase} />

@@ -88,6 +88,8 @@
 !/scripts/evaluate_handling.py
 !/scripts/test_evaluate_handling.py
 !/scripts/audit_git.py
+!/scripts/role_voice_browser_fixture.py
+!/scripts/role_voice_browser_qa.js
 !/scripts/test_audit_git.py
 !/scripts/dev_lmu_layout_check.py
 !/scripts/build_lmu_lock.py

@@ -188,6 +188,7 @@ class RadioAudioCache:
         self.lock = threading.Lock()
         self.memory = OrderedDict()
         self.pending = {}
+        self.custom_packs = None
 
     def path(self, role, text):
         from race_engineer import role_voice
@@ -202,6 +203,7 @@ class RadioAudioCache:
         return self._pieces
 
     def cached(self, role, text):
+        if self.custom_packs is not None and self.custom_packs.has(role,text):return True
         import number_splice
         if number_splice.spliceable(text):
             return self.pieces().on_disk(role, text)
@@ -216,12 +218,20 @@ class RadioAudioCache:
 
     def read_prepared(self, role, text):
         """Read an existing whole-sentence clip; never repair or synthesize it."""
+        if self.custom_packs is not None and self.custom_packs.has(role,text):
+            return self.custom_packs.audio(role,text)
+        import number_splice
+        if number_splice.spliceable(text):
+            if getattr(self,'_prepared_pieces',None) is None:self._prepared_pieces=number_splice.Pieces(_PreparedSpeech(),self.directory/'pieces')
+            return self._prepared_pieces.sentence(role,text)
         data=self.path(role,text).read_bytes()
         if len(data)<100:raise ValueError('Prepared audio is missing or incomplete.')
         return base64.b64encode(data).decode('ascii')
 
     def phrase(self, role, text):
         """One whole call as a single clip, synthesized once per voice and wording."""
+        if self.custom_packs is not None and self.custom_packs.has_selection(role):
+            return self.read_prepared(role,text)
         import number_splice
         if number_splice.spliceable(text):
             # Joined from cut pieces; returned as a whole data URL since it is a WAV, not an MP3.
@@ -259,3 +269,6 @@ class RadioAudioCache:
             while len(self.memory) > 1500:
                 self.memory.popitem(last=False)
         return encoded
+
+class _PreparedSpeech:
+    def synthesize(self,*args,**kwargs):raise ValueError('기본 음성이 준비되지 않았습니다. 기본 음성 준비를 먼저 실행하세요.')

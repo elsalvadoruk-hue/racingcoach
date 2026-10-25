@@ -45,6 +45,7 @@ class OptionalRadioPartsTests(unittest.TestCase):
         def phrase(role, text):
             return 'cached:' + text if text in self.stored else self.synthesize(text, role=role)
         self.coach = VoiceCoach.__new__(VoiceCoach)
+        self.coach.custom_packs = SimpleNamespace(selected=None,has_selection=lambda role:False)
         self.coach.cloud_lock = asyncio.Lock()
         self.coach.speech = MagicMock()
         self.coach.fixed_audio = SimpleNamespace(cached=lambda role, text: text in self.stored,

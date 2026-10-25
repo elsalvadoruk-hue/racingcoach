@@ -31,8 +31,8 @@ export function VoiceWorkspace({ runtime, onSettings }) {
         {host.error && <Alert variant="destructive"><AlertDescription>{host.error}</AlertDescription></Alert>}
         <AudioPreferences runtime={runtime} />
       </div>
-      <div className="voice-column" aria-label="스포터 설정 영역" tabIndex={0}><SpotterPanel spotter={host.spotter} muted={controls.muted} volume={controls.volume / 100} audioError={host.audioOutput.message} /><p className="text-xs text-muted-foreground"><Headphones className="inline" aria-hidden="true" /> 스포터를 켜면 엔지니어 자동 보고도 함께 시작합니다. 피트월은 별도로 끌 수 있습니다.</p></div>
-      <div className="voice-column" aria-label="피트월 설정 영역" tabIndex={0}><PitWall enabled={host.wallEnabled} onToggle={host.toggleWall} preferences={host.wallPreferences} onChange={host.changeWallPreferences} view={host.wallView} engineers={host.status?.engineers} onTestVoice={host.testVoice} busy={busy} speaking={host.audioOutput.isPlaying} standby={host.audioOutput.standby} /></div>
+      <div className="voice-column" aria-label="스포터 설정 영역" tabIndex={0}><SpotterPanel voiceLocked={host.wallEnabled} apiBase={runtime.apiBase} spotter={host.spotter} muted={controls.muted} volume={controls.volume / 100} audioError={host.audioOutput.message} /><p className="text-xs text-muted-foreground"><Headphones className="inline" aria-hidden="true" /> 스포터를 켜면 엔지니어 자동 보고도 함께 시작합니다. 피트월은 별도로 끌 수 있습니다.</p></div>
+      <div className="voice-column" aria-label="피트월 설정 영역" tabIndex={0}><PitWall spotter={host.spotter} enabled={host.wallEnabled} onToggle={host.toggleWall} preferences={host.wallPreferences} onChange={host.changeWallPreferences} view={host.wallView} engineers={host.status?.engineers} onTestVoice={host.testVoice} busy={busy} speaking={host.audioOutput.isPlaying} standby={host.audioOutput.standby} /></div>
     </div>
   </section>;
 }

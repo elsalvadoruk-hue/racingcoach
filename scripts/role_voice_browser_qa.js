@@ -1,0 +1,41 @@
+async page => {
+  const checks=[],errors=[];page.on('pageerror',e=>errors.push(String(e)));const check=(x,name)=>{if(!x)throw Error(name);checks.push(name);};
+  await page.addInitScript(()=>{window.EventSource=class{close(){}};window.WebSocket=class{static OPEN=1;static CLOSED=3;constructor(){this.readyState=1;setTimeout(()=>this.onopen?.({}),0);}close(){this.readyState=3;}send(){}addEventListener(){}removeEventListener(){}};});
+  await page.route('**/*',async route=>{const r=route.request(),u=new URL(r.url());if(u.pathname.startsWith('/api/')){const v=await page.request.fetch('http://127.0.0.1:24673'+u.pathname+u.search,{method:r.method(),data:r.postDataBuffer(),headers:{'Content-Type':r.headers()['content-type']||'application/json'}});return route.fulfill({status:v.status(),body:await v.body(),headers:{'Content-Type':'application/json','Access-Control-Allow-Origin':'*'}});}if(u.origin==='http://127.0.0.1:24673')return route.continue();return route.abort();});
+  await page.goto('http://127.0.0.1:24673');await page.getByRole('button',{name:'음성 코치',exact:true}).click();
+  const summary=page.locator('summary').filter({hasText:'음성팩 설치·관리'});await summary.click();
+  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent==='ZIP 파일 설치'&&!b.disabled));
+  const base='.work/role-voice-browser/';
+  await page.getByLabel('커스텀 음성팩 ZIP').setInputFiles(base+'spotter.rcvoice.zip');await page.getByText(/스포터 시험팩 설치 완료/).waitFor();
+  await page.getByLabel('커스텀 음성팩 ZIP').setInputFiles(base+'coach.rcvoice.zip');await page.getByText(/코치 시험팩 설치 완료/).waitFor();
+  check((await summary.textContent()).includes('추가 제작 알림'),'installed older baseline immediately shows update notification');
+  await page.getByText('목소리·반복 설정',{exact:true}).click();
+  await page.getByLabel('스포터 목소리',{exact:true}).selectOption('pack:role-spotter@1');
+  await page.getByLabel('주행 코치 목소리',{exact:true}).selectOption('pack:role-coach@1');
+  await page.waitForTimeout(400);
+  check(await page.getByLabel('레이스 엔지니어 목소리',{exact:true}).inputValue()===''&&await page.getByLabel('전략 엔지니어 목소리',{exact:true}).inputValue()==='','one custom pit role coexists with default race and strategy voices');
+  check(await page.getByLabel('레이스 엔지니어 목소리',{exact:true}).locator('option').filter({hasText:'코치 시험팩'}).count()===0,'role-specific options exclude incompatible packs');
+  const coachRow=page.locator('li').filter({hasText:'코치 시험팩 · 1'});
+  await coachRow.getByRole('button',{name:'미리 듣기',exact:true}).click();const audio=page.locator('audio').last();await page.waitForFunction(()=>[...document.querySelectorAll('audio')].some(a=>a.duration>0));
+  check((await audio.getAttribute('src')).startsWith('data:audio/ogg;codecs=opus'),'installed Opus preview decodes without changing selections');
+  const response=page.waitForResponse(r=>r.url().endsWith('/custom-voice-packs/updates'));
+  await coachRow.getByRole('button',{name:'추가 제작 목록 저장'}).click();const update=await(await response).json();check(update.newCount===1&&update.newEntries[0].role==='coach','actual update download identifies one newly added coach wording');
+  await page.getByRole('button',{name:'스포터 켜기',exact:true}).click();await page.getByRole('button',{name:'스포터 끄기',exact:true}).waitFor();
+  check(await page.getByLabel('주행 코치 목소리',{exact:true}).isDisabled()&&await page.getByLabel('스포터 목소리',{exact:true}).isDisabled(),'voice selectors lock during playback service');
+  await page.getByRole('button',{name:'스포터 끄기',exact:true}).click();
+  const stop=page.getByRole('button',{name:'자동 보고 중지',exact:true});if(await stop.count())await stop.click();
+  await page.reload();await page.getByRole('button',{name:'음성 코치',exact:true}).click();await page.getByText('목소리·반복 설정',{exact:true}).click();
+  check(await page.getByLabel('스포터 목소리',{exact:true}).inputValue()==='pack:role-spotter@1'&&await page.getByLabel('주행 코치 목소리',{exact:true}).inputValue()==='pack:role-coach@1','both independent choices persist after reload');
+  await page.getByRole('radio',{name:'LMU',exact:true}).click();await page.getByText('목소리·반복 설정',{exact:true}).click();
+  check(await page.getByLabel('스포터 목소리',{exact:true}).inputValue()==='Fenrir'&&await page.getByLabel('주행 코치 목소리',{exact:true}).inputValue()==='','game-specific choices stay separate');
+  await page.getByLabel('주행 코치 목소리',{exact:true}).selectOption('pack:role-coach@1');await page.waitForTimeout(250);
+  await page.locator('summary').filter({hasText:'음성팩 설치·관리'}).click();const row=page.locator('li').filter({hasText:'코치 시험팩 · 1'});
+  await row.getByRole('button',{name:'적용 해제·삭제'}).click();await page.getByRole('button',{name:'적용만 해제 · 파일 보관'}).click();await page.getByRole('dialog').waitFor({state:'hidden'});
+  check(await page.getByLabel('주행 코치 목소리',{exact:true}).inputValue()===''&&await page.locator('li').filter({hasText:'코치 시험팩 · 1'}).count()===1,'unapply returns to default while retaining installed pack');
+  await page.getByRole('radio',{name:'iRacing',exact:true}).click();await page.getByText('목소리·반복 설정',{exact:true}).click();
+  check(await page.getByLabel('주행 코치 목소리',{exact:true}).inputValue()===''&&await page.getByLabel('스포터 목소리',{exact:true}).inputValue()==='pack:role-spotter@1','unapply clears other game role without changing unrelated spotter');
+  await page.locator('summary').filter({hasText:'음성팩 설치·관리'}).click();await page.locator('li').filter({hasText:'코치 시험팩 · 1'}).getByRole('button',{name:'적용 해제·삭제'}).click();await page.getByRole('button',{name:'설치 파일까지 삭제',exact:true}).click();await page.getByRole('dialog').waitFor({state:'hidden'});await page.locator('li').filter({hasText:'코치 시험팩 · 1'}).waitFor({state:'detached'});
+  check(true,'managed-copy deletion removes the installed pack from options');
+  for(const width of [1600,1366,1100]){await page.setViewportSize({width,height:1000});check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),`no page overflow at ${width}px`);check(await page.locator('.coach-role-grid').evaluate(grid=>[...grid.children].every(c=>c.scrollWidth<=c.clientWidth)),`engineer cards and controls fit their column at ${width}px`);}
+  await page.screenshot({path:'output/playwright/role-library-final.png',fullPage:true});check(!errors.length,'no browser exceptions');return {status:'pass',checks:checks.length,passed:checks,errors,scope:'real pack install/Opus decoder and role API, synthetic audio and no game/cloud'};
+}

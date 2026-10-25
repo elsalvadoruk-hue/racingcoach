@@ -9,13 +9,15 @@ import { SPOTTER_VOICES } from '../useSpotter';
 import { useGame } from '../lib/gameContext';
 import { spotterAlertPatch } from '../lib/voiceAlerts';
 import VoiceAlertSettings from './VoiceAlertSettings';
+import CustomVoicePacks from './CustomVoicePacks';
+import RoleVoiceSelect from './RoleVoiceSelect';
 
-export function SpotterSettings({ settings, onChange: changeSettings, disabled = false, capabilities = {}, idPrefix = 'spotter' }) {
+export function SpotterSettings({ settings, onChange: changeSettings, disabled = false, capabilities = {}, idPrefix = 'spotter', library, voiceDisabled = false }) {
   const supported = key => capabilities[key] !== false;
   const id = key => `${idPrefix}-${key}`;
   return <FieldSet disabled={disabled} className="spotter-settings mt-6 border-t pt-5"><FieldLegend>스포터 안내 설정</FieldLegend>
     <FieldGroup className="grid gap-4 sm:grid-cols-2">
-      {supported('voice') && <Field><FieldLabel htmlFor={id('voice')}>스포터 목소리</FieldLabel><NativeSelect id={id('voice')} aria-label="스포터 목소리" value={settings.voice || 'Fenrir'} onChange={e => changeSettings({ voice: e.target.value })}>{SPOTTER_VOICES.map(([name, label]) => <option key={name} value={name}>{name} · {label}</option>)}</NativeSelect></Field>}
+      {supported('voice') && <RoleVoiceSelect role="spotter" library={library} settings={settings} onChange={changeSettings} disabled={disabled || voiceDisabled} defaults={SPOTTER_VOICES.map(([name, label]) => [name, `${name} · ${label}`])} />}
       {supported('formation') && <Field><FieldLabel htmlFor={id('formation')}>포메이션 랩 안내 개수</FieldLabel><NativeSelect id={id('formation')} aria-label="포메이션 랩 안내 개수" value={settings.formation_calls || 5} onChange={e => changeSettings({ formation_calls: Number(e.target.value) })}>{[1, 2, 3, 4, 5, 6, 7, 8].map(n => <option key={n} value={n}>{`${n}개`}</option>)}</NativeSelect></Field>}
       <Field data-disabled={disabled || (capabilities.repeat_toggle && settings.repeat_enabled === false) || undefined}><FieldLabel htmlFor={id('repeat')}>옆 차량 반복 간격</FieldLabel><NativeSelect id={id('repeat')} aria-label="옆 차량 반복 간격" disabled={disabled || (capabilities.repeat_toggle && settings.repeat_enabled === false)} value={settings.repeat_seconds} onChange={e => changeSettings({ repeat_seconds: Number(e.target.value) })}>{(capabilities.repeat_toggle ? [2, 3, 5, 8, 10] : [2, 3, 5]).map(n => <option key={n} value={n}>{n}초</option>)}</NativeSelect></Field>
       <Field><FieldLabel htmlFor={id('clear')}>클리어 확인 시간</FieldLabel><NativeSelect id={id('clear')} aria-label="클리어 확인 시간" disabled={disabled} value={settings.clear_delay} onChange={e => changeSettings({ clear_delay: Number(e.target.value) })}>{[.15, .3, .5].map(n => <option key={n} value={n}>{n * 1000}ms</option>)}</NativeSelect></Field>
@@ -26,7 +28,7 @@ export function SpotterSettings({ settings, onChange: changeSettings, disabled =
   </FieldSet>;
 }
 
-export default function SpotterPanel({ spotter, muted, volume, audioError }) {
+export default function SpotterPanel({ spotter, muted, volume, audioError, apiBase = '', voiceLocked = false }) {
   const { enabled, preparing, view, voice, error, toggle, test, settings, settingsBusy, changeSettings } = spotter;
   const { selectedGame } = useGame();
   const side = view?.raw_state;
@@ -54,7 +56,9 @@ export default function SpotterPanel({ spotter, muted, volume, audioError }) {
     })}</div>}
     {enabled && hazard && <p role="status" className="mt-3 rounded-lg border border-warning bg-warning/10 p-3 text-sm text-warning">{hazard.kind === 'hazard_off_ahead' ? '전방 트랙 밖 차량' : '전방 매우 느린 차량'} · {hazard.name || '차량'} · 거리 환산 약 {hazard.gap_estimate_s}초</p>}
     {enabled && box && (box.ready || box.reason !== '피트 진입 대기') && <p className="mt-3 rounded-lg border border-success/30 p-3 text-sm text-success">{box.ready ? `피트박스까지 약 ${box.distance_estimate_m}m (추정)` : box.reason}{!box.enabled && ' · 음성 카운트다운 꺼짐'}</p>}
-    {settings && <details className="voice-basic-settings"><summary>목소리·반복 설정</summary><SpotterSettings settings={settings} onChange={changeSettings} disabled={preparing || settingsBusy} /></details>}
+    {spotter.library?.view?.packs?.some(p => p.updates?.newCount > 0) && <p role="status" className="mt-3 text-sm text-warning">설치한 음성팩에 앱 업데이트 후 추가된 대본이 있습니다. 음성팩 설치·관리에서 추가 제작 목록을 저장하세요.</p>}
+    {settings && <details className="voice-basic-settings"><summary>목소리·반복 설정</summary><SpotterSettings library={spotter.library} settings={settings} onChange={changeSettings} disabled={preparing || settingsBusy} voiceDisabled={enabled || voiceLocked} /></details>}
+    {settings && <CustomVoicePacks library={spotter.library} settings={settings} disabled={enabled || preparing || settingsBusy || voiceLocked} />}
     {enabled && <Button variant="outline" type="button" onClick={test} disabled={view?.occupied} className="mt-3  border  px-3 py-2 text-sm  disabled:opacity-40">스포터 목소리 듣기</Button>}
     {error && <p role="alert" className="mt-3 text-sm text-destructive">{error}</p>}
     {enabled && audioError && <p role="alert" className="mt-3 text-sm text-warning">{audioError}</p>}

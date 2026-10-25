@@ -22,16 +22,18 @@ export default function RadioAudioPrepare({ apiBase }) {
     return () => clearInterval(timer);
   }, [status?.state, call]);
   if (!status) return error ? <p role="alert" className="mt-3 text-sm text-warning">{error}</p> : null;
+
   const running = status.state === 'RUNNING';
   return <div className="mt-4 rounded-lg border border-border p-4" aria-label="엔지니어·스포터 음성 미리 합성">
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <p className="text-sm font-semibold text-foreground">엔지니어·스포터 음성 미리 합성 · {STATE_TEXT[status.state] || status.state}</p>
+      <p className="text-sm font-semibold text-foreground">기본 음성 준비 · 엔지니어·스포터 음성 미리 합성 · {STATE_TEXT[status.state] || status.state}</p>
       <Button type="button" variant={running ? 'outline' : 'default'} disabled={status.state === 'COMPLETE'} onClick={() => call(running ? '/stop' : '/prepare', 'POST')}>
         {running ? '멈추기' : status.state === 'COMPLETE' ? '준비 완료' : status.ready ? '빠진 음성 합성' : '전부 합성해 두기'}
       </Button>
     </div>
     <progress className="mt-3 h-2 w-full" max={status.total} value={status.ready} aria-label="준비된 음성" />
     <p role="status" className="mt-2 text-sm text-foreground">{status.ready} / {status.total}개 준비됨{status.missing ? ` · 남은 ${status.missing}개, 약 ${status.characters_missing}자` : ''}</p>
+    {Object.keys(status.voice_packs || {}).length > 0 && <p className="mt-2 text-xs text-muted-foreground">커스텀팩에 없는 문장은 준비된 기본 음성으로 보완합니다. 설정 → 업데이트의 “빠진 음성 받기”에서 무료 기본 음성을 먼저 받으세요.</p>}
     {status.spotter_voice && <p className="mt-1 text-xs text-muted-foreground">엔지니어 세 명과 지금 고른 스포터 목소리({status.spotter_voice})의 음성 수입니다. 다른 스포터 목소리를 고르면 그 목소리 기준으로 다시 셉니다.</p>}
     {status.message && <p className="mt-1 text-sm text-warning">{status.message}</p>}
     {error && <p role="alert" className="mt-1 text-sm text-warning">{error}</p>}

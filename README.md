@@ -1,5 +1,7 @@
 <h1 align="center">iRacing 주행 코치</h1>
 
+> **2.3.0 로컬 개발판:** [음성팩 설치·역할별 목소리 선택](manual/custom-voice-packs.md)과 오버레이 개선을 포함한 개발판입니다. 현재 공개 버전은 2.2.1입니다. 음성 제작 프로그램 Voice Studio는 별도로 제공합니다.
+
 <p align="center"><strong>달린 기록을 살펴보고, 다음 주행에서 바꿀 한 가지를 찾으세요.</strong></p>
 
 <p align="center">iRacing과 Le Mans Ultimate의 주행 기록을 분석하고<br>한국어 스포터·피트월·음성 질문으로 주행을 돕는 Windows 로컬 앱입니다.</p>
