@@ -233,7 +233,6 @@ class RaceRadioTests(unittest.TestCase):
             self.tick(lap_completed=lap, lap_last_s=last)
             self.wait(.3)
         self.tick(lap_completed=6, lap_last_s=103.)
-        self.wait(5.1)
         event = next(e for e in self.events() if e['key'] == 'lap_time')
         self.assertEqual(len(event['speech_parts']), 2)
         self.assertIn('느렸습니다', event['speech_parts'][1])

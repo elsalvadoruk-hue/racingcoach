@@ -20,20 +20,25 @@ import test_engineer_variation as radio_fixtures
 
 
 class QualifyingVoicePartsTests(unittest.TestCase):
-    def test_result_rebuilds_lap_for_race_voice_and_solo_time_keeps_spotter(self):
+    def test_qualifying_time_keeps_spotter_and_standings_are_a_separate_race_call(self):
         for standings in (True, False):
             fixture = radio_fixtures.RadioCallTests()
             fixture.setUp()
             fixture.meta.update(session_type='Lone Qualify', cars=[radio_fixtures.car(0, 91.), radio_fixtures.car(1, 90.7)] if standings else [])
             fixture.tick()
             fixture.lap(91.)
-            # Include a lap-only phrase variant that does not exist in the race voice.
-            fixture.radio.quali_lap['parts'][0] = radio_phrases.build('lap_time_read', 1, lap=91.)['text']
+            lap = fixture.events()['lap_time']
+            self.assertEqual(lap['engineer'], 'spotter')
+            self.assertTrue(lap['immediate'])
+            self.assertIn('1분 31초', lap['speech_text'])
             fixture.wait(1.6)
-            event = fixture.events()['quali_result' if standings else 'lap_time']
-            self.assertEqual(event['engineer'], 'race' if standings else 'spotter')
-            expected = radio_phrases.build('form_lap', lap=91.)['text'] if standings else radio_phrases.build('lap_time_read', 1, lap=91.)['text']
-            self.assertEqual((event.get('speech_parts') or [event['speech_text']])[0], expected)
+            if standings:
+                event = fixture.events()['quali_result']
+                self.assertEqual(event['engineer'], 'race')
+                self.assertNotIn('1분 31초', event['speech_text'])
+                self.assertNotEqual(event['group'], lap['group'])
+            else:
+                self.assertNotIn('quali_result', fixture.events())
 
 
 class OptionalRadioPartsTests(unittest.TestCase):

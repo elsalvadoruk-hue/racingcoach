@@ -101,7 +101,8 @@ test('a setting change rejects in-flight multipart audio even after the switch i
 });
 
 test('spotter-owned results remain selectable when pitwall is stopped, regardless of the speaking role', async () => {
-  const { result } = renderHook(() => useSpotter('http://test', audio, { specialists: false, wallAlerts: { battle: true } }));
+  const wallAlerts = { battle: true };
+  const { result } = renderHook(() => useSpotter('http://test', audio, { specialists: false, wallAlerts }));
   await enable(result);
   const event = { id:'run:11', key:'race_result', engineer:'race', priority:2, serial:11, run_id:'run', expires_in_ms:10000,
     alert_categories:['spotter.result'] };
@@ -199,6 +200,96 @@ const radioEvent = (key, extra = {}) => ({ id: `run:${key}`, serial: 1, key, tex
   engineer: 'spotter', priority: 1, run_id: 'run', cached: false, expires_in_ms: 15000, ...extra });
 const radioFrame = (events, quiet = true, extra = {}) => frame(1, null, { serial: 0,
   radio: { connected: true, run_id: 'run', events, quiet }, ...extra });
+
+test('immediate lap bypasses driving hold and the routine gap without raising safety priority', async () => {
+  global.fetch = jest.fn(async url => ({ ok: true, json: async () => url.endsWith('/render')
+    ? { event: {}, audio_base64: 'lap-audio' } : manifest }));
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  send(sockets[0], radioFrame([radioEvent('lap_time', { immediate: true, expires_in_ms: 2000 })], false));
+  await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(1));
+  const options = audio.play.mock.calls[0][2];
+  expect(options.priority).toBe(1);
+  expect(options.interrupt).toBe(false);
+  expect(options.valid()).toBe(true);
+  expect(options.workloadValid).toBeUndefined();
+  expect(options.startDeadline).toEqual(expect.any(Number));
+});
+
+test('disabling overlap speech does not allow a lap time during a physical overlap', async () => {
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  await act(async () => result.current.changeSettings({ alerts: { ...result.current.settings.alerts, overlap: false } }));
+  const event = radioEvent('lap_time', { immediate: true, expires_in_ms: 2000 });
+  send(sockets[0], radioFrame([event], false, { occupied: true, raw_state: 2, state: 2 }));
+  await act(async () => {});
+  expect(audio.play).not.toHaveBeenCalled();
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/render'))).toHaveLength(0);
+});
+
+test.each([{ close: true }, { side: 'ahead', gap_estimate_s: .5 }])('immediate lap respects close battle %j and expires without replay', async car => {
+  jest.useFakeTimers();
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  const event = radioEvent('lap_time', { immediate: true, expires_in_ms: 2000 });
+  send(sockets[0], radioFrame([event], false, { radio: { connected: true, run_id: 'run', events: [event],
+    quiet: false, traffic: { nearby: [car] } } }));
+  await act(async () => {});
+  expect(audio.play).not.toHaveBeenCalled();
+  send(sockets[0], radioFrame([], false));
+  for (let i = 0; i < 9; i += 1) {
+    act(() => jest.advanceTimersByTime(250));
+    send(sockets[0], radioFrame([], false));
+  }
+  send(sockets[0], radioFrame([], true));
+  expect(audio.play).not.toHaveBeenCalled();
+});
+
+test('hung render times out and releases the next dynamic announcement', async () => {
+  jest.useFakeTimers();
+  let count = 0;
+  global.fetch = jest.fn(url => url.endsWith('/render') && ++count === 1 ? new Promise(() => {})
+    : Promise.resolve({ ok: true, json: async () => url.endsWith('/render') ? { event: {}, audio_base64: 'next-audio' } : manifest }));
+  const recordDelivery = jest.fn();
+  const { result } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));
+  await enable(result);
+  const event = radioEvent('position');
+  send(sockets[0], radioFrame([event]));
+  await act(async () => {});
+  for (let i = 0; i < 36; i += 1) {
+    act(() => jest.advanceTimersByTime(250));
+    send(sockets[0], radioFrame([event]));
+    await act(async () => {});
+  }
+  send(sockets[0], radioFrame([radioEvent('time_60')]));
+  await act(async () => {});
+  expect(audio.play).toHaveBeenCalledWith('next-audio', 'audio/mpeg', expect.any(Object));
+  expect(recordDelivery.mock.calls.some(([, status, reason]) => status === 'failed' && reason === 'audio_preparation_timeout')).toBe(true);
+});
+
+test('session transition cancels a hung render immediately and late completion cannot unlock its successor', async () => {
+  let finishOld, finishNew;
+  const requests = [];
+  global.fetch = jest.fn((url, options) => {
+    if (!url.endsWith('/render')) return Promise.resolve({ ok: true, json: async () => manifest });
+    requests.push(options);
+    return new Promise(resolve => { if (requests.length === 1) finishOld = resolve; else finishNew = resolve; });
+  });
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  send(sockets[0], radioFrame([radioEvent('position')]));
+  await act(async () => {});
+  const next = radioEvent('time_60', { id: 'next:time', run_id: 'next' });
+  const nextFrame = radioFrame([next], true, { run_id: 'next', radio: { connected: true, run_id: 'next', quiet: true, events: [next] } });
+  send(sockets[0], nextFrame);
+  await act(async () => {});
+  expect(requests).toHaveLength(2);
+  expect(requests[0].signal.aborted).toBe(true);
+  await act(async () => finishOld({ ok: true, json: async () => ({ event: {}, audio_base64: 'old-audio' }) }));
+  expect(audio.play).not.toHaveBeenCalled();
+  await act(async () => finishNew({ ok: true, json: async () => ({ event: {}, audio_base64: 'new-audio' }) }));
+  expect(audio.play).toHaveBeenCalledWith('new-audio', 'audio/mpeg', expect.any(Object));
+});
 
 test('prepared routine speech waits until the hold allows a start while urgent spotting stays immediate', async () => {
   global.fetch = jest.fn(async (url) => ({ ok: true, json: async () =>

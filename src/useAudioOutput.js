@@ -23,6 +23,14 @@ const listedOutputs = (all) => all.filter((device) => device.kind === 'audiooutp
 // Windows can drop an output for a moment while a game reopens it (a session loading). Only a device that is
 // still gone this long after it disappeared stops what is being said.
 export const OUTPUT_GRACE_MS = 2000;
+export const AUDIO_START_TIMEOUT_MS = 5000;
+export const AUDIO_STALL_TIMEOUT_MS = 5000;
+const disposePlayer = part => {
+  part.onended = part.onerror = part.onplaying = part.onloadedmetadata = null;
+  part._effect?.release(false); part._effect = null;
+  // Release the browser's decoder and media resource between calls and sentence parts.
+  part.removeAttribute?.('src'); part.load?.();
+};
 const MISSING_OUTPUT_MESSAGE = '선택한 출력장치를 사용할 수 없어 임시로 Windows 기본 장치로 재생합니다. 저장된 선택은 유지하며 같은 장치가 연결되면 다음 안내부터 돌아갑니다.';
 const PLAYBACK_KEY = 'iracing.voice.playback';
 const clampVolume = (value) => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(1.3, value)) : 1;
@@ -91,8 +99,9 @@ export default function useAudioOutput() {
   const stop = useCallback((reason = 'stopped') => {
     if (typeof reason !== 'string') reason = 'driver_or_radio_pause';
     const current = player.current;
-    if (current) { current.pause(); current._finish?.('interrupted', reason); current._effect?.release(false); }
-    player.current = null; if (mounted.current) setIsPlaying(false);
+    player.current = null;
+    if (current) { current.pause(); current._finish?.('interrupted', reason); disposePlayer(current); }
+    if (mounted.current && !player.current) setIsPlaying(false);
   }, []);
   // The driver's own stop (a new question, the stop button) ends routine speech and his answer,
   // but never a warning that is being spoken.
@@ -248,7 +257,7 @@ export default function useAudioOutput() {
     saveOutput(id); setMessage('');
     if (selectedGame === activeGame) { stop('output_changed'); radioEffect.warm(effectSettings.current, id); }
   }, [stop, saveOutput, selectedGame, activeGame]);
-  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall' } = {}) => {
+  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall', startDeadline } = {}) => {
     // Multipart calls use their own absolute rate, never a multiplier of the role's rate.
     // Capture it once so every sentence keeps the same speed until this call ends.
     const multipart = Array.isArray(encoded) && encoded.length > 1;
@@ -262,18 +271,52 @@ export default function useAudioOutput() {
     const rest = Array.isArray(encoded) ? encoded.slice(1) : [];
     const current = new Audio(clipSource(Array.isArray(encoded) ? encoded[0] : encoded, mime));
     current._priority = priority;
-    let terminal = false, monitor, metadataReady;
-    current._finish = (status, reason = '') => {
+    let terminal = false, monitor, metadataReady, deadlineTimer, settle;
+    const finished = new Promise(resolve => { settle = resolve; });
+    const wait = operation => Promise.race([operation, finished]);
+    const finish = (status, reason = '') => {
       if (terminal) return;
-      terminal = true; onStatus?.(status, reason);
-      clearInterval(monitor); metadataReady?.();
+      terminal = true;
+      clearInterval(monitor); clearTimeout(deadlineTimer); metadataReady?.(); settle();
+      onStatus?.(status, reason);
     };
+    current._finish = finish;
     player.current = current;
     setIsPlaying(true);
     // Keep every sentence and its Web Audio effect on the same actual output for this call.
     // Try the saved device again on each new call, even if devicechange was missed.
     let sinkId = selected.current;
+    let stage = 'routing', began = false, startedLogged = false, partStarted = false, lastProgress = Date.now(), lastPosition = 0;
     const active = (part) => mounted.current && !terminal && player.current === part;
+    const progress = part => {
+      partStarted = true;
+      if (part === current) { began = true; clearTimeout(deadlineTimer); }
+      lastProgress = Date.now(); lastPosition = Number(part.currentTime) || 0;
+    };
+    const reportStarted = () => {
+      if (!startedLogged && active(current)) { startedLogged = true; onStatus?.('started', ''); }
+    };
+    // Every awaited browser operation is also settled by stop/expiry. No single media
+    // element, output route or missing ended event may occupy the radio indefinitely.
+    monitor = setInterval(() => {
+      const part = player.current;
+      if (terminal || !part || part._finish !== finish) return;
+      const position = Number(part.currentTime);
+      if (partStarted && Number.isFinite(position) && position > lastPosition + .01) {
+        lastPosition = position; lastProgress = Date.now();
+      }
+      if (partStarted && part.ended) { follow(part); return; }
+      if (whilePlaying && part === current && !whilePlaying()) { stop('condition_changed'); return; }
+      if (Date.now() - lastProgress < (partStarted ? AUDIO_STALL_TIMEOUT_MS : AUDIO_START_TIMEOUT_MS)) return;
+      const reason = partStarted ? 'playback_stalled' : 'playback_start_timeout';
+      console.warn('[RacingCoach audio]', { reason, stage, priority, channel,
+        current_time_s: Number.isFinite(position) ? position : null, duration_s: Number.isFinite(part.duration) ? part.duration : null });
+      setMessage('음성 재생이 멈춰 이번 안내를 건너뛰었습니다. 다음 안내에서 출력장치 연결을 다시 확인합니다.');
+      finish('failed', reason); if (player.current === part) stop();
+    }, 250);
+    if (Number.isFinite(startDeadline)) deadlineTimer = setTimeout(() => {
+      if (!began && active(current)) { finish('cancelled', 'start_deadline'); stop(); }
+    }, Math.max(0, startDeadline - Date.now()));
     const routingFailed = (part, failure) => {
       if (!active(part)) return false;
       setMessage(failure?.name === 'NotAllowedError'
@@ -284,14 +327,15 @@ export default function useAudioOutput() {
     const route = async (part) => {
       if (!supported) return active(part);
       try {
-        await part.setSinkId(sinkId);
+        stage = 'routing';
+        await wait(part.setSinkId(sinkId));
         if (active(part) && sinkId && unavailableOutput.current === sinkId) unavailableOutput.current = '';
       } catch (failure) {
         if (!active(part)) return false;
         if (failure?.name !== 'NotFoundError' || !sinkId) return routingFailed(part, failure);
         unavailableOutput.current = sinkId;
         sinkId = '';
-        try { await part.setSinkId(sinkId); }
+        try { await wait(part.setSinkId(sinkId)); }
         catch (fallbackFailure) { return routingFailed(part, fallbackFailure); }
         if (!active(part)) return false;
         setMessage(MISSING_OUTPUT_MESSAGE);
@@ -304,9 +348,11 @@ export default function useAudioOutput() {
         followed.add(part);
         part._effect?.release(!rest.length);
         part._effect = null;
-        if (!rest.length) { current._finish('completed'); stop(); return; }
+        if (!rest.length) { finish('completed'); stop(); return; }
+        part.pause(); disposePlayer(part);
         const next = new Audio(clipSource(rest.shift(), mime));
-        next._priority = priority; next._finish = current._finish;
+        next._priority = priority; next._finish = finish;
+        partStarted = false; lastProgress = Date.now(); lastPosition = 0;
         next.playbackRate = speed; next.preservesPitch = true;
         next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;
         chain(next);
@@ -314,14 +360,15 @@ export default function useAudioOutput() {
         const start = async () => {
           try {
             if (!await route(next)) return;
-            await radioEffect.warm(effectSettings.current, sinkId);
+            stage = 'effect'; await wait(radioEffect.warm(effectSettings.current, sinkId));
             if (!active(next)) return;
             next._effect = radioEffect.attach(next, effectSettings.current, { sinkId, ...playbackSettings.current });
             next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;
             next._effect?.start(false);
-            await next.play();
+            stage = 'play'; await wait(next.play());
+            if (active(next)) { stage = 'playing'; progress(next); }
           } catch {
-            if (active(next)) { current._finish('failed', 'playback_error'); stop(); }
+            if (active(next)) { finish('failed', 'playback_error'); stop(); }
           }
         };
         start();
@@ -335,11 +382,13 @@ export default function useAudioOutput() {
           setMessage('출력장치가 잠시 끊겨 안내를 멈췄습니다. 장치가 돌아오면 처음부터 다시 말합니다.');
           stop('output_error'); return;
         }
-        current._finish('failed', 'media_error'); if (player.current === part) { setMessage('음성을 재생하지 못했습니다. 출력장치를 확인하세요.'); stop(); }
+        if (active(part)) { finish('failed', 'media_error'); setMessage('음성을 재생하지 못했습니다. 출력장치를 확인하세요.'); stop(); }
       };
       // The silent tail of a clip can be skipped so the sentences sit closer together.
       part.onplaying = () => {
         part._heard = true;
+        progress(part);
+        if (part === current) reportStarted();
         if (PART_OVERLAP_S > 0 && rest.length && Number.isFinite(part.duration)) setTimeout(() => follow(part),
           Math.max(0, (part.duration - part.currentTime - PART_OVERLAP_S) / part.playbackRate * 1000));
       };
@@ -369,21 +418,20 @@ export default function useAudioOutput() {
       }
       if (workloadValid && !workloadValid()) { current._finish('cancelled', 'driving_workload'); stop(); return false; }
       // Routed through the radio effect only when that is certain to be heard on the chosen device.
-      await radioEffect.warm(effectSettings.current, sinkId);
+      stage = 'effect'; await wait(radioEffect.warm(effectSettings.current, sinkId));
       if (!mounted.current || player.current !== current || terminal) return false;
       if (!valid() || (priority < 3 && priorityGate.current) || (workloadValid && !workloadValid())) { stop(); return false; }
       current._effect = radioEffect.attach(current, effectSettings.current, { sinkId, ...playbackSettings.current });
       current.volume = Math.min(1, playbackSettings.current.volume); current.muted = playbackSettings.current.muted;
       if (playbackSettings.current.volume > 1 && !current._effect?.boosted) setMessage('이 브라우저 또는 출력장치에서는 증폭을 사용할 수 없어 100%로 재생합니다. 최신 Chrome 또는 Edge와 출력장치 설정을 확인하세요.');
       current._effect?.start(true);
-      await current.play();
+      if (Number.isFinite(startDeadline) && Date.now() >= startDeadline) { finish('cancelled', 'start_deadline'); stop(); return false; }
+      stage = 'play'; await wait(current.play());
       if (!mounted.current || player.current !== current || terminal) return false;
-      onStatus?.('started', '');
+      stage = 'playing'; progress(current);
+      reportStarted();
       // Braking or steering never cuts a call that has started: a half sentence distracts more
       // than a whole one. Only a call whose situation is over (whilePlaying) is stopped.
-      if (whilePlaying) monitor = setInterval(() => {
-        if (player.current === current && !whilePlaying()) stop('condition_changed');
-      }, 100);
       return true;
     } catch (failure) {
       if (!mounted.current || player.current !== current) return;

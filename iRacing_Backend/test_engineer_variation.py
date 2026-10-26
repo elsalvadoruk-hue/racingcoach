@@ -300,19 +300,20 @@ class RadioCallTests(unittest.TestCase):
         self.meta.update(session_type='Lone Qualify', cars=[car(0, 91.), car(1, 90.7), car(2, 90.9), car(3, 80., class_id=2)])
         self.tick()
         self.lap(91.)
-        self.assertEqual(list(self.events()), [])  # the lap time waits a moment for the standings
+        self.assertEqual(list(self.events()), ['lap_time'])
+        self.assertTrue(self.events()['lap_time']['immediate'])
         # Other cars are on their own laps: never called, although these are urgent calls in a race.
         for key in ('hazard_slow_ahead', 'hazard_off_ahead', 'close_behind', 'traffic_faster_behind'):
             self.radio.emit(key, self.now, priority=2, cooldown=0)
         self.radio.emit('position', self.now, '클래스 3위.', cooldown=0)
         self.radio.emit('corner_focus', self.now, '다음 코너. 제동이 일렀습니다.', role='coach', cooldown=0)
-        self.assertEqual(sorted(self.events()), ['corner_focus'])
+        self.assertEqual(sorted(self.events()), ['corner_focus', 'lap_time'])
         self.wait(1.6)
         result = self.events()['quali_result']
-        # One call: the lap time, then where it stands.
-        self.assertEqual((result['speech_parts'], result['engineer']), (['1분 31초 0입니다.', '클래스 3위. 선두와 0.3초 차.'], 'race'))
+        # The lap time starts immediately; delayed standings cannot replace it.
+        self.assertEqual((result['speech_text'], result['engineer']), ('클래스 3위. 선두와 0.3초 차.', 'race'))
         self.assertTrue(result['text'].endswith('클래스 3위. 선두와 0.3초 차.'))
-        self.assertNotIn('lap_time', self.events())
+        self.assertIn('lap_time', self.events())
         self.wait(1)
         self.assertEqual(len([e for e in self.radio.pending if e['key'] == 'quali_result']), 1)  # once per completed lap
         self.tick(session_flags=0x100000)
@@ -335,10 +336,10 @@ class RadioCallTests(unittest.TestCase):
         self.radio.pending.clear()
         self.meta['cars'][0]['best_lap_s'] = 90.5
         self.lap(90.5)
+        self.assertIn('1분 30초 5', self.events()['lap_time']['speech_text'])
         self.wait(1.6)
         pole = self.events()['quali_p1']
-        self.assertIn('1분 30초 5', pole['speech_parts'][0])
-        self.assertEqual(pole['speech_parts'][1], '클래스 1위입니다. 2위와 0.2초 차.')
+        self.assertEqual(pole['speech_text'], '클래스 1위입니다. 2위와 0.2초 차.')
 
     def test_places_lost_during_a_pit_stop_are_said_once_back_on_track(self):
         self.tick(class_position=3)
@@ -373,7 +374,6 @@ class RadioCallTests(unittest.TestCase):
         self.meta['cars'] = [car(0, 91.), car(1, 90.7)]
         self.tick()
         self.lap(91.)
-        self.wait(2)
         lap_call = self.events()['lap_time']
         # The spotter now reads the time itself; the screen keeps the lap number and hundredths.
         self.assertEqual((lap_call['speech_text'], lap_call['engineer']), ('1분 31초 0입니다.', 'spotter'))
@@ -418,7 +418,6 @@ class RadioCallTests(unittest.TestCase):
             self.lap(seconds)
         self.wait(1)
         self.lap(91.6)
-        self.wait(5.2)
         lap_call = self.events()['lap_time']   # the time and the pace are one call now
         self.assertEqual(lap_call['speech_parts'][1:], ['최근 페이스보다 1.3초 느렸습니다.'])
         self.assertIn('1분 31초 6', lap_call['speech_parts'][0])

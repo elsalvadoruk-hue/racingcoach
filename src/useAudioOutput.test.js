@@ -1,7 +1,7 @@
 import React from 'react';
 import { GameContext } from './lib/gameContext';
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
-import useAudioOutput, { OUTPUT_GRACE_MS } from './useAudioOutput';
+import useAudioOutput, { OUTPUT_GRACE_MS, AUDIO_START_TIMEOUT_MS, AUDIO_STALL_TIMEOUT_MS } from './useAudioOutput';
 import { RESUMABLE } from './voiceAudio';
 import LiveCoach from './components/LiveCoach';
 import * as radioEffect from './radioEffect';
@@ -14,6 +14,118 @@ const originalFetch = global.fetch;
 const originalMedia = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
 const originalSink = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'setSinkId');
 let media, players;
+
+test('stalled priority audio releases the radio and records a failed terminal status', async () => {
+  jest.useFakeTimers();
+  const { result, unmount } = renderHook(useAudioOutput);
+  const status = jest.fn();
+  await act(async () => result.current.play('side', 'audio/mpeg', { priority: 3, onStatus: status }));
+  players[0].currentTime = 0;
+  act(() => jest.advanceTimersByTime(AUDIO_STALL_TIMEOUT_MS + 500));
+  expect(status).toHaveBeenCalledWith('failed', 'playback_stalled');
+  expect(result.current.audioBusy()).toBe(false);
+  await act(async () => result.current.play('next', 'audio/mpeg', { priority: 1 }));
+  expect(players[1].play).toHaveBeenCalled();
+  unmount(); jest.useRealTimers();
+});
+
+test('hanging output routing settles playback and permits the next call', async () => {
+  jest.useFakeTimers();
+  const { result, unmount } = renderHook(useAudioOutput);
+  let pending;
+  const status = jest.fn();
+  act(() => { pending = result.current.play('first', 'audio/mpeg', { priority: 3, onStatus: status }); });
+  players[0].setSinkId.mockImplementation(() => new Promise(() => {}));
+  // Restart with a routing promise that never settles.
+  act(() => result.current.stop());
+  global.Audio.mockImplementationOnce(src => {
+    const player = { src, pause: jest.fn(), play: jest.fn(), setSinkId: jest.fn(() => new Promise(() => {})) };
+    players.push(player); return player;
+  });
+  act(() => { pending = result.current.play('hung', 'audio/mpeg', { priority: 3, onStatus: status }); });
+  await act(async () => { jest.advanceTimersByTime(AUDIO_START_TIMEOUT_MS + 500); await pending; });
+  expect(status).toHaveBeenCalledWith('failed', 'playback_start_timeout');
+  expect(result.current.audioBusy()).toBe(false);
+  unmount(); jest.useRealTimers();
+});
+
+test('a lap start deadline also cancels delayed native play and cannot stop a newer clip', async () => {
+  jest.useFakeTimers();
+  const { result, unmount } = renderHook(useAudioOutput);
+  let finish, pending;
+  const status = jest.fn();
+  global.Audio.mockImplementationOnce(src => {
+    const player = { src, pause: jest.fn(), play: jest.fn(() => new Promise(resolve => { finish = resolve; })), setSinkId: jest.fn(async () => {}) };
+    players.push(player); return player;
+  });
+  act(() => { pending = result.current.play('lap', 'audio/mpeg', { onStatus: status, startDeadline: Date.now() + 2000 }); });
+  await act(async () => {});
+  await act(async () => { jest.advanceTimersByTime(2100); await pending; });
+  expect(status).toHaveBeenCalledWith('cancelled', 'start_deadline');
+  expect(result.current.audioBusy()).toBe(false);
+  await act(async () => result.current.play('new', 'audio/mpeg', { priority: 2 }));
+  await act(async () => finish());
+  expect(players[1].pause).not.toHaveBeenCalled();
+  expect(result.current.audioBusy()).toBe(true);
+  unmount(); jest.useRealTimers();
+});
+
+test('advancing speech survives the start deadline and long duration, including a missing ended event', async () => {
+  jest.useFakeTimers();
+  const { result, unmount } = renderHook(useAudioOutput);
+  const status = jest.fn();
+  await act(async () => result.current.play('long-lap', 'audio/mpeg', { startDeadline: Date.now() + 2000, onStatus: status }));
+  for (let i = 1; i <= 25; i += 1) {
+    players[0].currentTime = i;
+    act(() => jest.advanceTimersByTime(1000));
+  }
+  expect(status.mock.calls.map(([state]) => state)).toEqual(['started']);
+  expect(result.current.audioBusy()).toBe(true);
+  players[0].ended = true;
+  act(() => jest.advanceTimersByTime(250));
+  expect(status).toHaveBeenCalledWith('completed', '');
+  expect(result.current.audioBusy()).toBe(false);
+  unmount();
+});
+
+test('a stalled later sentence releases the whole multipart call', async () => {
+  jest.useFakeTimers();
+  const { result, unmount } = renderHook(useAudioOutput);
+  const status = jest.fn();
+  await act(async () => result.current.play(['first', 'second'], 'audio/mpeg', { onStatus: status }));
+  await act(async () => players[0].onended());
+  expect(players[1].play).toHaveBeenCalled();
+  act(() => jest.advanceTimersByTime(AUDIO_STALL_TIMEOUT_MS + 500));
+  expect(status.mock.calls.map(([state]) => state)).toEqual(['started', 'failed']);
+  expect(result.current.audioBusy()).toBe(false);
+  expect(players[1].pause).toHaveBeenCalled();
+  unmount();
+});
+
+test.each(['effect', 'play'])('a hanging %s operation settles and cannot alter the next call after unmount', async stage => {
+  jest.useFakeTimers();
+  let resolve, pending;
+  const blocked = new Promise(done => { resolve = done; });
+  if (stage === 'effect') jest.spyOn(radioEffect, 'warm').mockReturnValueOnce(blocked);
+  else global.Audio.mockImplementationOnce(src => {
+    const part = { src, pause: jest.fn(), play: jest.fn(() => blocked), setSinkId: jest.fn(async () => {}) };
+    players.push(part); return part;
+  });
+  const { result, unmount } = renderHook(useAudioOutput);
+  const status = jest.fn();
+  act(() => { pending = result.current.play('hung', 'audio/mpeg', { priority: 3, onStatus: status }); });
+  await act(async () => {});
+  await act(async () => { jest.advanceTimersByTime(AUDIO_START_TIMEOUT_MS + 500); await pending; });
+  expect(status).toHaveBeenCalledWith('failed', 'playback_start_timeout');
+  await act(async () => result.current.play('recovered'));
+  await act(async () => resolve());
+  expect(players[1].pause).not.toHaveBeenCalled();
+  expect(result.current.audioBusy()).toBe(true);
+  unmount();
+  await act(async () => { jest.advanceTimersByTime(0); });
+  jest.runAllTicks();
+  expect(jest.getTimerCount()).toBe(0);
+});
 
 test('LMU edits leave the active iRacing audio untouched and are applied when LMU connects', async () => {
   localStorage.setItem(storageKey, 'headset');
@@ -131,6 +243,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  jest.useRealTimers();
   global.Audio = originalAudio;
   global.fetch = originalFetch;
   if (originalMedia) Object.defineProperty(navigator, 'mediaDevices', originalMedia); else delete navigator.mediaDevices;

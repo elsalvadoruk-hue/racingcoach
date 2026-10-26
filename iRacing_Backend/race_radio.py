@@ -87,8 +87,7 @@ QUALI_SILENT_FLAGS = ('yellow', 'caution', 'blue', 'debris', 'red', 'one_to_gree
 
 TRAFFIC_REARM_S = 4.       # a car that was called is called again only after it dropped this far back (or got past)
 CLOSE_REARM_S = 1.5
-LAP_CALL_SHARE = .8        # a lap time may wait this share of the next lap for room on the radio
-LAP_CALL_MAX_S = 115.      # the screen keeps a waiting call for two minutes at most
+LAP_CALL_START_S = 2.      # Start at the line or skip it, including delayed SDK publication.
 POSITION_CALL_S = 40.      # a place is only said while it still holds, so it can wait out a run of corners
 
 
@@ -158,7 +157,6 @@ class RaceRadio:
         self._position_delivery_serial = -1
         self._deliveries = {}
         self.lap_position = None
-        self.quali_lap = None
         self.qualifying = False
         self.open_qualifying = False
         self.quali_traffic = QualifyingTraffic()
@@ -192,7 +190,7 @@ class RaceRadio:
         return allowed(category(key), self.alerts, self.wall_alerts)
 
     def emit(self, key, now, text=None, role='spotter', priority=1, ttl=18, condition=None, cooldown=30, group=None, delay=0, speech_key=None, speech_text=None,
-             speech_parts=None, part_categories=None, screen_parts=None, alert_category=None):
+             speech_parts=None, part_categories=None, screen_parts=None, alert_category=None, immediate=False):
         names = [alert_category or category(key)]
         if part_categories is not None:
             retained = [i for i, name in enumerate(part_categories) if allowed(name, self.alerts, self.wall_alerts)]
@@ -239,6 +237,8 @@ class RaceRadio:
                              'alert_categories': names,
                              'brief': bool(speech['spoken_text']) or key in ('lap_time', 'personal_best', 'position') or key.startswith(('time_', 'laps_')),
                              **speech})
+        if immediate:
+            self.pending[-1]['immediate'] = True
         event = self.pending[-1]
         if key in ('position', 'briefing') or (part_categories is not None and category('position') in names):
             self.track_delivery(event, position=num(self.latest.get('class_position')) if key != 'briefing' else None)
@@ -468,10 +468,9 @@ class RaceRadio:
         cars = (metadata or {}).get('cars') or []
         own = next((c for c in cars if c.get('idx') == (metadata or {}).get('player_idx')), None)
         lap = num(sample.get('lap_completed'))
-        timed = self.quali_lap if self.quali_lap and self.quali_lap['lap'] == lap else None
-        # The published lap time and the standings arrive a moment after the line; wait for both, but not for long.
+        # Standings may lag the line. The lap time has its own immediate call in _laps.
         if (self.qualifying and lap is not None and lap != self.quali_called and self.lap_done_at is not None
-                and now - self.lap_done_at >= 1.5 and (timed or now - self.lap_done_at >= 3.2)):
+                and now - self.lap_done_at >= 1.5):
             best = num(own.get('best_lap_s')) if own else None
             result = None
             if best is not None and best > 0 and own.get('class_id') is not None:
@@ -480,24 +479,12 @@ class RaceRadio:
                 ahead = [b for b in others if b < best]
                 result = (('quali_result', {'pos': len(ahead) + 1, 'gap': best - ahead[0]}) if ahead
                           else ('quali_p1', {'gap': others[0] - best}) if others else ('quali_alone', {}))
-            if result or timed:
-                self.quali_called, self.quali_lap = lap, None
-                parts, screen = list(timed['parts']) if timed else [], list(timed['screen']) if timed else []
-                categories = list(timed['categories']) if timed else []
-                if result:
-                    # The result is spoken by the race engineer. Its lap-time wording
-                    # uses the same prepared pieces as formation history in that voice.
-                    if timed:
-                        parts[0] = radio_phrases.build('form_lap', lap=timed['time'])['text']
-                    built = radio_phrases.build(result[0], self.variant_counts.get(result[0], 0), **result[1])
-                    self.variant_counts[result[0]] = self.variant_counts.get(result[0], 0) + 1
-                    parts.append(built['text'])
-                    screen.append(built['text'])
-                    categories.append(category(result[0]))
-                # One call: the lap time, then where it stands.
-                self.emit(result[0] if result else timed['key'], now, ' '.join(screen), role='race' if result else 'spotter', ttl=40, cooldown=0,
-                          group='lap_time', speech_text=' '.join(parts), speech_parts=parts,
-                          part_categories=categories, screen_parts=screen)
+            if result:
+                self.quali_called = lap
+                self.say(result[0], now, result[1], ttl=40, cooldown=0,
+                         condition=('lap', lap), group='quali_result')
+            elif now - self.lap_done_at >= 3.2:
+                self.quali_called = lap
         position, old_lap = num(sample.get('class_position')), num(previous.get('lap_completed'))
         native = sample.get('finish_status')
         crossed = (int(sample.get('session_flags') or 0) & 0x1 and int(previous.get('session_flags') or 0) & 0x1
@@ -611,14 +598,12 @@ class RaceRadio:
                     screen.append(f'현재 클래스 {int(position)}위입니다.')
                 if racing and position:
                     self.lap_position = position
-                if self.qualifying:
-                    # The result of the lap (place and gap) joins the lap time in _results.
-                    self.quali_lap = {'lap': lap, 'parts': parts, 'screen': screen, 'key': key, 'time': last, 'categories': categories}
-                else:
-                    # The time stays true until the next lap ends, so it may wait out a busy radio for most of the lap.
-                    self.emit(key, now, ' '.join(screen), ttl=min(LAP_CALL_MAX_S, max(45., last * LAP_CALL_SHARE)),
+                remaining = completed['at'] + LAP_CALL_START_S - now
+                if remaining > 0:
+                    self.emit(key, now, ' '.join(screen), ttl=remaining,
                               condition=('lap', lap), group='lap_time', cooldown=0,
-                              speech_text=' '.join(parts), speech_parts=parts, part_categories=categories, screen_parts=screen)
+                              speech_text=' '.join(parts), speech_parts=parts, part_categories=categories, screen_parts=screen,
+                              immediate=True)
                 if completed['clean']:
                     self.laps.append({'lap': lap, 'time': last, 'incidents': incidents})
                     wet = num(s.get('track_wetness'))

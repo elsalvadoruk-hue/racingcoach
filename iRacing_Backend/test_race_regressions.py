@@ -35,8 +35,9 @@ class RadioRegressions(unittest.TestCase):
         self.tick(lap_completed=3, lap_last_s=103., throttle=1, steering_rad=.22)
         self.assertFalse(self.radio.view(self.now)['quiet'])
         self.assertTrue(self.radio.view(self.now)['brief_quiet'])
-        self.wait(20)
         self.assertIn('lap_time', self.keys())
+        self.wait(20)
+        self.assertNotIn('lap_time', self.keys())
         self.tick(brake=.2)
         self.assertFalse(self.radio.view(self.now)['brief_quiet'])
 

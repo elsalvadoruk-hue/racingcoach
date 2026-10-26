@@ -31,7 +31,7 @@ class MultipartCatalogTests(unittest.TestCase):
 
     def test_each_builder_uses_the_call_voice_catalog(self):
         expected = {
-            ('race_radio.py', '_laps', 'dynamic'), ('race_radio.py', '_results', 'dynamic'),
+            ('race_radio.py', '_laps', 'dynamic'),
             ('live_reporting.py', '_brief_formation', 'formation_brief'),
             ('live_reporting.py', '_brief_straight', 'straight_brief'),
             ('live_coaching.py', '_track_sectors', 'repair_check'),
