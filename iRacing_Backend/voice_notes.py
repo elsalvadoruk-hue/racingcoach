@@ -64,6 +64,10 @@ class VoiceNoteStore:
                     event_json TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS radio_delivery_run ON radio_delivery(run_id, id);
+                CREATE TABLE IF NOT EXISTS session_health (
+                    run_id TEXT PRIMARY KEY, started_at REAL NOT NULL, updated_at REAL NOT NULL,
+                    identity_json TEXT NOT NULL, health_json TEXT NOT NULL
+                );
             ''')
             if 'recent_json' not in {row[1] for row in db.execute('PRAGMA table_info(voice_notes)')}:
                 db.execute("ALTER TABLE voice_notes ADD COLUMN recent_json TEXT NOT NULL DEFAULT ''")
@@ -79,10 +83,10 @@ class VoiceNoteStore:
                             json.dumps(recent, ensure_ascii=False, allow_nan=False) if recent else '', row['id']))
 
     @contextmanager
-    def connect(self):
+    def connect(self, timeout=15):
         if not self.available:
             raise ValueError('대화 기록 DB를 열 수 없습니다. 저장 경로의 쓰기 권한을 확인하세요.')
-        db = sqlite3.connect(self.path, timeout=15)
+        db = sqlite3.connect(self.path, timeout=timeout)
         db.row_factory = sqlite3.Row
         try:
             with db:
@@ -126,6 +130,24 @@ class VoiceNoteStore:
                 for row in db.execute(f"SELECT id, recent_json FROM voice_notes WHERE id IN ({','.join('?' * len(chunk))})", chunk):
                     found[row['id']] = json.loads(row['recent_json']) if row['recent_json'] else []
         return found
+
+    def record_session_health(self, run_id, identity, event):
+        from session_health import MAX_RUNS, MAX_SAMPLES
+        with self.connect(timeout=.1) as db:
+            old = db.execute('SELECT * FROM session_health WHERE run_id=?', (run_id,)).fetchone()
+            health = json.loads(old['health_json']) if old else {'format': 'racingcoach-session-health', 'format_version': 1,
+                'poll_seconds': 2, 'heartbeat_seconds': 30, 'samples': [], 'dropped_samples': 0}
+            health['samples'].append(event)
+            health['dropped_samples'] += max(0, len(health['samples']) - MAX_SAMPLES)
+            health['samples'] = health['samples'][-MAX_SAMPLES:]
+            identity = {**(json.loads(old['identity_json']) if old else {}), **identity}
+            started = min(old['started_at'], event['at']) if old else event['at']
+            ended = max(old['updated_at'], event['at']) if old else event['at']
+            db.execute('INSERT OR REPLACE INTO session_health VALUES(?,?,?,?,?)',
+                       (run_id, started, ended, json.dumps(identity, ensure_ascii=False, allow_nan=False),
+                        json.dumps(health, ensure_ascii=False, allow_nan=False)))
+            db.execute('DELETE FROM session_health WHERE run_id NOT IN '
+                       '(SELECT run_id FROM session_health ORDER BY updated_at DESC LIMIT ?)', (MAX_RUNS,))
 
     def record_radio(self, events):
         with self.connect() as db:

@@ -65,6 +65,7 @@ class LapAnalysis:
             "track_platform_id": metadata.get("track_platform_id"),
             "track_path": metadata.get("track_path"),
             "track_length_m": round_or_none(metadata.get("track_length_m"), 1),
+            **{key: metadata[key] for key in ('track_length_source', 'recorded_distance_max_m') if key in metadata},
             "track_turns": metadata.get("track_turns"),
             "track_version": metadata.get("track_version"),
             "setup_name": metadata.get("setup_name"),
@@ -97,6 +98,9 @@ class LapAnalysis:
         feature_support = {
             feature: required.issubset(available) for feature, required in FEATURE_CHANNELS.items()
         }
+        unknown_length = self.telemetry.metadata.get('track_length_source') == 'UNCONFIRMED'
+        if unknown_length:
+            feature_support.update(lap_comparison=False, vehicle_balance=False)
         valid_count = len(self.valid_laps)
         complete_count = sum(1 for lap in self.telemetry.laps if lap.complete)
         out_lap_count = sum(1 for lap in self.telemetry.laps if lap.status == "OUT_LAP")
@@ -127,6 +131,8 @@ class LapAnalysis:
         score = max(0.0, min(1.0, core_score + feature_score + lap_score))
 
         messages: list[str] = []
+        if unknown_length:
+            messages.append('완전한 랩이 없어 트랙 전체 길이를 확인할 수 없습니다. 기록된 입력값은 보존하며 코스 거리 기준 비교는 보류합니다.')
         if missing_core:
             state = "MISSING"
             messages.append("필수 채널 누락: " + ", ".join(missing_core))

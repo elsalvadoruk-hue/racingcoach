@@ -5,11 +5,12 @@ The file is a zip of plain JSON, readable without the app:
     manifest.json   what this is: app version, track, car, when, how many of what
     radio.jsonl     every call's life (started, completed, interrupted, expired, cancelled) with its reason
     reports.jsonl   the engineer's reports and the measured pit wall state behind each one
+    session-health.json  bounded backend connection samples, also for drives with no voice
 
 and, when they exist and the file stays small enough to send (EXTRA_ORDER, manifest "extras"):
 
     drive_summary.json.xz   the driver's own laps and corner passes as measured values (drive_summary)
-    handling-traces/*.json.xz   selected corners across laps, only without nearby-car files and within spare space
+    handling-traces/*.json.xz   selected whole corners across laps, within spare space after other files
     traffic.packed.xz       races: nearby cars ten times a second, positions only (traffic_log, log_pack)
     timing.packed.xz        races: every car's lap position and order once a second (timing_log, log_pack)
 
@@ -73,17 +74,37 @@ def _first_session(db, run_id):
     return {}
 
 
+def _health_rows(db, run_id=None, limit=20):
+    # Read old databases without upgrading or writing them from the exporter.
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_health'").fetchone():
+        return []
+    return db.execute('SELECT * FROM session_health ' + ('WHERE run_id=? ' if run_id else '')
+                      + 'ORDER BY updated_at DESC LIMIT ?', (run_id, limit) if run_id else (limit,)).fetchall()
+
+
 def sessions(store, limit=20):
-    """The most recent driven sessions that left a delivery log, newest first."""
+    """Recent driven sessions, including independently observed silent drives."""
     with store.connect() as db:
         runs = db.execute("SELECT run_id, MIN(created_at) AS started, MAX(created_at) AS ended, COUNT(*) AS events, "
                           "SUM(status='completed') AS completed FROM radio_delivery WHERE run_id != '' "
                           "GROUP BY run_id ORDER BY ended DESC LIMIT ?", (limit,)).fetchall()
+        merged = {row['run_id']: dict(row) for row in runs}
+        identities = {}
+        from session_health import MAX_RUNS
+        for health in _health_rows(db, limit=max(limit, MAX_RUNS)):
+            key = health['run_id']
+            identities[key] = json.loads(health['identity_json'])
+            row = merged.setdefault(key, {'run_id': key, 'started': health['started_at'],
+                                          'ended': health['updated_at'], 'events': 0, 'completed': 0})
+            row['started'] = min(row['started'], health['started_at'])
+            row['ended'] = max(row['ended'], health['updated_at'])
+        runs = sorted(merged.values(), key=lambda row: row['ended'], reverse=True)[:limit]
         result = []
         for run in runs:
             notes = db.execute("SELECT context_json, source FROM voice_notes WHERE created_at BETWEEN ? AND ? ORDER BY created_at",
                                (run['started'] - 120, run['ended'] + 120)).fetchall()
-            identity, session_type, reports, questions = {}, None, 0, 0
+            identity = identities.get(run['run_id'], {})
+            session_type, reports, questions = identity.get('session_type'), 0, 0
             for note in notes:
                 context = json.loads(note['context_json'] or '{}')
                 if note_run(context) != run['run_id']:
@@ -117,14 +138,16 @@ class Extra:
     supplement: object = None
 
 
-# Dropped first when the file would not fit: nearby cars, then the driver's own measured values.
-EXTRA_ORDER = ('nearby_cars', 'drive_summary')
+# Optional health samples go first, then nearby cars and the driver's own summary.
+EXTRA_ORDER = ('session_health', 'nearby_cars', 'drive_summary')
 EXTRA_DESCRIPTIONS = {
+    'session-health.json': 'bounded backend connection samples; not proof of playback or exact disconnect timing',
     'drive_summary.json.xz': "xz JSON: own laps, every valid lap's corner passes and handling observations (measured values only)",
     'traffic.packed.xz': 'races: nearby cars (within 200 m, 10 Hz), positions/order/class/pit only, no names (log_pack)',
     'timing.packed.xz': "races: every car's lap position and order once a second, no names (log_pack)",
 }
 MAX_SUPPLEMENT_GROUPS = 12
+MAX_TRAFFIC_SUPPLEMENT_GROUPS = 3   # race diagnostics add bounded work and never displace traffic
 
 
 def _zip(manifest, radio, reports, extras):
@@ -135,7 +158,7 @@ def _zip(manifest, radio, reports, extras):
         archive.writestr('reports.jsonl', '\n'.join(json.dumps(item, ensure_ascii=False) for item in reports))
         for extra in extras:
             for name, data in extra.files.items():
-                archive.writestr(name, data, compress_type=zipfile.ZIP_STORED)   # already xz
+                archive.writestr(name, data, compress_type=(zipfile.ZIP_DEFLATED if name == 'session-health.json' else zipfile.ZIP_STORED))
     return buffer.getvalue()
 
 
@@ -159,16 +182,20 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
     """
     with store.connect() as db:
         rows = db.execute('SELECT created_at, event_json FROM radio_delivery WHERE run_id=? ORDER BY id', (run_id,)).fetchall()
-        if not rows:
+        health_rows = _health_rows(db, run_id, 1)
+        health = health_rows[0] if health_rows else None
+        if not rows and health is None:
             return None
-        started, ended = rows[0]['created_at'], rows[-1]['created_at']
+        started = min(([rows[0]['created_at']] if rows else []) + ([health['started_at']] if health else []))
+        ended = max(([rows[-1]['created_at']] if rows else []) + ([health['updated_at']] if health else []))
         notes = db.execute('SELECT created_at, text, reply, source, reply_source, service_error, context_json FROM voice_notes '
                            'WHERE created_at BETWEEN ? AND ? ORDER BY created_at', (started - 120, ended + 120)).fetchall()
     radio = [scrub({**json.loads(row['event_json']), 'recorded_at': row['created_at']}) for row in rows]
     if not include_questions:
         # The answer to a microphone question is played like any call; its words stay out with the question.
         radio = [{**event, 'text': None} if event.get('key') == 'answer' else event for event in radio]
-    reports, identity, session_type, questions = [], {}, None, 0
+    identity = json.loads(health['identity_json']) if health else {}
+    reports, session_type, questions = [], identity.get('session_type'), 0
     for note in notes:
         context = json.loads(note['context_json'] or '{}')
         if note_run(context) != run_id:
@@ -207,6 +234,10 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
     run = {'run_id': run_id, 'started_at': started, 'ended_at': ended, 'identity': identity,
            'session_type': session_type, 'game': identity.get('game')}
     made = []
+    if health is not None:
+        document = scrub({**json.loads(health['health_json']), 'identity': json.loads(health['identity_json'])})
+        made.append(Extra('session_health', {'session-health.json': json.dumps(document, ensure_ascii=False).encode('utf-8')},
+                          {'samples': len(document['samples']), 'dropped_samples': document['dropped_samples']}))
     for provider in extras or ():
         try:
             extra = provider(run)
@@ -244,45 +275,45 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
     budget = min(limit, SEND_LIMIT) if limit is not None else SEND_LIMIT
     if summary is not None and len(data) < budget:
         nearby = any(e.group == 'nearby_cars' for e in included)
+        group_limit = MAX_TRAFFIC_SUPPLEMENT_GROUPS if nearby else MAX_SUPPLEMENT_GROUPS
         detail = Extra('handling_traces')
-        status[detail.group] = {'included': False, 'reason': 'nearby_cars_included' if nearby else 'no_eligible_corners',
+        status[detail.group] = {'included': False, 'reason': 'no_eligible_corners',
                                 'bytes': 0, 'groups': 0, 'passes': 0, 'samples': 0, 'skipped_groups': 0}
         before = data
         metadata_only = build()
         if len(metadata_only) <= budget:
             data = metadata_only
-            if not nearby:
-                included.append(detail)
-                try:
-                    for addition in islice(summary.supplement(), MAX_SUPPLEMENT_GROUPS):
-                        previous = dict(status[detail.group])
-                        detail.files.update(addition.files)
-                        status[detail.group] = {
-                            'included': True, 'reason': None,
-                            'bytes': previous['bytes'] + sum(len(v) for v in addition.files.values()),
-                            'groups': previous['groups'] + 1,
-                            'passes': previous['passes'] + addition.info['passes'],
-                            'samples': previous['samples'] + addition.info['samples'],
-                            'skipped_groups': previous['skipped_groups'],
-                        }
-                        candidate = build()
-                        if len(candidate) <= budget:
-                            data = candidate
-                        else:
-                            for name in addition.files:
-                                detail.files.pop(name)
-                            status[detail.group] = previous
-                            status[detail.group]['skipped_groups'] += 1
-                            if not detail.files:
-                                status[detail.group]['reason'] = 'size_limit'
-                    final = build()
-                    if len(final) <= budget:
-                        data = final
-                except Deferred:
-                    raise
-                except Exception:
-                    # Failure of optional detail must not lose the base log.
-                    logger.exception('Handling trace supplement could not be made')
+            included.append(detail)
+            try:
+                for addition in islice(summary.supplement(), group_limit):
+                    previous = dict(status[detail.group])
+                    detail.files.update(addition.files)
+                    status[detail.group] = {
+                        'included': True, 'reason': None,
+                        'bytes': previous['bytes'] + sum(len(v) for v in addition.files.values()),
+                        'groups': previous['groups'] + 1,
+                        'passes': previous['passes'] + addition.info['passes'],
+                        'samples': previous['samples'] + addition.info['samples'],
+                        'skipped_groups': previous['skipped_groups'],
+                    }
+                    candidate = build()
+                    if len(candidate) <= budget:
+                        data = candidate
+                    else:
+                        for name in addition.files:
+                            detail.files.pop(name)
+                        status[detail.group] = previous
+                        status[detail.group]['skipped_groups'] += 1
+                        if not detail.files:
+                            status[detail.group]['reason'] = 'size_limit'
+                final = build()
+                if len(final) <= budget:
+                    data = final
+            except Deferred:
+                raise
+            except Exception:
+                # Failure of optional detail must not lose the base log.
+                logger.exception('Handling trace supplement could not be made')
         else:
             status.pop(detail.group)
             data = before
@@ -326,6 +357,8 @@ def read_extras(data):
     parts = {}
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         names = set(archive.namelist())
+        if 'session-health.json' in names:
+            parts['session_health'] = json.loads(archive.read('session-health.json'))
         if 'drive_summary.json.xz' in names:
             parts['drive_summary'] = drive_summary.unpack(archive.read('drive_summary.json.xz'))
         trace_names = sorted(n for n in names if re.fullmatch(r'handling-traces/[0-9]+\.json\.xz', n))

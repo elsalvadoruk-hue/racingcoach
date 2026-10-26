@@ -3927,6 +3927,8 @@ def session_log_extras(defer: bool = False):
 
 @asynccontextmanager
 async def app_lifespan(_app):
+    from session_health import SessionHealthRecorder
+    session_health = SessionHealthRecorder(live_telemetry, voice_note_store, APP_VERSION)
     # Sends finished drives only while the driver's consent is recorded (session_log_auto).
     from session_log_auto import AutoUploader
     uploader = AutoUploader(voice_note_store, APP_VERSION, current_run=lambda: live_telemetry.run_id,
@@ -3944,11 +3946,13 @@ async def app_lifespan(_app):
     except Exception:
         logger.exception('LMU car models were not prepared; liveries stay separate this run')
     async with managed_lifespan(live_telemetry, overlay_controller, lambda: warm_background()):
-        uploader.start()
+        session_health.start()
         try:
+            uploader.start()
             yield
         finally:
             uploader.stop()
+            await asyncio.to_thread(session_health.stop)
 
 
 app = create_application(APP_VERSION, app_lifespan, overlay_controller)

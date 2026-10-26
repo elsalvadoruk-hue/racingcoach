@@ -83,6 +83,7 @@ QUALI_SILENT = ('traffic_', 'close_', 'hazard_', 'class_traffic')
 # Flags about other cars or the race start mean nothing on a lone qualifying lap. Green, white and
 # the chequered flag are called; so are the driver's own black flag and repair signal.
 QUALI_SILENT_FLAGS = ('yellow', 'caution', 'blue', 'debris', 'red', 'one_to_green', 'start_ready', 'start_set')
+RACE_START_CALLS = frozenset(('one_to_green', 'start_ready', 'start_set', 'race_started'))
 
 
 TRAFFIC_REARM_S = 4.       # a car that was called is called again only after it dropped this far back (or got past)
@@ -191,6 +192,10 @@ class RaceRadio:
 
     def emit(self, key, now, text=None, role='spotter', priority=1, ttl=18, condition=None, cooldown=30, group=None, delay=0, speech_key=None, speech_text=None,
              speech_parts=None, part_categories=None, screen_parts=None, alert_category=None, immediate=False):
+        # iRacing can raise start bits in Offline Testing too. Their race wording
+        # needs an actual race; safety flags keep their existing independent rules.
+        if key in RACE_START_CALLS and str(self.metadata.get('session_type') or '').strip().lower() != 'race':
+            return
         names = [alert_category or category(key)]
         if part_categories is not None:
             retained = [i for i, name in enumerate(part_categories) if allowed(name, self.alerts, self.wall_alerts)]
@@ -733,6 +738,8 @@ class RaceRadio:
                  condition=('quali_traffic', (sample.get('lap_number'), dict(result))))
 
     def valid(self, event, now):
+        if event.get('key') in RACE_START_CALLS and str(self.metadata.get('session_type') or '').strip().lower() != 'race':
+            return False
         if not event_allowed(event, self.alerts, self.wall_alerts):
             return False
         if (self.last_sample is None or not 0 <= now - self.last_sample < .5 or

@@ -106,6 +106,28 @@ class LmuIbtTests(unittest.TestCase):
         self.assertAlmostEqual(float(c['dcBrakeBias'][2000]), 55.)
         self.assertTrue(np.all(np.diff(c['SessionTime']) > 0))
 
+    def test_partial_recording_keeps_inputs_but_never_invents_course_length(self):
+        with duckdb.connect(str(self.path)) as db:
+            for name, hz in db.execute('SELECT channelName, frequency FROM channelsList').fetchall():
+                db.execute(f'DELETE FROM "{name}" WHERE rowid >= ?', [int(5 * hz)])
+            for name in ('Lap', 'Lap Time'):
+                db.execute(f'DELETE FROM "{name}" WHERE ts > ?', [START + 5])
+        telemetry = self.parse()
+        self.assertIsNone(telemetry.metadata['track_length_m'])
+        self.assertEqual(telemetry.metadata['track_length_source'], 'UNCONFIRMED')
+        self.assertTrue(np.all(np.isnan(telemetry.channels['LapDistPct'])))
+        self.assertTrue(np.any(np.isfinite(telemetry.channels['LapDist'])))
+        np.testing.assert_allclose(telemetry.channels['Speed'][10:-10], SPEED)
+        self.assertFalse(any(lap.valid or lap.complete for lap in telemetry.laps))
+        import backend_api
+        from analysis_models import AnalyzeRequest
+        result = backend_api.TelemetryAnalyzer(telemetry).analyze(AnalyzeRequest(filename=self.path.name))
+        self.assertIsNone(result['session']['track_length_m'])
+        self.assertEqual(result['session']['track_length_source'], 'UNCONFIRMED')
+        self.assertIsNone(result['comparison'])
+        self.assertFalse(result['data_quality']['coaching_ready'])
+        self.assertTrue(any('트랙 전체 길이' in text for text in result['data_quality']['messages']))
+
     def test_steering_uses_the_live_measured_wheel_range(self):
         nominal = self.parse()
         self.assertEqual(nominal.metadata['steering_scale'], 'NOMINAL')

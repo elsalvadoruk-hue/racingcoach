@@ -16,7 +16,8 @@ FORMAT, VERSION = 'iracing-coach-drive-summary', 1
 RECORDING_KEYS = ('game', 'car_name', 'car_path', 'car_platform_id', 'track_name', 'track_path', 'track_platform_id',
                   'track_config', 'track_length_m', 'track_turns', 'session_type', 'session_duration_s',
                   'session_laps_limit', 'estimated_lap_time_s', 'setup_modified', 'setup_passed_tech', 'is_fixed_setup',
-                  'weight_penalty_kg', 'power_adjust_pct', 'fuel_max_l', 'steering_scale')
+                  'weight_penalty_kg', 'power_adjust_pct', 'fuel_max_l', 'steering_scale',
+                  'track_length_source', 'recorded_distance_max_m', 'steering_half_range_deg')
 LAP_KEYS = ('lap_number', 'status', 'lap_time_s', 'start_pct', 'end_pct', 'on_track_ratio', 'fuel_used_l',
             'invalid_reason', 'delta_to_file_best_s')
 CORNER_KEYS = ('id', 'label', 'official_turn_number', 'segment_source', 'entry_pct', 'apex_pct', 'exit_pct',

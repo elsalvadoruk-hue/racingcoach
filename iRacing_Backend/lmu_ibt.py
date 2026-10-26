@@ -143,8 +143,11 @@ class LmuIbtReader:
             # LMU: positive steers right; iRacing: positive steers left.
             channels['SteeringWheelAngle'] = -steer * half_range
         travelled = self._lap_distance(time, sources.get('Lap Dist'), length)
-        distance = np.mod(travelled, length)
-        channels['LapDist'], channels['LapDistPct'] = distance, distance / length
+        distance = np.mod(travelled, length) if length is not None else travelled
+        channels['LapDist'] = distance
+        # Keep measured inputs from partial recordings, but never turn their
+        # last distance into a whole course or a usable comparison percentage.
+        channels['LapDistPct'] = distance / length if length is not None else np.full(len(time), np.nan)
         pits = step('In Pits', 0.) > 0
         channels['OnPitRoad'] = pits
         channels['IsOnTrack'] = np.ones(len(time), dtype=bool)
@@ -186,6 +189,8 @@ class LmuIbtReader:
         metadata = IBTReader._extract_metadata(None, session_info, '')
         layout = metadata_in.get('track_layout') or ''
         metadata.update(game='lmu', car_class=metadata_in.get('car_class') or None,
+                        track_length_source='COMPLETED_LAPS' if length is not None else 'UNCONFIRMED',
+                        recorded_distance_max_m=(float(np.nanmax(distance)) if np.any(np.isfinite(distance)) else None),
                         driver_name=str(metadata_in.get('driver_name') or '').strip() or None,
                         car_model_key=metadata_in.get('car_model_key') or None,
                         steering_scale=steering_scale, steering_half_range_deg=round(math.degrees(half_range), 1),
@@ -203,12 +208,11 @@ class LmuIbtReader:
     @staticmethod
     def _track_length(summary, distance):
         travelled = [lap.distance_m for lap in summary.laps
-                     if lap.status == 'VALIDITY_UNKNOWN' and lap.distance_m]
+                     if lap.status == 'VALIDITY_UNKNOWN' and lap.distance_m is not None
+                     and math.isfinite(lap.distance_m) and lap.distance_m > 0]
         if travelled:
             return float(np.median(travelled))
-        if distance is not None and np.any(np.isfinite(distance[1])):
-            return float(np.nanmax(distance[1]))
-        raise LmuTelemetryFormatError('트랙 길이를 확인할 수 있는 랩 거리가 없습니다.')
+        return None
 
     @staticmethod
     def _lap_distance(time, source, length):
@@ -216,6 +220,8 @@ class LmuIbtReader:
             return np.full(len(time), np.nan)
         axis, values = source
         values = np.asarray(values, dtype=float)
+        if length is None:
+            return np.interp(time, axis, values, left=np.nan, right=np.nan)
         # Unwrap the start/finish reset so interpolation never sweeps the lap backwards.
         resets = np.r_[0, np.cumsum(np.diff(values) < -length / 2)]
         unwrapped = values + resets * length
@@ -244,7 +250,7 @@ class LmuIbtReader:
         # LMU's lap event and its distance reset can be up to a second apart.
         # Cut laps where the distance actually crosses the line (as an IBT does)
         # when that crossing is close to the event; keep the recorded lap time.
-        crossings = np.flatnonzero(np.diff(np.floor(travelled / length)) > 0) + 1 if np.any(
+        crossings = np.flatnonzero(np.diff(np.floor(travelled / length)) > 0) + 1 if length is not None and np.any(
             np.isfinite(travelled)) else np.array([], dtype=int)
 
         def boundary(stamp):
@@ -264,7 +270,7 @@ class LmuIbtReader:
             window = slice(first, last + 1)
             on_track = float(np.mean(surface[window] == 3))
             pit_samples = int(np.count_nonzero(pits[window]))
-            complete = lap.status not in ('INCOMPLETE', 'DISTANCE_DISCONTINUITY') and (
+            complete = length is not None and lap.status not in ('INCOMPLETE', 'DISTANCE_DISCONTINUITY') and (
                 lap.distance_m or 0) >= .9 * length
             reason = None
             if not complete:
@@ -305,7 +311,8 @@ class LmuIbtReader:
             'WeekendInfo': {'TrackDisplayName': track, 'TrackName': stable_id('track', track),
                             'TrackID': stable_id('track', track),
                             'TrackConfigName': '' if layout in ('', track) else layout,
-                            'TrackLength': f'{length / 1000:.4f} km', 'EventType': metadata.get('session_type') or ''},
+                            'TrackLength': f'{length / 1000:.4f} km' if length is not None else '',
+                            'EventType': metadata.get('session_type') or ''},
             'DriverInfo': {'DriverCarIdx': 0, 'DriverSetupName': 'LMU recording',
                            'Drivers': [{'CarIdx': 0, 'CarScreenName': name, 'CarPath': car_id, 'CarID': car_id}]},
             'SessionInfo': {'Sessions': [{'SessionNum': 0, 'SessionType': _session_type(metadata.get('session_type')),

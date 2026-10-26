@@ -99,14 +99,31 @@ class BudgetTests(unittest.TestCase):
         return Extra('handling_traces', {f'handling-traces/{index:03}.json.xz': os.urandom(size)},
                      {'passes': 4, 'samples': 100})
 
-    def test_nearby_files_that_fit_are_kept_and_detail_is_not_evaluated(self):
-        detail = Mock(side_effect=AssertionError('detail must stay lazy'))
+    def test_nearby_files_are_kept_and_spare_space_holds_bounded_whole_corners(self):
+        calls = []
+        def detail():
+            for i in range(100):
+                calls.append(i)
+                yield self.bundle(i, 1000)
         nearby = lambda run: Extra('nearby_cars', {'traffic.bin': b'traffic'})
         _, data = session_log.export(self.store, RUN, '2.1.0', extras=[nearby, self.provider(detail)], limit=50_000)
-        detail.assert_not_called()
         archive = zipfile.ZipFile(io.BytesIO(data))
         self.assertEqual(archive.read('traffic.bin'), b'traffic')
-        self.assertFalse(any(n.startswith('handling-traces/') for n in archive.namelist()))
+        self.assertEqual(len(calls), session_log.MAX_TRAFFIC_SUPPLEMENT_GROUPS)
+        self.assertEqual(len([n for n in archive.namelist() if n.startswith('handling-traces/')]), len(calls))
+        self.assertLessEqual(len(data), 50_000)
+
+    def test_detail_never_displaces_retained_traffic_even_when_first_corner_is_too_large(self):
+        nearby = lambda run: Extra('nearby_cars', {'traffic.bin': b'traffic'})
+        detail = lambda: iter([self.bundle(0, 60_000), self.bundle(1, 1000)])
+        _, data = session_log.export(self.store, RUN, '2.3.1', extras=[nearby, self.provider(detail)], limit=50_000)
+        archive = zipfile.ZipFile(io.BytesIO(data))
+        self.assertEqual(archive.read('traffic.bin'), b'traffic')
+        self.assertNotIn('handling-traces/000.json.xz', archive.namelist())
+        self.assertIn('handling-traces/001.json.xz', archive.namelist())
+        manifest = session_log.read(data)[0]
+        self.assertTrue(manifest['extras']['nearby_cars']['included'])
+        self.assertEqual(manifest['extras']['handling_traces']['skipped_groups'], 1)
 
     def test_size_dropped_nearby_files_allow_whole_bundles_only_and_keep_base_parts(self):
         base = self.provider(lambda: iter([self.bundle(0, 20_000), self.bundle(1, 40_000), self.bundle(2, 10_000)]))

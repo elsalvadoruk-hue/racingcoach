@@ -887,12 +887,14 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
 
     @router.post('/radio-delivery')
     async def record_radio_delivery(payload: RadioDeliveryBatch):
+        from session_health import feedback_context
         # Which game, track and car the call belonged to, so a session log names them even
         # when the drive left no engineer report. Only for the drive that is running now.
         live = coach.live
         with live.lock:
             run_id, identity = live.run_id, dict(live.identity)
             session_type = (live.pit_wall.race or {}).get('session_type')
+            contexts = [feedback_context(live, event.run_id, time.time()) for event in payload.events]
             for event in payload.events:
                 if event.run_id == run_id and callable(getattr(live, 'radio_delivery', None)):
                     live.radio_delivery(event.event_id, event.status, dropped_parts=event.dropped_parts)
@@ -900,7 +902,9 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
                     live.control_recommendations.delivery(event.event_id,event.status,live.clock())
         session = {key: identity.get(key) for key in ('game', 'track_name', 'track_path', 'track_config', 'car_name', 'car_path')}
         session['session_type'] = session_type
-        events = [{**e.model_dump(), **({'session': session} if run_id and e.run_id == run_id else {})} for e in payload.events]
+        events = [{**e.model_dump(), 'feedback_context': context,
+                   **({'session': session} if run_id and e.run_id == run_id else {})}
+                  for e, context in zip(payload.events, contexts)]
         await asyncio.to_thread(coach.store.record_radio, events)
         return {'recorded': len(payload.events)}
 
