@@ -38,9 +38,9 @@ beforeEach(() => {
 });
 afterEach(() => selectGame('iracing'));
 const ready = () => waitFor(() => expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled());
-async function picker({ external = ['A.csv'], game = 'iracing', trial } = {}) {
-  selectGame(game); activateSession(currentSessionResult({ ...session('A.ibt'), provider: game }));
-  render(<SourcePicker target="2" reference="2" external={external} onApply={jest.fn()}
+async function picker({ external = ['A.csv'], game = 'iracing', trial, snapshot = {}, referenceLap = '2' } = {}) {
+  selectGame(game); activateSession(currentSessionResult({ ...session('A.ibt'), provider: game, ...snapshot }));
+  render(<SourcePicker target="2" reference={referenceLap} external={external} onApply={jest.fn()}
     analysisWorkspace={{ game, activeTrial: trial }} />);
   await ready();
 }
@@ -67,6 +67,17 @@ test('a missing primary falls back to personal instead of promoting supporting l
   await picker({ external: ['missing.csv', 'support.csv'] });
   expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
   expect(screen.getByText(/이전에 선택한 Garage61 대표 기준을 사용할 수 없어/)).toBeInTheDocument();
+});
+
+test('a missing primary restores an automatic personal lap even after a previous manual selection', async () => {
+  await picker({ external: ['missing.csv'], snapshot: { reference_selection: 'MANUAL', defaultReference: null }, referenceLap: '' });
+  expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
+  expect(screen.getByLabelText('기준 선택 방식')).toHaveValue('AUTO');
+  expect(screen.getByLabelText('비교 기준')).toHaveValue('2');
+  fireEvent.click(screen.getByRole('button', { name: '선택한 랩 비교하기' }));
+  await waitFor(() => expect(labRequest).toHaveBeenCalledWith('comparison', expect.objectContaining({
+    reference_selection: 'AUTO', reference_lap: 2, external_reference_files: [],
+  })));
 });
 
 test('switching files selects compatible server recommendations and applying uses them', async () => {

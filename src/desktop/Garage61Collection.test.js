@@ -93,12 +93,54 @@ test('a sufficient cache explains why another download is unnecessary', async ()
 });
 
 test('a cooldown is visible instead of appearing to do nothing', async () => {
+  jest.useFakeTimers();
   requestJson.mockImplementation(async url => url.endsWith('/start')
     ? { health: health('B.ibt'), job: { state: 'SKIPPED_COOLDOWN', busy: false, message: '동일 조건을 최근 15분 이내 수집하여 재수집을 생략했습니다.' } }
     : { health: url.includes('B.ibt') ? health('B.ibt') : { enabled: false }, job: null });
   await open(); await choose('B.ibt');
   expect(await screen.findByText(/최근 15분 이내/)).toBeInTheDocument();
+  expect(screen.getByRole('status', { name: 'Garage61 수집 상태' })).toHaveTextContent('재수집 생략');
+  expect(screen.getByText('SKIPPED_COOLDOWN', { exact: true })).toBeInTheDocument();
+  expect(screen.queryByRole('progressbar', { name: 'Garage61 수집 예상 진행률' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled();
   expect(starts()).toHaveLength(1);
+  const calls = requestJson.mock.calls.length;
+  await act(async () => { jest.advanceTimersByTime(60000); });
+  expect(requestJson).toHaveBeenCalledTimes(calls);
+  fireEvent.click(screen.getByRole('button', { name: 'Garage61 다시 확인' }));
+  await waitFor(() => expect(starts()).toHaveLength(2));
+  expect(starts().every(([, options]) => JSON.parse(options.body).force === false)).toBe(true);
+  expect(await screen.findByText('SKIPPED_COOLDOWN', { exact: true })).toBeInTheDocument();
+});
+
+test.each([
+  ['COMPLETE', 'Garage61 수집 완료', 'Garage61 자료 수집을 마쳤습니다.'],
+  ['PARTIAL', 'Garage61 일부 수집', 'Garage61 자료를 일부 받았습니다.'],
+  ['CANCELLED', 'Garage61 수집 취소', 'Garage61 자료 수집이 취소됐습니다.'],
+  ['SKIPPED_CACHE_SUFFICIENT', 'Garage61 저장된 자료 사용', '최신 Garage61 기준이 충분해'],
+  ['FAILED', 'Garage61 수집 실패', '검증용 인증 오류'],
+])('%s has a visible terminal result and leaves personal comparison available', async (phase, title, message) => {
+  jest.useFakeTimers();
+  requestJson.mockImplementation(async url => url.endsWith('/start')
+    ? { health: health('B.ibt'), job: { state: phase, busy: false, message: '검증용 인증 오류' } }
+    : { health: url.includes('B.ibt') ? health('B.ibt') : { enabled: false }, job: null });
+  await open(); await choose('B.ibt');
+  const result = await screen.findByRole(phase === 'FAILED' ? 'alert' : 'status', { name: 'Garage61 수집 상태' });
+  expect(result).toHaveTextContent(title);
+  expect(result).toHaveTextContent(message);
+  expect(screen.queryByRole('progressbar', { name: 'Garage61 수집 예상 진행률' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled();
+  const calls = requestJson.mock.calls.length;
+  await act(async () => { jest.advanceTimersByTime(30000); });
+  expect(requestJson).toHaveBeenCalledTimes(calls);
+});
+
+test('a cooldown without server wording still explains the skipped download', async () => {
+  requestJson.mockImplementation(async url => url.endsWith('/start')
+    ? { health: health('B.ibt'), job: { state: 'SKIPPED_COOLDOWN', busy: false } }
+    : { health: url.includes('B.ibt') ? health('B.ibt') : { enabled: false }, job: null });
+  await open(); await choose('B.ibt');
+  expect(await screen.findByRole('status', { name: 'Garage61 수집 상태' })).toHaveTextContent('재수집 제한 시간 동안 다운로드를 생략');
 });
 
 test('LMU never checks or starts Garage61 collection', async () => {

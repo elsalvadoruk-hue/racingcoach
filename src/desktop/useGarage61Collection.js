@@ -38,7 +38,9 @@ export function useGarage61Collection({ filename, enabled, onCollected }) {
         CANCELLED: 'Garage61 자료 수집이 취소됐습니다.',
         SKIPPED_CACHE_SUFFICIENT: '최신 Garage61 기준이 충분해 내려받은 자료를 재사용합니다.',
       };
-      show(phase || 'FAILED', payload, messages[phase] || job?.message || 'Garage61 수집 작업을 시작하지 못했습니다. 다시 확인해 주세요.');
+      show(phase || 'FAILED', payload, messages[phase] || job?.message || (phase === 'SKIPPED_COOLDOWN'
+        ? '동일 조건을 최근에 수집하여 재수집 제한 시간 동안 다운로드를 생략했습니다.'
+        : 'Garage61 수집 작업을 시작하지 못했습니다. 다시 확인해 주세요.'));
       if (live() && ['COMPLETE', 'PARTIAL'].includes(phase)) collected.current?.(filename);
     };
     const schedule = () => { if (live()) timer = setTimeout(check, POLL_MS); };

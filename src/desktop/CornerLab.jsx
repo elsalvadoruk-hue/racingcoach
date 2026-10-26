@@ -130,6 +130,7 @@ function Workspace({ onSession, runtime, analysisWorkspace, busy, progress, fail
   const [channelMode, setChannelMode] = useState('basic');
   const [focus, setFocus] = useState(false);
   const [dialog, setDialog] = useState(null);
+  const sourceDialogOpener = useRef(null);
   const [practice, setPractice] = useState(null);
   // The comparison-point panel is a short summary in the sidebar; clicking it enlarges it over the
   // map and pushes the graphs left (corner list hidden). A click outside or Esc shrinks it again.
@@ -375,7 +376,10 @@ function Workspace({ onSession, runtime, analysisWorkspace, busy, progress, fail
       <section className="lap-timeline" aria-label="한눈에 보는 전체 코너 손실"><div className="timeline-heading"><strong>한 랩 한눈에</strong><span>자동 구간별 시간 차이 · 초</span><Button variant="ghost" size="sm" onClick={() => { choose(worst.id); setSort('loss'); }}><ArrowDownWideNarrow />가장 큰 손실로 이동</Button></div><div className="timeline-scroll" ref={timelineRef} role="region" aria-label="전체 자동 구간 탐색" tabIndex={0}><div className="timeline-corners" style={{ gridTemplateColumns: `repeat(${corners.length}, minmax(48px, 1fr))` }}>{corners.map((item, index) => <button key={item.id} aria-label={`타임라인 ${item.id} 선택`} aria-pressed={item.id === selected} onClick={() => choose(item.id)} className={cn('timeline-cell', item.delta_s < 0 && 'is-gain', item.id === selected && 'selected')}><span>{item.id}</span><div className="timeline-bar"><i style={{ height: `${bars[index]}px` }} /></div><strong>{signed(item.delta_s, 2)}</strong></button>)}</div></div></section></>}
     </> }</main></div>}
     <AppFooter version={packageInfo.version} busy={busy} message={failure || notice} workspace={analysisWorkspace} onNavigate={navigateDesktop} onFullscreen={fullscreen} />
-    <Dialog open={dialog === 'laps'} onOpenChange={open => !open && setDialog(null)}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>비교할 주행 선택</DialogTitle><DialogDescription>{lmu ? 'LMU 기록 파일에서 내 랩과 비교 기준 랩을 선택하세요.' : '내 IBT 기록과 내려받은 Garage61 기준을 선택하세요.'}</DialogDescription></DialogHeader><SourcePicker analysisWorkspace={analysisWorkspace} target={lap} reference={reference} external={external} onApply={applyComparison} /></DialogContent></Dialog>
+    <Dialog open={dialog === 'laps'} onOpenChange={open => !open && setDialog(null)}><DialogContent className="desktop-source-dialog"
+      onOpenAutoFocus={() => { sourceDialogOpener.current = document.activeElement; }}
+      onCloseAutoFocus={event => { if (sourceDialogOpener.current?.isConnected) { event.preventDefault(); sourceDialogOpener.current.focus(); } }}>
+      <DialogHeader><DialogTitle>비교할 주행 선택</DialogTitle><DialogDescription>{lmu ? 'LMU 기록 파일에서 내 랩과 비교 기준 랩을 선택하세요.' : '내 IBT 기록과 내려받은 Garage61 기준을 선택하세요.'}</DialogDescription></DialogHeader><SourcePicker analysisWorkspace={analysisWorkspace} target={lap} reference={reference} external={external} onApply={applyComparison} /></DialogContent></Dialog>
   </div></TooltipProvider>;
 }
 
