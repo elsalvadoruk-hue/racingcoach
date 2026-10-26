@@ -60,6 +60,6 @@ test('manual opens with an empty telemetry folder and can return to the starting
   fireEvent.click(screen.getByRole('button', { name: '처음 사용 가이드 열기' }));
   expect(screen.getByRole('navigation', { name: '매뉴얼 목차' })).toBeVisible();
   expect(screen.queryByRole('heading', { name: '분석할 주행을 선택하세요.' })).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: '주행 요약', exact: true }));
+  fireEvent.click(screen.getByRole('button', { name: '주행 분석', exact: true }));
   expect(screen.getByRole('heading', { name: '분석할 주행을 선택하세요.' })).toBeVisible();
 });
