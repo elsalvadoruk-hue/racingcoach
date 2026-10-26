@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Literal, Optional
 import logging
+import math
 from fastapi import HTTPException, Query
 import asyncio
 from analysis_models import Garage61CollectRequest
@@ -96,22 +97,35 @@ def register_routes(app, services: ReferenceRoutesServices):
                 "health": health,
                 "job": {
                     "state": "SKIPPED_CACHE_SUFFICIENT",
+                    "filename": path.name,
+                    "context_key": health["context"]["context_key"],
                     "message": "현재 IBT 조건에 맞는 Garage61 캐시가 충분하고 최신입니다.",
                     "busy": False,
                 },
             }
-        age_hours = health.get("last_context_scan_age_hours")
+        age_seconds = health.get("last_context_scan_age_seconds")
+        if age_seconds is None and health.get("last_context_scan_age_hours") is not None:
+            age_seconds = float(health["last_context_scan_age_hours"]) * 3600.0
+        cooldown_seconds = services.get_garage61_collector_cooldown_min() * 60.0
         if (
             not payload.force
-            and age_hours is not None
-            and float(age_hours) * 60.0 < services.get_garage61_collector_cooldown_min()
+            and age_seconds is not None
+            and float(age_seconds) < cooldown_seconds
         ):
+            remaining = math.ceil(cooldown_seconds - max(0.0, float(age_seconds)))
             return {
                 "status": "success",
                 "health": health,
                 "job": {
                     "state": "SKIPPED_COOLDOWN",
-                    "message": f"동일 조건을 최근 {services.get_garage61_collector_cooldown_min():.0f}분 이내 수집하여 재수집을 생략했습니다.",
+                    "filename": path.name,
+                    "context_key": health["context"]["context_key"],
+                    "retry_after_s": remaining,
+                    "message": (
+                        f"동일 조건을 최근 {services.get_garage61_collector_cooldown_min():.0f}분 이내 수집하여 재수집을 생략했습니다. "
+                        f"재수집 가능까지 약 {remaining // 60}분 {remaining % 60:02d}초입니다. "
+                        f"현재 로컬 호환 자료 {health.get('compatible_count', 0)}개."
+                    ),
                     "busy": False,
                 },
             }

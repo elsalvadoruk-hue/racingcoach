@@ -281,6 +281,11 @@ class Garage61CollectorManager:
             payload = _load_json(paths["status"])
             if not payload:
                 payload = {"job_id": resolved, "state": "UNKNOWN", "message": "Collector status file is not available yet."}
+            # Older workers replaced the queued status and dropped its identity.
+            # The matching request remains authoritative for both collector modes.
+            request = _load_json(paths["request"])
+            if request.get("job_id") == resolved:
+                payload.update({key: request.get(key) for key in ("filename", "context_key", "created_at", "target_count")})
             running = bool(resolved == self._active_job_id and self._process is not None and self._process.poll() is None)
             payload["busy"] = running
             payload["status_file"] = str(paths["status"])

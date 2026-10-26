@@ -299,7 +299,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "2.3.1"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "2.3.2"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -946,6 +946,7 @@ def garage61_reference_health(
         "cache_fresh_hours": GARAGE61_CACHE_FRESH_HOURS,
         "last_context_scan": scan or None,
         "last_context_scan_age_hours": round_or_none(age_hours, 1),
+        "last_context_scan_age_seconds": None if age_hours is None else age_hours * 3600.0,
         "cache_fresh": fresh,
         "enough_data": enough_data,
         "needs_collection": bool(GARAGE61_AUTO_COLLECT_ENABLED and needs_collection),

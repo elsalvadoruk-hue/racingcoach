@@ -97,6 +97,27 @@ class CollectionRouteTests(unittest.TestCase):
         self.manager.start.assert_not_called()
         self.manager.cancel.assert_not_called()
 
+    def test_cooldown_uses_exact_seconds_instead_of_rounded_display_hours(self):
+        self.health.update(last_context_scan_age_hours=.2, last_context_scan_age_seconds=899.5)
+        reply = self.start().json()['job']
+        self.assertEqual(reply['state'], 'SKIPPED_COOLDOWN')
+        self.assertEqual(reply['retry_after_s'], 1)
+        self.health['last_context_scan_age_seconds'] = 900.
+        self.start()
+        self.manager.start.assert_called_once()
+
+    def test_another_context_has_no_cooldown_and_clicking_does_not_extend_the_timer(self):
+        self.health.update(last_context_scan_age_hours=0, last_context_scan_age_seconds=60.)
+        first = self.start().json()['job']
+        second = self.start().json()['job']
+        self.assertEqual(first['retry_after_s'], second['retry_after_s'])
+        self.assertEqual(first['context_key'], 'car-track')
+        self.manager.start.assert_not_called()
+        self.health.update(last_context_scan_age_hours=None, last_context_scan_age_seconds=None,
+                           context={'context_key': 'other-car-track', 'filename': 'drive.ibt'})
+        self.start()
+        self.assertEqual(self.manager.start.call_args.args[0]['context_key'], 'other-car-track')
+
 
 if __name__ == "__main__":
     unittest.main()

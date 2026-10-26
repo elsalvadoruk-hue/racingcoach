@@ -77,7 +77,8 @@ class StatusWriter:
         self.path = path
         self.job_id = job_id
         self.started_at = time.time()
-        self.last: dict[str, Any] = {}
+        initial = load_json(path)
+        self.last: dict[str, Any] = initial if initial.get("job_id") == job_id else {}
 
     def update(self, state: str, message: str, progress: float, **extra: Any) -> None:
         now = time.time()
@@ -540,7 +541,10 @@ def condition_score(meta: dict[str, Any], current: dict[str, Any]) -> tuple[floa
             if s < 0.5:
                 reasons.append("BOP 출력 차이")
     current_tire = current.get("tire_compound")
-    if current_tire is not None and meta.get("tire_compound") is not None:
+    # PlayerTireCompound is an index into the SDK's per-car DriverTires list,
+    # not Garage61's tireCompound enum. An unverified mapping is unknown.
+    if (current.get("tire_compound_source") != "IRACING_SDK"
+            and current_tire is not None and meta.get("tire_compound") is not None):
         available += 1
         s = 1.0 if str(meta.get("tire_compound")) == str(current_tire) else 0.0
         weighted += 0.05 * s
@@ -859,6 +863,7 @@ def run(request_path: Path, status_path: Path, reference_dir: Path, token_file: 
     job_id = str(request.get("job_id") or "")
     global _active_status
     status = StatusWriter(status_path, job_id)
+    status.last.update({key: request.get(key) for key in ("filename", "context_key", "created_at", "target_count")})
     _active_status = status
     reference_dir.mkdir(parents=True, exist_ok=True)
     catalog_path = reference_dir / "garage61_catalog.json"
@@ -1095,7 +1100,7 @@ def run(request_path: Path, status_path: Path, reference_dir: Path, token_file: 
         save_catalog(catalog_path, catalog)
 
         local_count = len(list(reference_dir.glob("Garage 61 - *.csv")))
-        terminal = "COMPLETE" if len(context_ids) >= min(target_count, 3) else "PARTIAL"
+        terminal = "COMPLETE" if len(context_ids) >= target_count else "PARTIAL"
         message = (
             f"Garage61 API 기준 데이터 확보 완료 · 현재 컨텍스트 {len(context_ids)}개"
             if terminal == "COMPLETE"

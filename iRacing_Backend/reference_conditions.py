@@ -102,6 +102,7 @@ def telemetry_reference_conditions(
         "weight_penalty_kg": round_or_none(telemetry.metadata.get("weight_penalty_kg"), 2),
         "power_adjust_pct": round_or_none(telemetry.metadata.get("power_adjust_pct"), 3),
         "tire_compound": int(round(tire_compound)) if tire_compound is not None and math.isfinite(tire_compound) else None,
+        "tire_compound_source": "IRACING_SDK",
     }
 
 
@@ -222,7 +223,8 @@ def reference_condition_similarity(reference: dict[str, Any], current: dict[str,
 
     ref_tire = reference.get("tire_compound")
     current_tire = current.get("tire_compound")
-    if ref_tire is not None and current_tire is not None:
+    tire_comparable = current.get("tire_compound_source") != "IRACING_SDK"
+    if ref_tire is not None and current_tire is not None and tire_comparable:
         tire_score = 1.0 if str(ref_tire) == str(current_tire) else 0.0
         available += 1
         weighted += 0.05 * tire_score
@@ -231,6 +233,9 @@ def reference_condition_similarity(reference: dict[str, Any], current: dict[str,
         if not tire_score:
             setup_compatible = False
             setup_incompatibility_reasons.append("타이어 컴파운드 불일치")
+
+    if not tire_comparable and ref_tire is not None and current_tire is not None:
+        reasons.append("타이어 조건 미확인 (번호 체계 다름)")
 
     score = weighted / weight_sum if weight_sum else 0.50
     expected_fields = [
@@ -257,6 +262,7 @@ def reference_condition_similarity(reference: dict[str, Any], current: dict[str,
         "raw_score": round(max(0.0, min(1.0, score)), 3),
         "coverage": round(coverage, 3),
         "available_components": available,
+        "tire_compound_comparable": bool(tire_comparable and ref_tire is not None and current_tire is not None),
         "reasons": reasons[:8],
         "setup_compatible": bool(setup_compatible),
         "setup_incompatibility_reasons": setup_incompatibility_reasons[:4],

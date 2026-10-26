@@ -370,7 +370,8 @@ class StatusWriter:
         self.path = path
         self.job_id = job_id
         self.started_at = time.time()
-        self.last: dict[str, Any] = {}
+        initial = load_json(path)
+        self.last: dict[str, Any] = initial if job_id and initial.get("job_id") == job_id else {}
 
     def update(self, state: str, message: str, progress: Optional[float] = None, **extra: Any) -> None:
         now = time.time()
@@ -2918,6 +2919,7 @@ def main() -> int:
 
     request = load_json(args.request_file)
     status = StatusWriter(args.status_file, str(request.get("job_id") or "") or None)
+    status.last.update({key: request.get(key) for key in ("filename", "context_key", "created_at", "target_count")})
     if args.auto:
         if not request:
             status.update("FAILED", "Auto mode requires --request-file.", progress=1.0)
