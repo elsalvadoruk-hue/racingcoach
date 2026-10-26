@@ -102,7 +102,9 @@ export default function SourcePicker({ target, reference, external, onApply, ana
       setSession(next); setRefs(available); setPersonalReference(personal || null);
       const missingExternal = !trial && external.length && !retained.length;
       const fallback = changedFile ? !trial && !lmu && !nextSelected.length : missingExternal;
-      setReferenceNotice(references.unavailable || (fallback ? 'Garage61 기준을 사용할 수 없어 조건이 비슷한 내 베스트 랩을 사용합니다.' : ''));
+      setReferenceNotice(references.unavailable || (lmu ? '' : !available.length
+        ? '이 차량·트랙과 맞는 내려받은 Garage61 기준이 없습니다.'
+        : fallback ? '이전에 선택한 Garage61 대표 기준을 사용할 수 없어 조건이 비슷한 내 베스트 랩을 사용합니다. Garage61을 사용하려면 대표 기준을 다시 선택하세요.' : ''));
       if (missingExternal) { setMode('LOCAL'); setSelected([]); }
       if (personal && (changedFile || data.reference_selection !== 'MANUAL') && !trial) {
         setReferenceSelection('AUTO');

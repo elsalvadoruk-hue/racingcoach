@@ -372,6 +372,85 @@ test('desktop selection updates existing origin preferences and telemetry owners
   await waitFor(() => expect(JSON.parse(localStorage.getItem('iracing-tuner.workflow.v1')).preferences.selectedFile).toBe('C.ibt'));
 });
 
+test('desktop adoption collects missing Garage61 data once without replacing the selected comparison', async () => {
+  const original = global.fetch.getMockImplementation();
+  const health = { enabled: true, needs_collection: true, context: { context_key: 'C-context' } };
+  global.fetch.mockImplementation((url, options) => {
+    if (url.includes('/api/external-references') && url.includes('C.ibt')) {
+      return response({ files: [], recommended_selection: [], collector_health: health });
+    }
+    if (url.endsWith('/api/garage61/collector/start')) {
+      return response({ health, job: { id: 'C-job', busy: true, state: 'STARTING', context_key: 'C-context' } });
+    }
+    return original(url, options);
+  });
+  const { result } = await ready();
+  const chosen = { filename: 'C.ibt', defaultTarget: 3, defaultReference: 2, external: [],
+    reference_selection: 'AUTO', session: {}, analysisResult: analysisFor('C.ibt') };
+  act(() => result.current.adoptDesktopAnalysis(chosen, {}));
+  await waitFor(() => expect(result.current.garage61Collector.job?.id).toBe('C-job'));
+  // Reapplying a lap on the same recording must retain the normal context deduplication.
+  await act(async () => result.current.adoptDesktopAnalysis(chosen, {}));
+  const starts = global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/garage61/collector/start'));
+  expect(starts).toHaveLength(1);
+  expect(JSON.parse(starts[0][1].body)).toMatchObject({ filename: 'C.ibt', force: false, collector_mode: 'AUTO' });
+  expect(result.current.analysis).toBe(chosen.analysisResult);
+  expect(result.current.analysisSnapshot).toMatchObject({ filename: 'C.ibt', referenceMode: 'LOCAL', references: [], targetLap: 3 });
+  expect(result.current.loading).toBe(false);
+  expect(requests().map(request => request.filename)).toEqual(['A.ibt']);
+});
+
+test.each(['references', 'health'])('a late desktop %s response cannot collect for an abandoned recording', async (phase) => {
+  const original = global.fetch.getMockImplementation();
+  const health = { enabled: true, needs_collection: true, context: { context_key: 'C-context' } };
+  let finish;
+  global.fetch.mockImplementation((url, options) => {
+    if (url.includes('C.ibt') && (phase === 'references' ? url.includes('/api/external-references') : url.includes('/collector/status'))) {
+      return new Promise(resolve => { finish = () => resolve(response(phase === 'references'
+        ? { files: [], collector_health: health } : { health, job: null })); });
+    }
+    return original(url, options);
+  });
+  const { result } = await ready();
+  act(() => result.current.adoptDesktopAnalysis({ filename: 'C.ibt', defaultTarget: 3, defaultReference: 2,
+    external: [], session: {}, analysisResult: analysisFor('C.ibt') }, {}));
+  await waitFor(() => expect(finish).toBeDefined());
+  act(() => result.current.adoptDesktopAnalysis({ filename: 'B.ibt', defaultTarget: 1, defaultReference: 2,
+    external: [], session: {}, analysisResult: analysisFor('B.ibt') }, {}));
+  await act(async () => finish());
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/garage61/collector/start'))).toHaveLength(0);
+  expect(result.current.analysisSnapshot.filename).toBe('B.ibt');
+});
+
+test.each([
+  { enabled: false, needs_collection: true },
+  { enabled: true, needs_collection: false },
+])('desktop adoption respects collection policy %j', async (health) => {
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.includes('/api/external-references')
+    ? response({ files: [], collector_health: health }) : original(url, options));
+  const { result } = await ready();
+  await act(async () => result.current.adoptDesktopAnalysis({ filename: 'C.ibt', defaultTarget: 3, defaultReference: 2,
+    external: [], session: {}, analysisResult: analysisFor('C.ibt') }, {}));
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/garage61/collector/start'))).toHaveLength(0);
+});
+
+test('an unmounted desktop workspace cannot start collection after reference lookup', async () => {
+  const { result, unmount } = await ready();
+  const original = global.fetch.getMockImplementation();
+  let finish;
+  global.fetch.mockImplementation((url, options) => url.includes('/api/external-references')
+    ? new Promise(resolve => { finish = resolve; }) : original(url, options));
+  act(() => result.current.adoptDesktopAnalysis({ filename: 'C.ibt', defaultTarget: 3, defaultReference: 2,
+    external: [], session: {}, analysisResult: analysisFor('C.ibt') }, {}));
+  await waitFor(() => expect(finish).toBeDefined());
+  unmount();
+  await act(async () => finish(response({ files: [], collector_health: {
+    enabled: true, needs_collection: true, context: { context_key: 'C-context' },
+  } })));
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/garage61/collector/start'))).toHaveLength(0);
+});
+
 test('the last desktop lap pair restores on startup without changing saved reference ownership', async () => {
   localStorage.setItem('iracing.desktop.last-session.v1', JSON.stringify({ filename: 'A.ibt', target_lap: 4, reference_lap: 3, external_reference_files: [] }));
   const { result } = await ready();

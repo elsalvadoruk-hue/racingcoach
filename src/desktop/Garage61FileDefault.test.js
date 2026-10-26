@@ -62,14 +62,14 @@ test('a missing primary falls back to personal instead of promoting supporting l
   catalogs['A.ibt'] = { files: [reference('support.csv')], recommended_selection: ['support.csv'] };
   await picker({ external: ['missing.csv', 'support.csv'] });
   expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
-  expect(screen.getByText(/Garage61 기준을 사용할 수 없어/)).toBeInTheDocument();
+  expect(screen.getByText(/이전에 선택한 Garage61 대표 기준을 사용할 수 없어/)).toBeInTheDocument();
 });
 
 test('switching files selects compatible server recommendations and applying uses them', async () => {
   await picker(); await changeFile('B.ibt');
   expect(screen.getByLabelText('기준 종류')).toHaveValue('GARAGE61');
   expect(selected()).toEqual(['B2.csv']);
-  expect(screen.queryByText(/Garage61 기준을 사용할 수 없어/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/이전에 선택한 Garage61 대표 기준을 사용할 수 없어/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '선택한 랩 비교하기' }));
   await waitFor(() => expect(labRequest).toHaveBeenCalledWith('comparison', expect.objectContaining({
     filename: 'B.ibt', reference_mode: 'SINGLE', external_reference_files: ['B2.csv'],
@@ -94,7 +94,7 @@ test('no compatible Garage61 falls back locally and the next available file uses
     recommended_selection: ['broken.csv','other.csv'] };
   await picker(); await changeFile('C.ibt');
   expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
-  expect(screen.getByText(/Garage61 기준을 사용할 수 없어/)).toBeInTheDocument();
+  expect(screen.getByText(/이 차량·트랙과 맞는 내려받은 Garage61 기준이 없습니다/)).toBeInTheDocument();
   await changeFile('B.ibt');
   expect(screen.getByLabelText('기준 종류')).toHaveValue('GARAGE61');
   expect(selected()).toEqual(['B2.csv']);
@@ -105,6 +105,13 @@ test('compatible existing selections take precedence over replacing the chosen G
   await picker(); await changeFile('B.ibt');
   expect(screen.getByLabelText('기준 종류')).toHaveValue('GARAGE61');
   expect(selected()).toEqual(['A.csv']);
+});
+
+test('a local comparison also explains why the Garage61 option is unavailable', async () => {
+  catalogs['A.ibt'] = { files: [], recommended_selection: [] };
+  await picker({ external: [] });
+  expect(screen.getByRole('option', { name: 'Garage61 · 내려받은 기준' })).toBeDisabled();
+  expect(screen.getByText(/이 차량·트랙과 맞는 내려받은 Garage61 기준이 없습니다/)).toBeInTheDocument();
 });
 
 test('an older server without recommendations can still default to its first compatible reference', async () => {
@@ -145,7 +152,7 @@ test('opening the current recording shows loading instead of claiming that Garag
   await waitFor(() => expect(finish).toBeDefined());
   expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
   expect(screen.getByText('Garage61 기준 불러오는 중')).toBeInTheDocument();
-  expect(screen.queryByText('이 차량·트랙과 맞는 내려받은 기준이 없습니다.')).not.toBeInTheDocument();
+  expect(screen.queryByText('이 차량·트랙과 맞는 내려받은 Garage61 기준이 없습니다.')).not.toBeInTheDocument();
   const request = labRequest.mock.calls.find(([route]) => route === 'references');
   expect(request[2].aborted).toBe(false);
   view.unmount();

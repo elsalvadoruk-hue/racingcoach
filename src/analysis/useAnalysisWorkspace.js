@@ -328,9 +328,9 @@ export function useAnalysisWorkspace() {
   }, []);
 
   const maybeStartGarage61Collection = useCallback(async (filename, referencePayload = null) => {
-    if (!filename || !workspaceMounted.current) return null;
+    if (!filename || !workspaceMounted.current || selectedFileRef.current !== filename) return null;
     const health = referencePayload?.collector_health || (await loadGarage61CollectorStatus(filename))?.health;
-    if (!workspaceMounted.current) return null;
+    if (!workspaceMounted.current || selectedFileRef.current !== filename) return null;
     if (!health?.enabled || !health?.needs_collection) return null;
     const contextKey = health?.context?.context_key || `${filename}:unknown`;
     if (collectorAutoContextRef.current === contextKey) return null;
@@ -787,7 +787,9 @@ export function useAnalysisWorkspace() {
     setAnalysisSnapshot({ filename, ...nextFeedback,
       referenceMode: mode, references: refs, targetLap: sessionData.defaultTarget, referenceLap: sessionData.defaultReference,
       referenceFilename: sessionData.reference_filename, referenceSelection: sessionData.reference_selection });
-    void loadExternalReferences(filename, false);
+    // Keep the accepted comparison visible while the normal collection policy
+    // checks whether this recording needs more matching references.
+    void loadExternalReferences(filename, false).then(referencePayload => maybeStartGarage61Collection(filename, referencePayload));
   };
 
     return {

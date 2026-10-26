@@ -87,7 +87,8 @@ test.each(['iracing', 'lmu'])('%s falls back from unavailable Garage61 to a comp
   expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
   expect(screen.getByLabelText('기준 선택 방식')).toHaveValue('AUTO');
   expect(screen.getByLabelText(`기준 주행 파일 · ${game === 'lmu' ? 'LMU' : 'IBT'}`)).toHaveValue('best-file');
-  expect(screen.getByText(/Garage61 기준을 사용할 수 없어/)).toBeInTheDocument();
+  if (game === 'iracing') expect(screen.getByText(/이 차량·트랙과 맞는 내려받은 Garage61 기준이 없습니다/)).toBeInTheDocument();
+  else expect(screen.queryByText(/Garage61.*기준.*(없|없어)/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '선택한 랩 비교하기' }));
   await waitFor(() => expect(onApply).toHaveBeenCalledTimes(1));
   expect(labRequest).toHaveBeenCalledWith('comparison', expect.objectContaining({ reference_selection: 'AUTO',
