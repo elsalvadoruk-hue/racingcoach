@@ -576,10 +576,10 @@ class SetupAnalysis:
                 f"랩 {comparison['target_lap']}은 랩 {comparison['reference_lap']}보다 {abs(delta):.3f}초 {direction}."
             )
         external_aggregate = (external_reference or {}).get("aggregate", {}) or {}
-        external_gap = external_aggregate.get("gap_to_reference_median_s")
+        external_gap = external_aggregate.get("gap_to_reference_s")
         if external_gap is not None:
             summary_parts.append(
-                f"선택한 Garage61 기준 중앙값 대비 {float(external_gap):+.3f}초 차이입니다."
+                f"선택한 Garage61 대표 실주행 대비 {float(external_gap):+.3f}초 차이입니다."
             )
         if coaching_priorities:
             first = coaching_priorities[0]
@@ -614,7 +614,7 @@ class SetupAnalysis:
                 "items": (
                     [
                         f"선택 {external_reference.get('selected_reference_count', 0)}개 / 셋업 판단용 빠른 기준 {external_reference.get('decision_reference_count', 0)}개",
-                        f"외부 기준 중앙 랩타임 {external_aggregate.get('reference_median_time') or '--'} / 대상 대비 {external_gap:+.3f}초"
+                        f"대표 실주행 랩타임 {external_aggregate.get('reference_time') or '--'} / 대상 대비 {external_gap:+.3f}초"
                         if external_gap is not None else "외부 기준과의 랩타임 차이를 계산할 수 없습니다.",
                         *(external_reference.get("warnings", [])[:2]),
                     ]

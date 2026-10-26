@@ -41,6 +41,7 @@ function ReferenceSettings({ workspace: w }) {
   return <ExternalReferencePanel referenceStatus={w.externalReferenceStatus} files={w.externalReferences} selected={w.selectedExternalReferences}
     analysis={w.externalReferenceAnalysis} loading={w.loading || Boolean(w.activeTrial)} collector={w.garage61Collector} collectorLoading={w.garage61CollectorLoading}
     apiStatus={w.garage61ApiStatus} onToggle={w.toggleExternalReference} onRefresh={() => w.refreshExternalReferences()}
+    onPrimarySelect={name => !w.activeTrial && w.setSelectedExternalReferences(current => [name, ...current.filter(file => file !== name)])}
     onApply={() => !w.activeTrial && w.applyExternalReferences()} onAutoSelect={() => !w.activeTrial && w.setSelectedExternalReferences((w.externalReferenceStatus?.recommended_selection || []).slice(0, w.externalReferenceStatus?.display_limit || w.externalReferenceStatus?.max_selection || 9))}
     onClear={() => !w.activeTrial && w.setSelectedExternalReferences([])} onCollect={() => w.startGarage61Collection()}
     onForceCollect={() => w.startGarage61Collection(null, true)} onCancelCollect={w.cancelGarage61Collection} />;

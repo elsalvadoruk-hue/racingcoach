@@ -15,7 +15,11 @@ export default function Measurements({ corner, quality, warnings }) {
   return <><RacingLine line={corner.line} /><div className="measurement-grid">{items.map(([label, key, unit, digits = 1, scale = 1]) => <div key={key}><span>{label}</span><strong>{number(Number.isFinite(corner.target[key]) ? corner.target[key] * scale : null, digits)} <small>{unit}</small></strong><span>기준 {number(Number.isFinite(corner.reference[key]) ? corner.reference[key] * scale : null, digits)} {unit}</span></div>)}</div>
     <div className="measurement-bands">{[['같은 속도대 제동', corner.braking_band], ['같은 속도대 가속', corner.drive_band]].map(([title, band]) => <p key={title}>{title}: {band ? `${band.from_kph} → ${band.to_kph} km/h · 내 랩 ${number(band.target_s, 3)} s / 기준 ${number(band.reference_s, 3)} s · ${signed(band.delta_s)} s` : '비교할 측정값 없음'}</p>)}<p>제동 시작 {signed(distanceDifference(corner.target.brake_start_pct, corner.reference.brake_start_pct), 0)} m · + 기준보다 뒤 / − 앞</p></div>
     {quality && <p className="measurement-quality">분석 간격 {number(quality.analysis_spacing_m)} m · 유효 관측 {number(quality.target_coverage_ratio * 100, 1)}% · 관측이 없는 구간은 연결하지 않습니다.</p>}
-    {corner.reference_consensus && <p className="measurement-quality">이 구간 기준 {corner.reference_consensus.reference_count}랩 · 서로 다른 드라이버 {corner.reference_consensus.unique_driver_count}명 · 손실 일치 {number(corner.reference_consensus.loss_agreement_ratio * 100, 0)}%</p>}
+    {corner.reference_consensus && <p className="measurement-quality">{corner.reference_consensus.supporting_driver_count != null
+      ? corner.reference_consensus.supporting_driver_count > 0
+        ? `대표 랩 외 비교 가능한 드라이버 ${corner.reference_consensus.supporting_driver_count}명 중 ${corner.reference_consensus.supporting_faster_driver_count}명이 이 구간을 더 빠르게 통과했습니다. 원인과 셋업 효과를 확정하는 근거는 아닙니다.`
+        : '이 구간을 뒷받침할 다른 드라이버의 적합한 기록이 없습니다. 대표 랩과의 비교만 표시합니다.'
+      : `이 구간 기준 ${corner.reference_consensus.reference_count}랩 · 서로 다른 드라이버 ${corner.reference_consensus.unique_driver_count}명 · 손실 일치 ${number(corner.reference_consensus.loss_agreement_ratio * 100, 0)}%`}</p>}
     {!!warnings?.length && <p className="measurement-quality">{warnings.join(' ')}</p>}
   </>;
 }

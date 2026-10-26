@@ -59,6 +59,8 @@ export function useAnalysisWorkspace() {
   const [externalReferenceStatus, setExternalReferenceStatus] = useState(null);
   const [externalReferences, setExternalReferences] = useState([]);
   const [selectedExternalReferences, setSelectedExternalReferences] = useState(activeTrial?.reference_files || bootDraft.current.referenceFiles || []);
+  const selectedExternalRef = useRef(selectedExternalReferences);
+  selectedExternalRef.current = selectedExternalReferences;
   const [garage61Collector, setGarage61Collector] = useState(null);
   const [garage61CollectorLoading, setGarage61CollectorLoading] = useState(false);
   const [garage61ApiStatus, setGarage61ApiStatus] = useState(null);
@@ -204,7 +206,9 @@ export function useAnalysisWorkspace() {
       return empty;
     }
     try {
-      const payload = await requestJson(`/api/external-references?filename=${encodeURIComponent(effectiveFilename)}`);
+      const pinned = activeTrialRef.current?.reference_files || (autoSelect ? readDraft(effectiveFilename).referenceFiles : selectedExternalRef.current) || [];
+      const retainedQuery = pinned.map(name => `&retained_files=${encodeURIComponent(name)}`).join('');
+      const payload = await requestJson(`/api/external-references?filename=${encodeURIComponent(effectiveFilename)}${retainedQuery}`);
       if (selectedFileRef.current !== effectiveFilename) return payload;
       const nextFiles = payload.files || [];
       let appliedSelection;
@@ -225,12 +229,13 @@ export function useAnalysisWorkspace() {
       } else if (autoSelect) {
         const draftReferences = readDraft(effectiveFilename).referenceFiles;
         const available = new Set(nextFiles.filter((item) => item.usable !== false).map((item) => item.name));
+        const missingPrimary = draftReferences?.length && !available.has(draftReferences[0]);
         const restoredReferences = Array.isArray(draftReferences) ? draftReferences.filter((name) => available.has(name)) : null;
-        appliedSelection = (restoredReferences?.length ? restoredReferences : payload.recommended_selection || []).slice(0, payload.display_limit || payload.max_selection || 9);
+        appliedSelection = (missingPrimary ? [] : restoredReferences?.length ? restoredReferences : payload.recommended_selection || []).slice(0, payload.max_selection || 12);
         setSelectedExternalReferences(appliedSelection);
       } else {
         const available = new Set(nextFiles.filter((item) => item.usable !== false).map((item) => item.name));
-        setSelectedExternalReferences((current) => current.filter((name) => available.has(name)).slice(0, payload.display_limit || payload.max_selection || 9));
+        setSelectedExternalReferences((current) => available.has(current[0]) ? current.filter((name) => available.has(name)) : []);
       }
       return { ...payload, applied_selection: appliedSelection };
     } catch (referenceError) {
@@ -672,9 +677,9 @@ export function useAnalysisWorkspace() {
   const canAttachTrial = Boolean(activeTrial && selectedFile !== activeTrial.baseline_file && selectedFileEntry?.analyzable !== false
     && analysis && sameVehicleAndTrack(activeTrial.context, currentContext));
   const displayComparison = cleanSectionOnly ? null : hasExternalTrace ? { target_lap: comparison?.target_lap ?? analysis?.lap_selection?.target_lap,
-    reference_lap: analysisSnapshot?.referenceMode === 'SINGLE' ? '선택한 Garage61 랩' : 'Garage61 중앙값',
-    target_time: externalReferenceAnalysis.aggregate?.target_time, reference_time: externalReferenceAnalysis.aggregate?.reference_median_time,
-    total_delta_s: externalReferenceAnalysis.aggregate?.gap_to_reference_median_s } : wantsExternalComparison ? null : comparison;
+    reference_lap: externalReferenceAnalysis.aggregate?.reference_label || '선택한 Garage61 기준',
+    target_time: externalReferenceAnalysis.aggregate?.target_time, reference_time: externalReferenceAnalysis.aggregate?.reference_time ?? externalReferenceAnalysis.aggregate?.reference_median_time,
+    total_delta_s: externalReferenceAnalysis.aggregate?.gap_to_reference_s ?? externalReferenceAnalysis.aggregate?.gap_to_reference_median_s } : wantsExternalComparison ? null : comparison;
   const displayPriorities = wantsExternalComparison ? (externalReferenceAnalysis?.top_losses || []).slice(0, 3).map((corner, index) => ({
     rank: index + 1, corner: corner.label || corner.id, issue_type: corner.issue_type, distance_m: corner.distance_m, loss_s: corner.delta_s, action: corner.coaching_note || corner.coaching || '선택한 기준과 코너 입력을 비교하세요.',
     estimated_recovery_s: null, evidence: [`선택 기준 대비 코너 손실 ${formatSigned(corner.delta_s)}`],

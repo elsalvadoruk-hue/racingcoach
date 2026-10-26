@@ -19,14 +19,14 @@ export function RunSummary({ analysis, onNavigate, referenceMode = 'LOCAL' }) {
   const aggregate = external?.aggregate || {};
   const comparison = referenceMode === 'LOCAL' ? analysis.comparison || {} : {};
   const externalReady = referenceMode !== 'LOCAL' && external?.status === 'READY';
-  const gap = externalReady ? aggregate.gap_to_reference_median_s : comparison.total_delta_s;
+  const gap = externalReady ? aggregate.gap_to_reference_s ?? aggregate.gap_to_reference_median_s : comparison.total_delta_s;
   const candidates = externalReady ? external.top_losses || [] : referenceMode === 'LOCAL' ? analysis.performance?.corners || [] : [];
   const losses = candidates.filter((corner) => corner.delta_s !== null && corner.delta_s !== undefined && Number(corner.delta_s) > 0)
     .sort((left, right) => Number(right.delta_s) - Number(left.delta_s)).slice(0, 2);
   return <div className="flex flex-col gap-5">
     <div className="coach-overview-metrics grid gap-3 sm:grid-cols-3">
       <MetricCard label="내 대상 랩" value={externalReady ? aggregate.target_time : comparison.target_time || formatLapSeconds(analysis.laps?.find((lap) => String(lap.lap_number) === String(analysis.lap_selection?.target_lap))?.lap_time_s)} note={`랩 ${comparison.target_lap ?? analysis.lap_selection?.target_lap ?? '--'}`} icon={TimerReset} />
-      <MetricCard label={externalReady ? referenceMode === 'SINGLE' ? '실제 드라이버 기준' : '여러 드라이버 합성 기준' : '내 기준 랩'} value={externalReady ? aggregate.reference_median_time : comparison.reference_time || '비교 기준 없음'} note={externalReady ? aggregate.reference_label || `Garage61 · ${external.unique_driver_count || 0}명 · ${referenceMode === 'SINGLE' ? '실제 랩' : '중앙값'}` : comparison.reference_lap != null ? `랩 ${comparison.reference_lap}` : '기준랩을 추가하면 코너 손실을 비교합니다.'} icon={Target} tone="orange" />
+      <MetricCard label={externalReady ? 'Garage61 대표 기준' : '내 기준 랩'} value={externalReady ? aggregate.reference_time ?? aggregate.reference_median_time : comparison.reference_time || '비교 기준 없음'} note={externalReady ? aggregate.reference_label || '선택한 Garage61 기준' : comparison.reference_lap != null ? `랩 ${comparison.reference_lap}` : '기준랩을 추가하면 코너 손실을 비교합니다.'} icon={Target} tone="orange" />
       <MetricCard label="기준 대비 차이" value={gap == null ? '측정 불가' : formatSigned(gap)} note={gap == null ? '비교 가능한 기준이 필요합니다.' : Number(gap) > 0 ? '내 대상 랩이 느립니다.' : Number(gap) < 0 ? '내 대상 랩이 빠릅니다.' : '동일한 랩타임입니다.'} icon={TrendingDown} tone={gap == null ? 'slate' : Number(gap) > 0 ? 'rose' : 'emerald'} />
     </div>
     <div className="flex flex-wrap items-center justify-between gap-3">

@@ -1,5 +1,7 @@
 import { Database, RefreshCw, CheckCircle2, TimerReset, Target, TrendingUp, Activity, Thermometer } from "lucide-react";
 import { Button } from "../components/ui/button";
+import { NativeSelect, NativeSelectOption } from "../components/ui/native-select";
+import { Field, FieldLabel } from "../components/ui/field";
 import React from "react";
 import { ISSUE_LABELS, cx, formatLapSeconds, formatNumber, formatSigned } from './analysisShared';
 import { EmptyState, ErrorMessage, MetricCard, MetricMini } from './WorkspaceUi';
@@ -16,6 +18,7 @@ export function ExternalReferencePanel({
   collectorLoading,
   apiStatus,
   onToggle,
+  onPrimarySelect,
   onRefresh,
   onApply,
   onAutoSelect,
@@ -29,6 +32,7 @@ export function ExternalReferencePanel({
   const strongConsensusCount = Number(referenceStatus?.strong_consensus_count || 3);
   const recommendedCohort = Number(referenceStatus?.recommended_cohort_size || 5);
   const aggregate = analysis?.aggregate || {};
+  const primaryGap = aggregate.gap_to_reference_s ?? aggregate.gap_to_reference_median_s;
   const warnings = analysis?.warnings || [];
   const errors = analysis?.errors || [];
   const selectedSet = new Set(selected);
@@ -63,7 +67,7 @@ export function ExternalReferencePanel({
             <p className="mt-2 max-w-5xl text-sm leading-relaxed text-muted-foreground">
               IBT에서 차량·트랙·레이아웃·노면온도·기온·연료·습도·바람·강수·가능한 BOP/타이어 조건을 읽습니다.
               Garage61 API를 우선 사용해 최대 1,000개 후보를 조건별 단계 검색하고, 공개 telemetry만 내려받습니다. API 토큰이 없을 때만 기존 브라우저 수집기를 fallback으로 사용합니다.
-              CSV는 무결성·표본수·거리 커버리지·PositionType을 검증한 뒤 조건 가중 median + IQR + 코너 컨센서스로 분석합니다. 코너별 조작 비교 지도에서는 모든 자동 구간의 실제 라인을 비교할 수 있습니다. 아래 요약은 속도 손실과 GPS 차이가 큰 상위 2개 구간을 표시합니다.
+              CSV를 검증한 뒤 대표 실주행 한 랩으로 속도·페달·라인·시간차를 비교합니다. 조건이 맞는 다른 드라이버의 기록은 구간별 손실과 개선 방향을 확인하는 보조 자료로 사용합니다. 아래 요약은 속도 손실과 GPS 차이가 큰 상위 2개 구간을 표시합니다.
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
               <span className={cx(
@@ -200,7 +204,7 @@ export function ExternalReferencePanel({
         <MetricMini label="호환 CSV" value={`${referenceStatus?.total_compatible ?? files.length}개`} />
         <MetricMini label="화면 표시" value={`${files.length}/${referenceStatus?.display_limit || 9}`} />
         <MetricMini label="현재 선택" value={`${selected.length}/${maxSelection}`} />
-        <MetricMini label="자동 코호트" value={`${recommendedCohort}개`} />
+        <MetricMini label="자동 추천 상한" value={`${recommendedCohort}개`} />
         <MetricMini label="Setup Assist 최소" value={`${minimumForSetup}개`} />
         <MetricMini label="강한 컨센서스" value={`${strongConsensusCount}개+`} />
       </div>
@@ -238,7 +242,7 @@ export function ExternalReferencePanel({
 
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <p className="text-xs leading-relaxed text-muted-foreground">
-          전체 호환 {referenceStatus?.total_compatible ?? files.length}개 중 셋업 호환성 → 빠른 페이스 → 조건/메타 품질 → 드라이버 다양성 순으로 상위 {referenceStatus?.display_limit || 9}개만 표시합니다. 오래된 캐시 CSV는 보관되지만 이 목록을 늘리지 않습니다.
+          같은 차량·트랙에서 조건과 자료 품질이 적합한 빠른 기록을 우선 추천합니다. 상위 {referenceStatus?.display_limit || 9}개와 현재 선택한 기록을 표시하며, 조건이 부족하면 추천 개수를 채우지 않습니다.
         </p>
         <div className="flex flex-wrap justify-end gap-2">
         <Button variant="outline"
@@ -247,7 +251,7 @@ export function ExternalReferencePanel({
           disabled={loading || files.length === 0}
           className=" border   px-4 py-2 text-sm   transition   disabled:opacity-40"
         >
-          자동 추천 {Math.min(recommendedCohort, files.length)}개
+          적합한 기록 자동 추천
         </Button>
         <Button variant="outline"
           type="button"
@@ -363,6 +367,11 @@ export function ExternalReferencePanel({
         </div>
       </div>
 
+      {selected.length > 0 && onPrimarySelect && <Field><FieldLabel htmlFor="library-primary-reference">Garage61 대표 기준</FieldLabel><NativeSelect id="library-primary-reference" value={selected[0]} disabled={loading} onChange={event => onPrimarySelect(event.target.value)}>{selected.map(name => {
+        const file = files.find(item => item.name === name);
+        return <NativeSelectOption key={name} value={name}>{file?.driver_name || name} · {file?.lap_time || formatLapSeconds(file?.lap_time_s)}</NativeSelectOption>;
+      })}</NativeSelect><p className="text-sm text-muted-foreground">대표 랩의 실제 입력과 라인을 함께 비교합니다. 다른 선택 기록은 보조 근거이며, 적용 버튼을 누르면 기준이 바뀝니다.</p></Field>}
+
       <div className={cx(
         'rounded-2xl border p-4 text-sm leading-relaxed',
         selected.length >= minimumForSetup
@@ -387,15 +396,15 @@ export function ExternalReferencePanel({
 
       {analysis?.status === 'READY' && (
         <>
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
             <MetricCard label="내 대상 랩" value={aggregate.target_time || '--'} icon={TimerReset} tone="cyan" />
-            <MetricCard label={aggregate.reference_label || "여러 랩 합성 기준"} value={aggregate.reference_median_time || '--'} icon={Target} tone="violet" />
+            <MetricCard label={aggregate.reference_label || "대표 실주행 기준"} value={aggregate.reference_time || aggregate.reference_median_time || '--'} icon={Target} tone="violet" />
             <MetricCard
               label="외부 대비 격차"
-              value={formatSigned(aggregate.gap_to_reference_median_s)}
-              note={aggregate.gap_to_reference_median_s == null ? '측정 불가' : Number(aggregate.gap_to_reference_median_s) > 0 ? '내 랩이 느림' : Number(aggregate.gap_to_reference_median_s) < 0 ? '내 랩이 빠름' : '동일한 랩타임'}
+              value={formatSigned(primaryGap)}
+              note={primaryGap == null ? '측정 불가' : Number(primaryGap) > 0 ? '내 랩이 느림' : Number(primaryGap) < 0 ? '내 랩이 빠름' : '동일한 랩타임'}
               icon={TrendingUp}
-              tone={aggregate.gap_to_reference_median_s == null ? 'slate' : Number(aggregate.gap_to_reference_median_s) > 0 ? 'rose' : 'emerald'}
+              tone={primaryGap == null ? 'slate' : Number(primaryGap) > 0 ? 'rose' : 'emerald'}
             />
             <MetricCard
               label="컨센서스"
@@ -442,8 +451,8 @@ export function ExternalReferencePanel({
           {(analysis.top_losses || []).length > 0 && (
             <div>
               <div className="mb-3 flex items-center justify-between gap-3">
-                <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-muted-foreground">외부 코호트 대비 주요 손실</h4>
-                <span className="text-xs text-muted-foreground">거리 정규화 median · IQR</span>
+                <h4 className="text-sm font-semibold uppercase tracking-[0.16em] text-muted-foreground">대표 실주행 대비 주요 손실</h4>
+                <span className="text-xs text-muted-foreground">대표 랩 대비 손실 · 다른 드라이버의 관측 범위</span>
               </div>
               <div className="grid gap-3 lg:grid-cols-3">
                 {(analysis.top_losses || []).slice(0, 6).map((corner) => (
@@ -474,7 +483,7 @@ export function ExternalReferencePanel({
             <TraceChart
               trace={analysis.visualizations.trace}
               targetLap={aggregate.target_lap}
-              referenceLap="코호트 median"
+              referenceLap={aggregate.reference_label || 'Garage61 기준'}
             />
           )}
         </>

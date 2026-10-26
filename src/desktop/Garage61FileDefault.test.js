@@ -46,6 +46,25 @@ async function changeFile(file, game = 'iracing') {
 }
 function selected() { return [...screen.getByLabelText('Garage61 기준 · Ctrl 키로 여러 랩 선택').selectedOptions].map(option => option.value); }
 
+test('changing the primary preserves support and sends the pinned lap first', async () => {
+  catalogs['A.ibt'] = { files: [reference('A.csv'), reference('A2.csv'), reference('A3.csv')], recommended_selection: ['A.csv', 'A2.csv'] };
+  await picker({ external: ['A.csv', 'A2.csv'] });
+  fireEvent.change(screen.getByLabelText('Garage61 대표 기준'), { target: { value: 'A2.csv' } });
+  const list = screen.getByLabelText('Garage61 기준 · Ctrl 키로 여러 랩 선택');
+  for (const option of list.options) option.selected = true;
+  fireEvent.change(list);
+  expect(screen.getByLabelText('Garage61 대표 기준')).toHaveValue('A2.csv');
+  fireEvent.click(screen.getByRole('button', { name: '선택한 랩 비교하기' }));
+  await waitFor(() => expect(labRequest).toHaveBeenCalledWith('comparison', expect.objectContaining({ external_reference_files: ['A2.csv', 'A.csv', 'A3.csv'] })));
+});
+
+test('a missing primary falls back to personal instead of promoting supporting laps', async () => {
+  catalogs['A.ibt'] = { files: [reference('support.csv')], recommended_selection: ['support.csv'] };
+  await picker({ external: ['missing.csv', 'support.csv'] });
+  expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
+  expect(screen.getByText(/Garage61 기준을 사용할 수 없어/)).toBeInTheDocument();
+});
+
 test('switching files selects compatible server recommendations and applying uses them', async () => {
   await picker(); await changeFile('B.ibt');
   expect(screen.getByLabelText('기준 종류')).toHaveValue('GARAGE61');

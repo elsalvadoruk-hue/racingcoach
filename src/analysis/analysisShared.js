@@ -93,7 +93,8 @@ export function sameVehicleAndTrack(left, right) {
 }
 
 export function analysisContextKey(context) {
-  return JSON.stringify({ ...context, references: [...(context.references || [])].sort() });
+  const [primary, ...support] = context.references || [];
+  return JSON.stringify({ ...context, references: primary ? [primary, ...support.sort()] : [] });
 }
 
 export function comparisonContextLabel(file) {

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Literal, Optional
 import logging
-from fastapi import HTTPException
+from fastapi import HTTPException, Query
 import asyncio
 from analysis_models import Garage61CollectRequest
 
@@ -33,14 +33,14 @@ class ReferenceRoutesServices:
 
 def register_routes(app, services: ReferenceRoutesServices):
     @app.get("/api/external-references")
-    async def get_external_references(filename: Optional[str] = None) -> dict[str, Any]:
+    async def get_external_references(filename: Optional[str] = None, retained_files: list[str] = Query(default=[])) -> dict[str, Any]:
         path = await asyncio.to_thread(services.resolve_telemetry_file, filename)
         telemetry: Optional[services.get_parsed_telemetry()] = None
         if filename and path is None:
             raise HTTPException(status_code=404, detail="선택한 IBT 파일을 찾을 수 없습니다.")
         if path is not None:
             telemetry = await asyncio.to_thread(services.get_repository().load, path)
-        payload = await asyncio.to_thread(services.list_external_reference_metadata, telemetry)
+        payload = await asyncio.to_thread(services.list_external_reference_metadata, telemetry, retained_files=retained_files)
         payload["status"] = "success"
         payload["context"] = (
             {

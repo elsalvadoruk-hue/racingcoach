@@ -172,8 +172,8 @@ class SetupInfluenceTests(unittest.TestCase):
         from workspace_routes import workspace_comparison
         data = fixture()
         notice = setup_influence_notice(**data)
-        external = {'status': 'READY', 'aggregate': {'target_time_s': 100.2, 'reference_median_time_s': 100.,
-                                                  'gap_to_reference_median_s': .2},
+        external = {'status': 'READY', 'aggregate': {'target_time_s': 100.2, 'reference_time_s': 100.,
+                                                  'gap_to_reference_s': .2},
                     'corners': data['corners'], 'performance_diagnostics': {'setup_influence': notice}}
         target = SimpleNamespace(valid=True)
         analyzer = SimpleNamespace(_select_laps=lambda *args: (target, None, None),

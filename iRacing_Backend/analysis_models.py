@@ -75,8 +75,8 @@ class AnalyzeRequest(BaseModel):
     # Required when replacing a previously assigned QUALIFYING/BASELINE/ENDURANCE
     # classification for the same IBT file.
     replace_existing_mode: bool = False
-    # Garage61 CSV reference laps are read locally. One file is display-only;
-    # setup conclusions require at least two faster compatible references.
+    # Ordered selection: first CSV is the pinned primary actual lap; remaining
+    # files corroborate it. One file alone cannot support setup conclusions.
     external_reference_files: list[str] = Field(default_factory=list, max_length=24)
 
 
@@ -85,6 +85,7 @@ class ComparisonDetailRequest(BaseModel):
     reference_filename: Optional[str] = None
     target_lap: Optional[int] = None
     reference_lap: Optional[int] = None
+    # Same primary-first ordering as AnalyzeRequest, preserved by saved trials.
     external_reference_files: list[str] = Field(default_factory=list, max_length=24)
     start_pct: float = Field(default=0.0, ge=0.0, le=1.0)
     end_pct: float = Field(default=1.0, ge=0.0, le=1.0)

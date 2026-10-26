@@ -81,13 +81,12 @@ def workspace_comparison(services, telemetry, body):
         detail = services.comparison_detail_payload(telemetry, request)
         source = getattr(analyzer, '_external_line_source', {}) or {}
         path = (services.resolve_external_reference_file(source.get('reference_file'))
-                if request.reference_mode == 'SINGLE' and source.get('reference_file') else None)
+                if source.get('reference_file') else None)
         signals = comparison_controls(controls_api, telemetry, target, None,
             analyzer._lap_grid(target) if target.valid else analyzer._coaching_grid(target),
-            services.get_external_reference_repository().load(path) if path is not None else None,
-            aggregate=request.reference_mode == 'AGGREGATE')
+            services.get_external_reference_repository().load(path) if path is not None else None)
         return {**detail, 'corners': external['corners'], 'targetTime': aggregate.get('target_time_s'),
-                'referenceTime': aggregate.get('reference_median_time_s'), 'delta': aggregate.get('gap_to_reference_median_s'),
+                'referenceTime': aggregate.get('reference_time_s'), 'delta': aggregate.get('gap_to_reference_s'),
                 'warnings': external.get('warnings', []), 'aggregate': aggregate, 'controlEvents': signals,
                 'setupInfluence': (external.get('performance_diagnostics') or {}).get('setup_influence')}
     # An explicitly chosen self-comparison stays a zero baseline rather than
@@ -218,7 +217,8 @@ def register_routes(app, services: WorkspaceRoutesServices):
                     result = services.file_laps_payload(telemetry)
                 elif route == 'references':
                     try:
-                        catalog = await asyncio.to_thread(services.list_external_reference_metadata, telemetry)
+                        catalog = await asyncio.to_thread(services.list_external_reference_metadata, telemetry,
+                            retained_files=body.get('external_reference_files') or [])
                     except (OSError, ValueError):
                         catalog = {'files': []}
                     fields = ('name', 'driver_name', 'car_name', 'track_name', 'track_config', 'track_platform_id',
@@ -238,12 +238,13 @@ def register_routes(app, services: WorkspaceRoutesServices):
                         raise ValueError('단일 비교에는 Garage61 랩 한 개를 선택하세요.')
                     if body.get('reference_mode', 'LOCAL') != 'LOCAL':
                         try:
-                            catalog = await asyncio.to_thread(services.list_external_reference_metadata, telemetry)
+                            catalog = await asyncio.to_thread(services.list_external_reference_metadata, telemetry,
+                                retained_files=body.get('external_reference_files') or [])
                             usable = {row.get('name') for row in catalog.get('files', []) if row.get('usable') and row.get('compatible')}
                         except (OSError, ValueError):
                             usable = set()
-                        selected_files = set(body.get('external_reference_files') or [])
-                        if not usable or not selected_files.intersection(usable):
+                        selected_files = body.get('external_reference_files') or []
+                        if not selected_files or selected_files[0] not in usable:
                             body.update(reference_mode='LOCAL', reference_selection='AUTO', reference_lap=None,
                                         reference_filename=None, external_reference_files=[], referenceFallback='GARAGE61_UNAVAILABLE')
                     automatic = body.get('reference_mode', 'LOCAL') == 'LOCAL' and (

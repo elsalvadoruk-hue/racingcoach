@@ -629,7 +629,7 @@ def external_reference_validation(path: Path) -> dict[str, Any]:
     return dict(result)
 
 
-def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None) -> dict[str, Any]:
+def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None, retained_files: Iterable[str] = ()) -> dict[str, Any]:
     files: list[dict[str, Any]] = []
     parse_errors: list[dict[str, str]] = []
     current_best = None
@@ -688,7 +688,6 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
         condition = item.get("condition_similarity") or {}
         setup_compatible = bool(condition.get("setup_compatible", True))
         faster = bool(item.get("faster_than_current_best"))
-        selection_score = float(item.get("reference_selection_score") or condition.get("score") or 0.0)
         similarity = float(condition.get("score") or 0.0)
         coverage = float(condition.get("coverage") or 0.0)
         metadata_enriched = bool(item.get("metadata_enriched"))
@@ -697,11 +696,12 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
         except (TypeError, ValueError):
             rating = 0.0
         return (
+            0 if item.get("usable") else 1,
             0 if setup_compatible else 1,
             0 if faster else 1,
-            -selection_score,
             -similarity,
             -coverage,
+            -float(item.get("reference_quality_score") if item.get("reference_quality_score") is not None else 0.5),
             0 if metadata_enriched else 1,
             float(item.get("lap_time_s") or math.inf),
             -rating,
@@ -744,6 +744,7 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
     health_usable = [
         item for item in files
         if item.get("usable") and float((item.get("condition_similarity") or {}).get("score") or 0.0) >= GARAGE61_CONDITION_SCORE_MIN
+        and bool((item.get("condition_similarity") or {}).get("setup_compatible", True))
         and (current_best is None or bool(item.get("faster_than_current_best")))
     ]
     health_distinct_drivers = {
@@ -752,12 +753,12 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
         if _context_token(item.get("driver_slug") or item.get("driver_name"))
     }
 
-    # Auto cohort is selected only from the visible top-nine pool. This guarantees
-    # that every automatically selected reference is also visible/editable in UI.
+    # The first recommendation is the primary actual lap. Subsequent files are
+    # independent corroboration. Never pad the cohort with unsuitable laps.
     recommended: list[str] = []
     seen_drivers: set[str] = set()
     for item in display_files:
-        if not item.get("usable"):
+        if item not in health_usable:
             continue
         driver = _context_token(item.get("driver_slug") or item.get("driver_name"))
         if driver and driver in seen_drivers:
@@ -767,20 +768,20 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
             seen_drivers.add(driver)
         if len(recommended) >= EXTERNAL_REFERENCE_RECOMMENDED_COHORT:
             break
-    if len(recommended) < min(EXTERNAL_REFERENCE_RECOMMENDED_COHORT, len(display_files)):
-        for item in display_files:
-            name = str(item["name"])
-            if item.get("usable") and name not in recommended:
-                recommended.append(name)
-            if len(recommended) >= EXTERNAL_REFERENCE_RECOMMENDED_COHORT:
-                break
 
+    # New downloads may push a pinned primary outside the top-nine shortlist.
+    # Include requested usable files without changing the automatic ranking.
+    visible_names = {item['name'] for item in display_files}
+    retained = set(list(retained_files)[:EXTERNAL_REFERENCE_MAX_SELECTION])
+    display_files.extend(item for item in files if item['name'] in retained and item['name'] not in visible_names and item.get('usable'))
     enriched_count = sum(1 for item in files if item.get("metadata_enriched"))
     return {
         "directory": str(EXTERNAL_REFERENCE_DIR),
         "catalog_path": str(EXTERNAL_REFERENCE_CATALOG_PATH),
         "files": display_files,
         "recommended_selection": recommended,
+        "recommended_primary": recommended[0] if recommended else None,
+        "selection_policy": "FIRST_FILE_PRIMARY_REMAINING_SUPPORT",
         "recommended_cohort_size": EXTERNAL_REFERENCE_RECOMMENDED_COHORT,
         "display_limit": EXTERNAL_REFERENCE_DISPLAY_LIMIT,
         "displayed_reference_count": len(display_files),
@@ -1432,7 +1433,7 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
             self._lap_grid(target) if target else None,
         )
 
-        external_gap = (external_reference.get("aggregate") or {}).get("gap_to_reference_median_s")
+        external_gap = (external_reference.get("aggregate") or {}).get("gap_to_reference_s")
         setup_assist_available = bool(setup_recommendation.get("experimental_candidates"))
         classification["performance_objective"] = "CLOSE_EXTERNAL_REFERENCE_GAP"
         classification["classification_gate_removed"] = True
@@ -1861,7 +1862,7 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
             "strong_consensus": False,
             "consensus_tier": "DISPLAY_ONLY",
             "setup_conclusion_allowed": False,
-            "aggregation_method": "CONDITION_WEIGHTED_DISTANCE_NORMALIZED_ROBUST_MEDIAN",
+            "aggregation_method": "PRIMARY_ACTUAL_LAP_WITH_INDEPENDENT_SUPPORT",
             "minimum_references_for_setup": EXTERNAL_REFERENCE_MIN_DECISION,
             "strong_consensus_count": EXTERNAL_REFERENCE_STRONG_DECISION,
             "single_reference_policy": "DISPLAY_ONLY_NO_SETUP_CONCLUSION",
@@ -1898,7 +1899,9 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
             except Exception as exc:
                 base["errors"].append(f"{name}: {exc}")
 
-        if not loaded:
+        # The ordered selection pins the first file as the primary. A missing
+        # primary must not silently turn a supporting driver into a new target.
+        if not loaded or loaded[0].path.name != selected_names[0]:
             return base
 
         target_time = float(target.lap_time_s) if target.valid and target.lap_time_s else None
@@ -1930,26 +1933,25 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                 }
             )
 
-        decision_ready = len(decision_eligible_indices) >= EXTERNAL_REFERENCE_MIN_DECISION
-        display_eligible_indices = [
-            idx for idx, row in enumerate(reference_rows)
-            if float((row.get("condition_similarity") or {}).get("score") or 0.0) >= 0.45
-            and bool((row.get("condition_similarity") or {}).get("setup_compatible", True))
-        ]
-        pool_indices = (
-            decision_eligible_indices if decision_ready
-            else display_eligible_indices if display_eligible_indices
-            else list(range(len(loaded)))
-        )
-        # When a large library is selected, condition similarity is the first
-        # gate. This keeps the median representative of the current session
-        # instead of letting very different fuel/weather laps dominate it.
-        pool_indices.sort(
-            key=lambda idx: (
-                -float((reference_rows[idx].get("condition_similarity") or {}).get("score") or 0.0),
-                float(reference_rows[idx].get("lap_time_s") or math.inf),
-            )
-        )
+        primary_index = 0
+        primary_row = reference_rows[primary_index]
+        primary_grid = grids[primary_index]
+        primary_file = loaded[primary_index].path.name
+        primary_driver = _context_token(primary_row.get("driver_slug") or primary_row.get("driver_name"))
+        # Support is evidence from comparable faster laps, never replacement
+        # samples for the primary. One driver gets one vote (primary first).
+        pool_indices: list[int] = []
+        seen_drivers: set[str] = set()
+        for index in decision_eligible_indices:
+            row = reference_rows[index]
+            driver = _context_token(row.get("driver_slug") or row.get("driver_name"))
+            if driver and driver in seen_drivers:
+                continue
+            pool_indices.append(index)
+            if driver:
+                seen_drivers.add(driver)
+        decision_eligible_indices = pool_indices
+        decision_ready = primary_index in pool_indices and len(pool_indices) >= EXTERNAL_REFERENCE_MIN_DECISION
         pool_grids = [grids[index] for index in pool_indices]
         pool_rows = [reference_rows[index] for index in pool_indices]
 
@@ -1980,9 +1982,9 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
 
         unique_drivers = len(
             {
-                _context_token(item.get("driver_name"))
+                _context_token(item.get("driver_slug") or item.get("driver_name"))
                 for item in pool_rows
-                if item.get("driver_name")
+                if item.get("driver_slug") or item.get("driver_name")
             }
         )
         strong_consensus = bool(
@@ -1996,9 +1998,9 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
             "DISPLAY_ONLY"
         )
 
-        aggregate_grid: dict[str, np.ndarray[Any, Any]] = {
-            "distance_pct": np.linspace(0.0, 1.0, self.grid_points)
-        }
+        # Every displayed/control/coaching channel comes from this one actual
+        # lap, including its observation gaps. Other laps only supply ranges.
+        aggregate_grid = primary_grid
         aggregate_keys = [
             "time_s", "Speed", "speed_kph", "Throttle", "Brake", "SteeringWheelAngle",
             "YawRate", "LatAccel", "LongAccel", "Gear", "BrakeABSactive", "Lat", "Lon",
@@ -2009,16 +2011,12 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
             if pairs:
                 stack = np.vstack([pair[0] for pair in pairs])
                 key_weights = np.asarray([pair[1] for pair in pairs], dtype=float)
-                aggregate_grid[key] = _weighted_quantile_stack(stack, key_weights, 0.50)
                 distribution_grids[key] = {
                     "p25": _weighted_quantile_stack(stack, key_weights, 0.25),
                     "p75": _weighted_quantile_stack(stack, key_weights, 0.75),
                     "min": np.where(np.any(np.isfinite(stack), axis=0), np.min(np.where(np.isfinite(stack), stack, np.inf), axis=0), np.nan),
                     "max": np.where(np.any(np.isfinite(stack), axis=0), np.max(np.where(np.isfinite(stack), stack, -np.inf), axis=0), np.nan),
                 }
-        aggregate_grid["_coverage"] = np.isfinite(aggregate_grid.get("time_s", np.full(self.grid_points, np.nan))) & np.isfinite(aggregate_grid.get("speed_kph", np.full(self.grid_points, np.nan)))
-        aggregate_grid["_channel_support"] = {key: np.isfinite(value) for key, value in aggregate_grid.items() if isinstance(value, np.ndarray) and not key.startswith("_") and key != "distance_pct"}
-
         target_grid = self._lap_grid(target) if target.valid else self._coaching_grid(target)
         straight_performance = self._straight_performance_diagnostics(
             target_grid=target_grid,
@@ -2053,31 +2051,43 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                 issue = str(item.get("issue_type") or "")
                 issue_counts[issue] = issue_counts.get(issue, 0) + 1
             dominant_issue = max(issue_counts, key=issue_counts.get) if issue_counts else corner.get("issue_type")
-            # Delta, evidence and action describe the same weighted time curve.
-            # Per-lap losses below are a separate uncertainty distribution.
+            # Delta/evidence/action describe the primary. Per-driver losses are
+            # separate corroboration and must never replace its measurements.
             losses = [float(item["delta_s"]) for item, _ in measured_pairs]
             loss_weights = np.asarray([float(row.get("analysis_weight") or 0.0) for _, row in measured_pairs])
             loss_agreement = (
                 sum(1 for value in losses if value >= 0.02) / len(losses) if losses else 0.0
             )
             issue_agreement = (
-                issue_counts.get(str(dominant_issue), 0) / len(measured_pairs) if measured_pairs else 0.0
+                issue_counts.get(str(corner.get("issue_type")), 0) / len(measured_pairs) if measured_pairs else 0.0
             )
             condition_scores = [
                 float((row.get("condition_similarity") or {}).get("score") or 0.0)
                 for _, row in measured_pairs
             ]
             corner_drivers = {
-                _context_token(row.get("driver_name"))
+                _context_token(row.get("driver_slug") or row.get("driver_name"))
                 for _, row in measured_pairs
-                if row.get("driver_name")
+                if row.get("driver_slug") or row.get("driver_name")
             }
+            supporting_pairs = [
+                (item, row) for item, row in measured_pairs
+                if row is not primary_row
+                and _context_token(row.get("driver_slug") or row.get("driver_name"))
+                and _context_token(row.get("driver_slug") or row.get("driver_name")) != primary_driver
+            ]
             corner["reference_consensus"] = {
+                "primary_reference_file": primary_file,
+                "primary_lap_loss_s": corner.get("delta_s"),
+                "supporting_driver_count": len(supporting_pairs),
+                "supporting_faster_driver_count": sum(float(item["delta_s"]) >= 0.02 for item, _ in supporting_pairs),
+                "supporting_issue_agreement_count": sum(item.get("issue_type") == corner.get("issue_type") for item, _ in supporting_pairs),
                 "reference_count": len(measured_pairs),
                 "selected_reference_count": len(pairs),
                 "unique_driver_count": len(corner_drivers),
                 "loss_agreement_ratio": round(loss_agreement, 3),
                 "dominant_issue_type": dominant_issue,
+                "primary_issue_type": corner.get("issue_type"),
                 "issue_agreement_ratio": round(issue_agreement, 3),
                 "aggregate_curve_loss_s": corner.get("delta_s"),
                 "median_loss_s": round_or_none(float(_weighted_quantile_stack(np.asarray(losses)[:, None], loss_weights, .5)[0]), 3) if losses else None,
@@ -2096,7 +2106,8 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
         top_losses = [item for item in aggregate_corners if (item.get("delta_s") or 0.0) >= 0.02][:8]
         reference_times = [float(item["lap_time_s"]) for item in pool_rows]
         median_reference_time = float(_weighted_quantile_stack(np.asarray(reference_times)[:, None], pool_weights, .50)[0]) if reference_times else None
-        gap_to_reference = target_time - median_reference_time if target_time is not None and median_reference_time is not None else None
+        primary_time = float(primary_row["lap_time_s"])
+        gap_to_reference = target_time - primary_time if target_time is not None else None
         condition_scores = [
             float((item.get("condition_similarity") or {}).get("score") or 0.0)
             for item in pool_rows
@@ -2135,39 +2146,36 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                     values.append(value)
             return [round_or_none(min(values), 2), round_or_none(max(values), 2)] if values else [None, None]
 
-        representative_index = int(np.argmin(np.abs(np.asarray(reference_times) - median_reference_time))) if reference_times else 0
-        representative_grid = pool_grids[representative_index] if pool_rows else aggregate_grid
-        line_corners = self._corner_analysis(target_grid, representative_grid, definitions)
-        consensus_by_id = {corner["id"]: corner.get("reference_consensus", {}) for corner in aggregate_corners}
-        for corner in line_corners:
-            corner["reference_consensus"] = consensus_by_id.get(corner["id"], {})
+        representative_grid = primary_grid
+        line_corners = aggregate_corners
         line_comparison = self._external_racing_line_comparison(
             target_grid=target_grid,
-            # Independently median Lat/Lon may form a line nobody actually drove.
             reference_grid=representative_grid,
             corners=line_corners,
             reference_count=len(pool_rows),
             unique_driver_count=unique_drivers,
             consensus_tier=consensus_tier,
         )
-        representative_file = loaded[pool_indices[representative_index]].path.name if pool_rows else None
+        representative_file = primary_file
         line_comparison["reference_type"] = "GARAGE61_REPRESENTATIVE_ACTUAL_LAP"
         line_comparison["reference_file"] = representative_file
-        line_comparison["note"] = "라인은 종합 페달·시간 곡선이 아니라 조건을 통과한 대표 실주행 랩과 비교합니다."
+        line_comparison["note"] = "라인·페달·속도·시간차는 모두 같은 대표 실주행 랩과 비교합니다."
         self._external_line_grid = representative_grid
         self._external_line_source = {
             "type": "GARAGE61_REPRESENTATIVE_ACTUAL_LAP",
             "reference_file": representative_file,
-            "driver_name": pool_rows[representative_index].get("driver_name") if pool_rows else None,
-            "lap_time": format_lap_time(reference_times[representative_index]) if reference_times else None,
-            "chart_basis": "AGGREGATE" if len(pool_rows) > 1 else "ACTUAL_LAP",
+            "driver_name": primary_row.get("driver_name"),
+            "lap_time": format_lap_time(primary_time),
+            "chart_basis": "ACTUAL_LAP",
         }
         self._external_detail_grid = aggregate_grid
         self._external_detail_distributions = distribution_grids
         self._external_detail_support = {key: np.sum(np.vstack([np.isfinite(grid[key]) for grid in pool_grids if key in grid]), axis=0) for key in aggregate_keys if any(key in grid for grid in pool_grids)}
-        self._external_reference_label = "Garage61 실주행 기준" if len(pool_rows) == 1 else f"Garage61 조건 가중 종합 기준 · {len(pool_rows)}랩"
+        self._external_reference_label = f"Garage61 대표 실주행 · {primary_row.get('driver_name') or '드라이버'}"
 
         warnings: list[str] = []
+        if primary_index not in pool_indices:
+            warnings.append("대표 랩이 현재 대상보다 빠르고 조건이 유사한 기준을 충족하지 않아 참고 비교에만 사용합니다. 셋업 결론에는 사용하지 않습니다.")
         if len(loaded) == 1:
             warnings.append(
                 "외부 기준 CSV가 1개뿐이므로 그래프·드라이빙 코칭에만 사용하며 셋업 결론에는 사용하지 않습니다."
@@ -2203,6 +2211,13 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                 "current_conditions": current_conditions,
                 "references": reference_rows,
                 "aggregate": {
+                    "reference_time_s": round_or_none(primary_time, 4),
+                    "reference_time": format_lap_time(primary_time),
+                    "gap_to_reference_s": round_or_none(gap_to_reference, 4),
+                    "primary_reference_file": primary_file,
+                    "primary_driver_name": primary_row.get("driver_name"),
+                    "primary_condition_similarity": primary_row.get("condition_similarity"),
+                    "supporting_reference_count": sum(row is not primary_row for row in pool_rows),
                     "target_lap": target.lap_number,
                     "pace_eligible": bool(target.valid),
                     "coaching_scope": "VALID_LAP" if target.valid else "CLEAN_SEGMENTS_ONLY",
@@ -2210,14 +2225,14 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                     "target_time": format_lap_time(target_time),
                     "reference_median_time_s": round_or_none(median_reference_time, 4),
                     "reference_median_time": format_lap_time(median_reference_time),
-                    "gap_to_reference_median_s": round_or_none(gap_to_reference, 4),
+                    "gap_to_reference_median_s": round_or_none(target_time - median_reference_time, 4) if target_time is not None and median_reference_time is not None else None,
                     "fastest_reference_time_s": round_or_none(min(reference_times) if reference_times else None, 4),
                     "slowest_reference_time_s": round_or_none(max(reference_times) if reference_times else None, 4),
                     "reference_time_spread_s": round_or_none(
                         (max(reference_times) - min(reference_times)) if len(reference_times) > 1 else 0.0,
                         4,
                     ),
-                    "time_aggregation": "CONDITION_WEIGHTED_MEDIAN",
+                    "time_aggregation": "PRIMARY_ACTUAL_LAP",
                     "representative_reference_file": representative_file,
                     "reference_label": self._external_reference_label,
                     "reference_pool": "CONDITION_QUALIFIED_FASTER" if decision_ready else "SELECTED_DISPLAY_POOL",
@@ -2244,7 +2259,7 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
                         target_grid, aggregate_grid, aggregate_corners, straight_performance,
                         pace_eligible=bool(target.valid), lap_delta_s=gap_to_reference,
                         current_conditions=current_conditions,
-                        reference_conditions=pool_rows),
+                        reference_conditions=[primary_row]),
                 },
                 "visualizations": {"trace": trace,
                                    "track_path": gps_path(target_grid),
@@ -2817,7 +2832,7 @@ def build_planner_evidence(
                 "summary": (
                     f"Garage61 익명 기준 {external.get('selected_reference_count', 0)}개, "
                     f"셋업 판단용 빠른 기준 {external.get('decision_reference_count', 0)}개, "
-                    f"기준 중앙값 대비 {aggregate.get('gap_to_reference_median_s')}초"
+                    f"대표 실주행 대비 {aggregate.get('gap_to_reference_s')}초"
                 ),
                 "data": external,
             }
@@ -3858,7 +3873,7 @@ def load_task_overlay_reference(selection):
     grid = getattr(analyzer, '_external_detail_grid', None)
     if grid is None:
         raise ValueError('과제의 Garage61 비교 곡선이 없습니다.')
-    return GridReference(grid, external['aggregate']['reference_median_time_s'])
+    return GridReference(grid, external['aggregate'].get('reference_time_s', external['aggregate'].get('reference_median_time_s')))
 
 from overlay_personal import PersonalOverlayLoader
 
