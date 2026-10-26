@@ -1,6 +1,7 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import SourcePicker from './SourcePicker';
+jest.mock('../analysis/analysisClient', () => ({ requestJson: jest.fn(async () => ({ health: { enabled: false }, job: null })) }));
 import { activateSession, currentSessionResult, data, LAST_SESSION_KEY, labRequest, rememberSession, selectGame } from './sessionData';
 import { readDesktopLaps } from '../analysis/desktopSelection';
 

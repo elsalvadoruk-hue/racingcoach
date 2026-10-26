@@ -2,6 +2,9 @@ import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import SourcePicker from './SourcePicker';
 import { activateSession, currentSessionResult, labRequest, selectGame } from './sessionData';
+import { requestJson } from '../analysis/analysisClient';
+
+jest.mock('../analysis/analysisClient', () => ({ requestJson: jest.fn() }));
 
 jest.mock('./sessionData', () => {
   const actual = jest.requireActual('./sessionData');
@@ -14,6 +17,7 @@ const personalReference = filename => ({ filename, lap: 2, lap_time_s: 90 });
 const reference = name => ({ name, driver_name: name, usable: true, compatible: true, lap_time_s: 89 });
 let catalogs, delayed;
 beforeEach(() => {
+  requestJson.mockReset(); requestJson.mockResolvedValue({ health: { enabled: false }, job: null });
   localStorage.clear(); selectGame('iracing'); activateSession(currentSessionResult(session('A.ibt')));
   catalogs = {
     'A.ibt': { files: [reference('A.csv')], recommended_selection: ['A.csv'] },
@@ -199,6 +203,10 @@ test('a catalog error is explained and reopening can recover', async () => {
 });
 
 test('background collection shows its reported progress without blocking cached references', async () => {
+  requestJson.mockResolvedValue({ health: { enabled: true, context: { context_key: 'A-context' } }, job: {
+    job_id: 'A-job', context_key: 'A-context', busy: true, progress: 0.42, state: 'DOWNLOADING',
+    message: '기준 CSV를 내려받고 있습니다.',
+  } });
   render(<SourcePicker target="2" reference="2" external={['A.csv']} onApply={jest.fn()}
     analysisWorkspace={{ game: 'iracing', garage61Collector: { job: {
       busy: true, progress: 0.42, state: 'DOWNLOADING', message: '기준 CSV를 내려받고 있습니다.',

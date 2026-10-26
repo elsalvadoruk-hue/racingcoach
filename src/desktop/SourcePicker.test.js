@@ -4,6 +4,7 @@ import SourcePicker from './SourcePicker';
 import { activateSession, labRequest } from './sessionData';
 
 jest.mock('./sessionData', () => ({ ...jest.requireActual('./sessionData'), labRequest: jest.fn() }));
+jest.mock('../analysis/analysisClient', () => ({ requestJson: jest.fn(async () => ({ health: { enabled: false }, job: null })) }));
 
 test('LMU automatic baseline permits another file with unknown weather and explains the relaxed policy', async () => {
   const laps = [{ lap_number: 2, status: 'UNVERIFIED', measurement_eligible: true, lap_time_s: 120 }];
