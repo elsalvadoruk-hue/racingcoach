@@ -134,3 +134,70 @@ test('LMU stays local even if a catalog happens to contain Garage61 rows', async
   await picker({ external: [], game: 'lmu' }); await changeFile('B.ibt', 'lmu');
   expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
 });
+
+test('opening the current recording shows loading instead of claiming that Garage61 is empty', async () => {
+  const original = labRequest.getMockImplementation();
+  let finish;
+  labRequest.mockImplementation((route, body, signal) => route === 'references'
+    ? new Promise(resolve => { finish = resolve; }) : original(route, body, signal));
+  const view = render(<SourcePicker target="2" reference="2" external={['A.csv']} onApply={jest.fn()}
+    analysisWorkspace={{ game: 'iracing' }} />);
+  await waitFor(() => expect(finish).toBeDefined());
+  expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+  expect(screen.getByText('Garage61 기준 불러오는 중')).toBeInTheDocument();
+  expect(screen.queryByText('이 차량·트랙과 맞는 내려받은 기준이 없습니다.')).not.toBeInTheDocument();
+  const request = labRequest.mock.calls.find(([route]) => route === 'references');
+  expect(request[2].aborted).toBe(false);
+  view.unmount();
+  expect(request[2].aborted).toBe(true);
+  await act(async () => finish({ ...catalogs['A.ibt'], personalReference: personalReference('A.ibt') }));
+});
+
+test('file reading and reference lookup remain separate loading phases', async () => {
+  await picker();
+  const original = labRequest.getMockImplementation();
+  let finishSession, finishReferences;
+  labRequest.mockImplementation((route, body, signal) => {
+    if (route === 'session') return new Promise(resolve => { finishSession = resolve; });
+    if (route === 'references') return new Promise(resolve => { finishReferences = resolve; });
+    return original(route, body, signal);
+  });
+  fireEvent.change(screen.getByLabelText('주행 파일 · IBT'), { target: { value: 'B.ibt' } });
+  await waitFor(() => expect(finishSession).toBeDefined());
+  expect(screen.getByText('주행 파일 읽는 중')).toBeInTheDocument();
+  await act(async () => finishSession(session('B.ibt')));
+  expect(screen.getByText('Garage61 기준 불러오는 중')).toBeInTheDocument();
+  expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
+  expect(screen.getByRole('button', { name: 'Garage61 기준 불러오는 중…' })).toBeDisabled();
+  await act(async () => finishReferences({ ...catalogs['B.ibt'], personalReference: personalReference('B.ibt') }));
+  await ready();
+  expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  expect(selected()).toEqual(['B2.csv']);
+});
+
+test('a catalog error is explained and reopening can recover', async () => {
+  const original = labRequest.getMockImplementation();
+  labRequest.mockImplementation((route, body, signal) => route === 'references'
+    ? Promise.reject(new Error('기준 목록 연결 시간 초과')) : original(route, body, signal));
+  const view = render(<SourcePicker target="2" reference="2" external={['A.csv']} onApply={jest.fn()}
+    analysisWorkspace={{ game: 'iracing' }} />);
+  await ready();
+  expect(screen.getByText('기준 목록 연결 시간 초과')).toBeInTheDocument();
+  expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+  view.unmount();
+  labRequest.mockImplementation(original);
+  await picker();
+  expect(screen.queryByText('기준 목록 연결 시간 초과')).not.toBeInTheDocument();
+  expect(selected()).toEqual(['A.csv']);
+});
+
+test('background collection shows its reported progress without blocking cached references', async () => {
+  render(<SourcePicker target="2" reference="2" external={['A.csv']} onApply={jest.fn()}
+    analysisWorkspace={{ game: 'iracing', garage61Collector: { job: {
+      busy: true, progress: 0.42, state: 'DOWNLOADING', message: '기준 CSV를 내려받고 있습니다.',
+    } } }} />);
+  await ready();
+  expect(screen.getByRole('progressbar', { name: 'Garage61 수집 예상 진행률' })).toHaveAttribute('aria-valuenow', '42');
+  expect(screen.getByText('기준 CSV를 내려받고 있습니다.')).toBeInTheDocument();
+  expect(selected()).toEqual(['A.csv']);
+});

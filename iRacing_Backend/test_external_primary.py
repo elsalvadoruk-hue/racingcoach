@@ -176,6 +176,26 @@ class RecommendedPrimaryTests(unittest.TestCase):
         self.assertIn('lap11.csv', [row['name'] for row in pinned['files']])
         self.assertEqual(pinned['recommended_selection'], default['recommended_selection'])
 
+    def test_other_cars_and_layouts_are_rejected_before_reading_their_csv(self):
+        self.add('matching')
+        self.add('other_car')
+        with patch.object(api, 'external_reference_compatibility', side_effect=lambda meta, _: {
+            'compatible': meta['name'] == 'matching.csv', 'method': 'IDS', 'reason': 'CAR_MISMATCH'}), \
+             patch.object(api, 'external_reference_validation', return_value={'usable': True}) as validate:
+            result = api.list_external_reference_metadata(telemetry())
+        self.assertEqual([call.args[0].name for call in validate.call_args_list], ['matching.csv'])
+        self.assertEqual(result['scanned_reference_count'], 2)
+        self.assertEqual(result['total_compatible'], 1)
+        self.assertEqual(result['identity_rejections'], {'CAR_MISMATCH': 1})
+
+    def test_listing_without_a_current_recording_still_validates_the_whole_library(self):
+        self.add('first')
+        self.add('second')
+        with patch.object(api, 'external_reference_validation', return_value={'usable': True}) as validate:
+            result = api.list_external_reference_metadata()
+        self.assertEqual(validate.call_count, 2)
+        self.assertEqual(len(result['files']), 2)
+
 
 if __name__ == '__main__':
     unittest.main()

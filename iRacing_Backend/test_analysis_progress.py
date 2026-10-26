@@ -1,6 +1,7 @@
 """The picker's progress estimate: ordered stages, never backwards, never full before the end."""
 import unittest
 import asyncio
+from unittest.mock import patch
 
 import analysis_progress
 from analysis_progress import Job
@@ -16,8 +17,9 @@ class Clock:
 
 class JobTests(unittest.TestCase):
     def setUp(self):
-        self.saved = dict(analysis_progress._rates)
-        self.addCleanup(lambda: analysis_progress._rates.update(self.saved))
+        # Earlier workspace analyses teach process-wide rates; each deterministic
+        # clock example needs the documented defaults, independent of test order.
+        self.enterContext(patch.dict(analysis_progress._rates, analysis_progress.DEFAULT_RATES, clear=True))
 
     def test_the_bar_moves_inside_a_stage_but_waits_at_its_end(self):
         clock = Clock()

@@ -62,10 +62,10 @@ export function AnalysisProgressBar({ view }) {
   const percent = Number.isFinite(view.percent) ? Math.max(0, Math.min(100, view.percent)) : null;
   const left = remainingText(view.remaining_s);
   return <div className="analysis-progress" data-testid="analysis-progress">
-    <div className="analysis-progress-label"><span>{view.label || '분석 중'}</span><span className="numeric">{percent == null ? '준비 중' : `${view.stage === 'done' ? '' : '예상 '}${percent}%`}{left ? ` · ${left}` : ''}</span></div>
-    <div className="analysis-progress-track" role="progressbar" aria-label="주행 데이터 분석 예상 진행률" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined}>
+    <div className="analysis-progress-label"><span>{view.label || '분석 중'}</span><span className="numeric">{percent == null ? (view.waitLabel || '준비 중') : `${view.stage === 'done' ? '' : '예상 '}${percent}%`}{left ? ` · ${left}` : ''}</span></div>
+    <div className="analysis-progress-track" role="progressbar" aria-label={view.ariaLabel || '주행 데이터 분석 예상 진행률'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? undefined}>
       <div className={`analysis-progress-fill${percent == null ? ' analysis-progress-waiting' : ''}`} style={percent == null ? undefined : { width: `${percent}%` }} />
     </div>
-    <small>파일과 컴퓨터 상태에 따라 실제 남은 시간은 달라질 수 있습니다.</small>
+    <small>{view.description || '파일과 컴퓨터 상태에 따라 실제 남은 시간은 달라질 수 있습니다.'}</small>
   </div>;
 }

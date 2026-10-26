@@ -655,6 +655,13 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
         identity = external_reference_compatibility(metadata, telemetry.metadata) if telemetry else {
             "compatible": None, "method": "NO_IBT", "reason": "NO_IBT"
         }
+        # Compact metadata already identifies unrelated cars/layouts. Keep the
+        # rejection diagnostics without parsing CSVs that cannot be displayed.
+        if telemetry is not None and not identity.get("compatible"):
+            files.append({**metadata, "compatible": False,
+                          "compatibility_method": identity.get("method"),
+                          "compatibility_reason": identity.get("reason")})
+            continue
         validation = external_reference_validation(path)
         if not validation["usable"]:
             parse_errors.append({"name": path.name, "error": validation["validation_error"]})
