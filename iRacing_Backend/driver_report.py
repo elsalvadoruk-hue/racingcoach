@@ -2,20 +2,25 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from bisect import bisect_left, insort
 import hashlib
 import json
 import math
+import sqlite3
 from statistics import median
 
 from driver_history import DriverHistoryStore
+from driver_history_metrics import CALCULATION_VERSION as METRICS_VERSION
+from driver_style import build_style
+from driver_report_quality import build_quality
 
 
-CALCULATION_VERSION = 'observed-report-v2'
+CALCULATION_VERSION = 'observed-report-v5'
 _REQUIRED_CONDITIONS = ('fuel_level_l', 'track_temp_c', 'air_temp_c', 'track_wetness', 'tire_compound', 'setup_hash')
 _CONDITION_LABELS = {'fuel_level_l': '연료량', 'track_temp_c': '노면 온도', 'air_temp_c': '기온',
                      'track_wetness': '노면 젖음', 'tire_compound': '타이어 종류', 'setup_hash': '셋업'}
 _REASONS = {
-    'NATIVE_IDENTITY_UNAVAILABLE': '독립 세션 식별이 미확정이라 누적 운전량과 성장 추세에서 제외합니다.',
+    'NATIVE_IDENTITY_UNAVAILABLE': '독립 세션 수는 미확정입니다. 확인 가능한 파일별 측정과 관측 변화는 표시하며 실력 성장으로 확정하지 않습니다.',
     'REPLAY_STATE_UNAVAILABLE': '리플레이 여부를 확인할 정보가 없어 측정값을 부분 관측으로 표시합니다.',
     'REPLAY_STATE_INVALID': '리플레이 상태값이 올바르지 않아 해당 구간을 측정에서 제외합니다.',
     'REPLAY_SAMPLES_EXCLUDED': '리플레이로 확인된 구간은 측정에서 제외했습니다.',
@@ -55,6 +60,7 @@ _REASONS = {
     'SESSION_CHANGE': '실제 세션이 바뀌는 경계를 주행 구간이나 한 랩으로 연결하지 않습니다.',
     'LMU_NATIVE_COVERAGE_UNAVAILABLE': 'LMU 원본 시계의 연속 측정 범위를 확인할 수 없는 랩은 제외합니다.',
     'OUTDATED_METRICS': '이전 계산 또는 측정 근거 추출 실패로 다시 확인해야 할 원본이 있습니다.',
+    'OVERLAPPING_SOURCE_LAPS': '같은 차량·코스의 UTC 측정 랩이 다른 원본과 겹쳐 중복 집계하지 않았습니다.',
 }
 
 
@@ -153,71 +159,128 @@ def _unknown_replay(observation):
                    or 'REPLAY_STATE_UNAVAILABLE' in lap.get('reason_codes', [])))
 
 
-def _career(drives):
-    time_total, distance_total, measured, distance_measured = 0., 0., 0, 0
-    partial = False
-    replay_states, unknown_included = [], False
-    for drive in drives:
-        if drive['identity_status'] != 'NATIVE':
-            partial = True
+def _distance_lower_bound(sources):
+    """Use complete nonoverlapping measurements; never apportion a scalar."""
+    selected, total, measured = [], 0., False
+    for _, driving in sorted(sources, key=lambda item: (
+            -item[1]['distance_m'] if _finite(item[1].get('distance_m')) else math.inf, item[0])):
+        distance = driving.get('distance_m')
+        if not _finite(distance):
             continue
-        by_basis, replay_by_source = {}, {}
+        candidates = _union(driving['intervals'])
+        overlap = False
+        for window in candidates:
+            index = bisect_left(selected, window)
+            if _overlaps([window], selected[max(0, index - 1):index + 1]):
+                overlap = True
+                break
+        if overlap:
+            continue
+        for window in candidates:
+            insort(selected, window)
+        total += distance
+        measured = True
+    return total, measured
+
+
+def _driving_groups(drives):
+    """Keep shared UTC clocks, proven sessions and unshared source clocks distinct."""
+    contexts, replay_states = {}, []
+    partial = unknown_included = False
+    for drive in drives:
+        by_basis = {}
         for observation in drive['observations']:
             driving = observation.get('metrics', {}).get('driving', {})
-            if driving.get('status') == 'UNAVAILABLE' or not _finite(driving.get('time_s')):
+            replay = _replay_status(observation)
+            if (driving.get('status') not in {'OBSERVED', 'PARTIAL'}
+                    or not _finite(driving.get('time_s')) or not driving.get('intervals')
+                    or replay in {'CONFIRMED_REPLAY', 'INVALID'}):
                 partial = True
                 continue
             basis = observation['coverage']['time_basis']
-            if basis not in {'UTC', 'NATIVE_SESSION_TIME'}:
+            if basis not in {'UTC', 'NATIVE_SESSION_TIME', 'SOURCE_RELATIVE'}:
                 partial = True
                 continue
             by_basis.setdefault(basis, []).append((observation['source_id'], driving))
-            replay_by_source[observation['source_id']] = (_replay_status(observation), _unknown_replay(observation))
-            partial |= driving.get('status') != 'OBSERVED'
+            replay_states.append(replay)
+            unknown_included |= _unknown_replay(observation)
+            partial |= driving['status'] != 'OBSERVED' or replay != 'CONFIRMED_NON_REPLAY'
         if not by_basis:
             continue
-        # Different clocks cannot be summed. Pick the widest observed clock.
-        _, sources = max(sorted(by_basis.items()), key=lambda item: _duration(
-            [window for _, value in item[1] for window in value.get('intervals', [])]))
-        replay_states.extend(replay_by_source[source_id][0] for source_id, _ in sources)
-        unknown_included |= any(replay_by_source[source_id][1] for source_id, _ in sources)
-        partial |= any(replay_by_source[source_id][0] != 'CONFIRMED_NON_REPLAY' for source_id, _ in sources)
-        partial |= len(by_basis) > 1
-        windows = [window for _, item in sources for window in item.get('intervals', [])]
-        time_total += _duration(windows)
-        measured += 1
-        selected = []
-        for _, driving in sorted(sources, key=lambda item: (-item[1]['time_s'], item[0])):
-            value = driving.get('distance_m')
-            if not _finite(value):
-                partial = True
-                continue
-            candidate = driving.get('intervals', [])
-            if _overlaps(candidate, selected):
-                # Scalars do not prove the distance in the overlapping part.
-                # Retain a lower bound from whole non-overlapping observations.
-                partial = True
-                continue
-            selected = _union(selected + candidate)
-            distance_total += value
-            distance_measured += 1
+        # One drive can expose the same measurements on more than one clock.
+        basis, sources = max(sorted(by_basis.items()), key=lambda item: (
+            _duration([window for _, value in item[1] for window in value['intervals']]), item[0] == 'UTC'))
+        partial |= len(by_basis) > 1 or drive['identity_status'] != 'NATIVE'
+        windows = [window for _, value in sources for window in value['intervals']]
+        partial |= sum(end - start for start, end in windows) > _duration(windows) + .000001
+        partial |= any(not _finite(value.get('distance_m')) for _, value in sources)
+        key = tuple(drive[field] for field in ('game', 'car_key', 'track_key', 'layout_key'))
+        context = contexts.setdefault(key, dict(utc=[], native_utc=[], native_other=[], unshared=[]))
+        if basis == 'UTC':
+            context['utc'].extend(sources)
+            if drive['identity_status'] == 'NATIVE':
+                context['native_utc'].extend(sources)
+        elif drive['identity_status'] == 'NATIVE':
+            context['native_other'].append(sources)
+        else:
+            context['unshared'].append(sources)
+    return contexts, partial, unknown_included, replay_states
+
+
+def _career(drives):
+    contexts, partial, unknown_included, replay_states = _driving_groups(drives)
+    time_total = distance_total = 0.
+    measured = distance_measured = False
+    for context in contexts.values():
+        # Native identities prove distinct local clocks. Unidentified UTC
+        # sources can be unioned on a shared clock, without declaring a session.
+        # An unshared source may overlap either pool; retain a lower bound from
+        # the largest supported pool instead of adding potentially repeated data.
+        utc_time = _duration([window for _, value in context['utc'] for window in value['intervals']])
+        native_time = _duration([window for _, value in context['native_utc'] for window in value['intervals']])
+        native_time += sum(_duration([window for _, value in sources for window in value['intervals']])
+                           for sources in context['native_other'])
+        unshared_time = max((_duration([window for _, value in sources for window in value['intervals']])
+                             for sources in context['unshared']), default=0.)
+        time_total += max(utc_time, native_time, unshared_time)
+        measured |= bool(context['utc'] or context['native_other'] or context['unshared'])
+        utc_distance, utc_measured = _distance_lower_bound(context['utc'])
+        native_distance, native_measured = _distance_lower_bound(context['native_utc'])
+        for sources in context['native_other']:
+            value, available = _distance_lower_bound(sources)
+            native_distance += value
+            native_measured |= available
+        unshared_distance, unshared_measured = 0., False
+        for sources in context['unshared']:
+            value, available = _distance_lower_bound(sources)
+            unshared_distance = max(unshared_distance, value)
+            unshared_measured |= available
+        distance_total += max(utc_distance, native_distance, unshared_distance)
+        distance_measured |= utc_measured or native_measured or unshared_measured
+        # Overlapping distance scalars cannot prove the shared portion.
+        all_windows = [window for _, value in context['utc'] for window in value['intervals']]
+        partial |= sum(end - start for start, end in all_windows) > _duration(all_windows) + .000001
+        partial |= bool(context['unshared'])
+    includes_sources = any(drive['identity_status'] != 'NATIVE' for drive in drives)
+    partial |= includes_sources
     state = 'PARTIAL' if partial else 'OBSERVED'
-    reason = ('확인된 독립 세션의 관측 운전 구간만 반영했습니다. 겹친 원본의 거리는 중복 합산하지 않아 일부만 포함될 수 있습니다.'
-              if partial else '확인된 독립 세션의 운전 구간 합계입니다. 정차·확인된 리플레이·연결 공백을 제외했습니다.')
-    if any(drive['identity_status'] != 'NATIVE' for drive in drives):
-        reason += ' 독립 세션 식별이 미확정인 출처별 관측은 누적에서 제외했습니다.'
+    reason = '관측된 연속 주행 구간만 반영했습니다. 정차·확인된 리플레이·연결 공백은 제외했습니다.'
+    if includes_sources:
+        reason += ' 독립 세션 식별과 별개로 파일별 측정을 포함한 부분 관측입니다. 같은 차량·코스의 UTC 구간은 합집합으로 계산합니다.'
+    if partial:
+        reason += ' 겹친 거리와 서로 대응하지 않는 시계는 더하지 않아 확인된 일부의 하한을 표시합니다.'
     if unknown_included:
         reason += ' 리플레이 여부가 미확인인 구간을 포함한 부분 관측입니다.'
-    unavailable = ('독립 세션 식별이 확인된 기록이 없어 출처별 관측을 누적 운전량에 더하지 않았습니다.'
-                   if drives and not any(drive['identity_status'] == 'NATIVE' for drive in drives)
-                   else '확인된 독립 세션에 운전량을 계산할 측정 구간이 없습니다. 아래 관측 근거에서 누락 사유를 확인하세요.')
-    result_reason = '공식 최종 클래스 결과를 확인할 수 없습니다.'
+    unavailable = '운전량을 계산할 연속 주행 측정 구간이 없습니다. 관측 근거에서 누락 사유를 확인하세요.'
     replay_status = _combined_replay(replay_states)
+
     def observed_metric(value, available):
         return {**(_metric(value, reason, state) if available else _metric(reason=unavailable)),
-                'replay_status': replay_status, 'scope': 'CONNECTED_NATIVE_OBSERVATIONS',
-                'scope_label': '확인된 독립 세션의 주행 관측량' if replay_status != 'CONFIRMED_NON_REPLAY'
+                'replay_status': replay_status, 'scope': 'CONNECTED_OBSERVATIONS',
+                'scope_label': '파일별 측정을 포함한 주행 관측량' if includes_sources
+                               else '확인된 독립 세션의 주행 관측량' if replay_status != 'CONFIRMED_NON_REPLAY'
                                else '확인된 독립 세션의 비리플레이 운전량'}
+    result_reason = '공식 최종 클래스 결과를 확인할 수 없습니다.'
     return {'distance_m': observed_metric(distance_total, distance_measured),
         'driving_time_s': observed_metric(time_total, measured),
         'wins': _metric(reason=result_reason), 'podiums': _metric(reason=result_reason),
@@ -230,7 +293,8 @@ def _lap_selection(drive):
     for observation in drive['observations']:
         for lap in observation.get('metrics', {}).get('laps', []):
             if (lap.get('measurable') is True and _finite(lap.get('lap_time_s')) and lap['lap_time_s'] > 0
-                    and _finite(lap.get('start_s')) and _finite(lap.get('end_s')) and lap['end_s'] > lap['start_s']):
+                    and _finite(lap.get('start_s')) and _finite(lap.get('end_s')) and lap['end_s'] > lap['start_s']
+                    and _replay_status(observation, lap) not in {'CONFIRMED_REPLAY', 'INVALID'}):
                 grouped.setdefault(lap['lap_number'], []).append((observation['coverage']['time_basis'],
                     {**lap, 'replay_status': _replay_status(observation, lap)}))
     by_basis = {}
@@ -252,7 +316,14 @@ def _lap_selection(drive):
                                 key=lambda row: (row['start_s'], row['end_s'])))
             if any(row.get('conditions', {}) != selected.get('conditions', {}) for _, row in rows):
                 selected['conditions'] = {}
+            inputs = [row['inputs'] for _, row in rows if 'inputs' in row]
+            if inputs and all(item == inputs[0] for item in inputs):
+                selected['inputs'] = inputs[0]
+            elif inputs:
+                selected.pop('inputs', None)
+                reasons.add('CONFLICTING_INPUT_OBSERVATIONS')
             selected['replay_status'] = _combined_replay(row['replay_status'] for _, row in rows)
+            selected['time_basis'] = basis
             by_basis.setdefault(basis, []).append(selected)
     if len(by_basis) > 1:
         reasons.add('MIXED_TIME_BASES')
@@ -272,6 +343,46 @@ def _lap_selection(drive):
     return [row for row in output if row['lap_number'] not in blocked], reasons
 
 
+def _clock_scope(drive):
+    return tuple(drive[field] for field in ('game', 'car_key', 'track_key', 'layout_key'))
+
+
+def _shared_clock_laps(drives):
+    """Deduplicate UTC laps across file identities without inventing sessions.
+
+    The native-ID pass preserves stronger evidence for condition comparisons.
+    Each pass selects nonoverlapping complete laps by earliest finish. Local
+    source clocks are never compared to another file's relative seconds.
+    """
+    selected = {drive['drive_id']: _lap_selection(drive) for drive in drives}
+    by_scope = {}
+    for drive in drives:
+        for lap in selected[drive['drive_id']][0]:
+            if lap['time_basis'] == 'UTC':
+                by_scope.setdefault(_clock_scope(drive), []).append((drive, lap))
+    for candidates in by_scope.values():
+        occupied = []
+        for native in (True, False):
+            available = sorted(((drive, lap) for drive, lap in candidates
+                if (drive['identity_status'] == 'NATIVE') == native),
+                key=lambda item: (item[1]['end_s'], item[1]['start_s'], item[0]['drive_id']))
+            accepted = []
+            for drive, lap in available:
+                window = [lap['start_s'], lap['end_s']]
+                index = bisect_left(occupied, window)
+                overlaps = _overlaps([window], occupied[max(0, index - 1):index + 1])
+                overlaps |= bool(accepted and lap['start_s'] < accepted[-1][1] - .05)
+                if overlaps:
+                    rows, reasons = selected[drive['drive_id']]
+                    # Candidate objects are shared with the selection list.
+                    rows.remove(lap)
+                    reasons.add('OVERLAPPING_SOURCE_LAPS')
+                else:
+                    accepted.append(window)
+            occupied = _union(occupied + accepted)
+    return selected
+
+
 def _laps(drive):
     return _lap_selection(drive)[0]
 
@@ -279,7 +390,7 @@ def _laps(drive):
 def _stats(laps):
     values = [lap['lap_time_s'] for lap in laps]
     center = median(values)
-    return center, median(abs(value - center) for value in values) / center * 100.
+    return center, median(abs(value - center) for value in values) / center * 100. if len(values) >= 2 else None
 
 
 def _condition_key(laps):
@@ -304,35 +415,75 @@ def _scope_label(drive):
                        {'PRACTICE': '연습', 'QUALIFY': '퀄리', 'RACE': '레이스'}.get(drive['session_type'], '세션 확인 필요')])
 
 
+def _selected_period(drive, cutoff, now):
+    if cutoff is None:
+        return True
+    stamp = _date(drive['recorded_at'])
+    return stamp is not None and cutoff <= stamp <= now
+
+
+def _observation_points(candidates):
+    by_day = {}
+    for drive, laps in candidates:
+        stamp = _date(drive['recorded_at'])
+        if stamp is not None:
+            by_day.setdefault(stamp.date().isoformat(), []).append((_stats(laps), len(laps)))
+    return [{'date': day, 'median_lap_s': round(median(row[0][0] for row in values), 3),
+             'mad_pct': (round(median(spreads), 3) if (spreads := [row[0][1] for row in values
+                         if row[0][1] is not None]) else None),
+             'lap_count': sum(row[1] for row in values), 'observation_count': len(values)}
+            for day, values in sorted(by_day.items())]
+
+
+def _observed_change(points):
+    if len(points) < 2:
+        return None
+    before, after = points[0]['median_lap_s'], points[-1]['median_lap_s']
+    return round((after - before) / before * 100., 3)
+
+
 def _pace(drives, cutoff, now, lap_selections=None):
     result = {'status': 'UNAVAILABLE', 'scope': '', 'median_lap_s': None, 'mad_pct': None,
         'lap_count': 0, 'session_count': 0, 'trend': 'UNAVAILABLE', 'pace_change_pct': None,
         'spread_change_pct': None, 'points': [], 'replay_status': 'UNKNOWN', 'trend_reason_codes': [],
-        'reason': '선택 기간 안에 날짜가 확인된 측정 랩이 없습니다. 관측 근거에서 날짜·랩 측정 조건을 확인하세요.'}
+        'observation_count': 0, 'observation_change_pct': None, 'comparison_status': 'UNAVAILABLE',
+        'comparison_label': '', 'dispersion_status': 'UNAVAILABLE',
+        'reason': '선택 범위 안에 측정 가능한 랩이 없습니다. 관측 근거에서 날짜·랩 측정 조건을 확인하세요.'}
     candidates = [(drive, lap_selections[drive['drive_id']][0] if lap_selections is not None else _laps(drive)) for drive in drives
-                  if (stamp := _date(drive['recorded_at'])) is not None and cutoff <= stamp <= now]
+                  if _selected_period(drive, cutoff, now)
+                  and ((stamp := _date(drive['recorded_at'])) is None or stamp <= now)]
     candidates = [(drive, laps) for drive, laps in candidates if laps]
     if not candidates:
         result['trend_reason_codes'] = ['NO_MEASURED_RECORDINGS_IN_PERIOD']
         return result
-    latest, latest_laps = max(candidates, key=lambda item: (item[0]['recorded_at'], item[0]['drive_id']))
+    latest, latest_laps = max(candidates, key=lambda item: (item[0]['recorded_at'] or '', item[0]['drive_id']))
     center, spread = _stats(latest_laps)
+    scope_known = all(latest[field] not in {'', 'UNKNOWN'} for field in ('car_key', 'track_key'))
+    observed = [(drive, laps) for drive, laps in candidates
+                if drive['drive_id'] == latest['drive_id'] or (scope_known and _scope(drive) == _scope(latest))]
+    points = _observation_points(observed)
     result.update(status='PARTIAL', scope=_scope_label(latest), median_lap_s=round(center, 3),
-        mad_pct=round(spread, 3), lap_count=len(latest_laps), session_count=1,
-        reason='선택 기간 안의 최근 한 관측에서 측정한 랩입니다. 공식 유효 판정은 확인되지 않았습니다.',
+        mad_pct=round(spread, 3) if spread is not None else None,
+        dispersion_status='OBSERVED' if spread is not None else 'INSUFFICIENT_LAPS',
+        lap_count=len(latest_laps), session_count=int(latest['identity_status'] == 'NATIVE'),
+        reason=('선택 범위 안의 최근 한 관측에서 측정한 랩입니다. 공식 유효 판정은 확인되지 않았습니다. '
+                '그래프는 같은 차량·코스·세션 종류의 날짜별 관측이며 동일 조건이나 실력 변화를 보증하지 않습니다.'),
         replay_status=_combined_replay(lap['replay_status'] for lap in latest_laps),
-        points=[{'date': _date(latest['recorded_at']).date().isoformat(), 'median_lap_s': round(center, 3),
-                 'mad_pct': round(spread, 3), 'lap_count': len(latest_laps)}])
+        points=points, observation_count=len(observed), observation_change_pct=_observed_change(points),
+        comparison_status='OBSERVATION_ONLY', comparison_label='관측 변화 · 동일 조건 미확인')
     condition = _condition_key(latest_laps)
     blocked, explanations = [], []
     if latest['identity_status'] != 'NATIVE':
         blocked.append('NATIVE_IDENTITY_UNAVAILABLE')
-        explanations.append('독립 세션 식별이 미확정이라 이 관측을 누적 운전량과 성장 추세에 더하지 않습니다.')
+        explanations.append('독립 세션 식별이 미확정이므로 파일별 측정과 관측 변화로 표시합니다.')
+    if latest['recorded_at'] is None:
+        blocked.append('RECORDING_UTC_UNAVAILABLE')
+        explanations.append('날짜 미확인 기록의 측정값은 표시하지만 시간 그래프와 기간 추세에는 넣지 않습니다.')
     if result['replay_status'] != 'CONFIRMED_NON_REPLAY':
         explanations.append('리플레이 여부가 미확인인 부분 관측입니다.')
         if latest['game'] == 'iracing':
             blocked.append('REPLAY_STATE_UNAVAILABLE')
-            explanations.append('비리플레이로 확인된 랩이 필요해 성장 추세에서 제외합니다.')
+            explanations.append('비리플레이로 확인된 랩이 필요해 조건을 맞춘 추세 판단은 보류합니다.')
     if latest['session_type'] == 'UNKNOWN':
         blocked.append('SESSION_TYPE_UNAVAILABLE')
         explanations.append('실제 세션 종류를 확인해야 같은 종류의 기록을 비교할 수 있습니다.')
@@ -351,6 +502,7 @@ def _pace(drives, cutoff, now, lap_selections=None):
         return result
     comparable = [(drive, laps) for drive, laps in candidates
         if condition is not None and drive['identity_status'] == 'NATIVE'
+        and _date(drive['recorded_at']) is not None
         and drive['session_type'] != 'UNKNOWN' and _scope(drive) == _scope(latest)
         and len(laps) >= 3 and _condition_key(laps) == condition
         and (drive['game'] != 'iracing' or all(lap['replay_status'] == 'CONFIRMED_NON_REPLAY' for lap in laps))]
@@ -374,15 +526,12 @@ def _pace(drives, cutoff, now, lap_selections=None):
     noise = max(.1, old_spread + new_spread)
     trend = ('IMPROVING' if change < -noise and new_spread <= old_spread else
              'DECLINING' if change > noise else 'STEADY' if abs(change) <= noise else 'UNAVAILABLE')
-    by_day = {}
-    for drive, laps in comparable:
-        by_day.setdefault(drive['recorded_at'][:10], []).append((_stats(laps), len(laps)))
-    points = [{'date': day, 'median_lap_s': round(median(row[0][0] for row in values), 3),
-        'mad_pct': round(median(row[0][1] for row in values), 3), 'lap_count': sum(row[1] for row in values)}
-        for day, values in sorted(by_day.items())]
+    points = _observation_points(comparable)
     result.update(status='OBSERVED', session_count=len(comparable), lap_count=sum(len(laps) for _, laps in comparable),
         median_lap_s=round(new_pace, 3), mad_pct=round(new_spread, 3), trend=trend,
-        pace_change_pct=round(change, 3), spread_change_pct=round(new_spread - old_spread, 3), points=points)
+        pace_change_pct=round(change, 3), spread_change_pct=round(new_spread - old_spread, 3), points=points,
+        observation_count=len(comparable), observation_change_pct=_observed_change(points),
+        comparison_status='CONDITION_MATCHED', comparison_label='관측 조건을 맞춘 비교')
     if trend == 'UNAVAILABLE':
         result['trend_reason_codes'] = ['PACE_AND_SPREAD_DISAGREE']
     result['reason'] = ('같은 조합·실제 세션 종류·관측 조건의 독립 세션을 비교했습니다. 운전 실력의 확정 판정은 아닙니다.'
@@ -406,7 +555,7 @@ def _diagnostics(drives, lap_selections):
         for observation in drive['observations']:
             source_observations += 1
             metrics = observation.get('metrics', {})
-            if (metrics.get('calculation_version') != 'observed-metrics-v2'
+            if (metrics.get('calculation_version') != METRICS_VERSION
                     or 'METRICS_EXTRACTION_FAILED' in metrics.get('driving', {}).get('reason_codes', [])):
                 stale_sources.add(observation['source_id'])
                 reasons.add('OUTDATED_METRICS')
@@ -425,11 +574,11 @@ def _diagnostics(drives, lap_selections):
     if not drives:
         reason = '주행 파일을 분석하면 관측의 측정 가능 범위와 누락 사유를 보여드립니다.'
     else:
-        reason = f'연결 관측 {len(drives)}개 중 {measured}개에서 중복을 제외한 {measured_laps}개 측정 랩을 확인했습니다.'
+        reason = f'연결 관측 {len(drives)}개 중 {measured}개에서 측정 가능한 {measured_laps}개 랩을 확인했습니다. 같은 원본·확인된 세션·공유 UTC에서 식별할 수 있는 중복을 제외했습니다.'
         if replay_unknown:
             reason += f' {replay_unknown}개 관측은 리플레이 여부가 미확인이라 부분 관측으로 표시합니다.'
         if any(drive['identity_status'] != 'NATIVE' for drive in drives):
-            reason += ' 독립 세션 식별이 미확정인 출처별 관측은 누적 운전량과 성장 추세에 더하지 않습니다.'
+            reason += ' 독립 세션 식별이 미확정인 파일도 측정과 관측 변화를 표시하며, 대응하지 않는 시계의 누적은 하한으로 표시합니다.'
         if stale_sources:
             reason += f' 측정 재확인이 필요한 원본 {len(stale_sources)}개가 있습니다.'
     return dict(observation_count=len(drives), source_observation_count=source_observations,
@@ -441,21 +590,156 @@ def _diagnostics(drives, lap_selections):
             for code, count in sorted(counts.items())], reason=reason)
 
 
+def _growth_period(rows):
+    """Equal day weight avoids a long recording or split files dominating pace."""
+    points = _observation_points(rows)
+    if not points:
+        return None
+    center = median(point['median_lap_s'] for point in points)
+    between_days = median(abs(point['median_lap_s'] - center) for point in points)/center*100.
+    return dict(start_date=points[0]['date'], end_date=points[-1]['date'], day_count=len(points),
+        observation_count=len(rows), session_count=sum(drive['identity_status'] == 'NATIVE' for drive, _ in rows),
+        lap_count=sum(len(laps) for _, laps in rows), median_lap_s=round(center, 3),
+        mad_pct=(round(median(spreads), 3) if (spreads := [point['mad_pct'] for point in points
+                      if point['mad_pct'] is not None]) else None), between_day_mad_pct=round(between_days, 3))
+
+
+def _growth(drives, cutoff, now, lap_selections, period_days):
+    result = dict(status='UNAVAILABLE', comparison_status='UNAVAILABLE', scope='', previous=None, current=None,
+        pace_change_pct=None, dispersion_change_pp=None, pace_direction='UNCERTAIN',
+        dispersion_direction='UNCERTAIN', retention='UNCERTAIN', comparison_window='UNAVAILABLE',
+        baseline='SAME_COMBINATION_RAW_MEDIAN', strengths=[],
+        uncertainty=dict(reason_codes=[], reasons=[], sample_size_sufficient=False,
+                         pace_noise_pct=None, dispersion_noise_pp=None),
+        reason='선택 기간의 최근 조합에서 날짜가 확인된 측정 기록을 비교합니다.')
+    selected = [(drive, lap_selections[drive['drive_id']][0]) for drive in drives
+                if _selected_period(drive, cutoff, now) and lap_selections[drive['drive_id']][0]
+                and ((_date(drive['recorded_at']) or now) <= now)]
+    if not selected:
+        result['uncertainty'].update(reason_codes=['NO_MEASURED_RECORDINGS_IN_PERIOD'],
+            reasons=['선택 기간의 최근 관측이 없어 과거 세션으로 대신 비교하지 않습니다.'])
+        return result
+    latest, latest_laps = max(selected, key=lambda item: (item[0]['recorded_at'] or '', item[0]['drive_id']))
+    result['scope'] = _scope_label(latest)
+    if any(latest[field] in {'', 'UNKNOWN'} for field in ('car_key', 'track_key')):
+        result['uncertainty'].update(reason_codes=['COMBINATION_IDENTITY_UNAVAILABLE'],
+            reasons=['차량·코스의 같은 조합을 확인할 수 없습니다.'])
+        return result
+    cohort = [(drive, lap_selections[drive['drive_id']][0]) for drive in drives
+              if _scope(drive) == _scope(latest) and (stamp := _date(drive['recorded_at'])) is not None
+              and stamp <= now and lap_selections[drive['drive_id']][0]]
+    current = [(drive, laps) for drive, laps in cohort if _selected_period(drive, cutoff, now)]
+    if not current:
+        result['uncertainty'].update(reason_codes=['RECORDING_UTC_UNAVAILABLE'],
+            reasons=['최근 조합의 실제 주행 날짜를 확인할 수 없습니다.'])
+        return result
+    previous = [(drive, laps) for drive, laps in cohort if cutoff is not None
+                and cutoff - timedelta(days=period_days) <= _date(drive['recorded_at']) < cutoff]
+    notes, codes = [], []
+    if previous:
+        result['comparison_window'] = 'ADJACENT_PERIODS'
+    else:
+        dates = sorted({drive['recorded_at'][:10] for drive, _ in current})
+        if len(dates) >= 2:
+            boundary = dates[len(dates)//2]
+            previous = [(drive, laps) for drive, laps in current if drive['recorded_at'][:10] < boundary]
+            current = [(drive, laps) for drive, laps in current if drive['recorded_at'][:10] >= boundary]
+            result['comparison_window'] = 'SPLIT_OBSERVED_DAYS'
+            if period_days:
+                codes.append('PREVIOUS_PERIOD_EMPTY')
+                notes.append('직전 같은 길이의 기간에 기록이 없어 선택 기간의 관측일을 앞·뒤로 나눴습니다.')
+        else:
+            codes.append('NO_PREVIOUS_COMBINATION_OBSERVATION')
+            notes.append('최근 차량·코스 조합의 이전 날짜 기록이 없어 다른 조합을 퇴보 비교로 쓰지 않습니다.')
+    result.update(previous=_growth_period(previous), current=_growth_period(current))
+    if result['previous'] is None or result['current'] is None:
+        result['uncertainty'].update(reason_codes=codes, reasons=notes)
+        return result
+    old, new = result['previous'], result['current']
+    combined = previous + current
+    missing = [key for key in _REQUIRED_CONDITIONS
+               if any(lap.get('conditions', {}).get(key) is None for _, laps in combined for lap in laps)]
+    condition_keys = [_condition_key(laps) for _, laps in combined]
+    matched = (not missing and all(key is not None and key == condition_keys[0] for key in condition_keys)
+               and all(drive['identity_status'] == 'NATIVE' and drive['session_type'] != 'UNKNOWN'
+                       and len(laps) >= 3 and (drive['game'] != 'iracing'
+                            or all(lap['replay_status'] == 'CONFIRMED_NON_REPLAY' for lap in laps))
+                       for drive, laps in combined)
+               and latest['layout_key'] not in {'', 'UNKNOWN'} and len(previous) >= 2 and len(current) >= 2)
+    if missing:
+        codes.append('CONDITIONS_MISSING')
+        notes.append('미확인 조건: ' + '·'.join(_CONDITION_LABELS[key] for key in missing) + '.')
+    if any(key is None for key in condition_keys) or len(set(condition_keys)) > 1:
+        codes.append('CONDITIONS_NOT_MATCHED')
+        notes.append('연료·날씨·타이어·셋업 차이가 포함된 관측 비교입니다.')
+    if any(drive['identity_status'] != 'NATIVE' for drive, _ in combined):
+        codes.append('NATIVE_IDENTITY_UNAVAILABLE')
+        notes.append('파일별 관측을 독립 세션 수로 확정하지 않습니다.')
+    if latest['layout_key'] in {'', 'UNKNOWN'}:
+        codes.append('LAYOUT_IDENTITY_UNAVAILABLE')
+        notes.append('코스 레이아웃 식별이 미확인이라 동일 조건 비교로 확정하지 않습니다.')
+    if latest['session_type'] == 'UNKNOWN':
+        codes.append('SESSION_TYPE_UNAVAILABLE')
+        notes.append('실제 세션 종류가 미확인인 관측 비교입니다.')
+    if any(lap['replay_status'] != 'CONFIRMED_NON_REPLAY' for drive, laps in combined
+           if drive['game'] == 'iracing' for lap in laps):
+        codes.append('REPLAY_STATE_UNAVAILABLE')
+        notes.append('일부 관측의 리플레이 상태가 확인되지 않았습니다.')
+    spread_available = old['mad_pct'] is not None and new['mad_pct'] is not None
+    sufficient = (len(latest_laps) >= 3 and spread_available
+                  and all(period['lap_count'] >= 6 and period['observation_count'] >= 2 for period in (old, new)))
+    if not sufficient:
+        codes.append('LIMITED_COMPARISON_SAMPLE')
+        notes.append('기간별 관측 2개·측정 6랩보다 적어 방향은 참고용으로만 읽어 주세요.')
+    if len(latest_laps) < 3:
+        codes.append('LATEST_OBSERVATION_SAMPLE_LIMITED')
+        notes.append('최근 한 관측의 측정 랩이 3개 미만이라 과거 세션으로 최근의 유지 여부를 대신 판단하지 않습니다.')
+    change = (new['median_lap_s'] - old['median_lap_s']) / old['median_lap_s'] * 100.
+    dispersion = new['mad_pct'] - old['mad_pct'] if spread_available else None
+    noise = max(.1, (old['mad_pct'] + new['mad_pct']) if spread_available else 0.,
+                old['between_day_mad_pct'] + new['between_day_mad_pct'])
+    spread_noise = .05
+    pace_direction = 'MAINTAINED' if abs(change) <= noise else 'FASTER' if change < 0 else 'SLOWER'
+    spread_direction = ('UNCERTAIN' if dispersion is None else 'MAINTAINED' if abs(dispersion) <= spread_noise
+                        else 'NARROWER' if dispersion < 0 else 'WIDER')
+    retention = ('UNCERTAIN' if not sufficient else 'MAINTAINED'
+                 if change <= noise and dispersion <= spread_noise else 'CHANGED')
+    result.update(status='OBSERVED' if matched else 'PARTIAL',
+        comparison_status='CONDITION_MATCHED' if matched else 'OBSERVATION_ONLY',
+        pace_change_pct=round(change, 3), dispersion_change_pp=round(dispersion, 3) if dispersion is not None else None,
+        pace_direction=pace_direction, dispersion_direction=spread_direction, retention=retention,
+        uncertainty=dict(reason_codes=sorted(set(codes)), reasons=notes, sample_size_sufficient=sufficient,
+                         pace_noise_pct=round(noise, 3), dispersion_noise_pp=spread_noise,
+                         method='DESCRIPTIVE_MAD_RANGE'),
+        reason='같은 조합의 원시 랩타임 중앙값과 편차를 같은 방식으로 비교합니다. 외부 기준 교체의 영향은 없으며 변화의 원인이나 실력 향상을 확정하지 않습니다.')
+    if matched and sufficient and retention == 'MAINTAINED':
+        result['strengths'] = [dict(id='PACE_REPRODUCTION', title='이 조합에서 페이스와 편차를 유지한 관측',
+            scope=result['scope'], session_count=old['session_count'] + new['session_count'],
+            lap_count=old['lap_count'] + new['lap_count'], reason='조건을 확인한 전후 기록에서 나타난 결과이며 조작 성향과 별도입니다.')]
+    return result
+
+
 def build_driver_report(snapshot, game, period_days=30, *, now=None):
-    if game not in {'iracing', 'lmu'} or type(period_days) is not int or period_days not in {30, 90}:
+    if game not in {'iracing', 'lmu'} or type(period_days) is not int or period_days not in {0, 30, 90}:
         raise ValueError('리포트 조회 조건이 올바르지 않습니다.')
     now = now or datetime.now(timezone.utc)
-    cutoff = now - timedelta(days=period_days)
+    cutoff = now - timedelta(days=period_days) if period_days else None
     drives = [drive for drive in snapshot['drives'] if drive['game'] == game]
     drives.sort(key=lambda drive: (drive['recorded_at'] or '', drive['drive_id']), reverse=True)
     dates = [drive['recorded_at'] for drive in drives if drive['recorded_at']]
     native = [drive for drive in drives if drive['identity_status'] == 'NATIVE']
-    period = [drive for drive in native if (stamp := _date(drive['recorded_at'])) is not None and cutoff <= stamp <= now]
-    lap_selections = {drive['drive_id']: _lap_selection(drive) for drive in drives}
+    period_observations = [drive for drive in drives if _selected_period(drive, cutoff, now)]
+    period = [drive for drive in period_observations if drive['identity_status'] == 'NATIVE']
+    lap_selections = _shared_clock_laps(drives)
     pace = _pace(drives, cutoff, now, lap_selections)
+    style = build_style([drive for drive in period_observations
+                         if (_date(drive['recorded_at']) or now) <= now], lap_selections)
+    growth = _growth(drives, cutoff, now, lap_selections, period_days)
     coverage = {'source_count': snapshot['source_count'], 'native_session_count': len(native),
         'source_only_count': len(drives) - len(native), 'undated_count': sum(not drive['recorded_at'] for drive in drives),
-        'period_session_count': len(period), 'earliest_recorded_at': min(dates) if dates else None,
+        'period_session_count': len(period), 'period_observation_count': len(period_observations),
+        'period_measured_lap_count': sum(len(lap_selections[drive['drive_id']][0]) for drive in period_observations),
+        'earliest_recorded_at': min(dates) if dates else None,
         'latest_recorded_at': max(dates) if dates else None, **_diagnostics(drives, lap_selections)}
     title, body = ('나의 주행 이야기를 시작해요', '주행 파일을 분석하면 확인된 기록부터 차곡차곡 연결합니다.') if not drives else (
         '이번 기록에서 확인된 것부터', '기록을 연결했습니다. 확인된 관측과 아직 비교할 수 없는 부분을 함께 보여드려요.')
@@ -468,9 +752,9 @@ def build_driver_report(snapshot, game, period_days=30, *, now=None):
         'track': drive.get('labels', {}).get('track') or '코스 확인 필요',
         'session_type': drive['session_type'], 'identity_status': drive['identity_status'],
         'measured_laps': len(lap_selections[drive['drive_id']][0]), 'replay_status': _drive_replay(drive),
-        'in_selected_period': (stamp := _date(drive['recorded_at'])) is not None and cutoff <= stamp <= now,
+        'in_selected_period': True,
         'identity_reason': (_REASONS['NATIVE_IDENTITY_UNAVAILABLE'] if drive['identity_status'] != 'NATIVE'
-                            else '플랫폼 세션·사용자 식별자로 연결한 독립 세션입니다.')} for drive in drives[:6]]
+                            else '플랫폼 세션·사용자 식별자로 연결한 독립 세션입니다.')} for drive in period_observations[:6]]
     discoveries = []
     if dates:
         first = min(dates)[:10]
@@ -478,22 +762,38 @@ def build_driver_report(snapshot, game, period_days=30, *, now=None):
             'date': first, 'title': '처음 연결한 관측', 'body': '앱이 보관한 기록의 시작입니다. 생애 첫 주행이나 최초 달성을 뜻하지 않습니다.'})
     return {'schema_version': 1, 'calculation_version': CALCULATION_VERSION, 'game': game,
         'period_days': period_days, 'state': 'OBSERVED' if drives else 'EMPTY', 'coverage': coverage,
-        'scopes': {'career': 'ALL_CONNECTED_NATIVE_SESSIONS', 'pace': 'SELECTED_PERIOD',
-                   'recent_drives': 'ALL_CONNECTED_OBSERVATIONS'},
-        'scope_labels': {'career': '연결한 전체 기록 중 확인된 독립 세션', 'pace': f'최근 {period_days}일 안의 측정 기록',
-                         'recent_drives': '연결한 전체 기록에서 최근 6개 관측'},
+        'scopes': {'career': 'ALL_CONNECTED_OBSERVATIONS', 'pace': 'SELECTED_PERIOD',
+                   'recent_drives': 'ALL_CONNECTED_OBSERVATIONS' if not period_days else 'SELECTED_PERIOD_OBSERVATIONS'},
+        'scope_labels': {'career': '연결한 전체 기록의 주행 관측량',
+                         'pace': f'최근 {period_days}일 안의 측정 기록' if period_days else '연결한 전체 측정 기록',
+                         'recent_drives': f'최근 {period_days}일 안의 최근 6개 관측' if period_days else '연결한 전체 기록에서 최근 6개 관측'},
         'career': _career(drives), 'overview': {'title': title, 'body': body,
-            'scope': f'원본 {snapshot["source_count"]}개 · 확인된 세션 {len(native)}개 · 미확정 관측 {len(drives) - len(native)}개'},
-        'pace': pace, 'style': {'status': 'UNAVAILABLE', 'items': [], 'reason': '지속적인 운전 성향을 설명할 코너별 비교 근거를 먼저 확인합니다.'},
+            'scope': f'원본 {snapshot["source_count"]}개 · 확인된 세션 {len(native)}개 · 파일별 관측 {len(drives) - len(native)}개'},
+        'pace': pace, 'style': style, 'growth': growth,
+        'quality': build_quality([drive for drive in period_observations
+                                 if (_date(drive['recorded_at']) or now) <= now]),
         'challenge': {'title': '이번 기록 한 번 살펴보기' if drives else '기록 한 번 살펴보기',
             'body': '기록의 측정 랩과 코너를 살펴보세요. 아직 확인되지 않은 결과를 달성으로 바꾸지 않습니다.' if drives else
                     '이미 있는 주행 파일을 분석하고 이번 주행에서 확인된 내용을 살펴보세요.', 'action': 'analysis'},
         'discoveries': discoveries, 'recent_drives': recent_drives,
         'limitations': ['분석한 원본의 관측이며 게임의 평생 기록이 아닙니다.',
-            '식별이 미확정인 원본은 독립 세션 수·누적 운전량·성장 추세에 합산하지 않습니다.',
+            '파일별 관측을 독립 세션 수로 확정하지 않습니다. UTC 중복과 대응하지 않는 시계는 누적에서 보수적으로 처리합니다.',
+            '관측 그래프의 변화에는 연료·날씨·타이어·셋업 차이가 포함될 수 있습니다.',
             '측정 랩은 공식 유효 랩이나 실력 향상을 뜻하지 않습니다.']}
 
 
 def read_driver_report(game, period_days=30, *, store=None):
     storage = store if store is not None else DriverHistoryStore()
-    return build_driver_report(storage.report_snapshot(game), game, period_days)
+    report = build_driver_report(storage.report_snapshot(game), game, period_days)
+    # Results have their own authority and read-only store. Keep the pure
+    # observation builder usable without a results database or an API process.
+    try:
+        from driver_results import DriverResultsStore, read_driver_results
+        official = read_driver_results(game, 0, store=DriverResultsStore(history_path=storage.path))['career']
+        for key in ('wins', 'podiums', 'average_position'):
+            report['career'][key] = {**official[key], 'scope': 'OFFICIAL_FINAL_CLASS_RESULTS',
+                                     'scope_label': '보관한 공식 최종 클래스 결과'}
+    except (OSError, sqlite3.Error, ValueError, TypeError, KeyError, AttributeError):
+        for key in ('wins', 'podiums', 'average_position'):
+            report['career'][key] = _metric(reason='공식 결과 저장소를 읽지 못했습니다. 주행 관측은 그대로 표시합니다.')
+    return report

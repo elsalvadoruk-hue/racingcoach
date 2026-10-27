@@ -66,7 +66,14 @@ def require_current_api() -> None:
         # Routes added recently: an older server lacks them and must not be reused.
         supported = ('post' in paths.get('/api/lmu/telemetry/import', {})
                      and 'put' in paths.get('/api/session-logs/auto', {})
-                     and {'get', 'post'}.issubset(paths.get('/api/driver-history/refresh', {})))
+                     and {'get', 'post'}.issubset(paths.get('/api/driver-history/refresh', {}))
+                     and {'get', 'post'}.issubset(paths.get('/api/driver-history/library', {}))
+                     and 'post' in paths.get('/api/driver-history/library/pause', {})
+                     and 'get' in paths.get('/api/driver-journal', {})
+                     and {'put', 'delete'}.issubset(paths.get('/api/driver-journal/feelings/{drive_id}', {}))
+                     and 'post' in paths.get('/api/driver-journal/challenges', {})
+                     and 'post' in paths.get('/api/driver-journal/reconcile', {})
+                     and 'get' in paths.get('/api/driver-results', {}))
     except (ValueError, AttributeError, TypeError):
         supported = False
     if not supported:

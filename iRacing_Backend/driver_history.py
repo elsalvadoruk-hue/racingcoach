@@ -138,7 +138,7 @@ def _metrics(value):
         _fail()
     version = {}
     if 'calculation_version' in value:
-        version['calculation_version'] = _choice(value['calculation_version'], {'observed-metrics-v2'})
+        version['calculation_version'] = _choice(value['calculation_version'], {'observed-metrics-v2', 'observed-metrics-v3', 'observed-metrics-v4'})
     replay_options = {'CONFIRMED_NON_REPLAY', 'UNKNOWN', 'MIXED', 'CONFIRMED_REPLAY', 'INVALID'}
 
     def replay_fields(item):
@@ -184,12 +184,59 @@ def _metrics(value):
             if not isinstance(items, list) or len(items) > 100:
                 _fail()
             lap_reasons['reason_codes'] = sorted({_enum(item) for item in items})
+        inputs = {}
+        if 'inputs' in lap:
+            from driver_style import validate_inputs
+            inputs['inputs'] = validate_inputs(lap['inputs'])
+            if (inputs['inputs']['status'] != 'UNAVAILABLE' and
+                    (not lap['measurable'] or lap_replay.get('replay_status') in {'CONFIRMED_REPLAY', 'MIXED', 'INVALID'})):
+                _fail()
+            if (inputs['inputs']['status'] == 'OBSERVED'
+                    and lap_replay.get('replay_status') != 'CONFIRMED_NON_REPLAY'):
+                _fail()
         checked_laps.append({'lap_number': lap['lap_number'], 'start_s': start, 'end_s': end,
             'lap_time_s': lap_time, 'measurable': lap['measurable'],
-            **lap_replay, **lap_reasons,
+            **lap_replay, **lap_reasons, **inputs,
             'conditions': _conditions(lap.get('conditions', {})),
             'official_validity': _choice(lap.get('official_validity'), {'UNKNOWN'})})
-    return {'schema_version': 1, **version, 'driving': {'status': status, **facts, **driving_replay, 'intervals': windows,
+    extra={}
+    if version.get('calculation_version')=='observed-metrics-v4' and not {'lap_quality','incidents'}.issubset(value):
+        _fail()
+    if 'lap_quality' in value:
+        quality=value['lap_quality']
+        if not isinstance(quality,dict):
+            _fail()
+        quality_status=_choice(quality.get('status'),{'OBSERVED','PARTIAL','UNAVAILABLE'})
+        _choice(quality.get('authority'),{'ANALYSIS_POLICY'})
+        _choice(quality.get('official_validity'),{'UNKNOWN'})
+        items=quality.get('completed_laps')
+        quality_reasons=quality.get('reason_codes')
+        if not isinstance(items,list) or len(items)>2048 or not isinstance(quality_reasons,list) or len(quality_reasons)>100:
+            _fail()
+        checked=[]
+        for item in items:
+            if not isinstance(item,dict) or type(item.get('lap_number')) is not int or item['lap_number']<0:
+                _fail()
+            start,end=(_number(item.get(key)) for key in ('start_s','end_s'))
+            validity=_choice(item.get('analysis_validity'),{'VALID','INVALID','UNKNOWN'})
+            replay=_choice(item.get('replay_status'),replay_options)
+            item_reasons=item.get('reason_codes')
+            if (start<0 or end<=start or not isinstance(item_reasons,list) or len(item_reasons)>100
+                    or replay in {'CONFIRMED_REPLAY','MIXED','INVALID'} and validity!='UNKNOWN'):
+                _fail()
+            checked.append(dict(lap_number=item['lap_number'],start_s=start,end_s=end,
+                analysis_validity=validity,replay_status=replay,reason_codes=sorted({_enum(reason) for reason in item_reasons})))
+        checked_reasons=sorted({_enum(reason) for reason in quality_reasons})
+        if (quality_status=='UNAVAILABLE' and checked or quality_status!='UNAVAILABLE' and not checked
+                or quality_status=='OBSERVED' and (checked_reasons or any(row['analysis_validity']=='UNKNOWN'
+                    or row['replay_status']!='CONFIRMED_NON_REPLAY' for row in checked))):
+            _fail()
+        extra['lap_quality']=dict(status=quality_status,authority='ANALYSIS_POLICY',official_validity='UNKNOWN',
+                                  completed_laps=checked,reason_codes=checked_reasons)
+    if 'incidents' in value:
+        from driver_history_incidents import validate_incidents
+        extra['incidents']=validate_incidents(value['incidents'])
+    return {'schema_version': 1, **version, **extra, 'driving': {'status': status, **facts, **driving_replay, 'intervals': windows,
         'reason_codes': sorted({_enum(item) for item in reasons})}, 'laps': checked_laps}
 
 

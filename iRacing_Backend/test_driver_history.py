@@ -181,6 +181,58 @@ class DriverHistoryStoreTests(unittest.TestCase):
         self.store.record_source(payload)
         self.assertEqual(self.store.get_drive(identity('drive'))['observations'][0]['metrics'], metrics)
 
+    def test_quality_and_incidents_roundtrip_strip_unknown_fields_and_reanalysis_is_idempotent(self):
+        from driver_history_metrics import build_observation_metrics
+        from test_driver_history_metrics import DriverHistoryMetricsTests
+        import numpy as np
+        telemetry=DriverHistoryMetricsTests().telemetry()
+        telemetry.channels['PlayerCarMyIncidentCount']=np.array([0]*5+[1]*6)
+        value=source()
+        value['observations'][0]['metrics']=build_observation_metrics(telemetry,value['observations'][0])
+        value['observations'][0]['metrics']['incidents']['private_path']='PRIVATE SOURCE'
+        value['observations'][0]['metrics']['lap_quality']['completed_laps'][0]['private_name']='PRIVATE DRIVER'
+        self.store.record_source(value)
+        before=self.store.get_drive(identity('drive'))
+        self.store.record_source(value)
+        after=self.store.get_drive(identity('drive'))
+        self.assertEqual(before,after)
+        metrics=after['observations'][0]['metrics']
+        self.assertEqual(metrics['incidents']['increase_points'],1)
+        self.assertEqual(metrics['lap_quality']['completed_laps'][0]['analysis_validity'],'VALID')
+        self.assertEqual(metrics['lap_quality']['official_validity'],'UNKNOWN')
+        self.assertNotIn('PRIVATE',json.dumps(metrics))
+
+    def test_quality_and_counter_validation_rejects_inconsistent_or_malformed_facts_atomically(self):
+        from driver_history_metrics import build_observation_metrics
+        from test_driver_history_metrics import DriverHistoryMetricsTests
+        import numpy as np
+        telemetry=DriverHistoryMetricsTests().telemetry()
+        telemetry.channels['PlayerCarMyIncidentCount']=np.array([0]*5+[1]*6)
+        value=source()
+        value['observations'][0]['metrics']=build_observation_metrics(telemetry,value['observations'][0])
+        self.store.record_source(value)
+        before=self.store.get_drive(identity('drive'))
+        changes=[('increase_points',2),('increase_points',True),('observed_time_s',2.),
+            ('observed_time_s',float('nan')),('scope','DRIVING_TIME'),('reason_codes',['PRIVATE/path']),
+            ('events',[dict(start_s=.4,end_s=.5,points=-1)]),
+            ('events',[dict(start_s=.4,end_s=.5,points=1),dict(start_s=.4,end_s=.5,points=1)]),
+            ('intervals',[[0.,1.],[.5,2.]])]
+        for key,invalid in changes:
+            broken=deepcopy(value)
+            broken['observations'][0]['metrics']['incidents'][key]=invalid
+            with self.subTest(key=key),self.assertRaises(ValueError):self.store.record_source(broken)
+        for key,invalid in [('authority','OFFICIAL'),('official_validity','VALID'),('status','OBSERVED')]:
+            broken=deepcopy(value)
+            quality=broken['observations'][0]['metrics']['lap_quality']
+            quality[key]=invalid
+            if key=='status':quality['completed_laps'][0]['analysis_validity']='UNKNOWN'
+            with self.subTest(key=key),self.assertRaises(ValueError):self.store.record_source(broken)
+        for field in ['lap_quality','incidents']:
+            broken=deepcopy(value)
+            broken['observations'][0]['metrics'].pop(field)
+            with self.subTest(field=field),self.assertRaises(ValueError):self.store.record_source(broken)
+        self.assertEqual(before,self.store.get_drive(identity('drive')))
+
     def test_metrics_new_fields_reject_invalid_enums_and_inconsistent_replay_claims(self):
         from driver_history import _metrics
         metrics = {'schema_version': 1, 'calculation_version': 'observed-metrics-v2',
@@ -190,7 +242,7 @@ class DriverHistoryStoreTests(unittest.TestCase):
                       'conditions': {}, 'official_validity': 'UNKNOWN', 'replay_status': 'UNKNOWN',
                       'reason_codes': ['REPLAY_STATE_UNAVAILABLE']}]}
         invalid = []
-        for value in [None, 'observed-metrics-v3', 2]:
+        for value in [None, 'observed-metrics-v5', 2]:
             item = deepcopy(metrics); item['calculation_version'] = value; invalid.append(item)
         for value in [None, 'NON_REPLAY', 'PRIVATE replay', 0]:
             for target in ['driving', 'lap']:
@@ -216,6 +268,51 @@ class DriverHistoryStoreTests(unittest.TestCase):
             self.store.record_source(item)
         self.assertEqual(self.store.get_drive(identity('drive'))['labels'],
                          {'car': 'Synthetic GT3', 'track': 'Synthetic Track', 'layout': 'GP'})
+
+    def test_optional_input_summary_round_trips_and_old_v2_remains_readable(self):
+        from driver_history import _metrics
+        from driver_history_metrics import build_observation_metrics
+        from test_driver_style import telemetry
+        sample = telemetry()
+        value = source(intervals=[[0., 12.]])
+        row = value['observations'][0]
+        row['metrics'] = build_observation_metrics(sample, row)
+        checked = _metrics(row['metrics'])
+        self.assertEqual(checked['calculation_version'], 'observed-metrics-v4')
+        self.assertEqual(checked['laps'][0]['inputs']['brake_steer']['event_count'], 3)
+        self.store.record_source(value)
+        restored = self.store.get_drive(identity('drive'))['observations'][0]['metrics']
+        self.assertEqual(restored['laps'][0]['inputs'], checked['laps'][0]['inputs'])
+        legacy = deepcopy(value)
+        legacy['observations'][0]['metrics']['calculation_version'] = 'observed-metrics-v2'
+        legacy['observations'][0]['metrics']['laps'][0].pop('inputs')
+        self.store.record_source(legacy)
+        restored = self.store.get_drive(identity('drive'))['observations'][0]['metrics']
+        self.assertNotIn('inputs', restored['laps'][0])
+        self.assertEqual(self.store.status()['source_count'], 1)
+
+    def test_input_payload_rejects_invalid_values_without_losing_existing_observation(self):
+        from driver_history_metrics import build_observation_metrics
+        from test_driver_style import telemetry
+        value = source(intervals=[[0., 12.]])
+        value['observations'][0]['metrics'] = build_observation_metrics(telemetry(), value['observations'][0])
+        self.store.record_source(value)
+        before = self.store.get_drive(identity('drive'))
+        changes = [('status', 'PRIVATE'), ('sample_count', -1), ('sample_count', True),
+                   ('reason_codes', ['C:/PRIVATE/file.ibt']), ('schema_version', 2)]
+        for key, invalid in changes:
+            broken = deepcopy(value)
+            broken['observations'][0]['metrics']['laps'][0]['inputs'][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.store.record_source(broken)
+        for key, invalid in [('event_count', -1), ('linked_count', 500), ('overlap_pct', float('nan')),
+                             ('sampling_hz', 0.), ('timing_uncertainty_s', None)]:
+            broken = deepcopy(value)
+            broken['observations'][0]['metrics']['laps'][0]['inputs']['brake_steer'][key] = invalid
+            with self.subTest(key=key), self.assertRaises(ValueError): self.store.record_source(broken)
+        broken = deepcopy(value)
+        broken['observations'][0]['metrics']['laps'][0]['measurable'] = False
+        with self.assertRaises(ValueError): self.store.record_source(broken)
+        self.assertEqual(self.store.get_drive(identity('drive')), before)
 
     def test_conflicting_nonempty_labels_are_withheld_without_changing_native_identity(self):
         payloads = [source('a'), source('b')]

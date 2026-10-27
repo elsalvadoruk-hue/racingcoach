@@ -1,5 +1,6 @@
 """Launcher lifecycle checks without starting the real API or accessing personal data."""
 import os
+import json
 import shutil
 import subprocess
 import sys
@@ -82,8 +83,23 @@ class ApiCompatibilityTests(unittest.TestCase):
             stop.assert_not_called()
 
     def test_current_import_api_is_accepted_but_missing_or_malformed_contract_is_rejected(self):
-        with patch.object(launch_app, 'read_http', return_value=b'{"paths":{"/api/lmu/telemetry/import":{"post":{}},"/api/session-logs/auto":{"put":{}},"/api/driver-history/refresh":{"get":{},"post":{}}}}'):
+        paths = {'/api/lmu/telemetry/import': {'post': {}}, '/api/session-logs/auto': {'put': {}},
+                 '/api/driver-history/refresh': {'get': {}, 'post': {}},
+                 '/api/driver-history/library': {'get': {}, 'post': {}},
+                 '/api/driver-history/library/pause': {'post': {}},
+                 '/api/driver-journal': {'get': {}},
+                 '/api/driver-journal/feelings/{drive_id}': {'put': {}, 'delete': {}},
+                 '/api/driver-journal/challenges': {'post': {}},
+                 '/api/driver-journal/reconcile': {'post': {}},
+                 '/api/driver-results': {'get': {}}}
+        with patch.object(launch_app, 'read_http', return_value=json.dumps({'paths': paths}).encode()):
             launch_app.require_current_api()
+        for missing in ('/api/driver-history/library', '/api/driver-history/library/pause',
+                        '/api/driver-journal', '/api/driver-journal/feelings/{drive_id}',
+                        '/api/driver-journal/challenges', '/api/driver-journal/reconcile', '/api/driver-results'):
+            with self.subTest(missing=missing), patch.object(launch_app, 'read_http', return_value=json.dumps({'paths': {key: value for key, value in paths.items() if key != missing}}).encode()):
+                with self.assertRaises(RuntimeError):
+                    launch_app.require_current_api()
         for response in (None, b'not json', b'{"paths":null}', b'{"paths":{"/api/lmu/telemetry/import":{"get":{}}}}', b'{"paths":{"/api/lmu/telemetry/import":{"post":{}}}}', b'{"paths":{"/api/lmu/telemetry/import":{"post":{}},"/api/session-logs/auto":{"put":{}}}}'):
             with self.subTest(response=response), patch.object(launch_app, 'read_http', return_value=response):
                 with self.assertRaises(RuntimeError):

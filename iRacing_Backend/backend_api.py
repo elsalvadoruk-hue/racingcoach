@@ -3733,7 +3733,10 @@ def compare_experiments(
 
 # One live connection for whichever sim runs: iRacing, or LMU through its SDK adapter.
 from game_sdk import default_game_sdk
-live_telemetry = LiveTelemetry(sdk_factory=default_game_sdk if os.name == 'nt' else None)
+from driver_results import LiveResultCapture
+_driver_result_capture = LiveResultCapture()
+live_telemetry = LiveTelemetry(sdk_factory=default_game_sdk if os.name == 'nt' else None,
+                               result_observer=_driver_result_capture.submit)
 # Pit facts learned from driven stops live beside the database (seeded by scripts/learn_pit_history.py).
 live_telemetry.pit_knowledge = PitKnowledge(os.getenv("IRACING_PIT_KNOWLEDGE_PATH") or MEMORY_DB_PATH.parent / "pit-knowledge.json")
 live_telemetry.race_history = RaceHistory(os.getenv("IRACING_RACE_HISTORY_PATH") or MEMORY_DB_PATH.parent / "race-history.json")
@@ -3950,6 +3953,14 @@ def session_log_extras(defer: bool = False):
 
 
 @asynccontextmanager
+async def _managed_result_capture():
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(_driver_result_capture.shutdown, wait=True, timeout=2.)
+
+
+@asynccontextmanager
 async def app_lifespan(_app):
     from session_health import SessionHealthRecorder
     session_health = SessionHealthRecorder(live_telemetry, voice_note_store, APP_VERSION)
@@ -3969,12 +3980,15 @@ async def app_lifespan(_app):
             logger.info('LMU saved data moved from livery to model keys: %s', moved)
     except Exception:
         logger.exception('LMU car models were not prepared; liveries stay separate this run')
-    async with managed_lifespan(live_telemetry, overlay_controller, lambda: warm_background()):
+    async with _managed_result_capture(), managed_lifespan(live_telemetry, overlay_controller, lambda: warm_background()):
         session_health.start()
         try:
             uploader.start()
             yield
         finally:
+            # Stop owned parsers; unfinished recordings are retried next launch.
+            await asyncio.to_thread(_driver_history_library.shutdown, wait=True, timeout=2.)
+            await asyncio.to_thread(_driver_history_refresh.shutdown, wait=True, timeout=2.)
             uploader.stop()
             await asyncio.to_thread(session_health.stop)
 
@@ -4026,11 +4040,12 @@ async def load_analysis(request: AnalyzeRequest, *, update_current_analysis: boo
         # optional memory save. Reuse the content hash already computed above.
         try:
             from driver_history_index import index_telemetry as index_driver_history
-            await asyncio.to_thread(index_driver_history, telemetry, file_hash)
+            result['driver_history'] = await asyncio.to_thread(index_driver_history, telemetry, file_hash)
         except Exception as exc:
             # A missing/locked history store must not discard a successful
             # analysis or expose recording paths through the analysis result.
             logger.warning('Driver history indexing failed (%s)', type(exc).__name__)
+            result['driver_history'] = {'saved': False, 'reason': 'HISTORY_SAVE_FAILED'}
         target_mode = str(snapshot_session.get("session_mode") or request.session_mode.value)
         memory_payload: dict[str, Any] = {
             "enabled": memory_store is not None,
@@ -4475,9 +4490,16 @@ workspace_request = _handlers.workspace_request
 app.state.workspace_request = workspace_request
 
 
-# Recheck only stale sources already in the driver ledger, on an explicit request.
-# The analysis DB supplies existing locators; it does not seed new history.
+# Source repair and whole-library import share the existing recording readers.
+# Import never runs coaching, reference downloads, or analysis-memory writes.
 from driver_history_refresh import HistoryRefresh, register_refresh_routes
+from driver_history_library import HistoryLibrary
+from driver_library_routes import register_library_routes
+from driver_history_scheduling import HistoryActivity, is_foreground_analysis
+from driver_history_worker import summarize_in_process
+from driver_progress import persist_source_results, reconcile_driver_challenges
+from driver_journal_routes import register_journal_routes
+from driver_result_routes import register_result_routes
 
 
 def _driver_history_recordings(game):
@@ -4487,11 +4509,45 @@ def _driver_history_recordings(game):
     return list_ibt_files(None)
 
 
-register_refresh_routes(app, HistoryRefresh(
+def _history_live_view():
+    with live_telemetry.lock:
+        return live_telemetry.drive_lifecycle.view()
+
+
+_history_activity = HistoryActivity(live_state=_history_live_view)
+_driver_history_refresh = HistoryRefresh(
     memory_db_path=lambda: MEMORY_DB_PATH,
     allowed_paths=_driver_history_recordings,
     load_telemetry=lambda path: recording_reader(path).parse(),
-))
+    summarize_file=summarize_in_process,
+    can_run=_history_activity.reason,
+    before_save=persist_source_results,
+    after_save=reconcile_driver_challenges,
+)
+_driver_history_library = HistoryLibrary(
+    allowed_paths=_driver_history_recordings,
+    load_telemetry=lambda path: recording_reader(path).parse(),
+    summarize_file=summarize_in_process,
+    can_run=_history_activity.reason,
+    before_save=persist_source_results,
+    after_save=reconcile_driver_challenges,
+)
+register_journal_routes(app)
+register_result_routes(app)
+register_refresh_routes(app, _driver_history_refresh, blocked=lambda: any(
+    _driver_history_library.status(game)['status'] in {'SCANNING', 'RUNNING', 'WAITING', 'PAUSING'}
+    for game in ('iracing', 'lmu')))
+register_library_routes(app, _driver_history_library, blocked=lambda: any(
+    _driver_history_refresh.status(game)['status'] == 'RUNNING' for game in ('iracing', 'lmu')))
+
+
+@app.middleware('http')
+async def history_foreground_priority(request, call_next):
+    if is_foreground_analysis(request.method, request.url.path):
+        with _history_activity.foreground(settle=request.url.path not in {
+                '/api/workspace/files', '/api/lmu/workspace/files'}):
+            return await call_next(request)
+    return await call_next(request)
 
 
 def import_lmu_corner_names() -> int:

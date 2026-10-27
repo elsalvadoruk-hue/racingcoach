@@ -21,8 +21,8 @@ def register_routes(app, *, store_factory=None):
 
     @app.get('/api/driver-report')
     async def driver_report(game: Literal['iracing', 'lmu'] = 'iracing', period_days: int = Query(default=30)):
-        if period_days not in {30, 90}:
-            raise HTTPException(422, '조회 기간은 30일 또는 90일로 선택하세요.')
+        if period_days not in {0, 30, 90}:
+            raise HTTPException(422, '조회 기간은 전체(0), 30일 또는 90일로 선택하세요.')
         from driver_report import read_driver_report
         try:
             return await asyncio.to_thread(read_driver_report, game, period_days, store=factory())

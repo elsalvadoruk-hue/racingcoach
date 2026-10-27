@@ -99,9 +99,11 @@ TREAD_CHANNELS = tuple(f'{corner}wear{part}' for corner in ('LF', 'RF', 'LR', 'R
 class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
     SAMPLE_RATE_HZ, BUFFER_SECONDS = 30, 180
 
-    def __init__(self, sdk_factory=None, clock=time.time):
+    def __init__(self, sdk_factory=None, clock=time.time, result_observer=None):
         self.clock = clock
         self.sdk_factory = sdk_factory
+        self.result_observer = result_observer
+        self._result_read_at = -math.inf
         self.lock = threading.RLock()
         self.drive_lifecycle = DriveLifecycle()
         self.stop_event = threading.Event()
@@ -435,6 +437,21 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.drive_lifecycle.observe_unknown()
             raise
 
+    def _observe_final_result(self, sdk, sample):
+        """Offer terminal native snapshots to the app's nonblocking consumer."""
+        if (self.result_observer is None or sdk_boolean(sample.get('is_replay')) is not False
+                or not self.run_id or self.clock() - self._result_read_at < 1):
+            return
+        state = number(sample.get('session_state'))
+        if not (state is not None and state >= 4 or sample.get('finish_status') in (1, 2, 3)):
+            return
+        self._result_read_at = self.clock()
+        try:
+            native = {name: sdk[name] or {} for name in ('WeekendInfo', 'DriverInfo', 'SessionInfo')}
+            self.result_observer(native, game=self.game, sample=sample, run_id=self.run_id)
+        except Exception as exc:
+            logger.warning('Final result capture deferred (%s)', type(exc).__name__)
+
     def _read_tick(self, sdk):
         """One read of whichever game is connected (iRacing SDK or the LMU adapter)."""
         if not sdk.is_initialized:
@@ -527,6 +544,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                                                 self.run_id, sample.get('session_time'))
                     except Exception:
                         self.traffic_log.fail(self.run_id)
+            self._observe_final_result(sdk, sample)
         finally:
             sdk.unfreeze_var_buffer_latest()
         with self.lock:

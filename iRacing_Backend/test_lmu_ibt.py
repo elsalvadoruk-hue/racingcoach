@@ -106,6 +106,23 @@ class LmuIbtTests(unittest.TestCase):
         self.assertAlmostEqual(float(c['dcBrakeBias'][2000]), 55.)
         self.assertTrue(np.all(np.diff(c['SessionTime']) > 0))
 
+    def test_history_input_metadata_preserves_native_rates_without_another_channel_read(self):
+        from driver_history_metrics import build_observation_metrics
+        sample = self.parse()
+        evidence = sample.metadata['history_input_sampling']
+        self.assertEqual(evidence['native_hz']['Throttle'], 50.)
+        self.assertEqual(evidence['native_hz']['Brake'], 50.)
+        self.assertEqual(evidence['native_hz']['SteeringWheelAngle'], 100.)
+        self.assertTrue(evidence['interpolated'])
+        self.assertTrue(evidence['pit_state_available'])
+        self.assertGreater(evidence['steering_half_range_rad'], 0.)
+        observation = {'game': 'lmu', 'coverage': {'status': 'OBSERVED', 'intervals': [[10., 135.]], 'reasons': []}}
+        result = build_observation_metrics(sample, observation)
+        measured = [lap['inputs'] for lap in result['laps'] if lap['measurable']]
+        self.assertTrue(measured)
+        self.assertTrue(all(item['throttle']['sampling_hz'] == 50. for item in measured))
+        self.assertTrue(all('INTERPOLATED_NATIVE_INPUTS' in item['reason_codes'] for item in measured))
+
     def test_partial_recording_keeps_inputs_but_never_invents_course_length(self):
         with duckdb.connect(str(self.path)) as db:
             for name, hz in db.execute('SELECT channelName, frequency FROM channelsList').fetchall():

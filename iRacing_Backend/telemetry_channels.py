@@ -32,6 +32,7 @@ ANALYSIS_CHANNELS = {
     "SessionTime",
     "SessionTick",
     "SessionNum",
+    "SessionState",
     "IsReplayPlaying",
     "SessionFlags",
     "Lap",

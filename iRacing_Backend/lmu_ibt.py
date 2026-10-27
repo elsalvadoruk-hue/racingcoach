@@ -199,6 +199,19 @@ class LmuIbtReader:
                         official_track_id=official_track_id(metadata_in.get('track_name'), layout))
         from lmu_personal_reference import recording_conditions
         metadata['lmu_lap_conditions'] = recording_conditions(reader, summary)
+        # The report must not mistake the 60 Hz interpolation grid for native
+        # input resolution. These compact facts reuse the already-read specs.
+        input_names = {'Speed': 'Ground Speed', 'Brake': 'Brake Pos', 'Throttle': 'Throttle Pos',
+                       'SteeringWheelAngle': 'Steering Pos'}
+        metadata['history_input_sampling'] = dict(
+            native_hz={name: specs[raw.casefold()].frequency_hz for name, raw in input_names.items()
+                       if raw.casefold() in specs and sources.get(raw) is not None},
+            native_units={name: specs[raw.casefold()].unit for name, raw in input_names.items()
+                          if raw.casefold() in specs and sources.get(raw) is not None},
+            interpolated=True, steering_half_range_rad=half_range,
+            pit_state_available=bool(changes.get('In Pits') is not None and len(changes['In Pits'][0])),
+            pit_state_start_s=(float(changes['In Pits'][0][0]) if changes.get('In Pits') is not None
+                               and len(changes['In Pits'][0]) else None))
         telemetry = ParsedTelemetry(path=self.path, signature=file_signature(self.path), tick_rate=TICK_RATE,
                                     buffer_length=0, record_count=len(time), data_offset=0, session_text='',
                                     session_info=session_info, variables={}, channels=channels,

@@ -33,6 +33,124 @@ class DriverHistoryMetricsTests(unittest.TestCase):
         return {'game': game, 'coverage': {'time_basis': 'NATIVE_SESSION_TIME', 'reasons': list(reasons),
                                          'status': 'OBSERVED', 'intervals': [[0., 1.]]}}
 
+    def test_quality_retains_invalid_untimed_completed_laps_without_claiming_official_validity(self):
+        telemetry = self.telemetry()
+        telemetry.laps.extend([SimpleNamespace(lap_number=2, start_idx=0, end_idx=10,
+            lap_time_s=None, complete=True, status='INVALID', pit_samples=0),
+            SimpleNamespace(lap_number=3, start_idx=0, end_idx=10,
+            lap_time_s=None, complete=False, status='PARTIAL', pit_samples=0)])
+        quality = build_observation_metrics(telemetry, self.observation())['lap_quality']
+        self.assertEqual([row['analysis_validity'] for row in quality['completed_laps']], ['VALID', 'INVALID'])
+        self.assertEqual(quality['official_validity'], 'UNKNOWN')
+        self.assertEqual(quality['authority'], 'ANALYSIS_POLICY')
+
+    def test_incidents_measure_only_continuous_counter_increases_and_observed_time(self):
+        telemetry = self.telemetry()
+        telemetry.channels['PlayerCarMyIncidentCount'] = np.array([7, 7, 7, 8, 8, 8, 8, 12, 12, 12, 12])
+        incidents = build_observation_metrics(telemetry, self.observation(), offset=100.)['incidents']
+        self.assertEqual(incidents['increase_points'], 5)
+        self.assertAlmostEqual(incidents['observed_time_s'], 1.)
+        self.assertEqual(incidents['events'], [dict(start_s=100.2,end_s=100.3,points=1),dict(start_s=100.6,end_s=100.7,points=4)])
+        self.assertEqual(incidents['intervals'], [[100.,101.]])
+        self.assertIn('INITIAL_INCIDENT_POINTS_EXCLUDED', incidents['reason_codes'])
+
+    def test_incident_reader_accepts_sdk_boolean_track_channel(self):
+        telemetry=self.telemetry()
+        telemetry.channels['IsOnTrack']=np.ones(11,dtype=bool)
+        telemetry.channels['PlayerCarMyIncidentCount']=np.array([0]*5+[1]*6,dtype=np.int32)
+        incidents=build_observation_metrics(telemetry,self.observation())['incidents']
+        self.assertEqual((incidents['status'],incidents['increase_points']),('OBSERVED',1))
+
+    def test_counter_is_required_and_yaml_snapshot_is_not_an_increment_history(self):
+        telemetry=self.telemetry()
+        telemetry.session_info={'DriverInfo':{'DriverIncidentCount':99}}
+        telemetry.channels['PlayerIncidents']=np.full(11,0x200)
+        incidents=build_observation_metrics(telemetry,self.observation())['incidents']
+        self.assertEqual(incidents['status'],'UNAVAILABLE')
+        self.assertIsNone(incidents['increase_points'])
+        self.assertIsNone(incidents['observed_time_s'])
+
+    def test_observed_counter_zero_is_a_real_zero_and_stops_stay_in_its_own_denominator(self):
+        telemetry=self.telemetry()
+        telemetry.channels['Speed'][:]=0
+        telemetry.channels['PlayerCarMyIncidentCount']=np.zeros(11,dtype=np.int32)
+        result=build_observation_metrics(telemetry,self.observation())
+        self.assertIsNone(result['driving']['time_s'])
+        self.assertEqual(result['incidents']['increase_points'],0)
+        self.assertAlmostEqual(result['incidents']['observed_time_s'],1.)
+        telemetry.channels['PlayerCarMyIncidentCount'][6:]=1
+        incidents=build_observation_metrics(telemetry,self.observation())['incidents']
+        self.assertEqual(incidents['increase_points'],1)
+        self.assertEqual(incidents['scope'],'ON_TRACK_OBSERVED_TIME')
+
+    def test_counter_reset_and_held_values_are_not_new_points(self):
+        telemetry=self.telemetry()
+        telemetry.channels['PlayerCarMyIncidentCount']=np.array([7,7,0,0,1,1,1,1,1,1,1])
+        incidents=build_observation_metrics(telemetry,self.observation())['incidents']
+        self.assertEqual(incidents['increase_points'],1)
+        self.assertAlmostEqual(incidents['observed_time_s'],.9)
+        self.assertEqual(incidents['intervals'],[[0.,.1],[.2,1.]])
+        self.assertIn('INCIDENT_COUNTER_RESET',incidents['reason_codes'])
+
+    def test_counter_jumps_across_gaps_session_changes_and_off_track_are_excluded(self):
+        for mode,reason in [('gap','SAMPLE_GAP'),('session','SESSION_CHANGE'),('track','OFF_TRACK_SAMPLES_EXCLUDED')]:
+            with self.subTest(mode=mode):
+                telemetry=self.telemetry()
+                telemetry.channels['PlayerCarMyIncidentCount']=np.array([0,0,0,4,4,4,4,5,5,5,5])
+                if mode=='gap':telemetry.channels['SessionTime'][3:]+=.5
+                elif mode=='session':telemetry.channels['SessionNum'][3:]=1
+                else:telemetry.channels['IsOnTrack'][2:4]=0
+                incidents=build_observation_metrics(telemetry,self.observation())['incidents']
+                self.assertEqual(incidents['increase_points'],1)
+                self.assertIn(reason,incidents['reason_codes'])
+                self.assertLess(incidents['observed_time_s'],1.)
+
+    def test_counter_unknown_replay_is_partial_and_confirmed_replay_points_are_excluded(self):
+        telemetry=self.telemetry()
+        telemetry.channels['PlayerCarMyIncidentCount']=np.array([0,0,0,4,4,4,4,5,5,5,5])
+        telemetry.channels.pop('IsReplayPlaying')
+        incidents=build_observation_metrics(telemetry,self.observation())['incidents']
+        self.assertEqual((incidents['status'],incidents['replay_status'],incidents['increase_points']),('PARTIAL','UNKNOWN',5))
+        telemetry.channels['IsReplayPlaying']=np.array([0,0,1,1,1,0,0,0,0,0,0])
+        incidents=build_observation_metrics(telemetry,self.observation())['incidents']
+        self.assertEqual(incidents['increase_points'],1)
+        self.assertIn('REPLAY_SAMPLES_EXCLUDED',incidents['reason_codes'])
+        telemetry.channels['IsReplayPlaying'][:]=1
+        incidents=build_observation_metrics(telemetry,self.observation())['incidents']
+        self.assertEqual(incidents['status'],'UNAVAILABLE')
+        self.assertIsNone(incidents['increase_points'])
+
+    def test_malformed_counter_samples_never_become_zero_incidents(self):
+        for values in [True,[True]*11,['0']*11,[0]*10,[[0]*11],[-1]*11,[.5]*11,[np.nan]*11,[np.inf]*11]:
+            with self.subTest(values=values):
+                telemetry=self.telemetry()
+                telemetry.channels['PlayerCarMyIncidentCount']=values
+                incidents=build_observation_metrics(telemetry,self.observation())['incidents']
+                self.assertEqual(incidents['status'],'UNAVAILABLE')
+                self.assertIsNone(incidents['increase_points'])
+
+    def test_quality_unknown_replay_and_discontinuous_laps_do_not_claim_official_validity(self):
+        telemetry=self.telemetry()
+        telemetry.channels.pop('IsReplayPlaying')
+        quality=build_observation_metrics(telemetry,self.observation())['lap_quality']
+        self.assertEqual((quality['status'],quality['completed_laps'][0]['analysis_validity']),('PARTIAL','VALID'))
+        telemetry.channels['SessionTime'][5:]+=.5
+        quality=build_observation_metrics(telemetry,self.observation())['lap_quality']
+        self.assertEqual(quality['completed_laps'][0]['analysis_validity'],'UNKNOWN')
+        self.assertEqual(quality['official_validity'],'UNKNOWN')
+        self.assertIn('LAP_TIME_DISCONTINUITY',quality['reason_codes'])
+
+    def test_incident_segment_merge_does_not_join_a_gap_or_charge_the_next_initial_count(self):
+        telemetry=self.telemetry()
+        telemetry.channels['PlayerCarMyIncidentCount']=np.array([0]*5+[7]*6)
+        before=build_observation_metrics(telemetry,self.observation(),end_idx=5)
+        after=build_observation_metrics(telemetry,self.observation(),start_idx=6)
+        joined=merge_observation_metrics(before,after)['incidents']
+        self.assertEqual(joined['increase_points'],0)
+        self.assertEqual(joined['intervals'],[[0.,.4],[.6,1.]])
+        self.assertAlmostEqual(joined['observed_time_s'],.8)
+        self.assertEqual(joined['events'],[])
+
     def test_iracing_time_distance_and_lap_coordinates_use_the_same_offset(self):
         telemetry = self.telemetry()
         metrics = build_observation_metrics(telemetry, self.observation(), offset=1800000000.)
@@ -74,7 +192,7 @@ class DriverHistoryMetricsTests(unittest.TestCase):
                 original = copy.deepcopy(telemetry.channels)
                 result = build_observation_metrics(telemetry, self.observation())
                 driving, lap = result['driving'], result['laps'][0]
-                self.assertEqual(result['calculation_version'], 'observed-metrics-v2')
+                self.assertEqual(result['calculation_version'], 'observed-metrics-v4')
                 self.assertEqual(driving['status'], 'PARTIAL')
                 self.assertEqual(driving['replay_status'], 'UNKNOWN')
                 self.assertIn('REPLAY_STATE_UNAVAILABLE', driving['reason_codes'])
@@ -281,7 +399,7 @@ class DriverHistoryMetricsTests(unittest.TestCase):
         telemetry.channels.pop('IsReplayPlaying')
         after = build_observation_metrics(telemetry, self.observation(), start_idx=6)
         joined = merge_observation_metrics(before, after)
-        self.assertEqual(joined['calculation_version'], 'observed-metrics-v2')
+        self.assertEqual(joined['calculation_version'], 'observed-metrics-v4')
         self.assertEqual(joined['driving']['status'], 'PARTIAL')
         self.assertEqual(joined['driving']['replay_status'], 'UNKNOWN')
         self.assertEqual(joined['driving']['intervals'], [[0., .4], [.6, 1.]])

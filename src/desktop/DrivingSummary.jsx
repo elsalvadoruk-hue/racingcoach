@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { ArrowRight, BookmarkCheck, ChartColumn, Check, Flag, MapPin, Target } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -15,6 +15,7 @@ import SummaryAnalysis, { measuredSections, noteSection } from './SummaryAnalysi
 import FittedSections from './FittedSections';
 import { requestJson, API_BASE } from '../analysis/analysisClient';
 import PracticeCoach from '../components/PracticeCoach';
+import SelectedDriveReflection from './SelectedDriveReflection';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
 
 const columnNames = { tasks: '오늘의 연습 과제', next: '다음 주행에서 할 일', analysis: '비교·분석' };
@@ -28,6 +29,8 @@ export default function DrivingSummary({ comparison, names, onCorner, onCompare,
   const lmu = schematic && data.session?.game !== 'lmu';
   const [practice, setPractice] = useState(data.practice || data.analysisResult?.practice || {});
   const [practiceOpen, setPracticeOpen] = useState(false);
+  const [reflectionOpen, setReflectionOpen] = useState(false);
+  const reflectionTrigger=useRef(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const options = comparison.practiceSummary?.options || [];
@@ -83,7 +86,7 @@ export default function DrivingSummary({ comparison, names, onCorner, onCompare,
     aria-label={`${columnNames[id]} 넓게 보기`} disabled={open === id} onClick={() => setOpen(id)}>{open === id ? '펼침' : '넓게'}</Button>;
 
   return <section className={cn('driving-summary', plan?.mode?.startsWith('SETUP_') && 'summary-has-setup')} aria-label="주행 요약" data-expanded={open}>
-    <div className="summary-intro"><div><h2>주행 요약</h2><p>과제를 고르면 내용이 바뀝니다. 카드 빈 곳을 누르면 넓게 봅니다.</p></div><Badge variant="outline">로컬 측정 기반</Badge></div>
+    <div className="summary-intro"><div><h2>주행 요약</h2><p>과제를 고르면 내용이 바뀝니다. 카드 빈 곳을 누르면 넓게 봅니다.</p></div><Button ref={reflectionTrigger} variant="outline" size="sm" onClick={()=>setReflectionOpen(true)}>이 주행 체감 남기기</Button></div>
     <div className="summary-columns">
       <Card className={cn('summary-column summary-task', open === 'tasks' && 'is-open')} aria-labelledby="today-task-title" {...columnProps('tasks')}>
         <CardHeader className="summary-column-header"><div className="summary-column-title"><CardTitle asChild><h3 id="today-task-title" className="flex items-center gap-2"><Target />오늘의 연습 과제<Badge variant="secondary">{options.length}개</Badge></h3></CardTitle>{widen('tasks')}</div>
@@ -158,5 +161,6 @@ export default function DrivingSummary({ comparison, names, onCorner, onCompare,
         loadWindow={analysisWorkspace?.localCornerLoader} externalCorners={data.external?.length ? comparison.corners : []}
         externalLoadWindow={data.external?.length ? analysisWorkspace?.externalCornerLoader : null} externalLabel={comparison.reference_label} />
     </DialogContent></Dialog>}
+    <Dialog open={reflectionOpen} onOpenChange={setReflectionOpen}><DialogContent className="driver-reflection-dialog" onCloseAutoFocus={event=>{event.preventDefault();reflectionTrigger.current?.focus();}}><DialogHeader><DialogTitle>이 주행의 체감</DialogTitle><DialogDescription>지금 분석한 파일에 연결된 주행에 느낌을 남깁니다.</DialogDescription></DialogHeader><SelectedDriveReflection base={API_BASE} game={schematic ? 'lmu' : 'iracing'} link={data.analysisResult?.driver_history} /></DialogContent></Dialog>
   </section>;
 }

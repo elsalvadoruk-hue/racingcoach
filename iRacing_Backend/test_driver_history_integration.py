@@ -35,8 +35,14 @@ class HistoryCaptureTests(unittest.TestCase):
         with patch('driver_history_index.build_source_summary', return_value=summary) as build:
             result = index_telemetry(self.telemetry, self.source_id, store=store)
         build.assert_called_once_with(self.telemetry, self.source_id)
-        store.record_source.assert_called_once_with(summary)
+        store.record_source.assert_called_once()
+        actual = store.record_source.call_args.args[0]
+        self.assertEqual({key: actual[key] for key in summary}, summary)
+        self.assertEqual(actual['race_results']['source_id'], self.source_id)
+        self.assertEqual(actual['race_results']['results'], [])
         self.assertTrue(result['saved'])
+        self.assertEqual(result['drive_ids'], [])
+        self.assertIsNone(result['selected_drive_id'])
 
     def test_changed_recording_is_not_attached_to_an_old_content_hash(self):
         self.path.write_bytes(b'changed recording with different size')
@@ -73,6 +79,26 @@ class HistoryCaptureTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 index_telemetry(self.telemetry, 'not-a-content-hash')
         factory.assert_not_called()
+
+    def test_current_quality_and_counter_survive_foreground_capture_without_reopening_source(self):
+        from driver_history import DriverHistoryStore
+        from test_driver_history_metrics import DriverHistoryMetricsTests
+        import numpy as np
+        telemetry=DriverHistoryMetricsTests().telemetry()
+        telemetry.path=self.path
+        telemetry.signature=file_signature(self.path)
+        telemetry.channels['PlayerCarMyIncidentCount']=np.array([3]*5+[4]*6)
+        telemetry.session_info={}
+        store=DriverHistoryStore(self.root/'quality.sqlite3')
+        with patch('session_log_extras.recording_window',return_value=None), \
+                patch.object(Path,'open',side_effect=AssertionError('No additional source read')):
+            result=index_telemetry(telemetry,self.source_id,store=store,before_save=lambda *_:None,after_save=lambda *_:None)
+        self.assertTrue(result['saved'])
+        snapshot=store.report_snapshot('iracing')
+        metrics=snapshot['drives'][0]['observations'][0]['metrics']
+        self.assertEqual(metrics['incidents']['increase_points'],1)
+        self.assertEqual(metrics['lap_quality']['completed_laps'][0]['analysis_validity'],'VALID')
+        self.assertEqual(metrics['lap_quality']['official_validity'],'UNKNOWN')
 
 
 class HistoryReadRoutesTests(unittest.TestCase):

@@ -1,9 +1,10 @@
 .driver-report-scene {
   --driver-report-font:'Noto Sans KR Variable','Malgun Gothic',sans-serif;
   display:grid;
-  grid-template-rows:auto auto auto minmax(0,1fr) auto;
+  grid-auto-rows:auto;
+  align-content:start;
   gap:10px;
-  height:100%;
+  height:auto;
   min-width:0;
   min-height:0;
   font-family:var(--driver-report-font);
@@ -11,7 +12,6 @@
   line-height:1.5;
   font-synthesis:none;
 }
-.driver-report-scene:has(> .driver-report-error) { grid-template-rows:auto auto auto auto minmax(0,1fr) auto; }
 .driver-report-scene *, .driver-report-scene *::before, .driver-report-scene *::after { box-sizing:border-box; }
 .driver-report-scene p, .driver-report-scene h1, .driver-report-scene h2, .driver-report-scene h3, .driver-report-scene dl, .driver-report-scene dd { margin:0; }
 .driver-report-scene button { font-family:var(--driver-report-font); font-size:12px; }
@@ -40,8 +40,9 @@
 .driver-report-scene .driver-report-history-refresh h5 { margin:0 0 3px; font-size:13px; line-height:1.4; }
 .driver-report-scene .driver-report-history-refresh p { font-size:12px; overflow-wrap:anywhere; }
 .driver-report-scene .driver-report-history-refresh > button { flex-shrink:0; }
-.driver-report-scene:has(> .driver-report-query-area .driver-report-history-refresh) { overflow-y:auto; overscroll-behavior:contain; grid-template-rows:auto auto auto minmax(360px,1fr) auto; padding-right:4px; }
-.driver-report-scene:has(> .driver-report-error):has(.driver-report-history-refresh) { grid-template-rows:auto auto auto auto minmax(360px,1fr) auto; }
+.driver-report-scene .driver-report-library .driver-report-library-actions { display:flex; flex:0 0 auto; flex-wrap:wrap; justify-content:flex-end; gap:8px; max-width:240px; }
+.driver-report-scene .driver-report-library progress { display:block; width:100%; height:6px; margin:7px 0; accent-color:hsl(var(--primary)); }
+.driver-report-scene:has(> .driver-report-query-area .driver-report-history-refresh) { overscroll-behavior:contain; }
 .driver-report-scene .driver-report-error { display:flex; align-items:center; gap:12px; padding:7px 12px; min-height:36px; }
 .driver-report-scene .driver-report-error > h5 { flex-shrink:0; margin:0; font-size:12px; line-height:1.4; }
 .driver-report-scene .driver-report-error > div { font-size:12px; line-height:1.4; }
@@ -197,4 +198,129 @@
   .driver-report-scene .driver-report-history-refresh { align-items:flex-start; flex-direction:column; }
   .driver-report-scene .driver-report-evidence-counts { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .driver-report-scene .driver-report-drive { gap:6px; }
+}
+
+/* The desktop report keeps every feature in one viewport. Longer evidence
+   and complete histories are opened from their own cards. */
+.driver-report-scene.driver-report-dashboard {
+  height:100%; min-height:0; overflow:hidden; align-content:stretch;
+  grid-template-rows:auto auto auto minmax(0,1fr) auto; gap:9px;
+}
+.driver-report-scene.driver-report-dashboard:has(> .driver-report-error) { grid-template-rows:auto auto auto auto minmax(0,1fr) auto; }
+.driver-report-dashboard .driver-report-query-area { display:grid; grid-template-columns:minmax(240px,.85fr) minmax(0,1.65fr); gap:6px 12px; align-items:center; }
+.driver-report-dashboard .driver-report-query-line { min-height:34px; gap:8px; }
+.driver-report-dashboard .driver-report-query-line p { line-height:1.4; }
+.driver-report-dashboard .driver-report-history-refresh:not(.driver-report-library) { grid-column:1/-1; padding:6px 10px; }
+.driver-report-dashboard .driver-report-library { padding:6px 10px; min-height:42px; gap:8px; }
+.driver-report-dashboard .driver-report-library h5 { margin:0; font-size:12px; }
+.driver-report-dashboard .driver-report-library p { font-size:12px; line-height:1.4; }
+.driver-report-dashboard .driver-report-library .driver-report-library-actions { max-width:none; gap:6px; flex-wrap:nowrap; }
+.driver-report-dashboard .driver-report-library button { height:26px; min-height:26px; padding:0 8px; white-space:nowrap; }
+.driver-report-dashboard .driver-report-library progress { height:3px; margin:3px 0 0; }
+.driver-report-dashboard .driver-report-grid {
+  grid-template-columns:repeat(3,minmax(0,1fr)); grid-template-rows:repeat(3,minmax(0,1fr)); min-height:0; gap:10px;
+}
+.driver-report-dashboard .driver-report-grid > div { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+.driver-report-dashboard .driver-report-grid > div > :first-child { padding:12px 14px 6px; flex-shrink:0; gap:3px; }
+.driver-report-dashboard .driver-report-grid > div > :nth-child(2) { min-height:0; padding:0 14px; flex:1; display:flex; flex-direction:column; justify-content:center; gap:6px; }
+.driver-report-dashboard .driver-report-grid > div > :last-child { min-height:28px; padding:5px 14px 9px; margin-top:auto; flex-shrink:0; }
+.driver-report-dashboard .driver-report-grid h2 { font-size:17px; line-height:1.3; }
+.driver-report-dashboard .driver-report-grid h3 { font-size:13px; line-height:1.4; }
+.driver-report-dashboard .driver-report-grid p { font-size:12px; line-height:1.5; }
+.driver-report-dashboard .driver-report-grid button { height:28px; min-height:28px; font-size:12px; padding:0 8px; }
+.driver-report-dashboard .driver-report-overview { grid-column:1/3; grid-row:1; }
+.driver-report-dashboard .driver-report-overview h2 { font-size:28px; }
+.driver-report-dashboard .driver-report-overview > :nth-child(2) { align-items:flex-start; gap:10px; }
+.driver-report-dashboard .driver-report-overview [class*='text-muted-foreground'] { font-size:14px; line-height:1.5; }
+.driver-report-dashboard .driver-report-challenge { grid-column:3; grid-row:1; }
+.driver-report-dashboard .driver-report-grid .driver-report-challenge > :last-child button { width:auto; height:28px; min-height:28px; }
+.driver-report-dashboard .driver-report-style { grid-column:1; grid-row:2; }
+.driver-report-dashboard .driver-report-pace { grid-column:2; grid-row:2; }
+.driver-report-dashboard .driver-report-records { grid-column:3; grid-row:2; }
+.driver-report-dashboard .driver-report-feeling { grid-column:1; grid-row:3; }
+.driver-report-dashboard .driver-report-growth { grid-column:2; grid-row:3; }
+.driver-report-dashboard .driver-report-results { grid-column:3; grid-row:3; }
+.driver-report-dashboard .driver-report-grid .driver-report-pace > :nth-child(2) { gap:3px; }
+.driver-report-dashboard .driver-report-pace-values dd { font-size:23px; line-height:1.25; }
+.driver-report-dashboard .driver-report-chart { min-height:0; }
+.driver-report-dashboard .driver-report-chart > svg { height:45px; max-height:45px; min-height:18px; }
+.driver-report-dashboard:has(.driver-report-query-area > .driver-report-history-refresh) .driver-report-chart > svg,
+.driver-report-dashboard:has(> .driver-report-error) .driver-report-chart > svg { height:30px; max-height:30px; }
+.driver-report-dashboard .driver-report-chart-dates { font-size:12px; }
+.driver-report-dashboard .driver-report-record-summary { gap:6px; }
+.driver-report-dashboard .driver-report-discovery { gap:2px 6px; }
+.driver-report-dashboard .driver-report-discovery p { -webkit-line-clamp:2; }
+.driver-report-dashboard .driver-report-drive { gap:6px; }
+.driver-report-dashboard .driver-report-footnote { font-size:12px; line-height:1.3; }
+.driver-report-dashboard .driver-journal-actions { gap:4px 8px; }
+.driver-report-dashboard .driver-journal-choices { gap:4px; margin:4px 0; }
+.driver-report-dashboard .driver-journal-choices button { flex:1 1 auto; padding-inline:8px; }
+.driver-report-dashboard .driver-journal-note { margin-top:2px; font-size:12px; line-height:1.4; }
+.driver-report-dashboard .driver-insight-compact-title { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.driver-report-dashboard .driver-insight-compact-title button { flex-shrink:0; }
+.driver-report-dashboard .driver-style-compact-items { display:grid; gap:8px; }
+.driver-report-dashboard .driver-style-compact-item { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; }
+.driver-report-dashboard .driver-style-compact-item strong { font-size:14px; }
+.driver-report-dashboard .driver-insight-compact-scope { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:12px; color:hsl(var(--muted-foreground)); }
+.driver-report-dashboard .driver-insight-compact-note { font-size:12px; color:hsl(var(--muted-foreground)); }
+.driver-report-dashboard .driver-growth-compact-periods { display:table; width:100%; border-collapse:collapse; font-size:12px; }
+.driver-report-dashboard .driver-growth-compact-periods th,.driver-report-dashboard .driver-growth-compact-periods td { text-align:left; padding:2px 5px 2px 0; font-variant-numeric:tabular-nums; }
+.driver-report-dashboard .driver-growth-compact-periods thead { color:hsl(var(--muted-foreground)); font-weight:400; }
+.driver-report-dashboard .driver-insight-compact-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.driver-report-dashboard .driver-insight-compact-footer { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.driver-report-dashboard .driver-insight-compact-footer .driver-insight-compact-note { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.driver-report-dashboard .driver-insight-compact-footer button { flex-shrink:0; }
+.driver-report-dashboard .driver-journal-compact-title { display:flex; align-items:center; gap:7px; }
+.driver-report-dashboard .driver-journal-compact-title svg { width:15px; height:15px; color:hsl(var(--primary)); }
+.driver-report-dashboard .driver-journal-context { max-width:100%; font-size:12px; line-height:1.5; }
+.driver-report-dashboard .driver-journal-compact-status { min-height:18px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.driver-report-dashboard .driver-journal-compact-status:empty { display:none; min-height:0; }
+.driver-report-dashboard .driver-journal-compact-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.driver-report-dashboard .driver-journal-candidates-compact { gap:6px; padding-block:0; }
+.driver-report-dashboard .driver-journal-candidates-compact > div { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:2px 8px; }
+.driver-report-dashboard .driver-journal-candidates-compact > div > strong,.driver-report-dashboard .driver-journal-candidates-compact > div > p { grid-column:1; min-width:0; }
+.driver-report-dashboard .driver-journal-candidates-compact > div > button { grid-column:2; grid-row:1/3; }
+.driver-report-dashboard .driver-journal-active-summary { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:4px 8px; }
+.driver-report-dashboard .driver-journal-active-summary p { grid-column:1/-1; }
+.driver-report-dashboard .driver-journal-empty-compact { font-size:12px; line-height:1.5; }
+.driver-report-dashboard .driver-journal-compact-message { display:flex; align-items:center; justify-content:space-between; gap:6px; font-size:12px; }
+.driver-report-dashboard .driver-journal-compact-candidates { display:grid; gap:7px; }
+.driver-report-dashboard .driver-journal-compact-candidate { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:3px 8px; }
+.driver-report-dashboard .driver-journal-compact-candidate strong,.driver-report-dashboard .driver-journal-compact-candidate p { min-width:0; }
+.driver-report-dashboard .driver-journal-compact-candidate button { grid-column:2; grid-row:1/3; }
+.driver-report-dashboard .driver-growth-compact-periods strong { font-size:21px; font-variant-numeric:tabular-nums; }
+.driver-report-dashboard .driver-growth-compact-changes { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:12px; }
+.driver-report-dashboard .driver-results-totals { gap:6px; margin:0; }
+.driver-report-dashboard .driver-results-totals dd { font-size:20px; line-height:1.3; }
+.driver-report-dashboard .driver-results-latest { display:grid; gap:3px; font-size:12px; }
+.driver-report-dashboard .driver-results-latest > div { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+.driver-report-dashboard .driver-results-compact-actions { display:flex; justify-content:space-between; gap:6px; font-size:12px; }
+/* Portal dialogs reuse scene typography, not its dashboard/card grid layout.
+   Keep the header and closing footer outside the only shrinking scroll area. */
+.driver-report-scene.driver-insight-dialog,
+.driver-report-scene.driver-results-dialog,
+.driver-report-scene.driver-journal-detail { width:calc(100vw - 48px); max-width:850px; max-height:85dvh; height:auto; display:flex; flex-direction:column; gap:16px; overflow:hidden; }
+.driver-report-scene.driver-journal-detail { max-width:720px; }
+.driver-report-scene:is(.driver-insight-dialog,.driver-results-dialog,.driver-journal-detail) > div { flex-shrink:0; min-width:0; }
+.driver-report-scene.driver-insight-dialog > .driver-insight-dialog-body,
+.driver-report-scene.driver-results-dialog > .driver-results-dialog-body,
+.driver-report-scene.driver-journal-detail > .driver-journal-detail-body { flex:1 1 auto; overflow-y:auto; overscroll-behavior:contain; min-width:0; min-height:0; }
+.driver-library-dialog { width:calc(100vw - 48px); max-width:850px; max-height:85dvh; display:flex; flex-direction:column; }
+.driver-library-dialog > div:not(:first-child):not(:last-child) { display:grid; gap:12px; font-size:14px; line-height:1.7; }
+@media (max-height:900px) {
+  .driver-report-scene.driver-report-dashboard { gap:7px; }
+  .driver-report-dashboard .driver-report-heading { min-height:52px; }
+  .driver-report-dashboard .driver-report-summary-card { min-height:56px; padding-block:6px; }
+  .driver-report-dashboard .driver-report-summary-card strong { font-size:23px; }
+  .driver-report-dashboard .driver-report-grid { gap:8px; }
+  .driver-report-dashboard .driver-report-grid > div > :first-child { padding:8px 12px 4px; }
+  .driver-report-dashboard .driver-report-grid > div > :nth-child(2) { padding-inline:12px; gap:4px; }
+  .driver-report-dashboard .driver-report-grid > div > :last-child { padding:3px 12px 6px; min-height:25px; }
+  .driver-report-dashboard .driver-report-grid h2 { font-size:16px; }
+  .driver-report-dashboard .driver-report-overview h2 { font-size:25px; }
+  .driver-report-dashboard .driver-report-grid .driver-report-eyebrow { display:none; }
+  .driver-report-dashboard .driver-report-overview .driver-report-eyebrow,.driver-report-dashboard .driver-report-challenge .driver-report-eyebrow { display:flex; }
+  .driver-report-dashboard .driver-report-chart > svg { height:32px; max-height:32px; }
+  .driver-report-dashboard .driver-style-compact-items { gap:5px; }
+  .driver-report-dashboard .driver-growth-compact-periods strong { font-size:19px; }
 }

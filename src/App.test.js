@@ -9,8 +9,11 @@ beforeEach(() => {
   global.fetch = jest.fn(async (url) => ({
     ok: true,
     json: async () => url.endsWith('/api/files') ? { files: [] }
-      : url.includes('/api/driver-report?') ? { schema_version: 1, game: new URL(url).searchParams.get('game'), period_days: 30, state: 'EMPTY',
+      : url.includes('/api/driver-report?') ? { schema_version: 1, game: new URL(url).searchParams.get('game'), period_days: Number(new URL(url).searchParams.get('period_days')), state: 'EMPTY',
         overview: { title: '나의 주행 이야기를 시작해요' }, career: {}, pace: {}, recent_drives: [] }
+      : url.includes('/api/driver-history/library?') ? { game: new URL(url).searchParams.get('game'), status: 'COMPLETE', revision: 0, total: 0, processed: 0, updated: 0, skipped: 0, failed: 0 }
+      : url.includes('/api/driver-journal?') ? { game: new URL(url).searchParams.get('game'), drives: [], candidates: [], challenge_history: [] }
+      : url.includes('/api/driver-results?') ? { game: new URL(url).searchParams.get('game'), period_days: Number(new URL(url).searchParams.get('period_days')), results: [] }
       : url.includes('/api/overlay') ? { enabled: false, available: false, settings: {}, rows: [], auto_show: false, voices: {} }
       : url.endsWith('/api/settings') ? { version: '1.2.0', settings: { telemetry_dirs: [] }, google: {}, garage61: {}, audio: { radio_clips: 0, spotter_clips: 0 }, telemetry_folders: [] }
       : url.includes('/api/memory/sessions') ? { sessions: [] }
