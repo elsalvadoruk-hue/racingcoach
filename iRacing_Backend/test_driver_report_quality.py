@@ -5,9 +5,10 @@ import unittest
 from driver_report_quality import build_quality
 
 
-def drive(name='a', *, basis='UTC', native=True, offset=0., validity='VALID', points=2, seconds=600.):
+def drive(name='a', *, basis='UTC', native=True, offset=0., validity='VALID', points=2, seconds=600.,
+          session_type='RACE'):
     return dict(drive_id=name, game='iracing', car_key='car', track_key='track', layout_key='gp',
-                identity_status='NATIVE' if native else 'SOURCE_ONLY', observations=[dict(source_id=name,
+                session_type=session_type, identity_status='NATIVE' if native else 'SOURCE_ONLY', observations=[dict(source_id=name,
         coverage=dict(time_basis=basis), metrics=dict(
             lap_quality=dict(completed_laps=[dict(lap_number=1, start_s=offset, end_s=offset+100.,
                 analysis_validity=validity, replay_status='UNKNOWN')]),
@@ -17,6 +18,29 @@ def drive(name='a', *, basis='UTC', native=True, offset=0., validity='VALID', po
 
 
 class QualityTests(unittest.TestCase):
+    def test_incidents_use_race_and_qualifying_points_and_time_only(self):
+        rows = [drive('race', points=2), drive('qualify', offset=1000., points=1, session_type='QUALIFY'),
+                drive('practice', offset=2000., seconds=3600., points=99, session_type='PRACTICE'),
+                drive('unknown', offset=6000., points=40, session_type='UNKNOWN'),
+                drive('missing', offset=7000., points=10)]
+        rows[-1].pop('session_type')
+        result = build_quality(rows)
+        incidents = result['incidents_per_hour']
+        self.assertEqual(incidents['increase_points'], 3)
+        self.assertEqual(incidents['observed_time_s'], 1200.)
+        self.assertEqual(incidents['value'], 9.)
+        self.assertEqual(incidents['observation_count'], 2)
+        # This scope restriction is specific to incidents, not the valid-lap card.
+        self.assertEqual(result['valid_lap_ratio']['classified_laps'], 5)
+
+    def test_practice_only_has_no_competitive_incident_rate_even_with_zero_points(self):
+        result = build_quality([drive(points=0, session_type='PRACTICE')])['incidents_per_hour']
+        self.assertIsNone(result['value'])
+        self.assertIsNone(result['increase_points'])
+        self.assertEqual(result['observed_time_s'], 0.)
+        self.assertEqual(result['observation_count'], 0)
+        self.assertIn('레이스·퀄리', result['reason'])
+
     def test_missing_counters_are_unknown_and_measurable_laps_do_not_imply_validity(self):
         row = drive()
         row['observations'][0]['metrics'] = dict(laps=[dict(measurable=True)])

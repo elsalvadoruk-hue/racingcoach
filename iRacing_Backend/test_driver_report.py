@@ -101,14 +101,14 @@ class DriverReportTests(unittest.TestCase):
         self.assertEqual(growth['dispersion_direction'], 'UNCERTAIN')
         self.assertEqual(growth['retention'], 'UNCERTAIN')
 
-    def test_read_report_overlays_official_career_from_all_periods_without_changing_pure_builder(self):
+    def test_read_report_overlays_official_aggregate_for_the_selected_period(self):
         official = {key: {'value': value, 'status':'OBSERVED', 'reason':'공식 결과'}
                     for key, value in [('wins', 0), ('podiums', 2), ('average_position', 4.)]}
-        with patch('driver_results.read_driver_results', return_value={'career':official}) as read:
+        with patch('driver_results.read_driver_results', return_value={'aggregate':official}) as read:
             report = read_driver_report('iracing', 90, store=self.store)
         self.assertEqual(report['career']['wins']['value'], 0)
         self.assertEqual(report['career']['podiums']['value'], 2)
-        self.assertEqual(read.call_args.args, ('iracing', 0))
+        self.assertEqual(read.call_args.args, ('iracing', 90))
         expected = self.path.with_name(self.path.stem+'.results.sqlite3')
         self.assertEqual(read.call_args.kwargs['store'].path, expected)
         self.assertIsNone(self.report()['career']['wins']['value'])
@@ -281,7 +281,60 @@ class DriverReportTests(unittest.TestCase):
         self.assertEqual([point['date'] for point in all_report['pace']['points']], ['2025-01-01', '2026-10-26'])
         self.assertEqual(recent['coverage']['period_observation_count'], 1)
         self.assertEqual(len(recent['recent_drives']), 1)
-        self.assertEqual(all_report['career'], recent['career'])
+        self.assertGreater(all_report['career']['distance_m']['value'], recent['career']['distance_m']['value'])
+
+    def test_period_overview_and_discoveries_use_the_selected_records(self):
+        for name, date in [('old', '2026-06-22'), ('within90', '2026-08-01'),
+                           ('within30', '2026-10-25')]:
+            self.store.record_source(utc_facts(name, name, date=f'{date}T10:00:00Z'))
+        all_report, report30, report90 = [self.report(days=days) for days in (0, 30, 90)]
+        self.assertEqual([item['coverage']['period_observation_count']
+                          for item in (all_report, report30, report90)], [3, 1, 2])
+        self.assertEqual([item['discoveries'][0]['date'] for item in (all_report, report30, report90)],
+                         ['2026-06-22', '2026-10-25', '2026-08-01'])
+        self.assertEqual(report30['overview']['scope'], '최근 30일 · 원본 1개 · 확인된 세션 1개 · 파일별 관측 0개')
+        self.assertEqual(report90['overview']['scope'], '최근 90일 · 원본 2개 · 확인된 세션 2개 · 파일별 관측 0개')
+        self.assertEqual(report30['discoveries'][0]['title'], '선택 기간의 첫 관측')
+        self.assertEqual(report30['scopes']['discoveries'], 'SELECTED_PERIOD_OBSERVATIONS')
+        self.assertEqual([item['career']['distance_m']['value'] for item in (all_report, report30, report90)],
+                         [1500., 500., 1000.])
+        self.assertEqual([item['career']['driving_time_s']['value'] for item in (all_report, report30, report90)],
+                         [30., 10., 20.])
+        self.assertEqual([item['coverage']['period_source_count'] for item in (all_report, report30, report90)],
+                         [3, 1, 2])
+        self.assertEqual([item['coverage']['period_measured_observation_count']
+                          for item in (all_report, report30, report90)], [3, 1, 2])
+        self.assertEqual([item['coverage']['period_replay_unknown_observation_count']
+                          for item in (all_report, report30, report90)], [3, 1, 2])
+        self.assertEqual(report30['coverage']['period_source_only_count'], 0)
+        self.assertEqual(report30['coverage']['period_driving_unavailable_observation_count'], 0)
+        self.assertIn('연결 관측 1개', report30['coverage']['period_reason'])
+        self.assertEqual(report30['scopes']['career'], 'SELECTED_PERIOD_OBSERVATIONS')
+
+    def test_official_totals_follow_selected_period_without_writing_or_reopening_sources(self):
+        from driver_results import DriverResultsStore, extract_recording_results
+        from test_driver_results import telemetry, native_info
+        official_store = DriverResultsStore(history_path=self.path)
+        for index, (date, position) in enumerate([('2026-06-22', 0), ('2026-08-01', 1), ('2026-10-20', 3)]):
+            info = native_info(position=position)
+            info['WeekendInfo']['SubSessionID'] += index
+            official_store.record_batch(extract_recording_results(telemetry(info), str(index)*64,
+                recorded_at=f'{date}T10:00:00Z'))
+        before = (official_store.path.read_bytes(), official_store.path.stat().st_mtime_ns)
+        reports = [read_driver_report('iracing', days, store=self.store) for days in (0, 30, 90)]
+        self.assertEqual([report['career']['wins']['value'] for report in reports], [1, 0, 0])
+        self.assertEqual([report['career']['podiums']['value'] for report in reports], [2, 0, 1])
+        self.assertEqual([report['career']['average_position']['value'] for report in reports], [2.333, 4., 3.])
+        self.assertEqual((official_store.path.read_bytes(), official_store.path.stat().st_mtime_ns), before)
+        self.assertFalse(self.path.exists())
+
+    def test_no_records_in_period_cannot_borrow_an_old_discovery_or_overview(self):
+        self.store.record_source(utc_facts('old', 'old', date='2026-06-22T10:00:00Z'))
+        report = self.report(days=30)
+        self.assertEqual(report['discoveries'], [])
+        self.assertEqual(report['overview']['scope'], '최근 30일 · 원본 0개 · 확인된 세션 0개 · 파일별 관측 0개')
+        self.assertIn('선택 기간', report['overview']['title'])
+        self.assertIn('전체', report['overview']['body'])
 
     def test_unknown_replay_and_conditions_still_show_scoped_observation_timeline(self):
         for index, lap_time in enumerate((100., 98.)):
@@ -410,13 +463,13 @@ class DriverReportTests(unittest.TestCase):
         self.assertEqual(report['pace']['trend'], 'UNAVAILABLE')
         self.assertEqual(report['pace']['session_count'], 0)
 
-    def test_game_filter_and_career_are_independent_of_recent_period(self):
+    def test_game_filter_and_selected_period_both_apply_to_driving_totals(self):
         self.store.record_source(facts('old', 'old', date='2026-08-01T10:00:00Z'))
         self.store.record_source(facts('lmu', 'lmu', game='lmu', distance=900))
         report = self.report()
-        self.assertEqual(report['career']['distance_m']['value'], 500)
+        self.assertIsNone(report['career']['distance_m']['value'])
         self.assertEqual(report['coverage']['period_session_count'], 0)
-        self.assertEqual(report['career'], self.report(days=90)['career'])
+        self.assertEqual(self.report(days=90)['career']['distance_m']['value'], 500)
         self.assertEqual(self.report('lmu')['career']['distance_m']['value'], 900)
 
     def test_undated_observation_is_not_placed_on_a_growth_timeline(self):
@@ -605,7 +658,7 @@ class DriverReportTests(unittest.TestCase):
         report30, report90 = self.report(), self.report(days=90)
         self.assertEqual(report30['coverage']['period_session_count'], 1)
         self.assertEqual(report90['coverage']['period_session_count'], 3)
-        self.assertEqual(report30['career'], report90['career'])
+        self.assertLess(report30['career']['driving_time_s']['value'], report90['career']['driving_time_s']['value'])
         self.assertEqual(report30['scopes']['pace'], 'SELECTED_PERIOD')
         self.assertEqual(report30['scopes']['recent_drives'], 'SELECTED_PERIOD_OBSERVATIONS')
         self.assertIn('30일', report30['scope_labels']['recent_drives'])

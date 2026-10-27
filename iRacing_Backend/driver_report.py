@@ -15,7 +15,7 @@ from driver_style import build_style
 from driver_report_quality import build_quality
 
 
-CALCULATION_VERSION = 'observed-report-v5'
+CALCULATION_VERSION = 'observed-report-v6'
 _REQUIRED_CONDITIONS = ('fuel_level_l', 'track_temp_c', 'air_temp_c', 'track_wetness', 'tire_compound', 'setup_hash')
 _CONDITION_LABELS = {'fuel_level_l': '연료량', 'track_temp_c': '노면 온도', 'air_temp_c': '기온',
                      'track_wetness': '노면 젖음', 'tire_compound': '타이어 종류', 'setup_hash': '셋업'}
@@ -730,7 +730,11 @@ def build_driver_report(snapshot, game, period_days=30, *, now=None):
     native = [drive for drive in drives if drive['identity_status'] == 'NATIVE']
     period_observations = [drive for drive in drives if _selected_period(drive, cutoff, now)]
     period = [drive for drive in period_observations if drive['identity_status'] == 'NATIVE']
+    selected_sources = {row['source_id'] for drive in period_observations for row in drive['observations']}
     lap_selections = _shared_clock_laps(drives)
+    diagnostics = _diagnostics(drives, lap_selections)
+    period_diagnostics = (diagnostics if not period_days else _diagnostics(period_observations,
+        {drive['drive_id']: lap_selections[drive['drive_id']] for drive in period_observations}))
     pace = _pace(drives, cutoff, now, lap_selections)
     style = build_style([drive for drive in period_observations
                          if (_date(drive['recorded_at']) or now) <= now], lap_selections)
@@ -738,15 +742,24 @@ def build_driver_report(snapshot, game, period_days=30, *, now=None):
     coverage = {'source_count': snapshot['source_count'], 'native_session_count': len(native),
         'source_only_count': len(drives) - len(native), 'undated_count': sum(not drive['recorded_at'] for drive in drives),
         'period_session_count': len(period), 'period_observation_count': len(period_observations),
+        'period_source_count': len(selected_sources),
+        'period_source_only_count': len(period_observations) - len(period),
+        'period_measured_observation_count': period_diagnostics['measured_observation_count'],
+        'period_replay_unknown_observation_count': period_diagnostics['replay_unknown_observation_count'],
+        'period_driving_unavailable_observation_count': period_diagnostics['driving_unavailable_observation_count'],
+        'period_reason': period_diagnostics['reason'],
         'period_measured_lap_count': sum(len(lap_selections[drive['drive_id']][0]) for drive in period_observations),
         'earliest_recorded_at': min(dates) if dates else None,
-        'latest_recorded_at': max(dates) if dates else None, **_diagnostics(drives, lap_selections)}
+        'latest_recorded_at': max(dates) if dates else None, **diagnostics}
     title, body = ('나의 주행 이야기를 시작해요', '주행 파일을 분석하면 확인된 기록부터 차곡차곡 연결합니다.') if not drives else (
         '이번 기록에서 확인된 것부터', '기록을 연결했습니다. 확인된 관측과 아직 비교할 수 없는 부분을 함께 보여드려요.')
     if pace['trend'] == 'IMPROVING':
         title, body = '이 조합의 대표 페이스가 좋아졌어요', '조건을 확인한 기록에서 대표 랩이 짧아졌고 편차도 늘지 않았습니다. 이 조합의 관측 변화로 읽어 주세요.'
     elif pace['trend'] == 'DECLINING':
         title, body = '최근 페이스를 한 번 살펴볼까요', '조건을 확인한 기록에서 최근 대표 랩이 길어졌습니다. 원인을 단정하지 않고 이번 관측부터 살펴봅니다.'
+    if period_days and not period_observations:
+        title, body = ('선택 기간의 기록이 아직 없어요',
+                       f'최근 {period_days}일에 날짜가 확인된 주행 관측이 없습니다. 전체 보기에서 이전 기록을 확인할 수 있습니다.')
     recent_drives = [{'drive_id': drive['drive_id'], 'recorded_at': drive['recorded_at'],
         'car': drive.get('labels', {}).get('car') or '차량 확인 필요',
         'track': drive.get('labels', {}).get('track') or '코스 확인 필요',
@@ -756,19 +769,27 @@ def build_driver_report(snapshot, game, period_days=30, *, now=None):
         'identity_reason': (_REASONS['NATIVE_IDENTITY_UNAVAILABLE'] if drive['identity_status'] != 'NATIVE'
                             else '플랫폼 세션·사용자 식별자로 연결한 독립 세션입니다.')} for drive in period_observations[:6]]
     discoveries = []
-    if dates:
-        first = min(dates)[:10]
-        discoveries.append({'id': hashlib.sha256(f'{game}:first:{first}'.encode()).hexdigest(),
-            'date': first, 'title': '처음 연결한 관측', 'body': '앱이 보관한 기록의 시작입니다. 생애 첫 주행이나 최초 달성을 뜻하지 않습니다.'})
+    selected_dates = [drive['recorded_at'] for drive in period_observations if drive['recorded_at']]
+    if selected_dates:
+        first = min(selected_dates)[:10]
+        discovery_key = f'{game}:first:{period_days}:{first}' if period_days else f'{game}:first:{first}'
+        discoveries.append({'id': hashlib.sha256(discovery_key.encode()).hexdigest(),
+            'date': first, 'title': '선택 기간의 첫 관측' if period_days else '처음 연결한 관측',
+            'body': (f'최근 {period_days}일 안에서 날짜가 확인된 첫 기록입니다. 전체 기록의 시작이나 최초 달성을 뜻하지 않습니다.'
+                     if period_days else '앱이 보관한 기록의 시작입니다. 생애 첫 주행이나 최초 달성을 뜻하지 않습니다.')})
+    overview_scope = (f'최근 {period_days}일 · 원본 {len(selected_sources)}개 · 확인된 세션 {len(period)}개 · '
+                      f'파일별 관측 {len(period_observations) - len(period)}개' if period_days else
+                      f'원본 {snapshot["source_count"]}개 · 확인된 세션 {len(native)}개 · 파일별 관측 {len(drives) - len(native)}개')
     return {'schema_version': 1, 'calculation_version': CALCULATION_VERSION, 'game': game,
         'period_days': period_days, 'state': 'OBSERVED' if drives else 'EMPTY', 'coverage': coverage,
-        'scopes': {'career': 'ALL_CONNECTED_OBSERVATIONS', 'pace': 'SELECTED_PERIOD',
-                   'recent_drives': 'ALL_CONNECTED_OBSERVATIONS' if not period_days else 'SELECTED_PERIOD_OBSERVATIONS'},
-        'scope_labels': {'career': '연결한 전체 기록의 주행 관측량',
+        'scopes': {'career': 'ALL_CONNECTED_OBSERVATIONS' if not period_days else 'SELECTED_PERIOD_OBSERVATIONS', 'pace': 'SELECTED_PERIOD',
+                   'recent_drives': 'ALL_CONNECTED_OBSERVATIONS' if not period_days else 'SELECTED_PERIOD_OBSERVATIONS',
+                   'overview': 'ALL_CONNECTED_OBSERVATIONS' if not period_days else 'SELECTED_PERIOD_OBSERVATIONS',
+                   'discoveries': 'ALL_CONNECTED_OBSERVATIONS' if not period_days else 'SELECTED_PERIOD_OBSERVATIONS'},
+        'scope_labels': {'career': f'최근 {period_days}일의 주행 관측량' if period_days else '연결한 전체 기록의 주행 관측량',
                          'pace': f'최근 {period_days}일 안의 측정 기록' if period_days else '연결한 전체 측정 기록',
                          'recent_drives': f'최근 {period_days}일 안의 최근 6개 관측' if period_days else '연결한 전체 기록에서 최근 6개 관측'},
-        'career': _career(drives), 'overview': {'title': title, 'body': body,
-            'scope': f'원본 {snapshot["source_count"]}개 · 확인된 세션 {len(native)}개 · 파일별 관측 {len(drives) - len(native)}개'},
+        'career': _career(period_observations), 'overview': {'title': title, 'body': body, 'scope': overview_scope},
         'pace': pace, 'style': style, 'growth': growth,
         'quality': build_quality([drive for drive in period_observations
                                  if (_date(drive['recorded_at']) or now) <= now]),
@@ -789,10 +810,11 @@ def read_driver_report(game, period_days=30, *, store=None):
     # observation builder usable without a results database or an API process.
     try:
         from driver_results import DriverResultsStore, read_driver_results
-        official = read_driver_results(game, 0, store=DriverResultsStore(history_path=storage.path))['career']
+        official = read_driver_results(game, period_days, store=DriverResultsStore(history_path=storage.path))['aggregate']
         for key in ('wins', 'podiums', 'average_position'):
             report['career'][key] = {**official[key], 'scope': 'OFFICIAL_FINAL_CLASS_RESULTS',
-                                     'scope_label': '보관한 공식 최종 클래스 결과'}
+                                     'scope_label': (f'최근 {period_days}일의 공식 최종 클래스 결과' if period_days
+                                                     else '보관한 공식 최종 클래스 결과')}
     except (OSError, sqlite3.Error, ValueError, TypeError, KeyError, AttributeError):
         for key in ('wins', 'podiums', 'average_position'):
             report['career'][key] = _metric(reason='공식 결과 저장소를 읽지 못했습니다. 주행 관측은 그대로 표시합니다.')

@@ -47,7 +47,7 @@ test('empty history keeps unknown career metrics unavailable and offers authoriz
   const onNavigate = jest.fn(), onChooseSource = jest.fn();
   render(<DriverReport game="iracing" apiBase={API} onNavigate={onNavigate} onChooseSource={onChooseSource} />);
   expect(await screen.findByRole('heading', { name: '나의 주행 이야기를 시작해요' })).toBeInTheDocument();
-  const career = screen.getByRole('region', { name: '앱에 기록된 전체 누적 통계' });
+  const career = screen.getByRole('region', { name: '선택 기간 주행 통계' });
   expect(within(career).getAllByText('—')).toHaveLength(5);
   const summary = screen.getByRole('region', { name: '최근 성장 요약' });
   expect(within(summary).getAllByText('—')).toHaveLength(4);
@@ -84,7 +84,7 @@ test('real finite observations show partial totals and measured laps without inv
   expect(screen.queryByText(/페이스 개선/)).not.toBeInTheDocument();
   expect(screen.getByLabelText('우승 —')).toBeInTheDocument();
   expect(screen.getByText('전체 기간 · 관측 3개 · 측정 7랩')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '누적 통계 집계 기준' })).toHaveTextContent('부분 관측 포함');
+  expect(screen.getByRole('button', { name: '통계 집계 기준' })).toHaveTextContent('부분 관측 포함');
 });
 
 test('quality summaries show observed counters and analysis verdicts, including measured zero', async () => {
@@ -96,7 +96,7 @@ test('quality summaries show observed counters and analysis verdicts, including 
   expect(await screen.findByLabelText('분석 유효 랩 비율 75%')).toBeInTheDocument();
   expect(screen.getByLabelText('시간당 인시던트 점수 0점/h')).toBeInTheDocument();
   expect(screen.getByText('3/4완주 랩 · 앱 분석 기준')).toBeInTheDocument();
-  expect(screen.getByText('트랙 위 10분 · 0점 증가')).toBeInTheDocument();
+  expect(screen.getByText('레이스·퀄리 · 트랙 위 10분 · 0점 증가')).toBeInTheDocument();
 });
 
 test('a single lap never displays zero lap-to-lap dispersion even with an old server response', async () => {
@@ -121,7 +121,7 @@ test('game changes abort the previous read and ignore an old response even when 
   expect(screen.getByRole('region', { name: 'LMU 드라이버 리포트' })).toBeInTheDocument();
 });
 
-test('period changes abort stale reads and keep the accumulated career scope independent', async () => {
+test('period changes abort stale reads and prevent old period statistics from leaking', async () => {
   const old = deferred();
   fetch.mockImplementation(url => url.endsWith('period_days=90') ? Promise.resolve(response(observed('iracing', 90))) : old.promise);
   render(<DriverReport apiBase={API} />);
@@ -203,7 +203,7 @@ test('evidence dialog exposes partial coverage and actual record detail and retu
   trigger.focus(); fireEvent.click(trigger);
   const dialog = await screen.findByRole('dialog', { name: '관측 근거와 기록' });
   expect(within(dialog).getByText(/확인된 일부 · 확인한 운전 구간만 집계했습니다./)).toBeInTheDocument();
-  expect(within(dialog).getByText('전체 누적 통계')).toBeInTheDocument();
+  expect(within(dialog).getByText('전체 기간 통계')).toBeInTheDocument();
   expect(within(dialog).getByText('2026.10.26')).toBeInTheDocument();
   expect(within(dialog).getAllByText('최종 클래스 결과가 없습니다.')).toHaveLength(3);
   fireEvent.click(within(dialog).getAllByRole('button', { name: '닫기', exact: true })[0]);
@@ -391,12 +391,21 @@ test('a failed background state read preserves the report and retry resumes with
   } finally { jest.useRealTimers(); }
 });
 
-test('all, 30 and 90-day views use separate report queries without changing career totals', async () => {
-  fetch.mockImplementation(async url => response(observed('iracing', Number(new URL(url).searchParams.get('period_days')))));
+test('all, 30 and 90-day views update headline statistics and scope with their own report queries', async () => {
+  fetch.mockImplementation(async url => {
+    const days=Number(new URL(url).searchParams.get('period_days'));
+    const payload=observed('iracing',days);
+    payload.career.distance_m.value=days===30?3000:days===90?9000:12500;
+    payload.career.driving_time_s.value=days===30?600:days===90?1800:3860;
+    return response(payload);
+  });
   render(<DriverReport apiBase={API} />);
   await screen.findByText('전체 기간 · 관측 3개 · 측정 7랩');
   fireEvent.click(screen.getByRole('radio', { name: '30일', exact: true }));
   expect(await screen.findByText(/최근 30일 · 관측 3개 · 측정 7랩/)).toBeInTheDocument();
+  expect(screen.getByLabelText('주행 거리 3 km · 확인된 일부')).toBeInTheDocument();
+  expect(screen.getByLabelText('주행 시간 10분')).toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'통계 집계 기준'})).toHaveTextContent('최근 30일');
   fireEvent.click(screen.getByRole('button', { name: '관측 근거', exact: true }));
   const dialog = await screen.findByRole('dialog', { name: '관측 근거와 기록' });
   expect(within(dialog).getByText('최근 30일에 기록된 항목만 보여줍니다.')).toBeInTheDocument();
@@ -404,6 +413,9 @@ test('all, 30 and 90-day views use separate report queries without changing care
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   fireEvent.click(screen.getByRole('radio', { name: '90일', exact: true }));
   await screen.findByText(/최근 90일 · 관측 3개 · 측정 7랩/);
+  expect(screen.getByLabelText('주행 거리 9 km · 확인된 일부')).toBeInTheDocument();
+  expect(screen.getByLabelText('주행 시간 30분')).toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'통계 집계 기준'})).toHaveTextContent('최근 90일');
   fireEvent.click(screen.getByRole('radio', { name: '전체', exact: true }));
   await screen.findByText('전체 기간 · 관측 3개 · 측정 7랩');
   expect(screen.getByText('12.5 km')).toBeInTheDocument();

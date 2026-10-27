@@ -130,6 +130,10 @@ def _nonoverlapping(sources):
 def _incident_rate(drives):
     contexts = {}
     for drive in drives:
+        # Use the same competitive-session scope for both points and time.
+        # Stored observations already carry this type; no source re-read is needed.
+        if drive.get('session_type') not in {'RACE', 'QUALIFY'}:
+            continue
         per_basis = {}
         for observation in drive['observations']:
             incident = observation.get('metrics', {}).get('incidents', {})
@@ -161,16 +165,18 @@ def _incident_rate(drives):
         chosen.extend(max(pools, key=lambda items: sum(_duration(item['intervals']) for item in items)))
     points = sum(item['increase_points'] for item in chosen)
     seconds = sum(_duration(item['intervals']) for item in chosen)
-    reason = ('개인 인시던트 누적값의 증가점수 ÷ 같은 구간의 트랙 위 관측시간 × 3600입니다. '
+    reason = ('레이스·퀄리 세션만 집계하며 연습과 세션 종류 미확인 기록은 점수와 시간 모두에서 제외합니다. '
+              '개인 인시던트 누적값의 증가점수 ÷ 같은 구간의 트랙 위 관측시간 × 3600입니다. '
               '첫 표본의 이미 누적된 점수·카운터 리셋·기록 공백은 제외합니다. '
               '겹친 원본은 완전한 관측 하나를 선택하고 동일 구간의 점수가 충돌하면 제외합니다. 서로 대응하지 않는 시계는 합산하지 않습니다. '
               '정차를 포함한 관측 구간의 비율이며 공식 경기 전체의 점수나 사고 횟수가 아닙니다.')
     if not seconds:
-        reason = ('개인 인시던트 카운터와 같은 구간의 관측시간이 필요합니다. '
-                  '전체 기록 분석 또는 기존 기록 다시 확인 후 확인 가능한 자료를 반영합니다.')
+        reason = ('선택 기간에 레이스·퀄리의 개인 인시던트 카운터와 같은 구간의 관측시간이 없습니다. '
+                  '연습과 세션 종류 미확인 기록은 점수와 시간 모두에서 제외합니다.')
     return _available(points / seconds * 3600. if seconds else None, reason,
                       increase_points=points if seconds else None, observed_time_s=round(seconds, 3),
-                      observation_count=len(chosen), scope='ON_TRACK_OBSERVED_TIME')
+                      observation_count=len(chosen), scope='RACE_QUALIFY_ON_TRACK_OBSERVED_TIME',
+                      session_types=['RACE', 'QUALIFY'])
 
 
 def build_quality(drives):

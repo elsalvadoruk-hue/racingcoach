@@ -21,7 +21,10 @@ test('input facts keep zero, observation and session samples, and method without
   render(<DriverStyleCard style={{status:'PARTIAL',items:[input],reason:'성향과 빠르기는 별도입니다.'}} />);
   expect(screen.getByText('제동·조향 겹침 관측')).toBeInTheDocument();
   expect(screen.getByText('0%')).toBeInTheDocument();
-  expect(screen.getByText(/관측 2개 · 확인된 독립 세션 0개/)).toBeInTheDocument();
+  expect(screen.getAllByRole('definition')[2]).toHaveTextContent('2개');
+  expect(screen.getAllByRole('definition')[3]).toHaveTextContent('0개');
+  expect(screen.queryByText('입력이 겹친 시간 비율입니다.')).not.toBeInTheDocument();
+  userEvent.click(screen.getByRole('button',{name:'이번 수치의 측정 근거'}));
   expect(screen.getByText('입력이 겹친 시간 비율입니다.')).toBeInTheDocument();
   expect(screen.queryByText('반복 확인')).not.toBeInTheDocument();
 });
@@ -31,8 +34,11 @@ test('repeated inputs show opposing evidence and at most two axes',()=>{
     counter_evidence:{event_count:3,share_pct:20,dates:['2026-10-23']}},
     {...input,id:'throttle',axis:'throttle',title:'점진 가속형',status:'REPEATED'},
     {...input,id:'excluded',title:'세 번째 축'}]}} />);
-  expect(screen.getAllByText('반복 확인')).toHaveLength(2);
+  expect(screen.getAllByText('반복 확인')).toHaveLength(1);
+  userEvent.click(screen.getByRole('button',{name:'이번 수치의 측정 근거'}));
   expect(screen.getByText(/다른 양상도 3회 · 20%/)).toBeInTheDocument();
+  userEvent.click(screen.getByRole('tab',{name:'스로틀'}));
+  expect(screen.getByRole('heading',{name:'점진 가속형'})).toBeInTheDocument();
   expect(screen.queryByText('세 번째 축')).not.toBeInTheDocument();
 });
 
@@ -114,7 +120,13 @@ test('compact style keeps two values, counts and repeat states while details res
   const trigger=screen.getByRole('button',{name:'운전 성향 자세히'});
   userEvent.click(trigger);
   const dialog=await screen.findByRole('dialog',{name:'운전 성향 자세히'});
-  expect(within(dialog).getAllByText(input.method)).toHaveLength(2);
+  expect(within(dialog).queryByText(input.method)).not.toBeInTheDocument();
+  userEvent.click(within(dialog).getByRole('button',{name:'이번 수치의 측정 근거'}));
+  expect(within(dialog).getByText(input.method)).toBeInTheDocument();
+  userEvent.click(within(dialog).getByRole('tab',{name:'스로틀'}));
+  expect(within(dialog).queryByText(input.method)).not.toBeInTheDocument();
+  userEvent.click(within(dialog).getByRole('button',{name:'이번 수치의 측정 근거'}));
+  expect(within(dialog).getByText(input.method)).toBeInTheDocument();
   expect(within(dialog).getByText('입력 방식과 빠르기는 별도입니다.')).toBeInTheDocument();
   userEvent.click(within(dialog).getAllByRole('button',{name:'닫기',exact:true})[0]);
   await waitFor(()=>expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -178,14 +190,23 @@ test('style details explain both input measurements in plain language with units
   expect(within(brake).getByRole('heading',{name:'브레이크와 핸들을 함께 쓴 시간'})).toBeInTheDocument();
   expect(within(brake).getByText(/단위는 %/)).toBeInTheDocument();
   expect(within(brake).getByText(/2초.*0\.5초.*25%/)).toBeInTheDocument();
+  const calculation=within(brake).getByRole('button',{name:'계산 조건과 성향 이름 기준'});
+  expect(calculation).toHaveAttribute('aria-expanded','false');
+  expect(within(brake).queryByText(/0\.15~30초/)).not.toBeInTheDocument();
+  userEvent.click(calculation);
+  expect(calculation).toHaveAttribute('aria-expanded','true');
   expect(within(brake).getByText(/0\.15~30초.*20%.*1\.5초/)).toBeInTheDocument();
   expect(within(brake).getByText(/iRacing.*2\.9도.*LMU.*2%/)).toBeInTheDocument();
   expect(within(brake).getByText(/20%.*0\.15초.*5%/)).toBeInTheDocument();
   expect(within(brake).getByText(/코너 진입 위치나 트레일 브레이킹의 성공 여부/)).toBeInTheDocument();
+  expect(within(dialog).queryByRole('region',{name:'스로틀 전개의 뜻과 계산 기준'})).not.toBeInTheDocument();
+  userEvent.click(within(dialog).getByRole('tab',{name:'스로틀'}));
+  expect(within(dialog).queryByRole('region',{name:'제동·조향 겹침의 뜻과 계산 기준'})).not.toBeInTheDocument();
   const throttle=within(dialog).getByRole('region',{name:'스로틀 전개의 뜻과 계산 기준'});
   expect(within(throttle).getByRole('heading',{name:'가속 페달을 더 밟는 데 걸린 시간'})).toBeInTheDocument();
   expect(within(throttle).getByText(/스로틀은 가속 페달.*20% 이하.*80% 이상.*초 단위/)).toBeInTheDocument();
   expect(within(throttle).getByText(/0\.6초.*숫자가 작을수록/)).toBeInTheDocument();
+  userEvent.click(within(throttle).getByRole('button',{name:'계산 조건과 성향 이름 기준'}));
   expect(within(throttle).getByText(/8초.*오차를 빼도 0\.6초.*오차를 더해도 0\.35초/)).toBeInTheDocument();
   expect(within(throttle).getByText(/좋고 나쁨을 정하지 않습니다/)).toBeInTheDocument();
   userEvent.keyboard('{Escape}');
@@ -196,8 +217,14 @@ test('style reading guide explains record scope, equal weighting, repeat evidenc
   render(<DriverStyleCard style={{items:[{...input,status:'REPEATED',title:'제동 연결형'},
     {...input,id:'throttle',axis:'throttle',status:'REPEATED',title:'점진 가속형',unit:'s'}]}}/>);
   expect(screen.getByRole('region',{name:'제동·조향 겹침의 뜻과 계산 기준'})).toBeInTheDocument();
-  expect(screen.getByRole('region',{name:'스로틀 전개의 뜻과 계산 기준'})).toBeInTheDocument();
+  expect(screen.queryByRole('region',{name:'스로틀 전개의 뜻과 계산 기준'})).not.toBeInTheDocument();
+  userEvent.click(screen.getByRole('tab',{name:'수치 읽는 법'}));
   const guide=screen.getByRole('region',{name:'성향 수치와 표시 읽는 법'});
+  within(guide).getAllByRole('button').forEach(button=>{
+    expect(button).toHaveAttribute('aria-expanded','false');
+    userEvent.click(button);
+    expect(button).toHaveAttribute('aria-expanded','true');
+  });
   expect(within(guide).getByText(/랩·주행·날짜별 중앙값.*같은 비중으로 평균/)).toBeInTheDocument();
   expect(within(guide).getByText(/세션을 확인하지 못한 기록도 측정값은 표시/)).toBeInTheDocument();
   expect(within(guide).getByText(/2일 이상.*3개 이상.*5회 이상.*70%/)).toBeInTheDocument();
