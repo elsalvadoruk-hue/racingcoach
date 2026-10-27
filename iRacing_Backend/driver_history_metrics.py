@@ -9,6 +9,7 @@ import re
 import numpy as np
 
 from driver_history_incidents import incident_metrics, merge_incidents, unavailable_incidents
+from driver_style import CALCULATION_VERSION as INPUT_VERSION
 
 
 CALCULATION_VERSION = 'observed-metrics-v4'
@@ -60,7 +61,7 @@ def display_labels(metadata):
 
 
 def unavailable_metrics(reason='METRICS_UNAVAILABLE'):
-    return dict(schema_version=1, calculation_version=CALCULATION_VERSION,
+    return dict(schema_version=1, calculation_version=CALCULATION_VERSION, input_version=INPUT_VERSION,
                 driving=dict(status='UNAVAILABLE', time_s=None, distance_m=None,
                 intervals=[], reason_codes=[reason], replay_status='UNKNOWN'), laps=[],
                 lap_quality=dict(status='UNAVAILABLE',authority='ANALYSIS_POLICY',official_validity='UNKNOWN',
@@ -231,7 +232,7 @@ def build_observation_metrics(telemetry, observation, *, start_idx=0, end_idx=No
         return unavailable_metrics('SOURCE_SEGMENT_UNAVAILABLE')
     game = observation.get('game')
     replay_evidence = _replay_evidence(channels, count)
-    result = dict(schema_version=1, calculation_version=CALCULATION_VERSION,
+    result = dict(schema_version=1, calculation_version=CALCULATION_VERSION, input_version=INPUT_VERSION,
                   driving=_driving(telemetry, times, left, right, offset, game, replay_evidence), laps=[],
                   lap_quality=dict(status='UNAVAILABLE',authority='ANALYSIS_POLICY',official_validity='UNKNOWN',
                                    completed_laps=[],reason_codes=['NO_COMPLETED_LAP_OBSERVATIONS']))
@@ -344,6 +345,8 @@ def merge_observation_metrics(before, after):
         intervals=[list(window) for item in driving for window in item['intervals']],
         reason_codes=sorted(reasons), replay_status=replay_status),
         laps=[*before['laps'], *after['laps']])
+    if all(item.get('input_version') == INPUT_VERSION for item in (before, after)):
+        output['input_version'] = INPUT_VERSION
     empty=unavailable_metrics()
     qualities=[item.get('lap_quality',empty['lap_quality']) for item in (before,after)]
     quality_laps=[row for item in qualities for row in item['completed_laps']]

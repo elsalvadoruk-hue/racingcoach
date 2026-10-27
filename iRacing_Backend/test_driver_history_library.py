@@ -120,6 +120,146 @@ class HistoryLibraryTests(unittest.TestCase):
         self.loader.assert_not_called()
         self.assertEqual((state['updated'], state['skipped']), (0, 1))
 
+    def legacy_inputs(self, item):
+        source_id = hashlib.sha256(item.path.read_bytes()).hexdigest()
+        summary = build_source_summary(item, source_id)
+        for observation in summary['observations']:
+            observation['metrics'].pop('input_version', None)
+            for lap in observation['metrics']['laps']:
+                if 'inputs' in lap:
+                    lap['inputs'].pop('input_version', None)
+        self.store.record_source(summary)
+        return source_id, self.store.report_snapshot('iracing')
+
+    def test_legacy_input_enrichment_preserves_metrics_and_results_and_runs_once(self):
+        item = self.recording()
+        source_id, before = self.legacy_inputs(item)
+        before_save, after_save = Mock(), Mock()
+        service = self.service(before_save=before_save, after_save=after_save)
+        service.start('iracing')
+        self.assertEqual(self.terminal(service)['updated'], 1)
+        self.loader.assert_called_once()
+        after = self.store.report_snapshot('iracing')
+        from driver_history_inputs import INPUT_VERSION, current_inputs
+        for drive in after['drives']:
+            for observation in drive['observations']:
+                self.assertTrue(current_inputs(observation['metrics']))
+                self.assertEqual(observation['metrics'].pop('input_version'), INPUT_VERSION)
+        self.assertEqual(before, after)
+        before_save.assert_not_called()
+        after_save.assert_not_called()
+        self.loader.reset_mock()
+        reopened = self.service()
+        reopened.start('iracing')
+        self.assertEqual(self.terminal(reopened)['skipped'], 1)
+        self.loader.assert_not_called()
+
+    def test_failed_input_enrichment_preserves_summary_and_is_not_automatically_retried(self):
+        item = self.recording()
+        _, before = self.legacy_inputs(item)
+        self.loader.side_effect = RuntimeError('PRIVATE input failure')
+        service = self.service()
+        service.start('iracing')
+        state = self.terminal(service)
+        self.assertEqual((state['failed'], state['updated']), (1, 0))
+        self.assertEqual(self.store.report_snapshot('iracing'), before)
+        self.loader.reset_mock()
+        reopened = self.service()
+        reopened.start('iracing')
+        state = self.terminal(reopened)
+        self.assertEqual((state['failed'], state['updated']), (1, 0))
+        self.loader.assert_not_called()
+        self.assertEqual(state['reason_counts'], [{'code': 'INPUT_ENRICHMENT_FAILED', 'count': 1}])
+
+    def test_input_version_change_reuses_current_metric_checkpoint_and_parses_copies_once(self):
+        first, second = self.recording('original.ibt'), self.recording('copy.ibt')
+        second.path.write_bytes(first.path.read_bytes())
+        second.signature = file_signature(second.path)
+        service = self.service()
+        service.start('iracing')
+        self.terminal(service)
+        self.legacy_inputs(first)
+        self.loader.reset_mock()
+        with patch('driver_history_library._digest', side_effect=AssertionError('current file checkpoint')):
+            reopened = self.service()
+            reopened.start('iracing')
+            state = self.terminal(reopened)
+        self.assertEqual((state['updated'], state['skipped'], state['failed']), (1, 1, 0))
+        self.loader.assert_called_once_with(first.path)
+
+    def test_input_enrichment_yields_mid_file_without_partial_save_and_retries_exact_file(self):
+        from driver_history_inputs import measure_source_inputs
+        item = self.recording()
+        source_id, before = self.legacy_inputs(item)
+        busy = threading.Event()
+        calls = []
+        def enrich(path, identity, observations, should_stop):
+            calls.append(path)
+            self.assertEqual(identity, source_id)
+            payload = measure_source_inputs(deepcopy(item), identity, observations)
+            if len(calls) == 1:
+                busy.set()
+                self.assertTrue(should_stop())
+                raise InterruptedError('synthetic input child stopped')
+            return payload
+        service = self.service(enrich_file=enrich, can_run=lambda: '주행 중' if busy.is_set() else None)
+        service.start('iracing')
+        state = self.waiting(service)
+        self.assertEqual((state['processed'], state['updated'], state['failed']), (0, 0, 0))
+        self.assertEqual(self.store.report_snapshot('iracing'), before)
+        busy.clear()
+        final = self.terminal(service)
+        self.assertEqual((final['processed'], final['updated'], final['failed']), (1, 1, 0))
+        self.assertEqual(calls, [item.path, item.path])
+        self.loader.assert_not_called()
+
+    def test_input_enrichment_manual_pause_requires_resume_and_keeps_prior_summary(self):
+        item = self.recording()
+        _, before = self.legacy_inputs(item)
+        reading, released = threading.Event(), threading.Event()
+        def enrich(path, source_id, observations, should_stop):
+            reading.set()
+            while not should_stop():
+                threading.Event().wait(.005)
+            released.set()
+            raise InterruptedError('owned child reaped')
+        service = self.service(enrich_file=enrich)
+        service.start('iracing')
+        self.assertTrue(reading.wait(2))
+        service.pause('iracing')
+        state = self.terminal(service, expected='PAUSED')
+        self.assertTrue(released.is_set())
+        self.assertEqual((state['processed'], state['updated'], state['failed']), (0, 0, 0))
+        self.assertEqual(before, self.store.report_snapshot('iracing'))
+        service.enrich_file = None
+        service.start('iracing')
+        self.assertEqual(self.terminal(service)['updated'], 1)
+
+    def test_failed_input_enrichment_can_be_retried_explicitly_without_full_reanalysis(self):
+        from driver_history_refresh import refresh_summaries
+        item = self.recording()
+        self.legacy_inputs(item)
+        self.loader.side_effect = RuntimeError('synthetic parse failure')
+        service = self.service()
+        service.start('iracing')
+        self.assertEqual(self.terminal(service)['failed'], 1)
+        self.loader.side_effect = lambda path: deepcopy(self.recordings[path])
+        before_save, after_save = Mock(), Mock()
+        with patch('driver_history_refresh._locators', return_value={
+                hashlib.sha256(item.path.read_bytes()).hexdigest(): [item.path]}), \
+                patch('driver_history_metrics.build_observation_metrics', side_effect=AssertionError('no full metrics')), \
+                patch('driver_history_refresh.attach_recording_results', side_effect=AssertionError('no results')):
+            state = refresh_summaries('iracing', store=self.store,
+                memory_db_path=self.folder/'unused.sqlite3', allowed_paths=lambda _: [item.path],
+                load_telemetry=self.loader, before_save=before_save, after_save=after_save)
+        self.assertEqual((state['updated'], state['failed']), (1, 0))
+        before_save.assert_not_called()
+        after_save.assert_not_called()
+        self.loader.reset_mock()
+        service.start('iracing')
+        self.assertEqual(self.terminal(service)['skipped'], 1)
+        self.loader.assert_not_called()
+
     def test_copied_content_is_parsed_once_and_registered_as_one_source(self):
         first, second = self.recording('first.ibt'), self.recording('copy.ibt')
         second.path.write_bytes(first.path.read_bytes())

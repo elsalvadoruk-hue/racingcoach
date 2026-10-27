@@ -305,6 +305,21 @@ test('measurement evidence explains source-only observations, unknown replay and
 
 const refreshJob = (status, extra = {}) => ({ game: 'iracing', status, total: 12, processed: 0, updated: 0, skipped: 0, failed: 0, message: '', ...extra });
 
+test('input-only enrichment offers an explicit retry without automatically posting or hiding saved statistics', async () => {
+  const actual = observed();
+  actual.coverage.outdated_source_count = 0;
+  actual.coverage.outdated_input_source_count = 3;
+  fetch.mockImplementation(async url => response(url.includes('/api/driver-history/refresh?') ? refreshJob('IDLE', { message: '기존 기록을 다시 확인할 수 있습니다.' }) : actual));
+  render(<DriverReport apiBase={API} />);
+  expect(await screen.findByText('12.5 km')).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole('button', { name: '기존 기록 다시 확인' })).toBeEnabled());
+  expect(screen.getByText('기존 기록 3개의 새 성향 항목을 보완할 수 있어요. 기존 주행 통계와 경기 결과는 유지합니다.')).toBeInTheDocument();
+  expect(fetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: '기존 기록 다시 확인' }));
+  await waitFor(() => expect(fetch.mock.calls.filter(([, options]) => options.method === 'POST')).toHaveLength(1));
+  expect(screen.getByText('12.5 km')).toBeInTheDocument();
+});
+
 test('existing sources are refreshed only after an explicit action, polled once and followed by a report reload', async () => {
   jest.useFakeTimers();
   try {

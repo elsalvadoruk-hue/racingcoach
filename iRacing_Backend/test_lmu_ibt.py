@@ -108,13 +108,22 @@ class LmuIbtTests(unittest.TestCase):
 
     def test_history_input_metadata_preserves_native_rates_without_another_channel_read(self):
         from driver_history_metrics import build_observation_metrics
+        with duckdb.connect(str(self.path)) as db:
+            db.execute('INSERT INTO channelsList VALUES (?,?,?)', ['Engine RPM', 25., 'rpm'])
+            db.execute('CREATE TABLE "Engine RPM" AS SELECT 6000.0 AS value FROM range(?)',
+                       [int((LAPS * LAP_S + 2) * 25)])
         sample = self.parse()
         evidence = sample.metadata['history_input_sampling']
         self.assertEqual(evidence['native_hz']['Throttle'], 50.)
         self.assertEqual(evidence['native_hz']['Brake'], 50.)
         self.assertEqual(evidence['native_hz']['SteeringWheelAngle'], 100.)
+        self.assertEqual(evidence['native_hz']['RPM'], 25.)
+        self.assertEqual(evidence['native_units']['RPM'], 'rpm')
         self.assertTrue(evidence['interpolated'])
         self.assertTrue(evidence['pit_state_available'])
+        self.assertTrue(evidence['gear_events_available'])
+        self.assertEqual(evidence['gear_event_start_s'], START)
+        self.assertNotIn('Gear', evidence['native_hz'])
         self.assertGreater(evidence['steering_half_range_rad'], 0.)
         observation = {'game': 'lmu', 'coverage': {'status': 'OBSERVED', 'intervals': [[10., 135.]], 'reasons': []}}
         result = build_observation_metrics(sample, observation)

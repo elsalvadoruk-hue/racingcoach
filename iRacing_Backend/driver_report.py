@@ -11,11 +11,12 @@ from statistics import median
 
 from driver_history import DriverHistoryStore
 from driver_history_metrics import CALCULATION_VERSION as METRICS_VERSION
-from driver_style import build_style
+from driver_style import AXIS_METADATA, build_style
+from driver_history_inputs import INPUT_VERSION, current_inputs, outdated_input_sources
 from driver_report_quality import build_quality
 
 
-CALCULATION_VERSION = 'observed-report-v6'
+CALCULATION_VERSION = 'observed-report-v7'
 _REQUIRED_CONDITIONS = ('fuel_level_l', 'track_temp_c', 'air_temp_c', 'track_wetness', 'tire_compound', 'setup_hash')
 _CONDITION_LABELS = {'fuel_level_l': '연료량', 'track_temp_c': '노면 온도', 'air_temp_c': '기온',
                      'track_wetness': '노면 젖음', 'tire_compound': '타이어 종류', 'setup_hash': '셋업'}
@@ -287,6 +288,34 @@ def _career(drives):
         'average_position': _metric(reason=result_reason)}
 
 
+def _agreed_inputs(values):
+    """Keep an exact two-axis projection of one agreed nine-axis observation.
+
+    A version marker alone never establishes agreement. Every released field
+    and both original axes must match, and all current observations must agree
+    in full; a real conflict retains the existing withholding policy.
+    """
+    first = values[0]
+    if all(value == first for value in values):
+        return first
+    legacy_keys = {'schema_version', 'status', 'sample_count', 'reason_codes', 'brake_steer', 'throttle'}
+    current_keys = legacy_keys | {'input_version'} | set(AXIS_METADATA)
+    legacy, current = [], []
+    for value in values:
+        if not isinstance(value, dict):
+            return None
+        if set(value) == legacy_keys:
+            legacy.append(value)
+        elif set(value) == current_keys and value.get('input_version') == INPUT_VERSION:
+            current.append(value)
+        else:
+            return None
+    if not legacy or not current or not all(value == current[0] for value in current):
+        return None
+    projection = {key: current[0][key] for key in legacy_keys}
+    return current[0] if all(value == projection for value in legacy) else None
+
+
 def _lap_selection(drive):
     """A native lap appears once, even when complete in overlapping files."""
     grouped, reasons = {}, set()
@@ -317,11 +346,13 @@ def _lap_selection(drive):
             if any(row.get('conditions', {}) != selected.get('conditions', {}) for _, row in rows):
                 selected['conditions'] = {}
             inputs = [row['inputs'] for _, row in rows if 'inputs' in row]
-            if inputs and all(item == inputs[0] for item in inputs):
-                selected['inputs'] = inputs[0]
-            elif inputs:
-                selected.pop('inputs', None)
-                reasons.add('CONFLICTING_INPUT_OBSERVATIONS')
+            if inputs:
+                agreed = _agreed_inputs(inputs)
+                if agreed is not None:
+                    selected['inputs'] = agreed
+                else:
+                    selected.pop('inputs', None)
+                    reasons.add('CONFLICTING_INPUT_OBSERVATIONS')
             selected['replay_status'] = _combined_replay(row['replay_status'] for _, row in rows)
             selected['time_basis'] = basis
             by_basis.setdefault(basis, []).append(selected)
@@ -738,6 +769,20 @@ def build_driver_report(snapshot, game, period_days=30, *, now=None):
     pace = _pace(drives, cutoff, now, lap_selections)
     style = build_style([drive for drive in period_observations
                          if (_date(drive['recorded_at']) or now) <= now], lap_selections)
+    input_sources, pending_inputs = set(), set()
+    for drive in period_observations:
+        if (_date(drive['recorded_at']) or now) > now:
+            continue
+        for observation in drive['observations']:
+            input_sources.add(observation['source_id'])
+            if not current_inputs(observation.get('metrics')):
+                pending_inputs.add(observation['source_id'])
+    style['input_coverage'] = dict(source_count=len(input_sources),
+        current_source_count=len(input_sources - pending_inputs), pending_source_count=len(pending_inputs),
+        version=INPUT_VERSION,
+        reason=('기존 기록의 새 성향 항목을 백그라운드에서 한 번 보완합니다. 이미 보완한 파일은 다시 읽지 않습니다. '
+                '실패한 기록은 기존 기록 다시 확인으로 재시도할 수 있습니다.' if pending_inputs else
+                '선택 기간에 연결한 기록의 입력 요약 버전을 확인했습니다. 채널이나 표본이 없는 항목은 측정 대기로 표시합니다.'))
     growth = _growth(drives, cutoff, now, lap_selections, period_days)
     coverage = {'source_count': snapshot['source_count'], 'native_session_count': len(native),
         'source_only_count': len(drives) - len(native), 'undated_count': sum(not drive['recorded_at'] for drive in drives),
@@ -749,6 +794,7 @@ def build_driver_report(snapshot, game, period_days=30, *, now=None):
         'period_driving_unavailable_observation_count': period_diagnostics['driving_unavailable_observation_count'],
         'period_reason': period_diagnostics['reason'],
         'period_measured_lap_count': sum(len(lap_selections[drive['drive_id']][0]) for drive in period_observations),
+        'outdated_input_source_count': len(outdated_input_sources(snapshot)),
         'earliest_recorded_at': min(dates) if dates else None,
         'latest_recorded_at': max(dates) if dates else None, **diagnostics}
     title, body = ('나의 주행 이야기를 시작해요', '주행 파일을 분석하면 확인된 기록부터 차곡차곡 연결합니다.') if not drives else (

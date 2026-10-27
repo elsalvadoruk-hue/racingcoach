@@ -24,6 +24,7 @@ from driver_history_refresh import METRICS_VERSION, _stale_metrics, outdated_sou
 from driver_history_summary import build_source_summary
 from driver_progress import attach_recording_results, notify_after_save
 from driver_results import CALCULATION_VERSION as RESULTS_VERSION
+from driver_history_inputs import InputAttempts, current_inputs, measure_source_inputs, source_observations
 
 
 LIBRARY_VERSION = f'driver-library-v2:{METRICS_VERSION}:{RESULTS_VERSION}'
@@ -111,16 +112,55 @@ class _Checkpoints:
         self.connection.commit()
 
 
-def _current_sources(store, game):
+def _current_sources(store, game, snapshot=None):
     # Read compact history once per run. Re-reading the entire ledger per file
     # would make an initial library import quadratic in the number of files.
-    snapshot = store.report_snapshot(game)
+    snapshot = store.report_snapshot(game) if snapshot is None else snapshot
     source_ids = {row['source_id'] for drive in snapshot['drives'] for row in drive['observations']}
     return source_ids - outdated_sources(snapshot)
 
 
+def _enrich_file(path, game, source_id, signature, *, store, observations, attempts,
+                 load_telemetry, enrich_file, should_stop):
+    if attempts.failed(game, source_id):
+        return _FileResult('failed', 'INPUT_ENRICHMENT_FAILED', signature, source_id, True)
+    try:
+        if enrich_file is not None:
+            payload = enrich_file(path, source_id, observations, should_stop)
+        else:
+            telemetry = load_telemetry(path)
+            if tuple(telemetry.signature) != signature:
+                return _FileResult('skipped', 'SOURCE_CHANGED')
+            payload = measure_source_inputs(telemetry, source_id, observations)
+        if should_stop is not None and should_stop():
+            raise InterruptedError('Input enrichment interrupted')
+        if file_signature(path) != signature:
+            return _FileResult('skipped', 'SOURCE_CHANGED')
+        if _recording_in_use(path, game):
+            return _FileResult('skipped', 'RECORDING_IN_USE')
+        if payload.get('source_id') != source_id or payload.get('game') != game:
+            raise ValueError('Input identity mismatch')
+        store.enrich_source_inputs(payload)
+        # Update this run's compact snapshot only after the atomic write.
+        for observation in observations:
+            observation['metrics']['input_version'] = payload['input_version']
+        return _FileResult('updated', signature=signature, source_id=source_id, checkpoint=True)
+    except InterruptedError:
+        raise
+    except Exception:
+        if should_stop is not None and should_stop():
+            raise InterruptedError('Input enrichment interrupted') from None
+        if file_signature(path) != signature:
+            return _FileResult('skipped', 'SOURCE_CHANGED')
+        if _recording_in_use(path, game):
+            return _FileResult('skipped', 'RECORDING_IN_USE')
+        attempts.remember_failure(game, source_id)
+        return _FileResult('failed', 'INPUT_ENRICHMENT_FAILED', signature, source_id, True)
+
+
 def _import_file(path, game, *, store, journal, current, load_telemetry, summarize_file=None, should_stop=None,
-                 before_save=None, after_save=None, rechecked=None):
+                 before_save=None, after_save=None, rechecked=None, input_sources=None, input_attempts=None,
+                 enrich_file=None):
     """Return compact progress only; the full telemetry dies before the next file."""
     def check_interrupted():
         if should_stop is not None and should_stop():
@@ -141,7 +181,9 @@ def _import_file(path, game, *, store, journal, current, load_telemetry, summari
                              == (*signature[1:], LIBRARY_VERSION))
         if cache_matches:
             if cached['source_id'] in current:
-                return _FileResult('skipped', 'ALREADY_INDEXED')
+                observations = (input_sources or {}).get(cached['source_id'], [])
+                if not observations or all(current_inputs(row['metrics']) for row in observations):
+                    return _FileResult('skipped', 'ALREADY_INDEXED')
             if cached['reason'] in _CACHEABLE_SKIPS:
                 return _FileResult('skipped', cached['reason'])
         source_id = cached['source_id'] if cache_matches and cached['source_id'] else _digest(path, should_stop)
@@ -150,6 +192,10 @@ def _import_file(path, game, *, store, journal, current, load_telemetry, summari
         if _recording_in_use(path, game):
             return _FileResult('skipped', 'RECORDING_IN_USE')
         if source_id in current and (cached is None or cache_matches or rechecked is not None and source_id in rechecked):
+            observations = (input_sources or {}).get(source_id, [])
+            if input_attempts is not None and observations and not all(current_inputs(row['metrics']) for row in observations):
+                return _enrich_file(path, game, source_id, signature, store=store, observations=observations,
+                    attempts=input_attempts, load_telemetry=load_telemetry, enrich_file=enrich_file, should_stop=should_stop)
             return _FileResult('skipped', 'ALREADY_INDEXED', signature, source_id, True)
         check_interrupted()
         if summarize_file is not None:
@@ -209,6 +255,8 @@ def _import_file(path, game, *, store, journal, current, load_telemetry, summari
         except (OSError, sqlite3.Error, ValueError):
             return _FileResult('failed', 'SOURCE_SAVE_FAILED')
         current.add(source_id)
+        if input_sources is not None:
+            input_sources[source_id] = summary['observations']
         if rechecked is not None:
             rechecked.add(source_id)
         warnings = notify_after_save(store, summary, after_save)
@@ -223,12 +271,13 @@ def _import_file(path, game, *, store, journal, current, load_telemetry, summari
 class HistoryLibrary:
     """One sequential worker across both games, with durable per-file resumption."""
     def __init__(self, *, allowed_paths, load_telemetry=None, store_factory=DriverHistoryStore,
-                 can_run=None, summarize_file=None, before_save=None, after_save=None):
+                 can_run=None, summarize_file=None, before_save=None, after_save=None, enrich_file=None):
         self.allowed_paths = allowed_paths
         self.load_telemetry = load_telemetry
         self.store_factory = store_factory
         self.can_run = can_run
         self.summarize_file = summarize_file
+        self.enrich_file = enrich_file
         self.before_save, self.after_save = before_save, after_save
         self._lock = threading.RLock()
         self._states = {}
@@ -334,7 +383,9 @@ class HistoryLibrary:
                              message='기록 가져오기를 일시정지했습니다. 이어서 가져올 수 있습니다.')
                 return
             store = self.store_factory()
-            current = _current_sources(store, game)
+            snapshot = store.report_snapshot(game)
+            current = _current_sources(store, game, snapshot)
+            input_sources = source_observations(snapshot)
             rechecked = set()
             paths = {}
             for candidate in self.allowed_paths(game):
@@ -350,13 +401,14 @@ class HistoryLibrary:
             self._publish(game, state)
             reasons = {}
             if paths and not stop.is_set():
-                with _Checkpoints(store.path).opened() as journal:
+                with _Checkpoints(store.path).opened() as journal, InputAttempts(store.path).opened() as input_attempts:
                     for path in paths.values():
                         while self._wait_until_idle(game, state, stop):
                             try:
                                 result = _import_file(path, game, store=store, journal=journal, current=current,
                                     rechecked=rechecked,
                                     load_telemetry=self.load_telemetry, summarize_file=self.summarize_file,
+                                    input_sources=input_sources, input_attempts=input_attempts, enrich_file=self.enrich_file,
                                     should_stop=lambda: stop.is_set() or self._busy_reason() is not None,
                                     before_save=self.before_save, after_save=self.after_save)
                                 break
@@ -382,7 +434,7 @@ class HistoryLibrary:
             else:
                 state.update(status='COMPLETE', wait_reason=None, message=(
                     f"전체 {state['total']}개 확인을 마쳤습니다. 반영 {state['updated']}개 · 재사용/생략 {state['skipped']}개 · 실패 {state['failed']}개."
-                    + (' 실패한 파일은 다시 가져올 때 재시도합니다.' if state['failed'] else '')
+                    + (' 입력 보완 실패는 기존 기록 다시 확인에서, 새 파일 가져오기 실패는 다시 가져오기에서 재시도할 수 있습니다.' if state['failed'] else '')
                     + (' 도전 달성 자동 확인을 마치지 못했습니다. 드라이버 리포트에서 다시 확인해 주세요.' if state['warning_count'] else '')))
         except Exception:
             state.update(status='FAILED', wait_reason=None, message='기록 가져오기를 마치지 못했습니다. 완료한 기록은 보존했으며 다시 시도할 수 있습니다.')

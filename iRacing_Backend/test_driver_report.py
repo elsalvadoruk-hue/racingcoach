@@ -81,7 +81,119 @@ class DriverReportTests(unittest.TestCase):
         self.assertEqual(report['state'], 'EMPTY')
         self.assertTrue(all(item['value'] is None for item in report['career'].values()))
         self.assertEqual(report['pace']['points'], [])
-        self.assertEqual(report['style']['items'], [])
+        self.assertEqual(len(report['style']['items']), 9)
+        self.assertTrue(all(item['status'] == 'UNAVAILABLE' and item['value'] is None
+                            for item in report['style']['items']))
+
+    def test_input_expansion_coverage_uses_saved_versions_and_selected_sources_only(self):
+        self.store.record_source(current_metrics(facts('recent', 'recent')))
+        self.store.record_source(current_metrics(facts('old', 'old', date='2026-01-01T10:00:00Z')))
+        snapshot = self.store.report_snapshot('iracing')
+        before = deepcopy(snapshot)
+        report = build_driver_report(snapshot, 'iracing', 30, now=NOW)
+        self.assertEqual(snapshot, before)
+        coverage = report['style']['input_coverage']
+        self.assertEqual(coverage['source_count'], 1)
+        self.assertEqual(coverage['pending_source_count'], 1)
+        self.assertEqual(coverage['current_source_count'], 0)
+        self.assertIn('백그라운드', coverage['reason'])
+        for row in snapshot['drives']:
+            for observation in row['observations']:
+                observation['metrics']['input_version'] = 'driver-inputs-v2'
+        report = build_driver_report(snapshot, 'iracing', 30, now=NOW)
+        self.assertEqual(report['style']['input_coverage']['pending_source_count'], 0)
+        self.assertEqual(report['style']['input_coverage']['current_source_count'], 1)
+        self.assertEqual(build_driver_report(snapshot, 'iracing', 0, now=NOW)
+                         ['style']['input_coverage']['source_count'], 2)
+
+    def input_snapshot(self, inputs):
+        for index, value in enumerate(inputs):
+            payload = current_metrics(facts(f'input-copy-{index}', 'same-input-drive'))
+            metrics = payload['observations'][0]['metrics']
+            if 'input_version' in value:
+                metrics['input_version'] = value['input_version']
+            for lap in metrics['laps']:
+                lap['inputs'] = deepcopy(value)
+            self.store.record_source(payload)
+        return self.store.report_snapshot('iracing')
+
+    def test_old_and_new_input_copies_preserve_nine_axes_without_counting_the_lap_twice(self):
+        from test_driver_style import extended_inputs
+        current = extended_inputs()
+        legacy = {key: deepcopy(current[key]) for key in
+                  ('schema_version', 'status', 'sample_count', 'brake_steer', 'throttle', 'reason_codes')}
+        expected = build_driver_report(self.input_snapshot([current]), 'iracing', 30, now=NOW)
+        snapshot = self.input_snapshot([legacy, current, legacy, current])
+        before = deepcopy(snapshot)
+        for reverse in (False, True):
+            if reverse:
+                for drive in snapshot['drives']:
+                    drive['observations'].reverse()
+            report = build_driver_report(snapshot, 'iracing', 30, now=NOW)
+            self.assertEqual(report['style']['items'], expected['style']['items'])
+            self.assertEqual(report['pace']['lap_count'], expected['pace']['lap_count'])
+            self.assertEqual(report['coverage']['period_measured_lap_count'], 3)
+            self.assertTrue(all(item['value'] is not None for item in report['style']['items']))
+        for drive in snapshot['drives']:
+            drive['observations'].reverse()
+        self.assertEqual(snapshot, before)
+
+    def test_old_and_new_input_copies_with_conflicting_original_axes_remain_withheld(self):
+        from test_driver_style import extended_inputs
+        current = extended_inputs()
+        for axis, metric in (('brake_steer', 'overlap_pct'), ('throttle', 'rise_median_s')):
+            with self.subTest(axis=axis):
+                legacy = {key: deepcopy(current[key]) for key in
+                          ('schema_version', 'status', 'sample_count', 'brake_steer', 'throttle', 'reason_codes')}
+                legacy[axis][metric] += .01
+                snapshot = self.input_snapshot([legacy, current])
+                report = build_driver_report(snapshot, 'iracing', 30, now=NOW)
+                self.assertTrue(all(item['status'] == 'UNAVAILABLE' for item in report['style']['items']))
+                self.assertEqual(report['pace']['lap_count'], 3)
+
+    def test_true_current_axis_conflicts_cannot_be_hidden_by_an_agreeing_legacy_copy(self):
+        from test_driver_style import extended_inputs
+        current = extended_inputs()
+        other = deepcopy(current)
+        other['brake_application']['value'] += .01
+        legacy = {key: deepcopy(current[key]) for key in
+                  ('schema_version', 'status', 'sample_count', 'brake_steer', 'throttle', 'reason_codes')}
+        snapshot = self.input_snapshot([current, legacy, other])
+        for reverse in (False, True):
+            if reverse:
+                for drive in snapshot['drives']:
+                    drive['observations'].reverse()
+            report = build_driver_report(snapshot, 'iracing', 30, now=NOW)
+            self.assertTrue(all(item['status'] == 'UNAVAILABLE' for item in report['style']['items']))
+            self.assertEqual(report['pace']['lap_count'], 3)
+
+    def test_input_upgrade_requires_exact_shared_evidence_and_complete_current_axes(self):
+        from driver_report import _lap_selection
+        from test_driver_style import extended_inputs
+        current = extended_inputs()
+        legacy = {key: deepcopy(current[key]) for key in
+                  ('schema_version', 'status', 'sample_count', 'brake_steer', 'throttle', 'reason_codes')}
+        snapshot = self.input_snapshot([legacy, current])
+        for change in ('sample_count', 'status', 'reason_codes', 'marker_only', 'missing_axis'):
+            with self.subTest(change=change):
+                candidate = deepcopy(snapshot['drives'][0])
+                old = next(row for row in candidate['observations']
+                           if 'input_version' not in row['metrics']['laps'][0]['inputs'])
+                new = next(row for row in candidate['observations']
+                           if 'input_version' in row['metrics']['laps'][0]['inputs'])
+                for lap in old['metrics']['laps']:
+                    value = lap['inputs']
+                    if change == 'sample_count': value['sample_count'] += 1
+                    if change == 'status': value['status'] = 'PARTIAL'
+                    if change == 'reason_codes': value['reason_codes'] = ['REPLAY_STATE_UNAVAILABLE']
+                    if change == 'marker_only': value['input_version'] = current['input_version']
+                if change == 'missing_axis':
+                    for lap in new['metrics']['laps']:
+                        lap['inputs'].pop('shift_consistency')
+                laps, reasons = _lap_selection(candidate)
+                self.assertEqual(len(laps), 3)
+                self.assertTrue(all('inputs' not in lap for lap in laps))
+                self.assertIn('CONFLICTING_INPUT_OBSERVATIONS', reasons)
 
     def test_single_lap_has_a_median_but_no_lap_to_lap_dispersion(self):
         self.store.record_source(current_metrics(facts(lap_times=(100.,))))
@@ -677,7 +789,8 @@ class DriverReportTests(unittest.TestCase):
         self.assertEqual(report['pace']['session_count'], 4)
         self.assertEqual(report['pace']['pace_change_pct'], -2.)
         self.assertEqual(len(report['pace']['points']), 4)
-        self.assertEqual(report['style']['items'], [])
+        self.assertTrue(all(item['status'] == 'UNAVAILABLE' and item['value'] is None
+                            for item in report['style']['items']))
         self.assertIn('이 조합', report['overview']['body'])
 
     def test_missing_conditions_never_match_each_other_as_a_comparison_cohort(self):

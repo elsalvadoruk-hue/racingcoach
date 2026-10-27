@@ -1,11 +1,12 @@
 import React, { useId, useRef, useState } from 'react';
-import { ChevronDown, TrendingUp } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, TrendingUp } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../components/ui/empty';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { NativeSelect, NativeSelectOption, NativeSelectOptGroup } from '../components/ui/native-select';
 
 const text = value => typeof value === 'string' ? value : '';
 const number = (value, digits=2) => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('ko-KR',{maximumFractionDigits:digits}) : '—';
@@ -17,8 +18,16 @@ const direction = {IMPROVING:'짧아짐',FASTER:'짧아짐',DECLINING:'길어짐
 const spreadDirection = {NARROWER:'줄어듦',WIDER:'늘어남',MAINTAINED:'비슷함',UNCERTAIN:'판단 보류'};
 const retention = {MAINTAINED:'이전 수준을 유지한 관측',CHANGED:'이전 범위와 달라진 관측',UNCERTAIN:'유지 여부 판단 보류'};
 const validPeriod = value => value && typeof value === 'object' && Number.isFinite(value.median_lap_s) && value.median_lap_s > 0;
-const inputItems = style => Array.isArray(style?.items) ? style.items.filter(item=>item && typeof item==='object').slice(0,2) : [];
-const inputValue = item => `${number(item.value)}${item.unit==='s'?'초':text(item.unit)}`;
+const axisLabels = {brake_steer:'제동·조향',throttle:'스로틀 전개',brake_application:'브레이크 밟기',brake_release:'브레이크 놓기',
+  throttle_modulation:'가속 페달 조절',steering_application:'핸들 돌리기',steering_corrections:'핸들 수정',coasting:'페달을 쉬는 구간',shift_consistency:'변속 시점 반복'};
+const inputItems = style => Array.isArray(style?.items) ? style.items.filter(item=>item && typeof item==='object')
+  .map((item,index)=>({...item,selectionKey:text(item.id)||text(item.axis)||`input-${index}`}))
+  .sort((left,right)=>Number(right.status==='REPEATED')-Number(left.status==='REPEATED')) : [];
+const measuredInput = item => item.status!=='UNAVAILABLE' && Number.isFinite(item.value);
+const inputLabel = item => text(item.short_label)||axisLabels[text(item.axis)||text(item.id)]||text(item.title)||'입력 관측';
+const inputValue = item => Number.isFinite(item.value) ? `${number(item.value)}${item.unit==='s'?'초':text(item.unit)}` : '—';
+const inputStatus = item => item.status==='REPEATED'?'반복 확인':measuredInput(item)?'관측':'측정 대기';
+const pendingSources = style => Number.isInteger(style?.input_coverage?.pending_source_count)&&style.input_coverage.pending_source_count>0?style.input_coverage.pending_source_count:0;
 const shortDate = value => typeof value==='string' && /^\d{4}-\d{2}-\d{2}/.test(value) ? value.slice(5,10).replace('-','.') : '날짜 미확인';
 const shortPeriod = row => row ? row.start_date===row.end_date ? shortDate(row.start_date) : `${shortDate(row.start_date)}–${shortDate(row.end_date)}` : '이전 기록 없음';
 
@@ -34,6 +43,16 @@ function ExplanationDetails({ title, children }) {
 }
 
 function InputMeaning({item}) {
+  if([item.meaning,item.example,item.calculation,item.interpretation].some(value=>text(value))) return <section className="driver-input-meaning" aria-label={`${inputLabel(item)}의 뜻과 계산 기준`}>
+    <h3>{inputLabel(item)}는 무엇인가요?</h3>
+    {text(item.meaning)?<p>{item.meaning}</p>:null}
+    {text(item.example)?<aside className="driver-input-example"><span>예시로 이해하기</span><p>{item.example}</p></aside>:null}
+    <p className="driver-style-detail-caution">{text(item.interpretation)||'차량과 코스·노면에 따라 필요한 조작이 달라집니다. 이 수치만으로 운전의 좋고 나쁨이나 실력을 판단하지 않습니다.'}</p>
+    <ExplanationDetails title="계산 조건과 성향 이름 기준">
+      {text(item.calculation)?<p>{item.calculation}</p>:text(item.method)?<p>{item.method}</p>:<p>이 항목의 계산 조건을 아직 확인하지 못했습니다.</p>}
+      {Array.isArray(item.names)&&item.names.some(value=>text(value))?<p>반복 근거가 충분하면 {item.names.filter(value=>text(value)).join(' 또는 ')} 이름으로 표시합니다. 근거가 부족하면 관측값과 보류 이유를 먼저 확인합니다.</p>:null}
+    </ExplanationDetails>
+  </section>;
   const axis=text(item.axis)||text(item.id);
   if(axis==='brake_steer') return <section className="driver-input-meaning" aria-label="제동·조향 겹침의 뜻과 계산 기준">
     <h3>브레이크와 핸들을 함께 쓴 시간</h3>
@@ -61,8 +80,8 @@ function StyleReadingGuide() {
     <h3>숫자와 표시 읽는 법</h3>
     <p className="driver-style-detail-caution">궁금한 항목을 펼쳐 표본과 계산 기준을 확인하세요.</p>
     <div>
-      <ExplanationDetails title="대표 수치"><p>한 번씩 측정한 값을 랩·주행·날짜별 중앙값으로 정리한 뒤, 날짜와 차량·코스·레이아웃·세션 종류 조합을 같은 비중으로 평균냅니다. 중앙값은 값을 크기순으로 놓았을 때 가운데 값입니다. 오래 달린 파일 하나가 전체 수치를 좌우하지 않게 합니다.</p></ExplanationDetails>
-      <ExplanationDetails title="회 · 일 · 관측 · 확인된 독립 세션"><p>회는 조건을 통과한 제동 또는 페달 전개 횟수, 일은 입력을 측정한 날짜 수(UTC), 관측은 입력이 남은 주행 기록 묶음 수입니다. 독립 세션은 실제 세션 식별과 리플레이가 아님을 확인한 주행 수입니다. 세션을 확인하지 못한 기록도 측정값은 표시하며, 날짜 미확인 기록을 날짜 수에 더하지 않습니다.</p></ExplanationDetails>
+      <ExplanationDetails title="대표 수치"><p>각 항목의 측정값을 랩·주행·날짜별 중앙값으로 정리한 뒤, 날짜와 차량·코스·레이아웃·세션 종류 조합을 같은 비중으로 평균냅니다. 중앙값은 값을 크기순으로 놓았을 때 가운데 값입니다. 오래 달린 파일 하나가 전체 수치를 좌우하지 않게 합니다.</p></ExplanationDetails>
+      <ExplanationDetails title="회 · 일 · 관측 · 확인된 독립 세션"><p>회는 각 항목의 측정 조건을 통과한 입력·구간 횟수, 일은 입력을 측정한 날짜 수(UTC), 관측은 입력이 남은 주행 기록 묶음 수입니다. 독립 세션은 실제 세션 식별과 리플레이가 아님을 확인한 주행 수입니다. 세션을 확인하지 못한 기록도 측정값은 표시하며, 날짜 미확인 기록을 날짜 수에 더하지 않습니다.</p></ExplanationDetails>
       <ExplanationDetails title="관측 · 반복 확인"><p>관측은 이번 범위에서 측정한 입력입니다. 반복 확인은 각 조합에서 2일 이상·확인된 독립 세션 3개 이상·세션당 입력 5회 이상을 확보하고, 날짜와 조합의 비중을 맞춘 같은 양상이 70% 이상일 때 붙입니다. 확인된 세션에서도 같은 방향을 확인합니다. 성향 이름은 기량 점수가 아닙니다.</p></ExplanationDetails>
       <ExplanationDetails title="차량·코스와 관측 범위"><p>함께 적힌 차량·코스·레이아웃·세션 종류에서 나타난 입력입니다. 연료·날씨·타이어·셋업까지 같은 조건이라는 뜻은 아니며, 다른 조합에서도 항상 같은 방식으로 운전한다고 확대하지 않습니다.</p></ExplanationDetails>
       <ExplanationDetails title="관측 주기 · 시간 해상도"><p>Hz는 1초에 입력을 몇 번 기록했는지 나타냅니다. 시간 해상도는 원본 표본 두 칸에 해당하는 시간이며, 60Hz라면 약 0.033초입니다. LMU는 보간으로 늘린 점 대신 원본 채널 주기를 사용합니다. 이보다 작은 시간 차이는 구분하기 어렵습니다.</p></ExplanationDetails>
@@ -89,18 +108,27 @@ function InsightDetails({ title, children }) {
 
 function CompactStyleCard({style}) {
   const items=inputItems(style);
-  const scope=Array.from(new Set(items.map(item=>text(item.scope)).filter(Boolean))).join(' / ');
+  const measured=items.filter(measuredInput);
+  const [page,setPage]=useState(0);
+  const pageCount=Math.max(1,Math.ceil(measured.length/3));
+  const currentPage=Math.min(page,pageCount-1);
+  const visible=measured.slice(currentPage*3,currentPage*3+3);
+  const scope=Array.from(new Set(visible.map(item=>text(item.scope)).filter(Boolean))).join(' / ');
   return <Card className="driver-report-card driver-report-style driver-insight-compact" aria-label="운전 성향 관측">
-    <CardHeader><CardTitle className="driver-insight-compact-title" asChild><h2>나의 운전 성향</h2></CardTitle></CardHeader>
+    <CardHeader><div className="driver-insight-compact-heading"><CardTitle asChild><h2>나의 운전 성향</h2></CardTitle><span className="driver-style-kind-count">측정 {measured.length} / 전체 {items.length}종</span></div></CardHeader>
     <CardContent className="driver-insight-compact-body">
-      {items.length ? <div className="driver-style-compact-items">{items.map((item,index)=><article className="driver-style-compact-item" key={text(item.id)||index}>
-        <strong title={text(item.title)}>{text(item.title)||'입력 관측'}</strong>
-        <span className="numeric">{inputValue(item)}</span><span>{number(item.event_count,0)}회</span>
-        <Badge variant="secondary">{item.status==='REPEATED'?'반복 확인':'관측'}</Badge>
+      {measured.length ? <div className="driver-style-compact-items" aria-label="현재 페이지의 성향 항목">{visible.map(item=><article className="driver-style-compact-item" key={item.selectionKey}>
+        <strong title={`${inputLabel(item)} · ${text(item.title)} · 입력 ${number(item.event_count,0)}회`}>{text(item.title)||inputLabel(item)}</strong>
+        <span className="numeric">{inputValue(item)}</span>
+        <Badge variant="secondary">{inputStatus(item)}</Badge>
       </article>)}</div> : <p className="driver-insight-compact-note">입력을 측정할 수 있는 기록을 확인하고 있어요.</p>}
-      {scope ? <p className="driver-insight-compact-scope" title={scope}>{scope}</p> : null}
+      {pendingSources(style)?<p className="driver-insight-compact-scope" title={text(style.input_coverage.reason)}>기존 기록 {pendingSources(style)}개 보완 대기</p>:scope ? <p className="driver-insight-compact-scope" title={scope}>{scope}</p> : null}
     </CardContent>
-    <CardFooter className="driver-insight-compact-footer"><p className="driver-insight-compact-note">{items.length?'입력 방식과 빠르기는 별도':'성향 이름은 반복 근거가 있을 때'}</p>
+    <CardFooter className="driver-insight-compact-footer"><div className="driver-style-page-controls" role="group" aria-label="성향 항목 페이지">
+      <Button size="sm" variant="outline" aria-label="이전 성향 3개" disabled={currentPage===0} onClick={()=>setPage(currentPage-1)}><ChevronLeft data-icon="inline-start" aria-hidden="true"/></Button>
+      <span aria-live="polite">{measured.length?`${currentPage*3+1}–${Math.min((currentPage+1)*3,measured.length)} / ${measured.length}종`:'측정 대기'}</span>
+      <Button size="sm" variant="outline" aria-label="다음 성향 3개" disabled={currentPage===pageCount-1} onClick={()=>setPage(currentPage+1)}><ChevronRight data-icon="inline-start" aria-hidden="true"/></Button>
+    </div>
       <InsightDetails title="운전 성향 자세히"><DriverStyleCard style={style} /></InsightDetails>
     </CardFooter>
   </Card>;
@@ -138,19 +166,28 @@ export function DriverStyleCard({style, compact=false}) {
 
 function StyleDetailsTabs({style}) {
   const items=inputItems(style);
-  const [selected,setSelected]=useState('input-0');
-  const value=selected==='guide'||items.some((_,index)=>`input-${index}`===selected)?selected:'guide';
+  const measured=items.filter(measuredInput), unavailable=items.filter(item=>!measuredInput(item));
+  const [selected,setSelected]=useState('');
+  const [tab,setTab]=useState(items.length?'input':'guide');
+  const item=items.find(row=>row.selectionKey===selected)||measured[0]||items[0];
   return <section className="driver-style-details" aria-label="운전 성향 관측">
     {!items.length ? <Empty><EmptyHeader><EmptyTitle>아직은 관찰 중이에요</EmptyTitle><EmptyDescription>{text(style?.reason)||'조작을 설명할 수 있는 입력과 반복 표본을 확인하고 있습니다.'}</EmptyDescription></EmptyHeader></Empty> : null}
-    <Tabs value={value} onValueChange={setSelected}>
+    {pendingSources(style)?<section className="driver-style-coverage-note" role="status"><strong>기존 기록 {pendingSources(style)}개 보완 대기</strong><p>{text(style.input_coverage.reason)||'기존 기록의 새 성향 항목을 백그라운드에서 확인하고 있습니다.'}</p></section>:null}
+    <Tabs value={items.length?tab:'guide'} onValueChange={setTab}>
       <TabsList aria-label="성향 설명 항목" className="driver-style-detail-tabs">
-        {items.map((item,index)=><TabsTrigger key={index} value={`input-${index}`}>{(text(item.axis)||text(item.id))==='brake_steer'?'제동·조향':(text(item.axis)||text(item.id))==='throttle'?'스로틀':text(item.title)||'입력 관측'}</TabsTrigger>)}
+        {items.length?<TabsTrigger value="input">항목 설명 · 전체 {items.length}종</TabsTrigger>:null}
         <TabsTrigger value="guide">수치 읽는 법</TabsTrigger>
       </TabsList>
-      {items.map((item,index)=><TabsContent key={index} value={`input-${index}`} className="driver-style-detail-panel">
-        <div className="driver-style-detail-heading"><h3>{text(item.title)||'입력 관측'}</h3><Badge variant="secondary">{item.status==='REPEATED'?'반복 확인':'이번 범위의 관측'}</Badge></div>
+      {item?<TabsContent value="input" className="driver-style-detail-panel">
+        <label className="driver-style-item-selector"><span>설명할 성향 항목</span><NativeSelect size="sm" aria-label="설명할 성향 항목" value={item.selectionKey} onChange={event=>setSelected(event.target.value)}>
+          {measured.length?<NativeSelectOptGroup label="측정한 항목">{measured.map(row=><NativeSelectOption key={row.selectionKey} value={row.selectionKey}>{inputLabel(row)} · {inputStatus(row)}</NativeSelectOption>)}</NativeSelectOptGroup>:null}
+          {unavailable.length?<NativeSelectOptGroup label="측정을 기다리는 항목">{unavailable.map(row=><NativeSelectOption key={row.selectionKey} value={row.selectionKey}>{inputLabel(row)} · 측정 대기</NativeSelectOption>)}</NativeSelectOptGroup>:null}
+        </NativeSelect></label>
+        <div className="driver-style-selected-item" key={item.selectionKey}>
+        <div className="driver-style-detail-heading"><h3>{text(item.title)||inputLabel(item)}</h3><Badge variant="secondary">{inputStatus(item)}</Badge></div>
+        {!measuredInput(item)?<p className="driver-style-unavailable" role="status">{text(item.reason)||'이 항목에 필요한 입력이나 표본을 아직 확인하지 못했습니다.'}</p>:null}
         <div className="driver-style-detail-summary"><div><span>대표 수치</span><strong className="numeric">{inputValue(item)}</strong></div>
-          <dl>{[['입력 횟수',`${number(item.event_count,0)}회`],['관측일',`${number(item.day_count,0)}일`],['관측 기록',`${number(item.observation_count,0)}개`],['확인된 독립 세션',`${number(item.session_count,0)}개`]].map(([label,amount])=><div key={label}><dt>{label}</dt><dd>{amount}</dd></div>)}</dl>
+          <dl>{[[item.axis==='coasting'?'관측 구간':'입력 횟수',`${number(item.event_count,0)}${item.axis==='coasting'?'개':'회'}`],['관측일',`${number(item.day_count,0)}일`],['관측 기록',`${number(item.observation_count,0)}개`],['확인된 독립 세션',`${number(item.session_count,0)}개`]].map(([label,amount])=><div key={label}><dt>{label}</dt><dd>{amount}</dd></div>)}</dl>
         </div>
         {text(item.scope)?<p className="driver-style-detail-caution">관측 범위 · {item.scope}</p>:null}
         <InputMeaning item={item}/>
@@ -160,7 +197,8 @@ function StyleDetailsTabs({style}) {
           {Number.isFinite(item.sampling_hz)&&Number.isFinite(item.timing_uncertainty_s)?<p>관측 주기 {number(item.sampling_hz,0)}Hz 이상 · 시간 해상도 약 {number(item.timing_uncertainty_s,3)}초</p>:null}
           {Number.isFinite(item.counter_evidence?.share_pct)&&item.counter_evidence.event_count>0?<p>다른 양상도 {number(item.counter_evidence.event_count,0)}회 · {number(item.counter_evidence.share_pct,1)}% 관측됐습니다.</p>:null}
         </ExplanationDetails>
-      </TabsContent>)}
+        </div>
+      </TabsContent>:null}
       <TabsContent value="guide" className="driver-style-detail-panel"><StyleReadingGuide/></TabsContent>
     </Tabs>
     {items.length&&text(style?.reason)?<p className="driver-style-detail-caution">{style.reason}</p>:null}

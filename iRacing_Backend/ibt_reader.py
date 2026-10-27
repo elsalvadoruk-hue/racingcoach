@@ -65,7 +65,7 @@ class IBTReader:
         self.path = path
         self.file_size = path.stat().st_size
 
-    def parse(self) -> ParsedTelemetry:
+    def parse(self, *, requested_channels=None) -> ParsedTelemetry:
         with self.path.open("rb") as handle:
             header = handle.read(self.HEADER_SIZE)
             if len(header) < self.HEADER_SIZE:
@@ -124,7 +124,7 @@ class IBTReader:
             data_offset=data_offset,
             buffer_len=buffer_len,
             record_count=record_count,
-            requested=ANALYSIS_CHANNELS,
+            requested=ANALYSIS_CHANNELS if requested_channels is None else requested_channels,
         )
 
         metadata = self._extract_metadata(session_info, session_text)

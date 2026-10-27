@@ -49,6 +49,16 @@ def _stop_and_reap(process):
 
 
 def summarize_in_process(path, source_id, should_stop):
+    return _run_in_process(path, source_id, should_stop)
+
+
+def enrich_inputs_in_process(path, source_id, observations, should_stop):
+    """Read minimal input channels; preserve existing non-input evidence."""
+    from driver_history_inputs import input_request
+    return _run_in_process(path, source_id, should_stop, input_request(observations))
+
+
+def _run_in_process(path, source_id, should_stop, observations=None):
     """Read one recording, stopping promptly when foreground work needs the CPU.
 
     communicate() drains stdout while waiting; polling poll()/wait() alone can
@@ -67,7 +77,10 @@ def summarize_in_process(path, source_id, should_stop):
         if os.name == 'nt':
             options['creationflags'] = subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS
         process = subprocess.Popen([sys.executable, '-B', '-u', str(Path(__file__).resolve())], **options)
-        request = json.dumps({'path': str(path), 'source_id': source_id})
+        request = {'path': str(path), 'source_id': source_id}
+        if observations is not None:
+            request.update(mode='inputs', observations=observations)
+        request = json.dumps(request)
         while True:
             if stopped():
                 raise InterruptedError('Library measurement interrupted')
@@ -83,13 +96,17 @@ def summarize_in_process(path, source_id, should_stop):
         if process.returncode != 0:
             raise ValueError('Measurement process failed')
         result = json.loads(output)
-        if result == {'skip_reason': 'IMPORTED_REFERENCE'}:
+        if observations is None and result == {'skip_reason': 'IMPORTED_REFERENCE'}:
             return result
         expected_game = 'lmu' if Path(path).suffix.casefold() == '.duckdb' else 'iracing'
         if (not isinstance(result, dict) or result.get('schema_version') != 1
                 or result.get('source_id') != source_id or result.get('game') != expected_game
                 or not isinstance(result.get('observations'), list)):
             raise ValueError('Invalid measurement result')
+        if observations is not None:
+            from driver_history_inputs import INPUT_VERSION
+            if result.get('input_version') != INPUT_VERSION:
+                raise ValueError('Invalid input measurement result')
         return result
     except InterruptedError:
         raise
@@ -121,10 +138,8 @@ def _read_only_audit(event, args):
         raise PermissionError('Measurement is offline and read only')
 
 
-def _summarize_recording(path, source_id):
+def _read_recording(path, source_id, *, inputs_only=False):
     from analysis_numeric import file_signature
-    from driver_history_summary import build_source_summary
-    from driver_progress import attach_recording_results
 
     path = Path(path)
     signature = file_signature(path)
@@ -136,7 +151,11 @@ def _summarize_recording(path, source_id):
         raise ValueError('Recording changed')
     if path.suffix.casefold() == '.ibt':
         from ibt_reader import IBTReader
-        telemetry = IBTReader(path).parse()
+        if inputs_only:
+            from driver_style import DRIVER_INPUT_CHANNELS
+            telemetry = IBTReader(path).parse(requested_channels=DRIVER_INPUT_CHANNELS)
+        else:
+            telemetry = IBTReader(path).parse()
     elif path.suffix.casefold() == '.duckdb':
         import duckdb
         import lmu_car_models
@@ -157,9 +176,35 @@ def _summarize_recording(path, source_id):
     if tuple(telemetry.signature) != signature or file_signature(path) != signature:
         raise ValueError('Recording changed')
     if (telemetry.metadata or {}).get('imported') is True:
+        if inputs_only:
+            raise ValueError('Imported reference cannot enrich driver history')
         return {'skip_reason': 'IMPORTED_REFERENCE'}
+    return telemetry
+
+
+def _summarize_recording(path, source_id):
+    from analysis_numeric import file_signature
+    from driver_history_summary import build_source_summary
+    from driver_progress import attach_recording_results
+
+    path = Path(path)
+    telemetry = _read_recording(path, source_id)
+    if isinstance(telemetry, dict):
+        return telemetry
+    signature = telemetry.signature
     result = attach_recording_results(telemetry, build_source_summary(telemetry, source_id))
     if file_signature(path) != signature:
+        raise ValueError('Recording changed')
+    return result
+
+
+def _enrich_recording(path, source_id, observations):
+    from analysis_numeric import file_signature
+    from driver_history_inputs import measure_source_inputs
+
+    telemetry = _read_recording(path, source_id, inputs_only=True)
+    result = measure_source_inputs(telemetry, source_id, observations)
+    if file_signature(Path(path)) != tuple(telemetry.signature):
         raise ValueError('Recording changed')
     return result
 
@@ -172,7 +217,10 @@ def _main():
             return 1
         sys.dont_write_bytecode = True
         sys.addaudithook(_read_only_audit)
-        result = _summarize_recording(request['path'], request['source_id'])
+        if request.get('mode') == 'inputs':
+            result = _enrich_recording(request['path'], request['source_id'], request['observations'])
+        else:
+            result = _summarize_recording(request['path'], request['source_id'])
         json.dump(result, sys.stdout, ensure_ascii=True, allow_nan=False, separators=(',', ':'))
         return 0
     except Exception:

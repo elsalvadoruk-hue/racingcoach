@@ -11,6 +11,13 @@ import math
 import re
 
 import numpy as np
+from driver_style_extended import AXES as EXTENDED_AXES,empty_axes,measure_extended,validate_extended
+
+
+INPUT_CALCULATION_VERSION = 'driver-inputs-v2'
+CALCULATION_VERSION = INPUT_CALCULATION_VERSION
+DRIVER_INPUT_CHANNELS = frozenset({'SessionTime','SessionNum','IsReplayPlaying','Speed','IsOnTrack',
+                                 'OnPitRoad','Brake','Throttle','SteeringWheelAngle','Gear','RPM'})
 
 
 def _axis(kind):
@@ -21,8 +28,8 @@ def _axis(kind):
 
 
 def _empty(reason):
-    return dict(schema_version=1, status='UNAVAILABLE', sample_count=0,
-                brake_steer=_axis('brake_steer'), throttle=_axis('throttle'), reason_codes=[reason])
+    return dict(schema_version=1,input_version=INPUT_CALCULATION_VERSION,status='UNAVAILABLE',sample_count=0,
+                brake_steer=_axis('brake_steer'),throttle=_axis('throttle'),reason_codes=[reason],**empty_axes(reason))
 
 
 def _finite(value):
@@ -192,7 +199,9 @@ def measure_inputs(telemetry, start, end, *, measurable, replay_status, game):
                 axis['rapid_count'] += int(rising and duration + error <= .35)
             axis.update(event_count=len(durations),
                         rise_median_s=round(median(durations), 4) if durations else None)
-    any_events = any(result[key]['event_count'] for key in ('brake_steer', 'throttle'))
+    result.update(input_version=INPUT_CALCULATION_VERSION,
+        **measure_extended(telemetry,start,end,time=time,eligible=eligible,game=game,rate=rate,sampling=sampling))
+    any_events = any(result[key]['event_count'] for key in ('brake_steer','throttle',*EXTENDED_AXES))
     if not any_events: reasons.add('NO_COMPLETE_INPUT_EPISODES')
     result.update(status=('PARTIAL' if reasons else 'OBSERVED') if any_events else 'UNAVAILABLE',
                   reason_codes=sorted(reasons))
@@ -215,6 +224,10 @@ def validate_inputs(value):
             any(not isinstance(item, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,79}', item) for item in reasons)):
         fail()
     result = dict(schema_version=1, status=value['status'], sample_count=count, reason_codes=sorted(set(reasons)))
+    if 'input_version' in value:
+        if value['input_version']!=INPUT_CALCULATION_VERSION:fail()
+        if not set(EXTENDED_AXES).issubset(value):fail()
+        result['input_version']=value['input_version']
     for name, counts, metric, maximum in (
         ('brake_steer', ('linked_count', 'separated_count'), 'overlap_pct', 100.),
         ('throttle', ('progressive_count', 'rapid_count'), 'rise_median_s', 8.)):
@@ -234,7 +247,9 @@ def validate_inputs(value):
                                       or checked['timing_uncertainty_s'] is None): fail()
         if not checked['event_count'] and checked[metric] is not None: fail()
         result[name] = checked
-    if value['status'] == 'UNAVAILABLE' and any(result[key]['event_count'] for key in ('brake_steer', 'throttle')):
+    for name in EXTENDED_AXES:
+        if name in value:result[name]=validate_extended(name,value[name],fail)
+    if value['status'] == 'UNAVAILABLE' and any(result[key]['event_count'] for key in ('brake_steer','throttle',*EXTENDED_AXES) if key in result):
         fail()
     return result
 
@@ -244,6 +259,32 @@ def _label(drive):
     return ' · '.join(filter(None, (labels.get('car') or '차량 확인 필요',
         labels.get('track') or '코스 확인 필요', labels.get('layout'),
         {'PRACTICE':'연습', 'QUALIFY':'퀄리', 'RACE':'레이스'}.get(drive['session_type'], '세션 종류 미확인'))))
+
+
+AXIS_METADATA = {
+    'brake_steer':dict(short_label='제동·조향',unit='%',names=['제동 연결형','조작 분리형'],
+        meaning='브레이크를 밟은 구간에서 조향 입력이 함께 나타난 시간 비율입니다.',
+        example='제동 1초 중 조향이 0.3초 겹쳤다면 30%입니다.',
+        interpretation='겹침 20%·0.15초 이상과 5% 이하를 구분합니다. 코너 위치나 주행 실력과 별개입니다.',
+        calculation='브레이크 10% 이상 구간의 조향 겹침 비율 중앙값을 조합·날짜에 같은 비중으로 요약합니다. 코너 통과 위치는 판정하지 않습니다.'),
+    'throttle':dict(short_label='스로틀 전개',unit='s',names=['점진 가속형','빠른 가속 전개형'],
+        meaning='스로틀을 20% 이하에서 80% 이상까지 올린 시간입니다.',
+        example='0.8초에 걸쳐 올린 입력과 한 번에 올린 입력을 구분합니다.',
+        interpretation='시간 오차를 뺀 0.60초 이상과 더한 0.35초 이하를 구분합니다. 실제 가속 성과는 별도입니다.',
+        calculation='스로틀 20% 이하에서 80% 이상까지 전개한 시간의 중앙값을 조합·날짜에 같은 비중으로 요약합니다. 실제 가속 성과는 별도입니다.'),
+    **EXTENDED_AXES,
+}
+
+
+def _unavailable_item(axis_name,reasons):
+    metadata=AXIS_METADATA[axis_name]
+    return dict(id=axis_name,axis=axis_name,title=metadata['short_label']+' 관측',status='UNAVAILABLE',
+        value=None,unit=metadata['unit'],event_count=0,observation_count=0,session_count=0,day_count=0,
+        sampling_hz=None,timing_uncertainty_s=None,scope='',scope_count=0,
+        reason='이 입력 축의 측정 근거가 아직 없습니다. 필요한 채널·원본 주기·완전한 입력 구간을 확인한 뒤 표시합니다.',
+        reason_codes=sorted(reasons or {'INPUT_AXIS_UNAVAILABLE'}),
+        counter_evidence=dict(event_count=0,share_pct=None,dates=[]),method=metadata['calculation'],
+        **{key:value for key,value in metadata.items() if key!='unit'})
 
 
 def build_style(drives, lap_selections):
@@ -262,9 +303,12 @@ def build_style(drives, lap_selections):
                 continue
             unavailable.update(inputs.get('reason_codes', []))
         groups[key].append((drive, laps))
-    for axis_name, value_key, positive, negative, unit, neutral, names in (
+    definitions=[
         ('brake_steer', 'overlap_pct', 'linked_count', 'separated_count', '%', '제동·조향 겹침 관측', ('제동 연결형', '조작 분리형')),
-        ('throttle', 'rise_median_s', 'progressive_count', 'rapid_count', 's', '스로틀 전개 관측', ('점진 가속형', '빠른 가속 전개형'))):
+        ('throttle', 'rise_median_s', 'progressive_count', 'rapid_count', 's', '스로틀 전개 관측', ('점진 가속형', '빠른 가속 전개형'))]
+    definitions.extend((name,'value','positive_count','negative_count',metadata['unit'],metadata['short_label']+' 관측',metadata['names'])
+                       for name,metadata in EXTENDED_AXES.items())
+    for axis_name,value_key,positive,negative,unit,neutral,names in definitions:
         summaries, totals, sessions, days, native_ids = [], [], set(), set(), set()
         rates, timing_errors = [], []
         all_qualified, scope_labels, evidence_days, native_support = True, [], [], []
@@ -273,7 +317,11 @@ def build_style(drives, lap_selections):
             by_day, known_rows = defaultdict(list), []
             for drive, laps in rows:
                 axes = [lap['inputs'][axis_name] for lap in laps if lap.get('inputs')
-                        and lap['inputs'][axis_name]['event_count'] > 0]
+                        and isinstance(lap['inputs'].get(axis_name),dict)
+                        and lap['inputs'][axis_name].get('event_count',0)>0
+                        and _finite(lap['inputs'][axis_name].get(value_key))]
+                for lap in laps:
+                    reasons.update((lap.get('inputs') or {}).get(axis_name,{}).get('reason_codes',[]))
                 if not axes: continue
                 rates.extend(axis['sampling_hz'] for axis in axes)
                 timing_errors.extend(axis['timing_uncertainty_s'] for axis in axes)
@@ -308,7 +356,9 @@ def build_style(drives, lap_selections):
                 daily = [(median(row[0] for row in values), median(row[1] for row in values))
                          for values in by_native_day.values()]
                 native_support.append(tuple(sum(row[index] for row in daily)/len(daily) for index in (0, 1)))
-        if not summaries: continue
+        if not summaries:
+            result['items'].append(_unavailable_item(axis_name,reasons))
+            continue
         value, pro_share, con_share = (sum(row[index] for row in summaries)/len(summaries) for index in range(3))
         direction = 0 if pro_share >= .7 else 1 if con_share >= .7 else None
         repeated = (all_qualified and direction is not None and len(native_support) == len(summaries)
@@ -333,10 +383,11 @@ def build_style(drives, lap_selections):
             reason_codes=sorted(reasons),
             counter_evidence=dict(event_count=opposing, share_pct=round((con_share if direction != 1 else pro_share)*100., 2),
                                   dates=sorted(set(counter_days))[-3:]),
-            method=('브레이크 10% 이상 구간의 조향 겹침 비율 중앙값을 조합·날짜에 같은 비중으로 요약합니다. 코너 통과 위치는 판정하지 않습니다.' if axis_name == 'brake_steer' else
-                    '스로틀 20% 이하에서 80% 이상까지 전개한 시간의 중앙값을 조합·날짜에 같은 비중으로 요약합니다. 실제 가속 성과는 별도입니다.')))
+            method=AXIS_METADATA[axis_name]['calculation'],
+            **{key:value for key,value in AXIS_METADATA[axis_name].items() if key!='unit'}))
         result['scope_count'] = max(result['scope_count'], len(summaries))
-    if result['items']:
+    available=[item for item in result['items'] if item['status']!='UNAVAILABLE']
+    if available:
         result['status'] = 'OBSERVED' if all(item['status'] == 'REPEATED' for item in result['items']) else 'PARTIAL'
     else:
         result['reason_codes'] = sorted(unavailable or {'NO_COMPLETE_INPUT_EPISODES'})

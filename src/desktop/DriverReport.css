@@ -258,9 +258,14 @@
 .driver-report-dashboard .driver-journal-note { margin-top:2px; font-size:12px; line-height:1.4; }
 .driver-report-dashboard .driver-insight-compact-title { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .driver-report-dashboard .driver-insight-compact-title button { flex-shrink:0; }
-.driver-report-dashboard .driver-style-compact-items { display:grid; gap:8px; }
-.driver-report-dashboard .driver-style-compact-item { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; }
-.driver-report-dashboard .driver-style-compact-item strong { font-size:14px; }
+.driver-report-dashboard .driver-style-compact-items { display:grid; gap:5px; }
+.driver-report-dashboard .driver-style-compact-item { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:6px; min-width:0; min-height:21px; }
+.driver-report-dashboard .driver-style-compact-item strong { font-size:12px; line-height:1.4; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.driver-report-dashboard .driver-style-compact-item .numeric { font-size:12px; white-space:nowrap; }
+.driver-report-dashboard .driver-style-kind-count { font-size:12px; white-space:nowrap; color:hsl(var(--muted-foreground)); }
+.driver-style-page-controls { display:flex; align-items:center; gap:6px; min-width:0; }
+.driver-style-page-controls > span { font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.driver-report-dashboard .driver-style-page-controls > button { width:28px; flex:0 0 28px; padding:0; }
 .driver-report-dashboard .driver-insight-compact-scope { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:12px; color:hsl(var(--muted-foreground)); }
 .driver-report-dashboard .driver-insight-compact-note { font-size:12px; color:hsl(var(--muted-foreground)); }
 .driver-report-dashboard .driver-growth-compact-periods { display:table; width:100%; border-collapse:collapse; font-size:12px; }
@@ -306,6 +311,13 @@
 .driver-style-detail-tabs > button { flex:1; min-height:32px; }
 .driver-style-detail-panel { display:flex; flex-direction:column; gap:14px; padding-top:8px; }
 .driver-style-detail-panel[data-state='inactive'] { display:none; }
+.driver-style-item-selector { display:flex; align-items:center; gap:12px; min-width:0; }
+.driver-style-item-selector > span { flex-shrink:0; font-size:12px; color:hsl(var(--muted-foreground)); }
+.driver-style-item-selector [data-slot='native-select-wrapper'] { flex:1; min-width:0; }
+.driver-style-selected-item { display:flex; flex-direction:column; gap:14px; }
+.driver-style-details .driver-style-unavailable { padding:10px 12px; border:1px solid hsl(var(--border)); border-radius:8px; font-size:13px; }
+.driver-style-coverage-note { display:grid; gap:4px; padding:10px 12px; border:1px solid hsl(var(--border)); border-radius:8px; }
+.driver-style-details .driver-style-coverage-note p { font-size:12px; line-height:1.6; color:hsl(var(--muted-foreground)); }
 .driver-style-detail-heading { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
 .driver-style-details h3 { font-size:16px; line-height:1.5; font-weight:600; }
 .driver-style-details p { font-size:14px; line-height:1.85; font-weight:400; word-break:keep-all; overflow-wrap:anywhere; }

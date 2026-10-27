@@ -194,7 +194,7 @@ def compact_lmu_clock(gps_time, frequency_hz, recording_time):
     return compact
 
 
-def _lmu_observations(telemetry, source_id):
+def _lmu_observations(telemetry, source_id, detail_builder=None):
     metadata, car, track, layout, _, _ = _context(telemetry, 'lmu')
     evidence = _mapping(getattr(telemetry, '_driver_history_lmu_clock', None))
     epochs = (_rows(evidence.get('epochs')) if evidence.get('schema_version') == 1
@@ -227,7 +227,7 @@ def _lmu_observations(telemetry, source_id):
                 offset = datetime.fromisoformat(epoch['recorded_at']).timestamp() - float(analysis_time[0])
             elif coverage['time_basis'] == 'SOURCE_RELATIVE' and 'SESSION_CLOCK_RESET' not in reasons:
                 offset = -float(analysis_time[0])
-        _add_details(telemetry, observation, offset=offset)
+        (detail_builder or _add_details)(telemetry, observation, offset=offset)
         observations.append(observation)
     return observations
 
@@ -245,7 +245,7 @@ def _add_details(telemetry, observation, *, start_idx=0, end_idx=None, offset=No
         observation['metrics'] = unavailable_metrics('METRICS_EXTRACTION_FAILED')
 
 
-def build_source_summary(telemetry, source_id):
+def build_source_summary(telemetry, source_id, *, detail_builder=None):
     """Return compact facts without changing telemetry, hashing it or writing files.
 
     A native event/driver identity can unite split recordings. Missing native
@@ -259,7 +259,7 @@ def build_source_summary(telemetry, source_id):
     game = 'lmu' if _text(metadata.get('game')) == 'lmu' else 'iracing'
     result = dict(schema_version=SCHEMA_VERSION, source_id=source_id, game=game, observations=[])
     if game == 'lmu':
-        result['observations'] = _lmu_observations(telemetry, source_id)
+        result['observations'] = _lmu_observations(telemetry, source_id, detail_builder)
         return result
     channels = _mapping(getattr(telemetry, 'channels', None))
     times = _array(channels, 'SessionTime')
@@ -344,7 +344,7 @@ def build_source_summary(telemetry, source_id):
                            coverage=dict(time_basis=basis, intervals=intervals, status=('UNAVAILABLE' if not intervals else ('PARTIAL' if reasons else 'OBSERVED')),
                                          sample_count=int(len(indices)), reasons=sorted(reasons)),
                            validity_status='UNKNOWN', conditions={})
-        _add_details(telemetry, observation, start_idx=left, end_idx=right, offset=offset)
+        (detail_builder or _add_details)(telemetry, observation, start_idx=left, end_idx=right, offset=offset)
         if drive_id in groups:
             existing = groups[drive_id]
             existing['coverage']['intervals'].extend(intervals)
@@ -352,8 +352,9 @@ def build_source_summary(telemetry, source_id):
             existing['coverage']['reasons'] = sorted(set(existing['coverage']['reasons']) | reasons)
             existing['coverage']['status'] = ('UNAVAILABLE' if not existing['coverage']['intervals'] else
                                               ('PARTIAL' if existing['coverage']['reasons'] else 'OBSERVED'))
-            from driver_history_metrics import merge_observation_metrics
-            existing['metrics'] = merge_observation_metrics(existing['metrics'], observation['metrics'])
+            if detail_builder is None:
+                from driver_history_metrics import merge_observation_metrics
+                existing['metrics'] = merge_observation_metrics(existing['metrics'], observation['metrics'])
         else:
             groups[drive_id] = observation
     result['observations'] = list(groups.values())

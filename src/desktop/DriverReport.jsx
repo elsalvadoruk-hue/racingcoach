@@ -42,7 +42,7 @@ function normalizeReport(payload) {
     coverage: { ...coverage, ...Object.fromEntries(['source_count', 'native_session_count', 'source_only_count', 'undated_count',
       'period_session_count', 'period_observation_count', 'period_measured_lap_count', 'period_source_count', 'period_source_only_count',
       'period_measured_observation_count', 'period_replay_unknown_observation_count', 'period_driving_unavailable_observation_count', 'observation_count', 'source_observation_count', 'measured_observation_count', 'measured_lap_count',
-      'replay_unknown_observation_count', 'driving_unavailable_observation_count', 'outdated_source_count'].map(key => [key, count(coverage[key])])),
+      'replay_unknown_observation_count', 'driving_unavailable_observation_count', 'outdated_source_count', 'outdated_input_source_count'].map(key => [key, count(coverage[key])])),
       reason: text(coverage.reason), period_reason: text(coverage.period_reason), blocking_reason_counts: records(coverage.blocking_reason_counts).map(row => ({ code: text(row.code), count: count(row.count), reason: text(row.reason) })).filter(row => row.reason) },
     career: Object.fromEntries(CAREER_METRICS.map(({ key }) => { const metric = object(object(payload.career)[key]);
       return [key, { value: count(metric.value), status: text(metric.status), reason: text(metric.reason) }]; })),
@@ -126,7 +126,7 @@ function LibraryProgress({ library }) {
       {active ? <Button variant="outline" size="sm" onClick={library.pause} disabled={library.busy || job.status === 'PAUSING'}>{job.status === 'PAUSING' ? '일시정지 중…' : '분석 일시정지'}</Button>
         : ready ? <Button variant="outline" size="sm" onClick={library.start} disabled={library.busy || library.waiting}>{job.status === 'PAUSED' ? '분석 이어하기' : job.status === 'COMPLETE' ? '새 파일 확인' : job.status === 'FAILED' ? '가져오기 다시 시도' : '전체 파일 가져오기'}</Button> : null}
     </div>
-    <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}><DialogContent className="driver-library-dialog" onCloseAutoFocus={event=>{event.preventDefault();detailsTrigger.current?.focus();}}><DialogHeader><DialogTitle>과거 기록 가져오기</DialogTitle><DialogDescription>{library.error||job?.message||'설정한 기록 폴더의 전체 파일을 확인합니다.'}</DialogDescription></DialogHeader><div><p>파일이 많으면 수십 분 걸릴 수 있습니다. 다른 화면을 사용해도 계속되며, 앱을 다시 실행하면 완료한 파일은 재사용합니다.</p><p>주행 중·선택한 파일 분석 중에는 현재 가져오기도 중단합니다. 작업 종료 뒤 유휴 10초와 자원 여유를 확인해 이어갑니다. 직접 일시정지한 작업은 이어하기를 누를 때까지 기다립니다.</p>{job?.failed>0?<p>읽지 못한 파일은 다음 가져오기에서 다시 시도하며 기존 기록은 유지합니다.</p>:null}</div><DialogFooter><DialogClose asChild><Button variant="outline">닫기</Button></DialogClose></DialogFooter></DialogContent></Dialog>
+    <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}><DialogContent className="driver-library-dialog" onCloseAutoFocus={event=>{event.preventDefault();detailsTrigger.current?.focus();}}><DialogHeader><DialogTitle>과거 기록 가져오기</DialogTitle><DialogDescription>{library.error||job?.message||'설정한 기록 폴더의 전체 파일을 확인합니다.'}</DialogDescription></DialogHeader><div><p>파일이 많으면 수십 분 걸릴 수 있습니다. 다른 화면을 사용해도 계속되며, 앱을 다시 실행하면 완료한 파일은 재사용합니다.</p><p>주행 중·선택한 파일 분석 중에는 현재 가져오기도 중단합니다. 작업 종료 뒤 유휴 10초와 자원 여유를 확인해 이어갑니다. 직접 일시정지한 작업은 이어하기를 누를 때까지 기다립니다.</p>{job?.failed>0?<p>읽지 못한 새 파일은 다음 가져오기에서 다시 시도합니다. 기존 기록의 성향 보완 실패는 ‘기존 기록 다시 확인’으로 재시도하며, 저장된 기록은 유지합니다.</p>:null}</div><DialogFooter><DialogClose asChild><Button variant="outline">닫기</Button></DialogClose></DialogFooter></DialogContent></Dialog>
   </Alert>;
 }
 
@@ -318,10 +318,11 @@ export default function DriverReport({ game = 'iracing', apiBase = '', onNavigat
   const journal = useDriverJournal(base, selectedGame, reload);
   const libraryActive = ['SCANNING', 'RUNNING', 'WAITING', 'PAUSING'].includes(library.job?.status);
   const selectedPeriod = period === '0' ? '전체 기간' : `최근 ${period}일`;
-  const historyRefresh = useHistoryRefresh(base, selectedGame, coverage?.outdated_source_count > 0, refresh);
+  const needsHistoryRefresh = coverage?.outdated_source_count > 0 || coverage?.outdated_input_source_count > 0;
+  const historyRefresh = useHistoryRefresh(base, selectedGame, needsHistoryRefresh, refresh);
   const historyJob = historyRefresh.job;
   const historyRunning = historyJob?.status === 'RUNNING';
-  const showHistoryRefresh = coverage?.outdated_source_count > 0 || (historyJob && historyJob.status !== 'IDLE') || historyRefresh.error;
+  const showHistoryRefresh = needsHistoryRefresh || (historyJob && historyJob.status !== 'IDLE') || historyRefresh.error;
 
   return <section className="driver-report-scene driver-report-dashboard" aria-label={`${gameName} 드라이버 리포트`} data-state={loading ? 'LOADING' : error ? 'ERROR' : report?.state || 'UNAVAILABLE'} aria-busy={loading}>
     <header className="driver-report-heading">
@@ -334,10 +335,10 @@ export default function DriverReport({ game = 'iracing', apiBase = '', onNavigat
       <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}><RefreshCw data-icon="inline-start" />{error ? '다시 시도' : '새로고침'}</Button>
     </div><LibraryProgress library={library} />{showHistoryRefresh ? <Alert className="driver-report-history-refresh" role={historyRefresh.error || historyJob?.status === 'FAILED' ? 'alert' : 'status'} variant={historyRefresh.error || historyJob?.status === 'FAILED' ? 'destructive' : 'default'}>
       <div><AlertTitle>{historyRunning ? '기존 기록을 다시 확인하고 있어요' : '기존 기록 확인'}</AlertTitle><AlertDescription>
-        <p>{historyRefresh.error || historyJob?.message || `${number(coverage?.outdated_source_count)}개 원본의 측정 범위를 다시 확인할 수 있어요. 저장된 관측을 유지하며 확인합니다.`}</p>
+        <p>{historyRefresh.error || (historyJob?.status !== 'IDLE' && historyJob?.message) || (coverage?.outdated_input_source_count > 0 && !coverage?.outdated_source_count ? `기존 기록 ${number(coverage.outdated_input_source_count)}개의 새 성향 항목을 보완할 수 있어요. 기존 주행 통계와 경기 결과는 유지합니다.` : `${number(coverage?.outdated_source_count)}개 원본의 측정 범위를 다시 확인할 수 있어요. 저장된 관측을 유지하며 확인합니다.`)}</p>
         {historyJob && historyJob.status !== 'IDLE' ? <p>처리 {number(historyJob.processed)}/{number(historyJob.total)}개 · 갱신 {number(historyJob.updated)}개 · 건너뜀 {number(historyJob.skipped)}개 · 실패 {number(historyJob.failed)}개</p> : null}
         {historyJob?.failed > 0 || historyJob?.skipped > 0 ? <p>확인하지 못한 원본은 기존 관측을 유지합니다. 해당 주행을 다시 선택해 분석하면 확인할 수 있습니다.</p> : null}
-        {libraryActive ? <p>전체 기록 분석에서 기존 기록도 갱신합니다.</p> : null}
+        {libraryActive ? <p>백그라운드 가져오기에서 필요한 기존 요약을 보완합니다.</p> : null}
         {historyRunning && historyRefresh.error ? <p>화면 조회가 중단되어도 시작한 기록 확인은 계속될 수 있습니다.</p> : null}
       </AlertDescription></div>
       <Button variant="outline" size="sm" onClick={historyRefresh.start} disabled={libraryActive || historyRefresh.busy || (historyRunning && !historyRefresh.error)}>{historyRefresh.busy ? '상태 확인 중…' : historyRunning ? '진행 상태 다시 확인' : '기존 기록 다시 확인'}</Button>

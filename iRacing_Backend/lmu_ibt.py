@@ -202,13 +202,16 @@ class LmuIbtReader:
         # The report must not mistake the 60 Hz interpolation grid for native
         # input resolution. These compact facts reuse the already-read specs.
         input_names = {'Speed': 'Ground Speed', 'Brake': 'Brake Pos', 'Throttle': 'Throttle Pos',
-                       'SteeringWheelAngle': 'Steering Pos'}
+                       'SteeringWheelAngle': 'Steering Pos', 'RPM': 'Engine RPM'}
         metadata['history_input_sampling'] = dict(
             native_hz={name: specs[raw.casefold()].frequency_hz for name, raw in input_names.items()
                        if raw.casefold() in specs and sources.get(raw) is not None},
             native_units={name: specs[raw.casefold()].unit for name, raw in input_names.items()
                           if raw.casefold() in specs and sources.get(raw) is not None},
             interpolated=True, steering_half_range_rad=half_range,
+            gear_events_available=bool(changes.get('Gear') is not None and len(changes['Gear'][0])),
+            gear_event_start_s=(float(changes['Gear'][0][0]) if changes.get('Gear') is not None
+                                and len(changes['Gear'][0]) else None),
             pit_state_available=bool(changes.get('In Pits') is not None and len(changes['In Pits'][0])),
             pit_state_start_s=(float(changes['In Pits'][0][0]) if changes.get('In Pits') is not None
                                and len(changes['In Pits'][0]) else None))

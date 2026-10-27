@@ -22,6 +22,7 @@ from driver_history_index import _imported_reference
 from driver_history_summary import build_source_summary
 from driver_history_metrics import CALCULATION_VERSION
 from driver_progress import attach_recording_results, notify_after_save
+from driver_history_inputs import measure_source_inputs, outdated_input_sources, source_observations
 
 
 METRICS_VERSION = CALCULATION_VERSION
@@ -127,7 +128,8 @@ def _discover_originals(snapshot, source_ids, allowed, locators, hashes, progres
 
 
 def refresh_summaries(game, *, store, memory_db_path, allowed_paths, load_telemetry=None, progress=None,
-                      can_run=None, summarize_file=None, stop_event=None, before_save=None, after_save=None):
+                      can_run=None, summarize_file=None, stop_event=None, before_save=None, after_save=None,
+                      enrich_file=None):
     """Refresh stale connected content only; changed/missing sources stay intact."""
     outcome = dict(game=game, status='RUNNING', total=0, processed=0,
                    updated=0, skipped=0, failed=0, warning_count=0, reason_counts=[], message='연결한 기록을 다시 확인하고 있습니다.')
@@ -193,7 +195,10 @@ def refresh_summaries(game, *, store, memory_db_path, allowed_paths, load_teleme
     publish()
     wait_until_idle()
     snapshot = store.report_snapshot(game)
-    source_ids = outdated_sources(snapshot)
+    stale_metrics = outdated_sources(snapshot)
+    input_only = outdated_input_sources(snapshot) - stale_metrics
+    source_ids = stale_metrics | input_only
+    observations_by_source = source_observations(snapshot)
     outcome['total'] = len(source_ids)
     publish()
     if not source_ids:
@@ -243,6 +248,28 @@ def refresh_summaries(game, *, store, memory_db_path, allowed_paths, load_teleme
     _discover_originals(snapshot, source_ids - originals.keys(), allowed, discovered, hashes, locating,
                         checked_digest=checked_digest, wait_until_idle=wait_until_idle)
     originals.update({source_id: paths[0] for source_id, paths in discovered.items()})
+    # Explicit input repair also covers undated sources imported by the library,
+    # which may never have had an analysis-memory locator. Only hash candidates;
+    # never parse/add unrelated files or repeat this scan on automatic starts.
+    missing_inputs = input_only - originals.keys()
+    for scanned, path in enumerate(allowed.values(), 1):
+        if not missing_inputs:
+            break
+        wait_until_idle()
+        if path.suffix.casefold() != ('.duckdb' if game == 'lmu' else '.ibt'):
+            continue
+        if game == 'lmu' and Path(str(path) + '.wal').exists():
+            continue
+        locating(scanned, len(allowed))
+        try:
+            _, source_id = checked_digest(path)
+            if source_id in missing_inputs:
+                originals[source_id] = path
+                missing_inputs.remove(source_id)
+        except InterruptedError:
+            raise
+        except Exception:
+            continue
     outcome['message'] = '확인한 원본에서 연결 기록의 측정 근거를 갱신하고 있습니다.'
     publish()
     for source_id in sorted(source_ids):
@@ -254,6 +281,28 @@ def refresh_summaries(game, *, store, memory_db_path, allowed_paths, load_teleme
             if digest != source_id or file_signature(path) != before:
                 return 'SOURCE_CHANGED'
             check_interrupted()
+            if source_id in input_only:
+                if game == 'lmu' and Path(str(path) + '.wal').exists():
+                    return 'RECORDING_IN_USE'
+                observations = observations_by_source[source_id]
+                if enrich_file is not None:
+                    payload = enrich_file(path, source_id, observations, interrupted)
+                else:
+                    telemetry = load_telemetry(path)
+                    check_interrupted()
+                    if tuple(telemetry.signature) != before:
+                        return 'SOURCE_CHANGED'
+                    payload = measure_source_inputs(telemetry, source_id, observations)
+                check_interrupted()
+                if file_signature(path) != before:
+                    return 'SOURCE_CHANGED'
+                if game == 'lmu' and Path(str(path) + '.wal').exists():
+                    return 'RECORDING_IN_USE'
+                if payload.get('game') != game or payload.get('source_id') != source_id:
+                    return 'SOURCE_READ_FAILED'
+                store.enrich_source_inputs(payload)
+                outcome['updated'] += 1
+                return None
             if summarize_file is not None:
                 # A compact child result carries no source path. Preserve the
                 # existing exclusion of locally imported LMU reference files.
@@ -328,13 +377,14 @@ class HistoryRefresh:
     """One background reader at a time; repeat requests observe the same job."""
     def __init__(self, *, memory_db_path, allowed_paths, load_telemetry=None,
                  store_factory=DriverHistoryStore, can_run=None, summarize_file=None,
-                 before_save=None, after_save=None):
+                 before_save=None, after_save=None, enrich_file=None):
         self.memory_db_path = memory_db_path
         self.allowed_paths = allowed_paths
         self.load_telemetry = load_telemetry
         self.store_factory = store_factory
         self.can_run = can_run
         self.summarize_file = summarize_file
+        self.enrich_file = enrich_file
         self.before_save, self.after_save = before_save, after_save
         self._lock = threading.RLock()
         self._states = {}
@@ -385,6 +435,7 @@ class HistoryRefresh:
                               allowed_paths=self.allowed_paths, load_telemetry=self.load_telemetry,
                               summarize_file=self.summarize_file, can_run=self.can_run,
                               stop_event=stop, progress=progress,
+                              enrich_file=self.enrich_file,
                               before_save=self.before_save, after_save=self.after_save)
         except InterruptedError:
             state = self.status(game)

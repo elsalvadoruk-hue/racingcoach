@@ -139,10 +139,12 @@ def _metrics(value):
     version = {}
     if 'calculation_version' in value:
         version['calculation_version'] = _choice(value['calculation_version'], {'observed-metrics-v2', 'observed-metrics-v3', 'observed-metrics-v4'})
+    if 'input_version' in value:
+        version['input_version'] = _choice(value['input_version'], {'driver-inputs-v2'})
     replay_options = {'CONFIRMED_NON_REPLAY', 'UNKNOWN', 'MIXED', 'CONFIRMED_REPLAY', 'INVALID'}
 
     def replay_fields(item):
-        if 'replay_status' in item or version:
+        if 'replay_status' in item or 'calculation_version' in version:
             return {'replay_status': _choice(item.get('replay_status'), replay_options)}
         return {}  # Legacy payloads retain their original evidence shape.
 
@@ -179,7 +181,7 @@ def _metrics(value):
         if lap['measurable'] and lap_replay.get('replay_status') in {'CONFIRMED_REPLAY', 'MIXED', 'INVALID'}:
             _fail()
         lap_reasons = {}
-        if 'reason_codes' in lap or version:
+        if 'reason_codes' in lap or 'calculation_version' in version:
             items = lap.get('reason_codes')
             if not isinstance(items, list) or len(items) > 100:
                 _fail()
@@ -415,6 +417,70 @@ class DriverHistoryStore:
             connection.executemany('INSERT INTO observations VALUES(?,?,?,?,?)',
                                    [(source_id, item['drive_id'], game, item['recorded_at'], payload) for item, payload in payloads])
         return {'saved': True, 'source_id': source_id, 'observation_count': len(observations)}
+
+    def enrich_source_inputs(self, payload):
+        """Atomically replace only input fields of the existing, matching laps.
+
+        An interrupted/failed extraction never deletes old observations or
+        replaces driving/quality/conditions/result evidence with new values.
+        """
+        from driver_style import CALCULATION_VERSION as input_version, validate_inputs
+        if (not isinstance(payload, dict) or type(payload.get('schema_version')) is not int or payload['schema_version'] != 1
+                or payload.get('input_version') != input_version):
+            _fail()
+        source_id, game = _hash(payload.get('source_id')), _choice(payload.get('game'), _GAMES)
+        patches = payload.get('observations')
+        if not isinstance(patches, list) or not patches or len(patches) > 2048:
+            _fail()
+        by_drive = {}
+        for item in patches:
+            if not isinstance(item, dict) or not isinstance(item.get('laps'), list):
+                _fail()
+            drive_id = _hash(item.get('drive_id'))
+            if drive_id in by_drive:
+                _fail()
+            by_drive[drive_id] = item['laps']
+        if not self.path.exists():
+            _fail()
+        with self._write_lock, self._connection(write=True) as connection:
+            rows = connection.execute('SELECT drive_id,payload FROM observations WHERE source_id=? AND game=?',
+                                      (source_id, game)).fetchall()
+            if set(by_drive) != {row[0] for row in rows}:
+                _fail()
+            updates = []
+            for drive_id, raw in rows:
+                observation = json.loads(raw)
+                _observation(observation, game)
+                metrics = observation['metrics']
+                laps = metrics['laps']
+                patches = by_drive[drive_id]
+                if len(laps) != len(patches):
+                    _fail()
+                keys = ('lap_number', 'start_s', 'end_s', 'measurable', 'replay_status')
+                indexed = {}
+                for patch in patches:
+                    if not isinstance(patch, dict):
+                        _fail()
+                    key = tuple(patch.get(field) for field in keys)
+                    if key in indexed:
+                        _fail()
+                    inputs = validate_inputs(patch.get('inputs'))
+                    if inputs.get('input_version') != input_version:
+                        _fail()
+                    indexed[key] = inputs
+                for lap in laps:
+                    key = tuple(lap.get(field) for field in keys)
+                    if key not in indexed:
+                        _fail()
+                    lap['inputs'] = indexed.pop(key)
+                if indexed:
+                    _fail()
+                metrics['input_version'] = input_version
+                _observation(observation, game)  # Apply all existing eligibility constraints.
+                updates.append((json.dumps(observation, ensure_ascii=False, allow_nan=False,
+                    sort_keys=True, separators=(',', ':')), source_id, drive_id))
+            connection.executemany('UPDATE observations SET payload=? WHERE source_id=? AND drive_id=?', updates)
+        return {'saved': True, 'source_id': source_id, 'observation_count': len(rows)}
 
     def list_drives(self, game=None, limit=100, offset=0):
         if game is not None:

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>iRacing 주행 코치 2.4.0 사용 설명서</title>
+<title>iRacing 주행 코치 2.4.1 사용 설명서</title>
 <style>
 :root{color-scheme:light;--paper:#fff;--bg:#edf2ef;--ink:#1c3029;--muted:#53675d;--line:#cbd9d1;--accent:#12664c;--note:#edf7f2}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.8 "Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif}main{max-width:1120px;margin:28px auto;background:var(--paper);padding:52px 60px 80px;box-shadow:0 6px 28px #17382a0d;border-radius:14px}h1{font-size:36px;line-height:1.35;margin:12px 0}h2{font-size:25px;line-height:1.45;margin:58px 0 18px;padding-top:22px;border-top:2px solid var(--line);scroll-margin-top:18px}h3{font-size:18px;margin:26px 0 8px}p{margin:10px 0}a{color:var(--accent);text-underline-offset:3px}li{margin:5px 0}small,.muted,figcaption{color:var(--muted)}.eyebrow{font-size:13px;font-weight:bold;letter-spacing:.12em;color:var(--accent)}.lead{font-size:19px;color:var(--muted);margin:12px 0 24px}.tag{display:inline-block;padding:3px 12px;border:1px solid var(--line);border-radius:30px;font-size:13px}.note,.quick{background:var(--note);padding:16px 20px;margin:20px 0;border-radius:8px;border-left:4px solid var(--accent)}.quick strong{font-size:19px}.quick ol{margin:8px 0;padding-left:23px}nav{padding:18px 24px;border:1px solid var(--line);border-radius:9px;margin-top:28px}nav ol{columns:2;column-gap:36px;padding-left:24px;margin:8px 0}nav a{text-decoration:none}figure{margin:22px 0}figure a{display:block}figure img{display:block;width:100%;height:auto;border:1px solid #a6b9ad;border-radius:8px;background:#1e2326}figcaption{font-size:14px;line-height:1.65;margin:8px 0 0}table{width:100%;border-collapse:collapse;margin:16px 0;font-size:15px}th,td{padding:11px 13px;text-align:left;vertical-align:top;border:1px solid var(--line)}th{background:var(--note)}.table-wrap{overflow:auto}code,kbd{font:14px Consolas,monospace;background:#edf3ef;border:1px solid #dbe5de;border-radius:4px;padding:2px 5px}footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}.screen-hint{font-size:13px;color:var(--muted)}
@@ -14,12 +14,29 @@
 </head>
 <body>
 <main>
-<section id="driver-report"><h2>2.4.0 · 드라이버 리포트</h2><p>앱은 드라이버 리포트에서 시작합니다. 왼쪽 <strong>드라이버</strong>에서 전체·30일·90일 기록과 측정 페이스·편차, 경기 결과와 입력 성향을 확인하세요. 기존 기록은 백그라운드로 가져오며 주행·분석 중에는 기다립니다. 선택한 주행의 체감을 저장·수정·삭제하고 도전을 선택·취소하거나 달성 이력을 확인할 수 있습니다. 성향과 주행 변화의 자세히에서 뜻·예시·근거를 봅니다. 미확인 수치는 —와 이유로 표시하고 공식 결과·실력 향상을 만들어내지 않습니다.</p><p>상단 거리·시간·공식 경기 통계를 포함한 모든 통계가 선택 기간을 따릅니다. FHD 전체화면에서는 8개 카드를 한 화면에서 보고 긴 내용은 상세창으로 확인합니다. 공식 경기 집계는 근거가 있는 iRacing 결과만 포함하며 LMU 종료 관측과 구별합니다. 가져온 옛 파일은 도전 달성에 소급하지 않습니다. <a href="driver-history-foundation.md">집계 범위와 사용 흐름 자세히</a></p></section>
+<section id="driver-report">
+<h2>2.4.1 · 드라이버 리포트</h2>
+<p>2.4.0에서 추가한 드라이버 리포트는 앱의 시작 화면입니다. 왼쪽 <strong>드라이버</strong>에서 전체·30일·90일의 주행량·측정 페이스·편차·경기 결과와 입력 성향을 확인하세요. 상단 통계를 포함한 모든 통계가 선택 기간을 따릅니다. 체감을 저장·수정·삭제하고 도전을 선택·취소하거나 달성 이력을 확인합니다. 공식 경기 집계는 근거가 확인된 iRacing 결과만 포함하며 LMU 종료 관측과 구별합니다. 가져온 과거 파일을 도전 달성에 소급하지 않습니다.</p>
+<p>성향은 <strong>9개 항목</strong>을 각각 측정합니다. 메인 카드에서 측정한 항목을 3개씩 이전·다음으로 넘깁니다. <strong>자세히 → 항목 설명</strong>에서 전체 항목 중 하나를 선택해 뜻·예·계산·근거·보류 이유를 보고 <strong>수치 읽는 법</strong>에서 반복 성향의 기준을 확인하세요. FHD 전체화면에서는 메인 페이지 스크롤 없이 8개 카드와 조작을 확인하며 긴 설명은 상세창에서 봅니다.</p>
+<div class="table-wrap"><table><thead><tr><th>입력 항목</th><th>뜻과 예</th><th>계산</th></tr></thead><tbody>
+<tr><td>제동·조향</td><td>제동 1초 중 조향도 0.3초 했다면 30%입니다.</td><td>브레이크 10% 이상인 완전한 구간에서 조향이 겹친 시간 비율의 중앙값.</td></tr>
+<tr><td>스로틀 전개</td><td>페달을 빠르게 밟았는지 0.8초에 걸쳐 밟았는지 읽습니다.</td><td>20% 이하에서 80% 이상까지 올린 시간의 중앙값.</td></tr>
+<tr><td>제동 전개</td><td>최대 브레이크가 80%면 16→64% 시간을 읽습니다.</td><td>최대 입력 30% 이상인 완전한 구간의 상대 20→80% 시간 중앙값.</td></tr>
+<tr><td>제동 해제</td><td>브레이크 유지시간이 아니라 놓아 가는 길이입니다.</td><td>완전한 구간의 마지막 상대 80→20% 시간 중앙값.</td></tr>
+<tr><td>가속 재조절</td><td>40→80→55→80%는 한 번이며 마지막 해제는 세지 않습니다.</td><td>최대 60% 이상인 완전한 입력에서 12%p 이상 감소·회복한 횟수의 중앙값.</td></tr>
+<tr><td>조향 전개</td><td>핸들을 많이 돌린 정도보다 입력이 커진 시간을 읽습니다.</td><td>한 방향의 상대 20→80% 시간 중앙값. 최대 0.12rad 이상(iRacing) 또는 잠금범위 4% 이상(LMU)인 완전한 구간 사용.</td></tr>
+<tr><td>조향 재조절</td><td>30→20→30도처럼 줄였다 다시 넣은 입력을 셉니다.</td><td>최대값 80% 도달 뒤 충분히 감소·회복한 횟수의 중앙값. 작은 떨림·마지막 풀림 제외.</td></tr>
+<tr><td>타력 입력</td><td>같은 관측시간 100초 중 두 페달을 비운 구간이 8초면 8%입니다.</td><td>36km/h 초과·트랙 위·피트 밖에서 두 페달 3% 이하가 0.40초 이상 이어진 시간 ÷ 같은 조건의 관측시간.</td></tr>
+<tr><td>변속 회전수</td><td>2→3단끼리, 3→4단끼리 RPM의 흩어짐을 봅니다.</td><td>36km/h 초과·스로틀 60% 이상·브레이크 5% 이하의 한 단 상향변속. 한 랩의 같은 목표 기어 변속 3회 이상에서 RPM MAD÷중앙값×100을 구해 기어별 비율의 중앙값 표시.</td></tr>
+</tbody></table></div>
+<p>원본 채널 주기의 오차를 확인하며 조합·날짜별 같은 비중으로 요약합니다. LMU는 보간 60Hz를 원본 주기로 취급하지 않고 채널 단위·조향 잠금범위·기어 이벤트 근거를 확인합니다. 독립 세션이 부족해도 측정한 수치는 관측으로 남깁니다. 충분한 날짜·독립 세션·입력 반복 조건을 통과한 항목에만 성향 이름을 붙이며 미측정은 —와 이유로 표시합니다. 입력으로 실력·차량 균형·성격을 판정하지 않습니다.</p>
+<p>설정 폴더의 기존 IBT·DuckDB 전체를 백그라운드로 가져옵니다. 2.4.1의 새 항목에는 <strong>기존 기록의 입력 정보만 한 번 보완</strong>하고 남은 개수를 표시합니다. 거리·시간·랩 판정·경기 결과는 보존합니다. 보완한 원본과 복사본은 재사용하므로 매 패치마다 전체 파일을 재분석하지 않습니다. 주행·분석·자원 부족 때 중단하고 유휴 상태에서 재개하며 수동 일시정지는 이어하기를 누를 때까지 유지합니다. 자동 보완 실패를 계속 반복하지 않고 <strong>기존 기록 다시 확인</strong>으로 재시도합니다. <a href="driver-history-foundation.md">항목별 상세 계산·집계 범위와 사용 흐름</a>에서 더 확인하세요.</p>
+</section>
 
 <header class="cover">
 <div class="eyebrow">DRIVE · COMPARE · PRACTICE</div>
 <h1>iRacing 주행 코치<br>사용 설명서</h1>
-<span class="tag">버전 2.4.0 · 2026년 10월 27일</span>
+<span class="tag">버전 2.4.1 · 2026년 10월 27일</span>
 <p class="lead">주행에서 문제를 찾고, 다음 주행에서 한 가지씩 개선하세요.</p>
 <p>개인용 Windows 로컬 앱입니다. 주행 후 IBT·Garage61 비교와 셋업 실험을 돕고, 주행 중에는 한국어 스포터·피트월·마이크 질문을 제공합니다. FHD 전체 화면을 기준으로 주요 분석 정보를 한 화면에서 봅니다.</p>
 <div class="quick"><strong>처음이라면 이 순서로</strong><ol><li><code>설치.bat</code> → <code>실행.bat</code></li><li>주행 파일과 비교할 랩을 선택합니다.</li><li>주행 요약에서 오늘의 과제와 다음 주행 계획을 읽습니다.</li><li>코너 비교에서 위치·입력 차이를 확인합니다.</li><li>한 가지를 바꾸고 다시 달린 뒤 같은 조건으로 비교합니다.</li></ol></div>

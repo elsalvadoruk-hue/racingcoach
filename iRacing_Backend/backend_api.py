@@ -299,7 +299,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "2.4.0"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "2.4.1"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -4496,7 +4496,7 @@ from driver_history_refresh import HistoryRefresh, register_refresh_routes
 from driver_history_library import HistoryLibrary
 from driver_library_routes import register_library_routes
 from driver_history_scheduling import HistoryActivity, is_foreground_analysis
-from driver_history_worker import summarize_in_process
+from driver_history_worker import enrich_inputs_in_process, summarize_in_process
 from driver_progress import persist_source_results, reconcile_driver_challenges
 from driver_journal_routes import register_journal_routes
 from driver_result_routes import register_result_routes
@@ -4520,6 +4520,7 @@ _driver_history_refresh = HistoryRefresh(
     allowed_paths=_driver_history_recordings,
     load_telemetry=lambda path: recording_reader(path).parse(),
     summarize_file=summarize_in_process,
+    enrich_file=enrich_inputs_in_process,
     can_run=_history_activity.reason,
     before_save=persist_source_results,
     after_save=reconcile_driver_challenges,
@@ -4528,6 +4529,7 @@ _driver_history_library = HistoryLibrary(
     allowed_paths=_driver_history_recordings,
     load_telemetry=lambda path: recording_reader(path).parse(),
     summarize_file=summarize_in_process,
+    enrich_file=enrich_inputs_in_process,
     can_run=_history_activity.reason,
     before_save=persist_source_results,
     after_save=reconcile_driver_challenges,

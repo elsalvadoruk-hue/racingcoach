@@ -1,5 +1,6 @@
 """Owned child lifecycle and pure recording parsing; synthetic paths only."""
 from contextlib import ExitStack
+from copy import deepcopy
 import hashlib
 import importlib.util
 import json
@@ -100,6 +101,60 @@ class DriverHistoryWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, '^주행 기록의 측정 작업을 완료하지 못했습니다\\.$'):
             worker.summarize_in_process(self.path, 'f'*64, lambda: False)
 
+    def test_actual_input_child_returns_only_input_enrichment_and_preserves_source(self):
+        from driver_history_inputs import INPUT_VERSION
+        before = self.path.read_bytes(), self.path.stat().st_mtime_ns
+        old = worker.summarize_in_process(self.path, self.source_id, lambda: False)
+        payload = worker.enrich_inputs_in_process(self.path, self.source_id, old['observations'], lambda: False)
+        self.assertEqual(payload['input_version'], INPUT_VERSION)
+        self.assertEqual(payload['source_id'], self.source_id)
+        self.assertEqual(sum(len(row['laps']) for row in payload['observations']), 3)
+        self.assertNotIn('race_results', payload)
+        self.assertTrue(all(set(row) == {'drive_id', 'laps'} for row in payload['observations']))
+        self.assertTrue(all(lap['inputs']['input_version'] == INPUT_VERSION
+            for row in payload['observations'] for lap in row['laps']))
+        self.assertNotIn(str(self.folder), json.dumps(payload))
+        self.assertEqual(before, (self.path.read_bytes(), self.path.stat().st_mtime_ns))
+
+    def test_input_mode_reads_minimum_channels_without_recalculating_metrics_or_results(self):
+        from ibt_reader import IBTReader
+        from driver_history_summary import build_source_summary
+        from driver_style import DRIVER_INPUT_CHANNELS
+        old = build_source_summary(IBTReader(self.path).parse(), self.source_id)
+        calls = []
+        original = IBTReader._read_channels
+        def read(reader, **kwargs):
+            calls.append(set(kwargs['requested']))
+            return original(reader, **kwargs)
+        with patch.object(IBTReader, '_read_channels', new=read), \
+                patch('driver_history_metrics.build_observation_metrics', side_effect=AssertionError('no metrics')), \
+                patch('driver_progress.attach_recording_results', side_effect=AssertionError('no results')):
+            payload = worker._enrich_recording(self.path, self.source_id, old['observations'])
+        self.assertEqual(calls, [set(DRIVER_INPUT_CHANNELS)])
+        self.assertEqual(len(payload['observations'][0]['laps']), 3)
+
+    def test_input_mode_rejects_unmatched_lap_boundaries_without_returning_partial_patch(self):
+        from ibt_reader import IBTReader
+        from driver_history_summary import build_source_summary
+        old = build_source_summary(IBTReader(self.path).parse(), self.source_id)
+        changed = deepcopy(old['observations'])
+        changed[0]['metrics']['laps'][-1]['end_s'] += .03
+        with self.assertRaisesRegex(ValueError, 'boundaries unavailable'):
+            worker._enrich_recording(self.path, self.source_id, changed)
+
+    def test_input_child_cancellation_reaps_process_and_closes_pipes(self):
+        process = Mock(returncode=None)
+        process.communicate.side_effect = [subprocess.TimeoutExpired('worker', .2), ('', None)]
+        process.wait.return_value = 0
+        should_stop = Mock(side_effect=[False, False, True])
+        with patch.object(worker.subprocess, 'Popen', return_value=process):
+            with self.assertRaises(InterruptedError):
+                worker.enrich_inputs_in_process(self.path, self.source_id, [], should_stop)
+        process.terminate.assert_called_once()
+        process.wait.assert_called()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close.assert_called_once()
+
     @unittest.skipUnless(importlib.util.find_spec('duckdb'), 'Optional DuckDB is unavailable')
     def test_actual_lmu_child_is_read_only_and_never_learns_model_associations(self):
         import duckdb
@@ -134,6 +189,12 @@ class DriverHistoryWorkerTests(unittest.TestCase):
         self.assertEqual(payload['observations'][0]['coverage']['sample_count'], 101)
         self.assertEqual(payload['observations'][0]['coverage']['time_basis'], 'UTC')
         self.assertNotIn(str(self.folder), json.dumps(payload))
+        from driver_history_inputs import INPUT_VERSION
+        inputs = worker.enrich_inputs_in_process(path, source_id, payload['observations'], lambda: False)
+        self.assertEqual(inputs['input_version'], INPUT_VERSION)
+        self.assertEqual(inputs['game'], 'lmu')
+        self.assertTrue(all(set(row) == {'drive_id', 'laps'} for row in inputs['observations']))
+        self.assertNotIn('race_results', inputs)
         self.assertEqual(before, {item.name: (item.read_bytes(), item.stat().st_mtime_ns)
                                   for item in self.folder.iterdir()})
 

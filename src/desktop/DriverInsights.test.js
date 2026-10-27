@@ -20,7 +20,7 @@ const input = {id:'brake_steer',axis:'brake_steer',title:'제동·조향 겹침 
 test('input facts keep zero, observation and session samples, and method without a persistent name',()=>{
   render(<DriverStyleCard style={{status:'PARTIAL',items:[input],reason:'성향과 빠르기는 별도입니다.'}} />);
   expect(screen.getByText('제동·조향 겹침 관측')).toBeInTheDocument();
-  expect(screen.getByText('0%')).toBeInTheDocument();
+  expect(screen.getAllByText('0%')).toHaveLength(1);
   expect(screen.getAllByRole('definition')[2]).toHaveTextContent('2개');
   expect(screen.getAllByRole('definition')[3]).toHaveTextContent('0개');
   expect(screen.queryByText('입력이 겹친 시간 비율입니다.')).not.toBeInTheDocument();
@@ -29,7 +29,7 @@ test('input facts keep zero, observation and session samples, and method without
   expect(screen.queryByText('반복 확인')).not.toBeInTheDocument();
 });
 
-test('repeated inputs show opposing evidence and at most two axes',()=>{
+test('repeated inputs show opposing evidence and keep every supplied axis accessible',()=>{
   render(<DriverStyleCard style={{items:[{...input,status:'REPEATED',title:'제동 연결형',
     counter_evidence:{event_count:3,share_pct:20,dates:['2026-10-23']}},
     {...input,id:'throttle',axis:'throttle',title:'점진 가속형',status:'REPEATED'},
@@ -37,9 +37,10 @@ test('repeated inputs show opposing evidence and at most two axes',()=>{
   expect(screen.getAllByText('반복 확인')).toHaveLength(1);
   userEvent.click(screen.getByRole('button',{name:'이번 수치의 측정 근거'}));
   expect(screen.getByText(/다른 양상도 3회 · 20%/)).toBeInTheDocument();
-  userEvent.click(screen.getByRole('tab',{name:'스로틀'}));
+  userEvent.selectOptions(screen.getByRole('combobox',{name:'설명할 성향 항목'}),'throttle');
   expect(screen.getByRole('heading',{name:'점진 가속형'})).toBeInTheDocument();
-  expect(screen.queryByText('세 번째 축')).not.toBeInTheDocument();
+  userEvent.selectOptions(screen.getByRole('combobox',{name:'설명할 성향 항목'}),'excluded');
+  expect(screen.getByRole('heading',{name:'세 번째 축'})).toBeInTheDocument();
 });
 
 test('missing style uses its actual missing evidence explanation',()=>{
@@ -105,17 +106,17 @@ test('malformed or absent growth never claims verified conditions or prints inva
   expect(screen.queryByText(/Infinity|NaN|undefined/)).not.toBeInTheDocument();
 });
 
-test('compact style keeps two values, counts and repeat states while details restore focus',async()=>{
+test('compact style keeps measured values and repeat states while details restore focus',async()=>{
   render(<DriverStyleCard compact style={{items:[{...input,status:'REPEATED',title:'제동 연결형'},
     {...input,id:'throttle',axis:'throttle',title:'스로틀 전개 관측',value:.65,unit:'s'},
     {...input,id:'excluded',title:'세 번째 축'}],reason:'입력 방식과 빠르기는 별도입니다.'}} />);
-  expect(screen.getByText('0%')).toBeInTheDocument();
+  expect(screen.getAllByText('0%')).toHaveLength(2);
   expect(screen.getByText('0.65초')).toBeInTheDocument();
-  expect(screen.getAllByText('6회')).toHaveLength(2);
+  expect(screen.getByText('측정 3 / 전체 3종')).toBeInTheDocument();
   expect(screen.getByText('반복 확인')).toBeInTheDocument();
-  expect(screen.getByText('관측')).toBeInTheDocument();
+  expect(screen.getAllByText('관측')).toHaveLength(2);
   expect(screen.getByText('GT3 · GP')).toBeInTheDocument();
-  expect(screen.queryByText('세 번째 축')).not.toBeInTheDocument();
+  expect(screen.getByText('세 번째 축')).toBeInTheDocument();
   expect(screen.queryByText(input.method)).not.toBeInTheDocument();
   const trigger=screen.getByRole('button',{name:'운전 성향 자세히'});
   userEvent.click(trigger);
@@ -123,7 +124,7 @@ test('compact style keeps two values, counts and repeat states while details res
   expect(within(dialog).queryByText(input.method)).not.toBeInTheDocument();
   userEvent.click(within(dialog).getByRole('button',{name:'이번 수치의 측정 근거'}));
   expect(within(dialog).getByText(input.method)).toBeInTheDocument();
-  userEvent.click(within(dialog).getByRole('tab',{name:'스로틀'}));
+  userEvent.selectOptions(within(dialog).getByRole('combobox',{name:'설명할 성향 항목'}),'throttle');
   expect(within(dialog).queryByText(input.method)).not.toBeInTheDocument();
   userEvent.click(within(dialog).getByRole('button',{name:'이번 수치의 측정 근거'}));
   expect(within(dialog).getByText(input.method)).toBeInTheDocument();
@@ -200,7 +201,7 @@ test('style details explain both input measurements in plain language with units
   expect(within(brake).getByText(/20%.*0\.15초.*5%/)).toBeInTheDocument();
   expect(within(brake).getByText(/코너 진입 위치나 트레일 브레이킹의 성공 여부/)).toBeInTheDocument();
   expect(within(dialog).queryByRole('region',{name:'스로틀 전개의 뜻과 계산 기준'})).not.toBeInTheDocument();
-  userEvent.click(within(dialog).getByRole('tab',{name:'스로틀'}));
+  userEvent.selectOptions(within(dialog).getByRole('combobox',{name:'설명할 성향 항목'}),'throttle');
   expect(within(dialog).queryByRole('region',{name:'제동·조향 겹침의 뜻과 계산 기준'})).not.toBeInTheDocument();
   const throttle=within(dialog).getByRole('region',{name:'스로틀 전개의 뜻과 계산 기준'});
   expect(within(throttle).getByRole('heading',{name:'가속 페달을 더 밟는 데 걸린 시간'})).toBeInTheDocument();
@@ -241,4 +242,79 @@ test('unknown input types and missing measurements retain general guidance witho
   expect(screen.getByText('측정 가능한 입력이 없습니다.')).toBeInTheDocument();
   expect(screen.getByRole('region',{name:'성향 수치와 표시 읽는 법'})).toBeInTheDocument();
   expect(screen.queryByText('0%')).not.toBeInTheDocument();
+});
+
+const styleAxes=['brake_steer','throttle','brake_application','brake_release','throttle_modulation',
+  'steering_application','steering_corrections','coasting','shift_consistency'];
+const fullStyle=()=>({items:styleAxes.map((axis,index)=>({...input,id:axis,axis,title:`조작 관측 ${index+1}`,
+  short_label:`조작 종류 ${index+1}`,value:index,meaning:`입력 의미 ${index+1}`,example:`입력 예시 ${index+1}`,
+  calculation:`입력 계산 조건 ${index+1}`,interpretation:`입력 해석 한계 ${index+1}`,names:[`성향 A${index+1}`,`성향 B${index+1}`]}))});
+
+test('all nine measured axes are accessible three at a time with repeated evidence first and bounded pages',()=>{
+  const style=fullStyle();style.items[7].status='REPEATED';
+  const view=render(<DriverStyleCard compact style={style}/>);
+  expect(screen.getByText('측정 9 / 전체 9종')).toBeInTheDocument();
+  expect(screen.getByText('1–3 / 9종')).toBeInTheDocument();
+  const shown=screen.getByLabelText('현재 페이지의 성향 항목');
+  expect(within(shown).getAllByRole('article')).toHaveLength(3);
+  expect(within(shown).getByText('조작 관측 8')).toBeInTheDocument();
+  expect(within(shown).queryByText('조작 관측 9')).not.toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'이전 성향 3개'})).toBeDisabled();
+  userEvent.click(screen.getByRole('button',{name:'다음 성향 3개'}));
+  expect(screen.getByText('4–6 / 9종')).toBeInTheDocument();
+  expect(within(shown).getByText('조작 관측 3')).toBeInTheDocument();
+  userEvent.click(screen.getByRole('button',{name:'다음 성향 3개'}));
+  expect(screen.getByText('7–9 / 9종')).toBeInTheDocument();
+  expect(within(shown).getByText('조작 관측 9')).toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'다음 성향 3개'})).toBeDisabled();
+  userEvent.click(screen.getByRole('button',{name:'이전 성향 3개'}));
+  expect(screen.getByText('4–6 / 9종')).toBeInTheDocument();
+  view.rerender(<DriverStyleCard compact style={{items:style.items.slice(0,2)}}/>);
+  expect(screen.getByText('1–2 / 2종')).toBeInTheDocument();
+  expect(within(shown).getAllByRole('article')).toHaveLength(2);
+});
+
+test('nine-axis details select one meaning at a time and use backend examples and calculation metadata',async()=>{
+  render(<DriverStyleCard compact style={fullStyle()}/>);
+  const trigger=screen.getByRole('button',{name:'운전 성향 자세히'});
+  userEvent.click(trigger);
+  const dialog=await screen.findByRole('dialog',{name:'운전 성향 자세히'});
+  const selector=within(dialog).getByRole('combobox',{name:'설명할 성향 항목'});
+  expect(within(selector).getAllByRole('option')).toHaveLength(9);
+  expect(within(dialog).getAllByRole('tab')).toHaveLength(2);
+  for(const [index,axis] of styleAxes.entries()) {
+    userEvent.selectOptions(selector,axis);
+    expect(within(dialog).getByText(`입력 의미 ${index+1}`)).toBeInTheDocument();
+    expect(within(dialog).getByText(`입력 예시 ${index+1}`)).toBeInTheDocument();
+    expect(within(dialog).getByText(`입력 해석 한계 ${index+1}`)).toBeInTheDocument();
+    expect(within(dialog).queryByText(`입력 의미 ${index===0?2:1}`)).not.toBeInTheDocument();
+    userEvent.click(within(dialog).getByRole('button',{name:'계산 조건과 성향 이름 기준'}));
+    expect(within(dialog).getByText(`입력 계산 조건 ${index+1}`)).toBeInTheDocument();
+    expect(within(dialog).getByText(new RegExp(`성향 A${index+1} 또는 성향 B${index+1}`))).toBeInTheDocument();
+  }
+  userEvent.click(within(dialog).getByRole('tab',{name:'수치 읽는 법'}));
+  expect(within(dialog).getByRole('region',{name:'성향 수치와 표시 읽는 법'})).toBeInTheDocument();
+  userEvent.keyboard('{Escape}');
+  await waitFor(()=>expect(trigger).toHaveFocus());
+});
+
+test('unavailable axes remain selectable with their reason and never fill the measured main list',async()=>{
+  const style=fullStyle();
+  style.items=style.items.map((item,index)=>index<2?item:{...item,status:'UNAVAILABLE',value:null,event_count:0,reason:`입력 채널 부족 ${index+1}`});
+  style.input_coverage={source_count:7,current_source_count:2,pending_source_count:5,version:'driver-inputs-v2',reason:'기존 기록의 새 성향 항목을 백그라운드에서 한 번 보완합니다.'};
+  render(<DriverStyleCard compact style={style}/>);
+  expect(screen.getByText('측정 2 / 전체 9종')).toBeInTheDocument();
+  expect(screen.getByText('기존 기록 5개 보완 대기')).toBeInTheDocument();
+  expect(screen.queryByText('조작 관측 3')).not.toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'다음 성향 3개'})).toBeDisabled();
+  userEvent.click(screen.getByRole('button',{name:'운전 성향 자세히'}));
+  const dialog=await screen.findByRole('dialog',{name:'운전 성향 자세히'});
+  const selector=within(dialog).getByRole('combobox',{name:'설명할 성향 항목'});
+  expect(within(selector).getAllByRole('option')).toHaveLength(9);
+  expect(within(dialog).getByText(style.input_coverage.reason)).toBeInTheDocument();
+  userEvent.selectOptions(selector,'shift_consistency');
+  expect(within(dialog).getByText('입력 채널 부족 9')).toBeInTheDocument();
+  expect(within(dialog).getByText('입력 의미 9')).toBeInTheDocument();
+  expect(within(dialog).getByText('—')).toBeInTheDocument();
+  expect(within(dialog).queryByText('—%')).not.toBeInTheDocument();
 });

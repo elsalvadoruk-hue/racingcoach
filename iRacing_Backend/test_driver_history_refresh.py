@@ -73,6 +73,40 @@ class HistoryRefreshTests(unittest.TestCase):
         self.assertEqual(result['total'], 0)
         self.loader.assert_not_called()
 
+    def test_input_only_refresh_finds_undated_original_without_an_analysis_locator(self):
+        current = build_source_summary(self.telemetry, self.source_id)
+        for row in current['observations']:
+            row['metrics'].pop('input_version', None)
+            row.update(recorded_at=None, recorded_at_source='UNKNOWN')
+        self.store.record_source(current)
+        before = self.store.report_snapshot('iracing')
+        before_save, after_save = Mock(), Mock()
+        with patch('driver_history_refresh._locators', return_value={}), \
+                patch('driver_history_metrics.build_observation_metrics', side_effect=AssertionError('no metrics')), \
+                patch('driver_history_refresh.attach_recording_results', side_effect=AssertionError('no results')):
+            result = self.run_refresh(before_save=before_save, after_save=after_save)
+        self.assertEqual((result['total'], result['updated'], result['failed']), (1, 1, 0))
+        after = self.store.report_snapshot('iracing')
+        for drive in after['drives']:
+            for row in drive['observations']:
+                row['metrics'].pop('input_version')
+        self.assertEqual(before, after)
+        before_save.assert_not_called()
+        after_save.assert_not_called()
+
+    def test_input_only_refresh_failure_preserves_summary_and_is_explicitly_retryable(self):
+        current = build_source_summary(self.telemetry, self.source_id)
+        for row in current['observations']:
+            row['metrics'].pop('input_version', None)
+        self.store.record_source(current)
+        before = self.store.report_snapshot('iracing')
+        callback = Mock(side_effect=RuntimeError('PRIVATE failure'))
+        result = self.run_refresh(enrich_file=callback)
+        self.assertEqual((result['total'], result['updated'], result['failed']), (1, 0, 1))
+        self.assertEqual(self.store.report_snapshot('iracing'), before)
+        self.assertNotIn('PRIVATE', json.dumps(result))
+        self.assertEqual(self.run_refresh()['updated'], 1)
+
     def test_previous_v3_summary_backfills_quality_and_counter_once_from_unchanged_source(self):
         previous=build_source_summary(self.telemetry,self.source_id)
         for row in previous['observations']:
