@@ -33,6 +33,20 @@ def facts(name='a', drive='drive', *, start=0., end=10., distance=500., lap_time
     return payload
 
 
+def current_metrics(payload, replay='CONFIRMED_NON_REPLAY'):
+    for row in payload['observations']:
+        metrics = row['metrics']
+        metrics['calculation_version'] = 'observed-metrics-v2'
+        metrics['driving']['replay_status'] = replay
+        metrics['driving']['status'] = 'PARTIAL' if replay == 'UNKNOWN' else metrics['driving']['status']
+        if replay == 'UNKNOWN':
+            metrics['driving']['reason_codes'] = ['REPLAY_STATE_UNAVAILABLE']
+        for lap in metrics['laps']:
+            lap['replay_status'] = replay
+            lap['reason_codes'] = ['REPLAY_STATE_UNAVAILABLE'] if replay == 'UNKNOWN' else []
+    return payload
+
+
 class DriverReportTests(unittest.TestCase):
     def setUp(self):
         self.work = tempfile.TemporaryDirectory()
@@ -129,6 +143,187 @@ class DriverReportTests(unittest.TestCase):
         self.store.record_source(facts('b', lap_times=(90.,)))
         self.assertIsNone(self.report()['pace']['median_lap_s'])
 
+    def test_same_number_and_duration_with_different_time_windows_does_not_merge(self):
+        self.store.record_source(facts('a', lap_times=(100.,)))
+        other = facts('b', lap_times=(100.,))
+        lap = other['observations'][0]['metrics']['laps'][0]
+        lap.update(start_s=1000., end_s=1110.)
+        self.store.record_source(other)
+        report = self.report()
+        self.assertIsNone(report['pace']['median_lap_s'])
+        self.assertEqual(report['recent_drives'][0]['measured_laps'], 0)
+        self.assertIn('CONFLICTING_LAP_WINDOW', {item['code'] for item in report['coverage']['blocking_reason_counts']})
+
+    def test_different_lap_numbers_with_overlapping_windows_are_not_independent_measurements(self):
+        payload = facts(lap_times=(100., 100.))
+        payload['observations'][0]['metrics']['laps'][1].update(start_s=0., end_s=110.)
+        self.store.record_source(payload)
+        report = self.report()
+        self.assertEqual(report['coverage']['measured_lap_count'], 0)
+        self.assertIn('OVERLAPPING_LAP_WINDOWS', {item['code'] for item in report['coverage']['blocking_reason_counts']})
+
+    def test_lap_windows_from_different_time_bases_are_not_falsely_compared_or_added(self):
+        self.store.record_source(facts('a'))
+        other = facts('b')
+        other['observations'][0]['coverage']['time_basis'] = 'UTC'
+        for lap in other['observations'][0]['metrics']['laps']:
+            lap['start_s'] += 1800000000.
+            lap['end_s'] += 1800000000.
+        self.store.record_source(other)
+        report = self.report()
+        self.assertEqual(report['coverage']['measured_lap_count'], 3)
+        self.assertEqual(report['pace']['lap_count'], 3)
+        self.assertNotIn('CONFLICTING_LAP_WINDOW', {item['code'] for item in report['coverage']['blocking_reason_counts']})
+
+    def test_diagnostics_count_connected_observations_and_stale_sources_without_lap_copy_inflation(self):
+        self.store.record_source(facts('a'))
+        self.store.record_source(facts('copy'))
+        report = self.report()
+        coverage = report['coverage']
+        self.assertEqual(coverage['source_count'], 2)
+        self.assertEqual(coverage['source_observation_count'], 2)
+        self.assertEqual(coverage['observation_count'], 1)
+        self.assertEqual(coverage['measured_observation_count'], 1)
+        self.assertEqual(coverage['measured_lap_count'], 3)
+        self.assertEqual(coverage['outdated_source_count'], 2)
+        self.assertEqual(next(item['count'] for item in coverage['blocking_reason_counts'] if item['code'] == 'OUTDATED_METRICS'), 1)
+
+    def test_one_stale_source_with_multiple_observations_counts_once_and_games_stay_separate(self):
+        payload = facts('a')
+        row = deepcopy(payload['observations'][0])
+        row['drive_id'] = identity('second-drive')
+        payload['observations'].append(row)
+        self.store.record_source(payload)
+        self.store.record_source(current_metrics(facts('current', 'current')))
+        self.store.record_source(facts('lmu', 'lmu', game='lmu'))
+        coverage = self.report()['coverage']
+        self.assertEqual(coverage['source_count'], 2)
+        self.assertEqual(coverage['outdated_source_count'], 1)
+        self.assertEqual(coverage['observation_count'], 3)
+        self.assertEqual(self.report('lmu')['coverage']['source_count'], 1)
+        self.assertEqual(self.report('lmu')['coverage']['outdated_source_count'], 1)
+
+    def test_native_replay_unknown_values_are_partial_observations_and_cannot_establish_growth(self):
+        self.populate_trend()
+        self.store.record_source(current_metrics(facts('latest', 'latest', date='2026-10-26T10:00:00Z'), 'UNKNOWN'))
+        report = self.report()
+        self.assertEqual(report['career']['distance_m']['value'], 2500.)
+        self.assertEqual(report['career']['distance_m']['status'], 'PARTIAL')
+        self.assertEqual(report['career']['distance_m']['replay_status'], 'UNKNOWN')
+        self.assertIn('주행 관측량', report['career']['distance_m']['scope_label'])
+        self.assertIn('리플레이 여부가 미확인', report['career']['distance_m']['reason'])
+        self.assertEqual(report['pace']['median_lap_s'], 100.)
+        self.assertEqual(report['pace']['lap_count'], 3)
+        self.assertEqual(report['pace']['replay_status'], 'UNKNOWN')
+        self.assertEqual(report['pace']['trend'], 'UNAVAILABLE')
+        self.assertIn('REPLAY_STATE_UNAVAILABLE', report['pace']['trend_reason_codes'])
+        self.assertEqual(report['coverage']['replay_unknown_observation_count'], 1)
+
+    def test_source_only_unknown_replay_keeps_latest_measured_laps_without_changing_career(self):
+        self.store.record_source(current_metrics(facts('known', 'known', date='2026-10-24T10:00:00Z')))
+        self.store.record_source(current_metrics(facts('unknown', 'unknown', identity_status='SOURCE_ONLY'), 'UNKNOWN'))
+        report = self.report()
+        self.assertEqual(report['career']['distance_m']['value'], 500.)
+        self.assertEqual(report['coverage']['native_session_count'], 1)
+        self.assertEqual(report['coverage']['measured_observation_count'], 2)
+        self.assertEqual(report['coverage']['measured_lap_count'], 6)
+        self.assertEqual(report['pace']['median_lap_s'], 100.)
+        self.assertEqual(report['pace']['trend'], 'UNAVAILABLE')
+        self.assertIn('NATIVE_IDENTITY_UNAVAILABLE', report['pace']['trend_reason_codes'])
+        self.assertEqual(report['recent_drives'][0]['measured_laps'], 3)
+        self.assertIn('누적', report['recent_drives'][0]['identity_reason'])
+
+    def test_unavailable_measurements_explain_missing_replay_and_stale_metrics(self):
+        payload = facts()
+        row = payload['observations'][0]
+        row['coverage']['reasons'] = ['REPLAY_STATE_UNAVAILABLE']
+        row['metrics']['driving'].update(status='UNAVAILABLE', time_s=None, distance_m=None,
+            intervals=[], reason_codes=['REPLAY_STATE_UNAVAILABLE'])
+        row['metrics']['laps'] = []
+        self.store.record_source(payload)
+        coverage = self.report()['coverage']
+        self.assertEqual(coverage['measured_lap_count'], 0)
+        self.assertEqual(coverage['driving_unavailable_observation_count'], 1)
+        self.assertEqual(coverage['replay_unknown_observation_count'], 1)
+        self.assertEqual(coverage['outdated_source_count'], 1)
+        diagnostic = next(item for item in coverage['blocking_reason_counts'] if item['code'] == 'REPLAY_STATE_UNAVAILABLE')
+        self.assertEqual(diagnostic['count'], 1)
+        self.assertIn('리플레이', diagnostic['reason'])
+
+    def test_legacy_observations_without_measured_evidence_keep_replay_unknown(self):
+        for variant in ('no-metrics', 'unavailable', 'unmeasured-laps'):
+            with self.subTest(variant=variant):
+                self.store = DriverHistoryStore(self.path.with_name(variant + '.sqlite3'))
+                payload = facts()
+                row = payload['observations'][0]
+                if variant == 'no-metrics':
+                    row.pop('metrics')
+                else:
+                    row['metrics']['driving'].update(status='UNAVAILABLE', time_s=None,
+                        distance_m=None, intervals=[])
+                    if variant == 'unavailable':
+                        row['metrics']['laps'] = []
+                    else:
+                        for lap in row['metrics']['laps']:
+                            lap['measurable'] = False
+                self.store.record_source(payload)
+                report = self.report()
+                self.assertEqual(report['recent_drives'][0]['replay_status'], 'UNKNOWN')
+                self.assertEqual(report['coverage']['replay_unknown_observation_count'], 1)
+                self.assertIsNone(report['career']['driving_time_s']['value'])
+
+    def test_v1_actual_measurements_preserve_original_non_replay_evidence(self):
+        for variant in ('driving-only', 'laps-only', 'both', 'both-with-unmeasured-lap'):
+            with self.subTest(variant=variant):
+                self.store = DriverHistoryStore(self.path.with_name(variant + '.sqlite3'))
+                payload = facts()
+                row = payload['observations'][0]
+                if variant == 'driving-only':
+                    row['metrics']['laps'] = []
+                elif variant == 'laps-only':
+                    row['metrics']['driving'].update(status='UNAVAILABLE', time_s=None,
+                        distance_m=None, intervals=[])
+                elif variant == 'both-with-unmeasured-lap':
+                    row['metrics']['laps'][0]['measurable'] = False
+                self.store.record_source(payload)
+                report = self.report()
+                self.assertEqual(report['recent_drives'][0]['replay_status'], 'CONFIRMED_NON_REPLAY')
+                self.assertEqual(report['coverage']['replay_unknown_observation_count'], 0)
+                if variant != 'driving-only':
+                    self.assertEqual(report['pace']['lap_count'], 2 if variant == 'both-with-unmeasured-lap' else 3)
+                    self.assertEqual(report['pace']['replay_status'], 'CONFIRMED_NON_REPLAY')
+
+    def test_current_metrics_extraction_failure_remains_stale_for_reconfirmation(self):
+        payload = current_metrics(facts())
+        metrics = payload['observations'][0]['metrics']
+        metrics['driving'].update(status='UNAVAILABLE', time_s=None, distance_m=None,
+            intervals=[], replay_status='UNKNOWN', reason_codes=['METRICS_EXTRACTION_FAILED'])
+        metrics['laps'] = []
+        self.store.record_source(payload)
+        coverage = self.report()['coverage']
+        self.assertEqual(coverage['outdated_source_count'], 1)
+        counts = {item['code']: item['count'] for item in coverage['blocking_reason_counts']}
+        self.assertEqual(counts['METRICS_EXTRACTION_FAILED'], 1)
+        self.assertEqual(counts['OUTDATED_METRICS'], 1)
+
+    def test_30_90_day_boundaries_are_utc_and_recent_records_have_an_explicit_full_scope(self):
+        dates = [('boundary30', '2026-09-27T21:00:00+09:00'),
+                 ('outside30', '2026-09-27T11:59:59.999999Z'),
+                 ('boundary90', '2026-07-29T12:00:00Z'),
+                 ('outside90', '2026-07-29T11:59:59.999999Z'),
+                 ('future', '2026-10-27T12:00:00.000001Z')]
+        for name, date in dates:
+            self.store.record_source(current_metrics(facts(name, name, date=date)))
+        report30, report90 = self.report(), self.report(days=90)
+        self.assertEqual(report30['coverage']['period_session_count'], 1)
+        self.assertEqual(report90['coverage']['period_session_count'], 3)
+        self.assertEqual(report30['career'], report90['career'])
+        self.assertEqual(report30['scopes']['pace'], 'SELECTED_PERIOD')
+        self.assertEqual(report30['scopes']['recent_drives'], 'ALL_CONNECTED_OBSERVATIONS')
+        self.assertIn('전체', report30['scope_labels']['recent_drives'])
+        self.assertEqual(sum(item['in_selected_period'] for item in report30['recent_drives']), 1)
+        self.assertEqual(sum(item['in_selected_period'] for item in report90['recent_drives']), 3)
+
     def populate_trend(self, *, conditions=CONDITIONS, identity_status='NATIVE', session_type='PRACTICE'):
         for index, times in enumerate(((100., 100.5, 99.5), (100., 100.5, 99.5), (98., 98.2, 97.8), (98., 98.2, 97.8))):
             self.store.record_source(facts(str(index), str(index), date=f'2026-10-{20 + index}T10:00:00Z',
@@ -184,6 +379,34 @@ class DriverReportTests(unittest.TestCase):
     def test_unknown_actual_session_type_blocks_period_comparison(self):
         self.populate_trend(session_type='UNKNOWN')
         self.assertEqual(self.report()['pace']['trend'], 'UNAVAILABLE')
+
+    def test_latest_short_record_does_not_claim_a_trend_from_older_sessions(self):
+        self.populate_trend()
+        self.store.record_source(current_metrics(facts('latest', 'latest',
+            date='2026-10-26T10:00:00Z', lap_times=(97.,))))
+        pace = self.report()['pace']
+        self.assertEqual(pace['median_lap_s'], 97.)
+        self.assertEqual(pace['lap_count'], 1)
+        self.assertEqual(pace['session_count'], 1)
+        self.assertEqual(pace['trend'], 'UNAVAILABLE')
+        self.assertIn('INSUFFICIENT_LAPS_PER_SESSION', pace['trend_reason_codes'])
+
+    def test_missing_or_varying_conditions_explain_why_the_latest_pace_is_not_a_trend(self):
+        for variant in ('missing', 'varying'):
+            with self.subTest(variant=variant):
+                self.store = DriverHistoryStore(self.path.with_name(variant + '.sqlite3'))
+                payload = current_metrics(facts())
+                laps = payload['observations'][0]['metrics']['laps']
+                if variant == 'missing':
+                    laps[0]['conditions'].pop('setup_hash')
+                else:
+                    laps[0]['conditions']['fuel_level_l'] = 51.
+                self.store.record_source(payload)
+                pace = self.report()['pace']
+                self.assertEqual(pace['median_lap_s'], 100.)
+                self.assertIn('셋업' if variant == 'missing' else '모두 같지 않아', pace['reason'])
+                self.assertIn('CONDITIONS_MISSING' if variant == 'missing' else 'CONDITIONS_VARY_WITHIN_RECORDING',
+                              pace['trend_reason_codes'])
 
     def test_metrics_whitelist_never_persists_arbitrary_paths_or_raw_material(self):
         payload = facts()

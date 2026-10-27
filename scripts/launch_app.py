@@ -65,7 +65,8 @@ def require_current_api() -> None:
         paths = spec.get('paths', {})
         # Routes added recently: an older server lacks them and must not be reused.
         supported = ('post' in paths.get('/api/lmu/telemetry/import', {})
-                     and 'put' in paths.get('/api/session-logs/auto', {}))
+                     and 'put' in paths.get('/api/session-logs/auto', {})
+                     and {'get', 'post'}.issubset(paths.get('/api/driver-history/refresh', {})))
     except (ValueError, AttributeError, TypeError):
         supported = False
     if not supported:

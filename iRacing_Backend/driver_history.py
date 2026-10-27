@@ -136,11 +136,24 @@ def _labels(value):
 def _metrics(value):
     if not isinstance(value, dict) or type(value.get('schema_version')) is not int or value['schema_version'] != 1:
         _fail()
+    version = {}
+    if 'calculation_version' in value:
+        version['calculation_version'] = _choice(value['calculation_version'], {'observed-metrics-v2'})
+    replay_options = {'CONFIRMED_NON_REPLAY', 'UNKNOWN', 'MIXED', 'CONFIRMED_REPLAY', 'INVALID'}
+
+    def replay_fields(item):
+        if 'replay_status' in item or version:
+            return {'replay_status': _choice(item.get('replay_status'), replay_options)}
+        return {}  # Legacy payloads retain their original evidence shape.
+
     driving = value.get('driving')
     laps = value.get('laps')
     if not isinstance(driving, dict) or not isinstance(laps, list) or len(laps) > 2048:
         _fail()
     status = _choice(driving.get('status'), {'OBSERVED', 'PARTIAL', 'UNAVAILABLE'})
+    driving_replay = replay_fields(driving)
+    if status == 'OBSERVED' and driving_replay and driving_replay['replay_status'] != 'CONFIRMED_NON_REPLAY':
+        _fail()
     windows = _intervals(driving.get('intervals', []))
     facts = {}
     for key in ('time_s', 'distance_m'):
@@ -162,11 +175,21 @@ def _metrics(value):
         start, end, lap_time = (_number(lap.get(key)) for key in ('start_s', 'end_s', 'lap_time_s'))
         if start < 0 or end <= start or not 0 < lap_time <= 86400 or type(lap.get('measurable')) is not bool:
             _fail()
+        lap_replay = replay_fields(lap)
+        if lap['measurable'] and lap_replay.get('replay_status') in {'CONFIRMED_REPLAY', 'MIXED', 'INVALID'}:
+            _fail()
+        lap_reasons = {}
+        if 'reason_codes' in lap or version:
+            items = lap.get('reason_codes')
+            if not isinstance(items, list) or len(items) > 100:
+                _fail()
+            lap_reasons['reason_codes'] = sorted({_enum(item) for item in items})
         checked_laps.append({'lap_number': lap['lap_number'], 'start_s': start, 'end_s': end,
             'lap_time_s': lap_time, 'measurable': lap['measurable'],
+            **lap_replay, **lap_reasons,
             'conditions': _conditions(lap.get('conditions', {})),
             'official_validity': _choice(lap.get('official_validity'), {'UNKNOWN'})})
-    return {'schema_version': 1, 'driving': {'status': status, **facts, 'intervals': windows,
+    return {'schema_version': 1, **version, 'driving': {'status': status, **facts, **driving_replay, 'intervals': windows,
         'reason_codes': sorted({_enum(item) for item in reasons})}, 'laps': checked_laps}
 
 

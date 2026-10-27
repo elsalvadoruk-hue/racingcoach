@@ -163,6 +163,51 @@ class DriverHistoryStoreTests(unittest.TestCase):
             self.store.record_source(item)
         self.assertEqual(self.store.get_drive(identity('drive'))['labels'], expected)
 
+    def test_current_metrics_roundtrip_preserves_unknown_replay_and_old_payload_shape(self):
+        metrics = {'schema_version': 1, 'calculation_version': 'observed-metrics-v2',
+            'driving': {'status': 'PARTIAL', 'time_s': 1., 'distance_m': 10., 'intervals': [[0., 1.]],
+                        'reason_codes': ['REPLAY_STATE_UNAVAILABLE'], 'replay_status': 'UNKNOWN'},
+            'laps': [{'lap_number': 1, 'start_s': 0., 'end_s': 1., 'lap_time_s': 1., 'measurable': True,
+                      'conditions': {}, 'official_validity': 'UNKNOWN', 'replay_status': 'UNKNOWN',
+                      'reason_codes': ['REPLAY_STATE_UNAVAILABLE']}]}
+        payload = source()
+        payload['observations'][0]['metrics'] = metrics
+        self.store.record_source(payload)
+        self.assertEqual(self.store.get_drive(identity('drive'))['observations'][0]['metrics'], metrics)
+        metrics.pop('calculation_version')
+        metrics['driving'].pop('replay_status')
+        metrics['laps'][0].pop('replay_status')
+        metrics['laps'][0].pop('reason_codes')
+        self.store.record_source(payload)
+        self.assertEqual(self.store.get_drive(identity('drive'))['observations'][0]['metrics'], metrics)
+
+    def test_metrics_new_fields_reject_invalid_enums_and_inconsistent_replay_claims(self):
+        from driver_history import _metrics
+        metrics = {'schema_version': 1, 'calculation_version': 'observed-metrics-v2',
+            'driving': {'status': 'PARTIAL', 'time_s': 1., 'distance_m': 10., 'intervals': [[0., 1.]],
+                        'reason_codes': ['REPLAY_STATE_UNAVAILABLE'], 'replay_status': 'UNKNOWN'},
+            'laps': [{'lap_number': 1, 'start_s': 0., 'end_s': 1., 'lap_time_s': 1., 'measurable': True,
+                      'conditions': {}, 'official_validity': 'UNKNOWN', 'replay_status': 'UNKNOWN',
+                      'reason_codes': ['REPLAY_STATE_UNAVAILABLE']}]}
+        invalid = []
+        for value in [None, 'observed-metrics-v3', 2]:
+            item = deepcopy(metrics); item['calculation_version'] = value; invalid.append(item)
+        for value in [None, 'NON_REPLAY', 'PRIVATE replay', 0]:
+            for target in ['driving', 'lap']:
+                item = deepcopy(metrics)
+                (item['driving'] if target == 'driving' else item['laps'][0])['replay_status'] = value
+                invalid.append(item)
+        for value in [None, 'REPLAY_STATE_UNAVAILABLE', ['private path'], [1], ['UNKNOWN'] * 101]:
+            item = deepcopy(metrics); item['laps'][0]['reason_codes'] = value; invalid.append(item)
+        for replay_status in ['CONFIRMED_REPLAY', 'MIXED', 'INVALID']:
+            item = deepcopy(metrics); item['laps'][0]['replay_status'] = replay_status; invalid.append(item)
+        item = deepcopy(metrics); item['driving']['status'] = 'OBSERVED'; invalid.append(item)
+        item = deepcopy(metrics); item['driving'].pop('replay_status'); invalid.append(item)
+        item = deepcopy(metrics); item['laps'][0].pop('reason_codes'); invalid.append(item)
+        for item in invalid:
+            with self.subTest(item=item), self.assertRaises(ValueError):
+                _metrics(item)
+
     def test_aggregate_labels_fill_known_fields_independently(self):
         payloads = sorted([source('a'), source('b')], key=lambda item: item['source_id'])
         payloads[0]['observations'][0]['labels'] = {'car': 'Synthetic GT3', 'track': '', 'layout': ''}

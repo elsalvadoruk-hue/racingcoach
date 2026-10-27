@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import DriverReport from './DriverReport';
+import DriverReport, { DRIVER_REPORT_TIMEOUT_MS } from './DriverReport';
 
 const API = 'http://localhost:24891';
 const unavailable = reason => ({ value: null, status: 'UNAVAILABLE', reason });
@@ -188,4 +188,174 @@ test('read cancellation on unmount and callback-only changes do not reload or mu
   view.rerender(<DriverReport apiBase={API} onChooseSource={jest.fn()} onNavigate={jest.fn()} />);
   expect(fetch).toHaveBeenCalledTimes(1);
   view.unmount(); expect(signal.aborted).toBe(true);
+});
+
+test('a hung read times out, ignores late data and supports a fresh retry', async () => {
+  jest.useFakeTimers();
+  try {
+    const pending = deferred();
+    fetch.mockReturnValueOnce(pending.promise).mockResolvedValue(response(observed()));
+    render(<DriverReport apiBase={API} />);
+    const signal = fetch.mock.calls[0][1].signal;
+    await act(async () => { jest.advanceTimersByTime(DRIVER_REPORT_TIMEOUT_MS || 15000); });
+    expect(screen.getByRole('alert')).toHaveTextContent('응답이 늦어 조회를 중단했습니다. 다시 시도해 주세요.');
+    expect(signal.aborted).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
+    await act(async () => { jest.advanceTimersByTime(0); });
+    expect(screen.getByText('12.5 km')).toBeInTheDocument();
+    const obsolete = observed(); obsolete.career.distance_m.value = 999000;
+    await act(async () => { pending.resolve(response(obsolete)); });
+    expect(screen.queryByText('999 km')).not.toBeInTheDocument();
+  } finally { jest.useRealTimers(); }
+});
+
+test('malformed optional nested values cannot crash the report or invent observations', async () => {
+  const malformed = { ...observed(), coverage: { period_session_count: {}, undated_count: [] },
+    overview: { title: {}, body: [] }, challenge: { title: [], body: {} }, style: { reason: {} },
+    career: { distance_m: { status: 'OBSERVED', value: 12500, reason: {} }, wins: [] },
+    pace: { status: 'OBSERVED', median_lap_s: 91.125, scope: {}, reason: {}, points: [null, {}, { date: '2026-02-31', median_lap_s: 90 }] },
+    discoveries: [null, {}, { title: {}, body: [] }], recent_drives: [null, { car: {}, track: [], measured_laps: {} }], limitations: [null, {}] };
+  fetch.mockResolvedValue(response(malformed));
+  render(<DriverReport apiBase={API} />);
+  expect(await screen.findByText('12.5 km')).toBeInTheDocument();
+  expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '관측 근거' }));
+  expect(await screen.findByRole('dialog', { name: '관측 근거와 기록' })).toBeInTheDocument();
+  expect(screen.queryByText('[object Object]')).not.toBeInTheDocument();
+});
+
+test('the pace chart orders real calendar days and scales horizontal spacing by elapsed days', async () => {
+  const actual = observed();
+  actual.pace.points = [
+    { date: '2026-10-10', median_lap_s: 89 }, { date: '2026-10-01', median_lap_s: 91 },
+    { date: '2026-10-02', median_lap_s: 90 }, { date: '2026-02-31', median_lap_s: 88 },
+  ];
+  fetch.mockResolvedValue(response(actual));
+  render(<DriverReport apiBase={API} />);
+  const chart = await screen.findByRole('img', { name: '날짜가 확인된 3개 관측의 랩 중앙값' });
+  // Verify the actual SVG geometry; accessible text cannot prove day spacing.
+  // eslint-disable-next-line testing-library/no-node-access
+  const dots = [...chart.querySelectorAll('circle')];
+  expect(dots.map(dot => dot.textContent.slice(0, 10))).toEqual(['2026.10.01', '2026.10.02', '2026.10.10']);
+  const x = dots.map(dot => Number(dot.getAttribute('cx')));
+  expect((x[2] - x[1]) / (x[1] - x[0])).toBeCloseTo(8);
+});
+
+test('evidence distinguishes all connected records from the selected comparison period', async () => {
+  fetch.mockResolvedValue(response(observed()));
+  render(<DriverReport apiBase={API} />);
+  await screen.findByText('12.5 km');
+  fireEvent.click(screen.getByRole('button', { name: '관측 근거' }));
+  const dialog = await screen.findByRole('dialog', { name: '관측 근거와 기록' });
+  expect(within(dialog).getByText('전체 연결 기록 중 최근 항목')).toBeInTheDocument();
+  expect(within(dialog).getByText(/선택한 30일 밖의 기록도 포함될 수 있습니다/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/세션을 확인하지 못한 출처는 별도 관측으로/)).toBeInTheDocument();
+});
+
+test('measurement evidence explains source-only observations, unknown replay and omitted totals in Korean', async () => {
+  const actual = observed();
+  Object.assign(actual.coverage, { observation_count: 3, measured_observation_count: 2, measured_lap_count: 7,
+    replay_unknown_observation_count: 1, driving_unavailable_observation_count: 2,
+    blocking_reason_counts: [{ code: 'SOURCE_ONLY', count: 1, reason: '독립 세션을 확인할 수 없습니다.' }] });
+  Object.assign(actual.recent_drives[0], { identity_status: 'SOURCE_ONLY', replay_status: 'UNKNOWN', in_selected_period: false });
+  fetch.mockResolvedValue(response(actual));
+  render(<DriverReport apiBase={API} />);
+  await screen.findByText('12.5 km');
+  fireEvent.click(screen.getByRole('button', { name: '관측 근거' }));
+  const dialog = await screen.findByRole('dialog', { name: '관측 근거와 기록' });
+  expect(within(dialog).getByText('측정 가능한 랩')).toBeInTheDocument();
+  expect(within(dialog).getByText('7랩')).toBeInTheDocument();
+  expect(within(dialog).getByText(/측정 가능한 랩은 공식 유효 랩 수가 아닙니다/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/독립 세션 미확인 · 누적 통계와 성장 비교에서 제외/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/리플레이 여부 미확인 · 관측한 측정값만 표시/)).toBeInTheDocument();
+  expect(within(dialog).getByText('독립 세션을 확인할 수 없습니다. · 1개 관측')).toBeInTheDocument();
+  expect(within(dialog).queryByText('SOURCE_ONLY')).not.toBeInTheDocument();
+});
+
+const refreshJob = (status, extra = {}) => ({ game: 'iracing', status, total: 12, processed: 0, updated: 0, skipped: 0, failed: 0, message: '', ...extra });
+
+test('existing sources are refreshed only after an explicit action, polled once and followed by a report reload', async () => {
+  jest.useFakeTimers();
+  try {
+    const actual = observed(); actual.coverage.outdated_source_count = 12;
+    let posted = false;
+    fetch.mockImplementation(async (url, options) => {
+      if (url.includes('/api/driver-report?')) return response(actual);
+      if (options.method === 'POST') { posted = true; return response(refreshJob('RUNNING')); }
+      return response(refreshJob(posted ? 'COMPLETE' : 'IDLE', posted ? { processed: 12, updated: 10, skipped: 1, failed: 1, message: '기존 기록 확인을 마쳤습니다.' } : {}));
+    });
+    render(<DriverReport apiBase={API} />);
+    await act(async () => { jest.advanceTimersByTime(0); });
+    expect(fetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
+    expect(screen.getByText(/12개 원본의 측정 범위를 다시 확인/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '기존 기록 다시 확인' }));
+    await act(async () => { jest.advanceTimersByTime(0); });
+    expect(screen.getByText('기존 기록을 다시 확인하고 있어요')).toBeInTheDocument();
+    await act(async () => { jest.advanceTimersByTime(1500); });
+    expect(screen.getByText('기존 기록 확인을 마쳤습니다.')).toBeInTheDocument();
+    expect(screen.getByText('처리 12/12개 · 갱신 10개 · 건너뜀 1개 · 실패 1개')).toBeInTheDocument();
+    expect(screen.getByText(/확인하지 못한 원본은 기존 관측을 유지합니다/)).toBeInTheDocument();
+    expect(fetch.mock.calls.filter(([, options]) => options.method === 'POST')).toHaveLength(1);
+    expect(fetch.mock.calls.filter(([url]) => url.includes('/api/driver-report?'))).toHaveLength(2);
+  } finally { jest.useRealTimers(); }
+});
+
+test('an existing background check reconnects with GET and stops polling on game change', async () => {
+  jest.useFakeTimers();
+  try {
+    const actual = observed(); actual.coverage.outdated_source_count = 12;
+    fetch.mockImplementation(async url => response(url.includes('/api/driver-history/refresh?') ? refreshJob('RUNNING')
+      : url.includes('game=lmu') ? observed('lmu') : actual));
+    const view = render(<DriverReport apiBase={API} />);
+    await act(async () => { jest.advanceTimersByTime(0); });
+    expect(screen.getByText('기존 기록을 다시 확인하고 있어요')).toBeInTheDocument();
+    expect(fetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
+    const signal = fetch.mock.calls.find(([url]) => url.includes('/api/driver-history/refresh?'))[1].signal;
+    view.rerender(<DriverReport apiBase={API} game="lmu" />);
+    await act(async () => { jest.advanceTimersByTime(0); });
+    expect(signal.aborted).toBe(true);
+    const calls = fetch.mock.calls.length;
+    await act(async () => { jest.advanceTimersByTime(3000); });
+    expect(fetch).toHaveBeenCalledTimes(calls);
+    expect(screen.queryByText('기존 기록을 다시 확인하고 있어요')).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'LMU 드라이버 리포트' })).toBeInTheDocument();
+  } finally { jest.useRealTimers(); }
+});
+
+test('unknown replay cannot advertise growth and repeated dates do not imply elapsed time', async () => {
+  const actual = observed();
+  Object.assign(actual.pace, { status: 'OBSERVED', replay_status: 'UNKNOWN', pace_change_pct: -10, trend: 'IMPROVING',
+    points: [{ date: '2026-10-26', median_lap_s: 91 }, { date: '2026-10-26', median_lap_s: 90 }] });
+  actual.recent_drives[0].session_type = 'constructor';
+  fetch.mockResolvedValue(response(actual));
+  render(<DriverReport apiBase={API} />);
+  await screen.findByText('1:31.125');
+  expect(screen.getByLabelText('개인 페이스 —')).toBeInTheDocument();
+  expect(screen.queryByText('비교 범위에서 페이스 개선')).not.toBeInTheDocument();
+  expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  expect(screen.getByText(/Monza · 종류 미확인/)).toBeInTheDocument();
+});
+
+test('a failed background state read preserves the report and retry resumes with GET rather than another POST', async () => {
+  jest.useFakeTimers();
+  try {
+    const actual = observed(); actual.coverage.outdated_source_count = 1;
+    let statusReads = 0;
+    fetch.mockImplementation(async url => {
+      if (url.includes('/api/driver-report?')) return response(actual);
+      statusReads += 1;
+      if (statusReads === 2) throw new TypeError('Failed to fetch');
+      return response(refreshJob(statusReads === 1 ? 'RUNNING' : 'FAILED', { failed: 1, message: '원본을 다시 선택해 분석해 주세요.' }));
+    });
+    render(<DriverReport apiBase={API} />);
+    await act(async () => { jest.advanceTimersByTime(0); });
+    await act(async () => { jest.advanceTimersByTime(1500); });
+    expect(screen.getByText('12.5 km')).toBeInTheDocument();
+    expect(screen.getByText('기록 확인 상태를 가져오지 못했습니다. 연결 상태를 확인해 주세요.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '진행 상태 다시 확인' }));
+    await act(async () => { jest.advanceTimersByTime(0); });
+    expect(screen.getByText('원본을 다시 선택해 분석해 주세요.')).toBeInTheDocument();
+    expect(fetch.mock.calls.some(([, options]) => options.method === 'POST')).toBe(false);
+    expect(fetch.mock.calls.filter(([url]) => url.includes('/api/driver-report?'))).toHaveLength(2);
+  } finally { jest.useRealTimers(); }
 });

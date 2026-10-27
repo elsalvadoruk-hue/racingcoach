@@ -4475,6 +4475,25 @@ workspace_request = _handlers.workspace_request
 app.state.workspace_request = workspace_request
 
 
+# Recheck only stale sources already in the driver ledger, on an explicit request.
+# The analysis DB supplies existing locators; it does not seed new history.
+from driver_history_refresh import HistoryRefresh, register_refresh_routes
+
+
+def _driver_history_recordings(game):
+    if game == 'lmu':
+        import lmu_recordings
+        return lmu_recordings.recordings()
+    return list_ibt_files(None)
+
+
+register_refresh_routes(app, HistoryRefresh(
+    memory_db_path=lambda: MEMORY_DB_PATH,
+    allowed_paths=_driver_history_recordings,
+    load_telemetry=lambda path: recording_reader(path).parse(),
+))
+
+
 def import_lmu_corner_names() -> int:
     """Carry corner numbers confirmed on the earlier LMU screen into the shared store."""
     from lmu_irsdk import stable_id

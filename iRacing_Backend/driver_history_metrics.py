@@ -9,6 +9,9 @@ import re
 import numpy as np
 
 
+CALCULATION_VERSION = 'observed-metrics-v2'
+
+
 def _mapping(value):
     return value if isinstance(value, dict) else {}
 
@@ -55,38 +58,85 @@ def display_labels(metadata):
 
 
 def unavailable_metrics(reason='METRICS_UNAVAILABLE'):
-    return dict(schema_version=1, driving=dict(status='UNAVAILABLE', time_s=None, distance_m=None,
-                intervals=[], reason_codes=[reason]), laps=[])
+    return dict(schema_version=1, calculation_version=CALCULATION_VERSION,
+                driving=dict(status='UNAVAILABLE', time_s=None, distance_m=None,
+                intervals=[], reason_codes=[reason], replay_status='UNKNOWN'), laps=[])
 
 
-def _driving(telemetry, times, left, right, offset, game):
+def _replay_evidence(channels, count):
+    """Absence/NaN is unknown; malformed values never become absent evidence."""
+    if 'IsReplayPlaying' not in channels:
+        return None, 'UNKNOWN'
+    try:
+        values = np.asarray(channels['IsReplayPlaying'])
+        if values.ndim != 1 or len(values) != count or values.dtype.kind not in 'biuf':
+            return None, 'INVALID'
+        return values.astype(float, copy=False), None
+    except (TypeError, ValueError, OverflowError):
+        return None, 'INVALID'
+
+
+def _replay_window(evidence, left, right):
+    values, unavailable = evidence
+    if unavailable:
+        return unavailable, unavailable == 'UNKNOWN', {
+            'REPLAY_STATE_UNAVAILABLE' if unavailable == 'UNKNOWN' else 'REPLAY_STATE_INVALID'}
+    values = values[left:right]
+    non_replay, replay, unknown = values == 0, values == 1, np.isnan(values)
+    invalid = ~(non_replay | replay | unknown)
+    reasons = set()
+    if np.any(unknown):
+        reasons.add('REPLAY_STATE_UNAVAILABLE')
+    if np.any(replay):
+        reasons.add('REPLAY_SAMPLES_EXCLUDED')
+    if np.any(invalid):
+        reasons.add('REPLAY_STATE_INVALID')
+        status = 'INVALID'
+    elif np.any(replay):
+        status = 'MIXED' if np.any(non_replay | unknown) else 'CONFIRMED_REPLAY'
+    else:
+        status = 'UNKNOWN' if np.any(unknown) else 'CONFIRMED_NON_REPLAY'
+    return status, non_replay | unknown, reasons
+
+
+def _combined_replay_status(statuses):
+    statuses = set(statuses)
+    if 'INVALID' in statuses:
+        return 'INVALID'
+    if len(statuses) == 1:
+        return next(iter(statuses))
+    return 'MIXED' if statuses & {'MIXED', 'CONFIRMED_REPLAY'} else 'UNKNOWN'
+
+
+def _driving(telemetry, times, left, right, offset, game, replay_evidence):
     if game == 'lmu':
         return unavailable_metrics('LMU_NATIVE_DRIVING_EVIDENCE_UNAVAILABLE')['driving']
     count = len(times)
     channels = _mapping(getattr(telemetry, 'channels', None))
     rate = _rate(getattr(telemetry, 'tick_rate', None))
-    required = {'Speed': 'SPEED_UNAVAILABLE', 'IsReplayPlaying': 'REPLAY_STATE_UNAVAILABLE',
-                'IsOnTrack': 'ON_TRACK_STATE_UNAVAILABLE', 'SessionNum': 'SESSION_STATE_UNAVAILABLE'}
+    required = {'Speed': 'SPEED_UNAVAILABLE', 'IsOnTrack': 'ON_TRACK_STATE_UNAVAILABLE',
+                'SessionNum': 'SESSION_STATE_UNAVAILABLE'}
     arrays = {key: _array(channels, key, count) for key in required}
     reasons = {reason for key, reason in required.items() if arrays[key] is None}
     if rate is None or rate <= 0:
         reasons.add('SAMPLING_RATE_UNAVAILABLE')
     if right - left < 2:
         reasons.add('INSUFFICIENT_CONTIGUOUS_SAMPLES')
+    replay_status, replay_eligible, replay_reasons = _replay_window(replay_evidence, left, right)
     if reasons:
         output = unavailable_metrics()['driving']
-        output['reason_codes'] = sorted(reasons)
+        output.update(reason_codes=sorted(reasons | replay_reasons), replay_status=replay_status)
         return output
+    reasons.update(replay_reasons)
     window = slice(left, right)
     time = times[window]
-    speed, replay, on_track, nums = (arrays[key][window] for key in required)
+    speed, on_track, nums = (arrays[key][window] for key in required)
     finite_time = np.isfinite(time) & (time >= 0)
-    known_replay = np.isfinite(replay) & np.isin(replay, [0., 1.])
     known_track = np.isfinite(on_track) & np.isin(on_track, [0., 1.])
     known_num = np.isfinite(nums) & (nums >= 0) & (nums == np.floor(nums))
     known_speed = np.isfinite(speed) & (speed >= 0) & (speed <= 150.)
-    known = finite_time & known_replay & known_track & known_num & known_speed
-    eligible = known & (replay == 0) & (on_track == 1) & (speed > .5)
+    known = finite_time & known_track & known_num & known_speed
+    eligible = known & replay_eligible & (on_track == 1) & (speed > .5)
     delta = np.diff(time)
     continuous = np.isfinite(delta) & (delta > 0) & (delta <= 1.5 / rate)
     same_session = known_num[:-1] & known_num[1:] & (nums[:-1] == nums[1:])
@@ -97,8 +147,6 @@ def _driving(telemetry, times, left, right, offset, game):
         reasons.add('SAMPLE_GAP')
     if np.any(np.isfinite(delta) & (delta <= 0)):
         reasons.add('SESSION_CLOCK_DISCONTINUITY')
-    if not np.all(known_replay):
-        reasons.add('REPLAY_STATE_UNAVAILABLE')
     if not np.all(known_track):
         reasons.add('ON_TRACK_STATE_UNAVAILABLE')
     if not np.all(known_num):
@@ -113,7 +161,7 @@ def _driving(telemetry, times, left, right, offset, game):
     if not len(indices):
         reasons.add('NO_CONFIRMED_DRIVING_INTERVALS')
         output = unavailable_metrics()['driving']
-        output['reason_codes'] = sorted(reasons)
+        output.update(reason_codes=sorted(reasons), replay_status=replay_status)
         return output
     starts = indices[np.r_[True, np.diff(indices) != 1]]
     ends = indices[np.r_[np.diff(indices) != 1, True]] + 1
@@ -122,7 +170,7 @@ def _driving(telemetry, times, left, right, offset, game):
     return dict(status='PARTIAL' if reasons else 'OBSERVED',
                 time_s=float(np.sum(delta[edges])),
                 distance_m=float(np.sum((speed[:-1][edges] + speed[1:][edges]) * .5 * delta[edges])),
-                intervals=intervals, reason_codes=sorted(reasons))
+                intervals=intervals, reason_codes=sorted(reasons), replay_status=replay_status)
 
 
 def _setup_hash(telemetry):
@@ -177,7 +225,9 @@ def build_observation_metrics(telemetry, observation, *, start_idx=0, end_idx=No
     if left is None or right is None or not 0 <= left < right <= count or offset is None:
         return unavailable_metrics('SOURCE_SEGMENT_UNAVAILABLE')
     game = observation.get('game')
-    result = dict(schema_version=1, driving=_driving(telemetry, times, left, right, offset, game), laps=[])
+    replay_evidence = _replay_evidence(channels, count)
+    result = dict(schema_version=1, calculation_version=CALCULATION_VERSION,
+                  driving=_driving(telemetry, times, left, right, offset, game, replay_evidence), laps=[])
     coverage = _mapping(observation.get('coverage'))
     rate = _rate(getattr(telemetry, 'tick_rate', None))
     blocked = {'SAMPLE_GAP', 'SESSION_CLOCK_RESET', 'INVALID_SESSION_TIME', 'DUPLICATE_SESSION_TIME',
@@ -186,7 +236,6 @@ def build_observation_metrics(telemetry, observation, *, start_idx=0, end_idx=No
                                     or bool(blocked & set(coverage.get('reasons', []))))
     setup_hash = _setup_hash(telemetry)
     nums = _array(channels, 'SessionNum', count)
-    replay = _array(channels, 'IsReplayPlaying', count)
     laps = getattr(telemetry, 'laps', ())
     if not isinstance(laps, (list, tuple)) or not laps:
         return result
@@ -209,20 +258,35 @@ def build_observation_metrics(telemetry, observation, *, start_idx=0, end_idx=No
         differences = np.diff(values)
         continuous = bool(rate is not None and rate > 0 and np.all(np.isfinite(values))
                           and np.all((differences > 0) & (differences <= 1.5 / rate)))
-        complete = getattr(lap, 'complete', False) is True
-        measurable = bool(complete and lap_time is not None and continuous and not lmu_blocked
-                          and getattr(lap, 'status', None) == 'VALID'
-                          and _integer(getattr(lap, 'pit_samples', None)) == 0
-                          and abs(lap_time - (last - first)) <= max(3. / rate, .05)) if rate else False
+        blockers = set()
+        if not continuous:
+            blockers.add('LAP_TIME_DISCONTINUITY' if rate else 'SAMPLING_RATE_UNAVAILABLE')
+        if getattr(lap, 'complete', False) is not True:
+            blockers.add('INCOMPLETE_LAP')
+        if getattr(lap, 'status', None) != 'VALID':
+            blockers.add('ANALYSIS_LAP_INVALID')
+        pit_samples = _integer(getattr(lap, 'pit_samples', None))
+        if pit_samples != 0:
+            blockers.add('PIT_STATE_UNAVAILABLE' if pit_samples is None else 'PIT_SAMPLES_PRESENT')
+        if rate and abs(lap_time - (last - first)) > max(3. / rate, .05):
+            blockers.add('LAP_DURATION_MISMATCH')
+        if lmu_blocked:
+            blockers.add('LMU_NATIVE_COVERAGE_UNAVAILABLE')
+        replay_status, replay_reasons = 'UNKNOWN', set()
         if game == 'iracing':
-            measurable = bool(measurable and nums is not None and replay is not None
-                and np.all(np.isfinite(nums[start:end + 1]) & (nums[start:end + 1] >= 0)
-                           & (nums[start:end + 1] == np.floor(nums[start:end + 1])))
-                and np.all(nums[start:end + 1] == nums[start])
-                and np.all(replay[start:end + 1] == 0))
+            if nums is None or not np.all(np.isfinite(nums[start:end + 1]) & (nums[start:end + 1] >= 0)
+                                         & (nums[start:end + 1] == np.floor(nums[start:end + 1]))):
+                blockers.add('SESSION_STATE_UNAVAILABLE')
+            elif not np.all(nums[start:end + 1] == nums[start]):
+                blockers.add('SESSION_CHANGE')
+            replay_status, replay_eligible, replay_reasons = _replay_window(replay_evidence, start, end + 1)
+            if not np.all(replay_eligible):
+                blockers.update(replay_reasons - {'REPLAY_STATE_UNAVAILABLE'})
+        measurable = not blockers
         result['laps'].append(dict(lap_number=number, start_s=round(first + offset, 6),
             end_s=round(last + offset, 6), lap_time_s=lap_time, measurable=measurable,
             conditions=_conditions(condition_arrays, start, end, setup_hash, game),
+            replay_status=replay_status, reason_codes=sorted(blockers | replay_reasons),
             official_validity='UNKNOWN'))
     return result
 
@@ -232,10 +296,14 @@ def merge_observation_metrics(before, after):
     driving = [item['driving'] for item in (before, after)]
     measured = [item for item in driving if item['time_s'] is not None and item['distance_m'] is not None]
     reasons = set().union(*(set(item['reason_codes']) for item in driving))
+    replay_status = _combined_replay_status(item.get('replay_status', 'UNKNOWN') for item in driving)
+    if replay_status == 'UNKNOWN':
+        reasons.add('REPLAY_STATE_UNAVAILABLE')
     status = ('UNAVAILABLE' if not measured else 'OBSERVED'
-              if all(item['status'] == 'OBSERVED' for item in driving) else 'PARTIAL')
-    return dict(schema_version=1, driving=dict(status=status,
+              if all(item['status'] == 'OBSERVED' for item in driving) and not reasons else 'PARTIAL')
+    return dict(schema_version=1, calculation_version=CALCULATION_VERSION, driving=dict(status=status,
         time_s=sum(item['time_s'] for item in measured) if measured else None,
         distance_m=sum(item['distance_m'] for item in measured) if measured else None,
-        intervals=[list(window) for item in driving for window in item['intervals']], reason_codes=sorted(reasons)),
+        intervals=[list(window) for item in driving for window in item['intervals']],
+        reason_codes=sorted(reasons), replay_status=replay_status),
         laps=[*before['laps'], *after['laps']])

@@ -82,9 +82,9 @@ class ApiCompatibilityTests(unittest.TestCase):
             stop.assert_not_called()
 
     def test_current_import_api_is_accepted_but_missing_or_malformed_contract_is_rejected(self):
-        with patch.object(launch_app, 'read_http', return_value=b'{"paths":{"/api/lmu/telemetry/import":{"post":{}},"/api/session-logs/auto":{"put":{}}}}'):
+        with patch.object(launch_app, 'read_http', return_value=b'{"paths":{"/api/lmu/telemetry/import":{"post":{}},"/api/session-logs/auto":{"put":{}},"/api/driver-history/refresh":{"get":{},"post":{}}}}'):
             launch_app.require_current_api()
-        for response in (None, b'not json', b'{"paths":null}', b'{"paths":{"/api/lmu/telemetry/import":{"get":{}}}}', b'{"paths":{"/api/lmu/telemetry/import":{"post":{}}}}'):
+        for response in (None, b'not json', b'{"paths":null}', b'{"paths":{"/api/lmu/telemetry/import":{"get":{}}}}', b'{"paths":{"/api/lmu/telemetry/import":{"post":{}}}}', b'{"paths":{"/api/lmu/telemetry/import":{"post":{}},"/api/session-logs/auto":{"put":{}}}}'):
             with self.subTest(response=response), patch.object(launch_app, 'read_http', return_value=response):
                 with self.assertRaises(RuntimeError):
                     launch_app.require_current_api()
