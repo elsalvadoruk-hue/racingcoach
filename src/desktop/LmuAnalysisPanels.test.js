@@ -62,6 +62,38 @@ test('lap selector combines files and removes a selected lap without duplicating
   expect(screen.getByText(/선택 1개/)).toBeInTheDocument();
 });
 
+test('LMU lap and setup selectors exclude confirmed empty files while keeping measured unknown-validity records', async () => {
+  const empty = { name: 'empty', display_name: '빈 기록.duckdb', analyzable: true, measurement_laps: 0, valid_laps: null };
+  override = path => path === '/api/lmu/workspace/files' ? Promise.resolve({ files: [empty,
+    { ...files[0], measurement_laps: 2, valid_laps: null },
+    { ...files[1], measurement_laps: 3, valid_laps: null },
+  ] }) : undefined;
+  const view = render(<LmuLapSelection selections={[]} onChange={() => {}} />);
+  const laps = screen.getByLabelText('측정 랩을 추가할 주행');
+  await waitFor(() => expect(within(laps).getByRole('option', { name: '이전 주행.duckdb' })).toBeInTheDocument());
+  expect(within(laps).queryByRole('option', { name: '빈 기록.duckdb' })).not.toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: '랩 1 · 1:58.000' })).toBeEnabled();
+  view.unmount();
+  render(<LmuSetupPanel />);
+  const setup = screen.getByLabelText('기준 A 주행');
+  await waitFor(() => expect(within(setup).getByRole('option', { name: '이전 주행.duckdb' })).toBeInTheDocument());
+  expect(within(setup).queryByRole('option', { name: '빈 기록.duckdb' })).not.toBeInTheDocument();
+});
+
+test('a currently selected LMU recording that resolves to zero measurements cannot add new observations', async () => {
+  override = path => path === '/api/lmu/workspace/files' ? Promise.resolve({ files: [
+    { ...files[0], measurement_laps: 0, valid_laps: null }, files[1],
+  ] }) : undefined;
+  const onChange = jest.fn();
+  render(<LmuLapSelection selections={[{ file_id: FILE, lap_number: 1 }]} onChange={onChange} />);
+  const select = screen.getByLabelText('측정 랩을 추가할 주행');
+  await waitFor(() => expect(within(select).getByRole('option', { name: /새 주행/ })).toBeDisabled());
+  expect(select).toHaveValue(FILE);
+  expect(screen.queryByRole('button', { name: '랩 2 · 1:59.000' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '랩 1 선택 해제' })).toBeEnabled();
+  expect(onChange).not.toHaveBeenCalled();
+});
+
 test('consistency requires three explicit observations and posts source identities from both files', async () => {
   override = path => path === '/api/lmu/telemetry/corner-consistency' ? Promise.resolve({ consistency: { corners: [{ id: 'C1', label: '첫 구간', sample_count: 3, spread_s: .25, input_consistency: { brake_start_m: { spread_m: 12 } } }] } }) : undefined;
   render(<LmuConsistencyPanel />);

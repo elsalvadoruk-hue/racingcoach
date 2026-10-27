@@ -21,6 +21,7 @@ from workspace_setup import setup_plan
 from workspace_summary import practice_summary
 from workspace_personal_reference import select_personal_reference, validate_personal_reference
 from analysis_numeric import format_lap_time
+from recording_selection import FILTER_POLICY, is_selectable_recording
 
 
 @dataclass(frozen=True)
@@ -54,14 +55,14 @@ def _filename(name):
     return name
 
 
-def _recording(services, name):
+def _recording(services, name, *, include_visibility=False):
     path = services.resolve_telemetry_file(_filename(name))
     if path is None:
         raise HTTPException(status_code=404, detail='주행 파일을 찾을 수 없습니다. 목록을 새로 불러오세요.')
     analysis_progress.file_size(path)
     telemetry = services.get_repository().load(path)
-    services.telemetry_file_visibility(path, telemetry)
-    return telemetry
+    visibility = services.telemetry_file_visibility(path, telemetry)
+    return (telemetry, visibility) if include_visibility else telemetry
 
 
 def workspace_comparison(services, telemetry, body):
@@ -194,20 +195,34 @@ def register_routes(app, services: WorkspaceRoutesServices):
                 if route == 'files':
                     paths = await asyncio.to_thread(services.list_ibt_files, 250)
                     fields = ('car_name', 'car_path', 'track_name', 'track_path', 'track_config', 'track_platform_id', 'analyzable', 'reason',
-                              'detected_laps', 'complete_laps', 'valid_laps', 'metadata_pending', 'status', 'retryable',
+                              'detected_laps', 'complete_laps', 'valid_laps', 'measurement_laps', 'metadata_pending', 'status', 'retryable',
                               'session_type', 'session_duration_s', 'suggested_session_mode', 'best_lap_s', 'recording_time')
                     files = []
                     for path in paths:
                         visibility = await asyncio.to_thread(services.quick_file_visibility, path)
-                        files.append({'name': path.name, **{key: visibility.get(key) for key in fields}})
-                    return services.json_safe({'files': files})
+                        files.append({'name': path.name, **{key: visibility.get(key) for key in fields},
+                                      'selectable': is_selectable_recording(visibility)})
+                    return services.json_safe({'files': files, 'filter_policy': FILTER_POLICY})
                 if route == 'setup-compare':
                     _filename(body.get('baseline_file'))
                     _filename(body.get('candidate_file'))
                     payload = ExperimentRequest(**body)
                     response = await services.compare_setup_experiments(payload)
                     return services.json_safe({**response['comparison'], 'memory_record': response.get('memory_record')})
-                telemetry = await asyncio.to_thread(_recording, services, body.get('filename'))
+                telemetry, visibility = await asyncio.to_thread(_recording, services, body.get('filename'), include_visibility=True)
+                if route == 'session' and body.get('preview') and not is_selectable_recording(visibility):
+                    # The picker learns the counts from this first read without
+                    # searching references or calculating an unselectable file.
+                    result = {'kind': 'LIVE_LOCAL', 'filename': body['filename'], 'selectable': False,
+                              'availability': visibility, **{key: visibility.get(key) for key in (
+                                  'detected_laps', 'complete_laps', 'valid_laps', 'measurement_laps', 'status', 'reason')},
+                              'session': {key: telemetry.metadata.get(key) for key in (
+                                  'car_name', 'car_path', 'track_name', 'track_path', 'track_config', 'track_length_m',
+                                  'track_platform_id', 'session_type', 'session_duration_s', 'suggested_session_mode', 'game')},
+                              'laps': [], 'corners': [], 'defaultTarget': None, 'defaultReference': None}
+                    response = services.json_safe(result)
+                    success = True
+                    return response
                 if route == 'race-positions':
                     from race_positions import read_history
                     if services.flush_race_timing is not None:

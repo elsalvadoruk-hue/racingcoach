@@ -12,6 +12,7 @@ import { Textarea } from '../components/ui/textarea';
 import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead } from '../components/ui/table';
 import { data, labRequest, signed, number } from './sessionData';
+import { isSelectableRecording } from '../lib/recordingFiles';
 import { SETUP_KEY, phases, speeds, symptoms, goals, decisions, settingLabels, labelFor, contextKey,
   emptyDraft, emptyFeedback, readSetupWorkflow, canPrepare, finishSetupTrial, nextBaseline, retryTrial, patchTrial,
   hydrateSetupWorkflow, toProductionTrial } from './setupWorkflow';
@@ -52,6 +53,8 @@ export default function SetupWorkbench({ onChooseSource, onCorner, analysisWorks
     return { ...emptyDraft(data.filename), ...(saved.active?.issue || saved.drafts[context] || {}) };
   });
   const [files, setFiles] = useState([]), [facts, setFacts] = useState(null), [plan, setPlan] = useState(null);
+  const selectableFile = filename => isSelectableRecording(files.find(file => file.name === filename) || {});
+  const draftSelectable = selectableFile(draft.filename);
   const [busy, setBusy] = useState(false), [comparing, setComparing] = useState(false), [error, setError] = useState('');
   const [original, setOriginal] = useState(''), [target, setTarget] = useState('');
   const [decision, setDecision] = useState('RETEST'), [dialog, setDialog] = useState(null), [storageError, setStorageError] = useState('');
@@ -97,7 +100,7 @@ export default function SetupWorkbench({ onChooseSource, onCorner, analysisWorks
   useEffect(() => {
     const controller = new AbortController();
     setPlan(null); setOriginal(''); setTarget(''); setError('');
-    if (!draft.filename) { setFacts(null); setBusy(false); return () => controller.abort(); }
+    if (!draft.filename || !draftSelectable) { setFacts(null); setBusy(false); return () => controller.abort(); }
     setBusy(true);
     const timer = setTimeout(() => {
       labRequest('setup-plan', { filename: draft.filename, phase: draft.phase, speed: draft.speed,
@@ -110,7 +113,7 @@ export default function SetupWorkbench({ onChooseSource, onCorner, analysisWorks
     return () => { clearTimeout(timer); controller.abort(); };
     // Only structured selections affect the existing rules. Free text stays in the log.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query]);
+  }, [query, draftSelectable]);
   useEffect(() => {
     setOriginal(draft.manual_setting ? plan?.setup?.[draft.manual_setting] ?? '' : plan?.candidate?.original_value ?? '');
     const setting = draft.manual_setting || plan?.candidate?.setting;
@@ -138,7 +141,7 @@ export default function SetupWorkbench({ onChooseSource, onCorner, analysisWorks
     changeWorkflow(state => ({ ...state, drafts: { ...state.drafts, [context]: next } }));
   }
   function prepare() {
-    if (active || busy || !canPrepare(candidate, original, target, draft)) return;
+    if (active || busy || !draftSelectable || !canPrepare(candidate, original, target, draft)) return;
     const baselineIsCurrent = analysisWorkspace?.analysisSnapshot?.filename === draft.filename;
     const trial = { id: crypto.randomUUID(), started_at: new Date().toISOString(), context: contextKey(plan.session), session: plan.session,
       baseline_file: draft.filename, candidate_file: '', issue: { ...draft },
@@ -160,7 +163,7 @@ export default function SetupWorkbench({ onChooseSource, onCorner, analysisWorks
     catch (e) { setError(e.message); }
   }
   async function compare() {
-    if (!active?.candidate_file || comparing) return;
+    if (!active?.candidate_file || !selectableFile(active.baseline_file) || !selectableFile(active.candidate_file) || comparing) return;
     const controller = new AbortController(); comparisonFlight.current?.abort(); comparisonFlight.current = controller;
     const snapshot = JSON.stringify(active);
     setComparing(true); setError('');
@@ -195,10 +198,10 @@ export default function SetupWorkbench({ onChooseSource, onCorner, analysisWorks
   } : plan?.candidate);
   const visibleHistory = workflow.history;
   const source = active?.session || facts?.session || data.session;
-  const compatibleFiles = files.filter(file => file.name !== active?.baseline_file && file.analyzable !== false
+  const compatibleFiles = files.filter(file => file.name !== active?.baseline_file && isSelectableRecording(file)
     && (!file.car_name || file.car_name === source.car_name) && (!file.track_name || file.track_name === source.track_name)
     && (file.metadata_pending || (file.track_config || '') === (source.track_config || '')));
-  const fileOptions = (selection, rows) => <>{selection && !rows.some(f => f.name === selection) && <NativeSelectOption value={selection}>{selection} · 저장한 선택</NativeSelectOption>}{rows.map(file => <NativeSelectOption key={file.name} value={file.name}>{shortFile(file.name)}{file.valid_laps != null ? ` · 유효 ${file.valid_laps}랩` : ''}</NativeSelectOption>)}</>;
+  const fileOptions = (selection, rows) => <>{selection && !rows.some(f => f.name === selection) && <NativeSelectOption value={selection} disabled={!selectableFile(selection)}>{selection} · 저장한 선택</NativeSelectOption>}{rows.map(file => <NativeSelectOption key={file.name} value={file.name}>{shortFile(file.name)}{file.valid_laps != null ? ` · 유효 ${file.valid_laps}랩` : ''}</NativeSelectOption>)}</>;
   const stage = !active ? '문제와 변경 선택' : !active.candidate_file ? '변경 후 주행 연결' : '체감과 결과 비교';
 
   return <section className="setup-workbench" aria-label="셋업 실험 작업 화면">
@@ -208,7 +211,7 @@ export default function SetupWorkbench({ onChooseSource, onCorner, analysisWorks
     <div className="setup-columns">
       <Card className="setup-card setup-problem"><CardHeader><div className="setup-card-title"><Badge variant="outline">01</Badge><CardTitle>어디가 불편한가요?</CardTitle>{active && <Badge variant="secondary">A 고정됨</Badge>}</div><CardDescription>느낀 증상과 관측 수치를 함께 남깁니다.</CardDescription></CardHeader><CardContent>
         <FieldGroup>
-          <Field><FieldLabel htmlFor="setup-baseline">변경 전 주행 · A</FieldLabel><NativeSelect id="setup-baseline" value={draft.filename} disabled={Boolean(active)} onChange={e => patchDraft({ filename: e.target.value })}><NativeSelectOption value="">기준으로 사용할 IBT 선택</NativeSelectOption>{fileOptions(draft.filename, files.filter(f => f.analyzable !== false))}</NativeSelect></Field>
+          <Field><FieldLabel htmlFor="setup-baseline">변경 전 주행 · A</FieldLabel><NativeSelect id="setup-baseline" value={draft.filename} disabled={Boolean(active)} onChange={e => patchDraft({ filename: e.target.value })}><NativeSelectOption value="">기준으로 사용할 IBT 선택</NativeSelectOption>{fileOptions(draft.filename, files.filter(isSelectableRecording))}</NativeSelect></Field>
           <Choice title="이번 실험의 목표" options={goals} value={draft.goal} onChange={goal => patchDraft({ goal })} disabled={Boolean(active)} />
           <Choice title="언제 불편한가요?" options={phases} value={draft.phase} onChange={phase => patchDraft({ phase })} disabled={Boolean(active)} />
           <Choice title="어떤 증상인가요?" options={symptoms} value={draft.symptom} onChange={symptom => patchDraft({ symptom })} disabled={Boolean(active)} className="setup-symptoms" />
@@ -230,7 +233,7 @@ export default function SetupWorkbench({ onChooseSource, onCorner, analysisWorks
           <div className="setup-explanation"><h3>무엇이 달라지는지 봅니다</h3><p>{candidate.expected_effect || '같은 증상 구간에서 다루기 편해지는지 확인합니다.'}</p><h3>함께 확인할 부작용</h3><p>{candidate.tradeoff}</p><h3>이 변경을 시험하는 이유</h3><p>{candidate.evidence}</p></div>
         </> : <div className="setup-plan-guide"><h2>{busy ? '측정 자료를 불러오는 중입니다' : '실험 계획에 필요한 것'}</h2><p>{plan?.hypothesis?.reason || '실제 주행 A와 증상 선택이 있어야 현재 값에 맞는 변경을 제안할 수 있습니다.'}</p><ol><li><strong>언제·어디서</strong><span>진입 / 중간 / 탈출과 코너 속도를 정합니다.</span></li><li><strong>실제 현재값</strong><span>IBT에서 읽고 차고에서 확인합니다.</span></li><li><strong>한 항목의 작은 변화</strong><span>알 수 없는 클릭 크기나 효과를 만들어내지 않습니다.</span></li></ol></div>}
         <div className="setup-run-plan"><h3>같은 조건으로 다시 달리기</h3><div><Check /><span>연료·타이어·노면 조건을 가능한 한 맞춥니다.</span></div><div><Check /><span>다른 셋업과 운전 방법은 함께 바꾸지 않습니다.</span></div><div><Check /><span>1~2랩으로 체감을 보고, 효과는 A/B 각각 {draft.goal === 'ENDURANCE' ? '5' : '3'}개 이상의 유효 랩으로 확인합니다.</span></div></div>
-      </CardContent><CardFooter>{active ? <><Badge variant="secondary">A와 변경 계획 고정됨</Badge><Button size="sm" variant="ghost" onClick={() => setDialog('cancel')}><RotateCcw data-icon="inline-start" />실험 중단</Button></> : <Button disabled={busy || !canPrepare(candidate, original, target, draft)} onClick={prepare}><FlaskConical data-icon="inline-start" />이 변경으로 실험 시작</Button>}</CardFooter></Card>
+      </CardContent><CardFooter>{active ? <><Badge variant="secondary">A와 변경 계획 고정됨</Badge><Button size="sm" variant="ghost" onClick={() => setDialog('cancel')}><RotateCcw data-icon="inline-start" />실험 중단</Button></> : <Button disabled={busy || !draftSelectable || !canPrepare(candidate, original, target, draft)} onClick={prepare}><FlaskConical data-icon="inline-start" />이 변경으로 실험 시작</Button>}</CardFooter></Card>
 
       <Card className="setup-card setup-review"><CardHeader><div className="setup-card-title"><Badge variant="outline">03</Badge><CardTitle>달린 뒤, 무엇이 달라졌나요?</CardTitle></div><CardDescription>체감·부작용과 실제 측정 결과를 함께 봅니다.</CardDescription></CardHeader><CardContent ref={reviewPane}>
         <FieldGroup className="setup-post-feedback">
@@ -238,7 +241,7 @@ export default function SetupWorkbench({ onChooseSource, onCorner, analysisWorks
           <Choice title="운전 편의 · 1 어려움 / 5 편함" value={String(active?.feedback.rating || '')} options={[["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["5", "5"]]} disabled={!active?.candidate_file} onChange={rating => patchFeedback({ rating })} />
           <Field><FieldLabel htmlFor="setup-side-effects">좋아진 곳·새로 생긴 부작용</FieldLabel><Textarea id="setup-side-effects" rows={2} maxLength={2000} disabled={!active?.candidate_file} value={active?.feedback.side_effects || ''} onChange={e => patchFeedback({ side_effects: e.target.value })} placeholder="예: 중간 회전은 편해졌지만 탈출 때 뒤가 흐름." /></Field>
         </FieldGroup>
-        <div className="setup-compare-action"><Button variant="outline" disabled={!active?.candidate_file || comparing} onClick={compare}>{comparing ? 'A/B 측정 비교 중' : 'A/B 측정 결과 확인'}</Button><span>베스트 한 랩보다 중앙값·편차·완주 안정성을 봅니다.</span></div>
+        <div className="setup-compare-action"><Button variant="outline" disabled={!active?.candidate_file || !selectableFile(active.baseline_file) || !selectableFile(active.candidate_file) || comparing} onClick={compare}>{comparing ? 'A/B 측정 비교 중' : 'A/B 측정 결과 확인'}</Button><span>베스트 한 랩보다 중앙값·편차·완주 안정성을 봅니다.</span></div>
         {active?.comparison ? <Findings comparison={active.comparison} /> : <div className="setup-result-wait"><strong>체감과 셋업 효과는 구분합니다</strong><p>편해졌다는 기록은 바로 남길 수 있습니다. 속도 효과는 조건·반복 표본·실제 변경이 맞을 때만 확인합니다.</p><dl className="setup-axes"><div><dt>페이스</dt><dd>A/B 비교 대기</dd></div><div><dt>일관성</dt><dd>A/B 비교 대기</dd></div><div><dt>완주 안정성</dt><dd>A/B 비교 대기</dd></div></dl></div>}
       </CardContent><CardFooter><FieldGroup className="setup-save-decision"><Choice title="다음 주행에는 어떻게 할까요?" value={decision} options={decisions} disabled={!active?.candidate_file} onChange={setDecision} /></FieldGroup><Button size="sm" disabled={!active?.candidate_file || !active.feedback.change || !active.feedback.rating || comparing} onClick={complete}><Save data-icon="inline-start" />결과 기록·다음 실험 준비</Button></CardFooter></Card>
     </div>
@@ -246,7 +249,7 @@ export default function SetupWorkbench({ onChooseSource, onCorner, analysisWorks
     <Card className="setup-log"><CardHeader><div className="flex items-center justify-between gap-4"><CardTitle>어떤 변경이 나에게 맞았나요?</CardTitle><Badge variant="outline">실험 기록 {visibleHistory.length}개</Badge></div><CardDescription>체감과 측정 효과를 구분해 누적합니다. 행을 누르면 당시 조건과 메모를 봅니다.</CardDescription></CardHeader><CardContent><Table><TableHeader><TableRow><TableHead>실험</TableHead><TableHead>문제</TableHead><TableHead>변경</TableHead><TableHead>체감</TableHead><TableHead>측정 효과</TableHead><TableHead>내 결정</TableHead></TableRow></TableHeader><TableBody>{visibleHistory.length ? visibleHistory.map((trial, index) => <TableRow key={trial.id} onClick={() => setDialog(trial)}><TableCell><Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); setDialog(trial); }}>#{visibleHistory.length - index} · {trial.session?.track_name || '기록 보기'}</Button></TableCell><TableCell>{labelFor(phases, trial.issue.phase)} · {labelFor(symptoms, trial.issue.symptom)}</TableCell><TableCell>{settingLabels[trial.adjustment.setting] || trial.adjustment.label} · {formatValue(trial.adjustment.original_value)} → {formatValue(trial.adjustment.value)}</TableCell><TableCell>{labelFor([['IMPROVED','개선'],['SAME','비슷함'],['WORSENED','악화']], trial.feedback.change)} · {trial.feedback.rating || '—'}/5</TableCell><TableCell>{effectLabels[trial.comparison?.verdict] || '효과 미확정'}</TableCell><TableCell>{trial.decision === 'CANCELLED' ? '실험 중단' : labelFor(decisions, trial.decision)}</TableCell></TableRow>) : <TableRow><TableCell colSpan={6}>첫 실험을 마치면 변경값·체감·측정 결과·다음 결정이 이곳에 쌓입니다.</TableCell></TableRow>}</TableBody></Table></CardContent></Card>
 
     <Dialog open={Boolean(dialog)} onOpenChange={open => !open && setDialog(null)}><DialogContent className="setup-dialog max-w-2xl"><DialogHeader><DialogTitle>{dialog === 'method' ? '좋은 셋업을 찾는 실험 방법' : dialog === 'cancel' ? '진행 중 실험 중단' : '이 실험의 조건과 피드백'}</DialogTitle><DialogDescription>{dialog === 'method' ? '한 번에 한 항목을 바꾸고, 반복해서 내게 맞는 타협점을 찾습니다.' : '실험 기록과 체감을 저장합니다. 셋업 효과는 조건이 맞는 A/B 측정으로만 확인합니다.'}</DialogDescription></DialogHeader>
-      {dialog === 'method' ? <div className="setup-method"><ol><li>기준 주행 A에서 불편한 구간·증상·정도를 고릅니다.</li><li>한 항목만 작은 폭으로 바꾸고 B를 기록합니다. 게임 설정은 직접 바꿉니다.</li><li>체감·새 부작용과 중앙 랩타임·편차·완주 안정성을 함께 봅니다.</li><li>B 유지 / A 원복 / 같은 변경 재시험을 기록하고 다음 실험을 이어갑니다.</li></ol><p>노면·연료·타이어 조건이 다르거나 변경 항목이 여러 개면 개별 셋업 효과는 미확정입니다. 체감만으로 셋업 효과를 학습하지 않습니다.</p><h3>참고한 실제 도구</h3><p><a href="https://github.com/SeriousOldMan/Simulator-Controller/wiki/Setup-Workbench" target="_blank" rel="noreferrer">Setup Workbench</a> · 증상·심각도와 반복 실험 기록</p><p><a href="https://store.steampowered.com/app/1220160/Virtual_Race_Car_Engineer_2020/" target="_blank" rel="noreferrer">Virtual Race Car Engineer</a> · 전체 랩·특정 코너의 체감으로 조정</p><p><a href="https://coachdaveacademy.com/delta/setup-iq/" target="_blank" rel="noreferrer">Setup IQ</a> · 변경 버전을 남기고 다시 주행하는 흐름. 현재 안내상 LMU·ACC용</p><p>이 페이지는 기존 로컬 계산을 사용하며 AI 분석·차고 자동 변경은 실행하지 않습니다.</p></div> : dialog === 'cancel' ? <><p>중단한 시도도 기록에 남깁니다. 차고 값은 원래 값으로 직접 되돌려 주세요.</p><Button variant="destructive" onClick={() => { comparisonFlight.current?.abort(); setComparing(false); changeWorkflow(state => ({ ...state, active: null, history: [{ ...state.active, decision: 'CANCELLED', completed_at: new Date().toISOString() }, ...state.history].slice(0, 100) })); setDialog(null); }}>중단 기록 남기기</Button></> : dialog && <div className="setup-method"><p><strong>{dialog.session?.car_name} · {dialog.session?.track_name}</strong></p><p>A · {dialog.baseline_file}</p><p>B · {dialog.candidate_file || '미연결'}</p><p>처음 체감 · {labelFor(phases, dialog.issue.phase)} / {labelFor(speeds, dialog.issue.speed)} / {labelFor(symptoms, dialog.issue.symptom)} / 불편도 {dialog.issue.severity}/5</p><p>상황 · {dialog.issue.note || '메모 없음'}</p><p>주행 후 · {dialog.feedback.side_effects || '추가 메모 없음'}</p>{dialog.comparison && <Findings comparison={dialog.comparison} />}<p>내 결정 · {dialog.decision === 'CANCELLED' ? '실험 중단' : labelFor(decisions, dialog.decision)}</p><Button variant="outline" disabled={Boolean(active)} onClick={() => { patchDraft({ ...dialog.issue, filename: nextBaseline(dialog), corner_id: '' }); setDialog(null); }}>이 기준으로 다음 실험</Button></div>}
+      {dialog === 'method' ? <div className="setup-method"><ol><li>기준 주행 A에서 불편한 구간·증상·정도를 고릅니다.</li><li>한 항목만 작은 폭으로 바꾸고 B를 기록합니다. 게임 설정은 직접 바꿉니다.</li><li>체감·새 부작용과 중앙 랩타임·편차·완주 안정성을 함께 봅니다.</li><li>B 유지 / A 원복 / 같은 변경 재시험을 기록하고 다음 실험을 이어갑니다.</li></ol><p>노면·연료·타이어 조건이 다르거나 변경 항목이 여러 개면 개별 셋업 효과는 미확정입니다. 체감만으로 셋업 효과를 학습하지 않습니다.</p><h3>참고한 실제 도구</h3><p><a href="https://github.com/SeriousOldMan/Simulator-Controller/wiki/Setup-Workbench" target="_blank" rel="noreferrer">Setup Workbench</a> · 증상·심각도와 반복 실험 기록</p><p><a href="https://store.steampowered.com/app/1220160/Virtual_Race_Car_Engineer_2020/" target="_blank" rel="noreferrer">Virtual Race Car Engineer</a> · 전체 랩·특정 코너의 체감으로 조정</p><p><a href="https://coachdaveacademy.com/delta/setup-iq/" target="_blank" rel="noreferrer">Setup IQ</a> · 변경 버전을 남기고 다시 주행하는 흐름. 현재 안내상 LMU·ACC용</p><p>이 페이지는 기존 로컬 계산을 사용하며 AI 분석·차고 자동 변경은 실행하지 않습니다.</p></div> : dialog === 'cancel' ? <><p>중단한 시도도 기록에 남깁니다. 차고 값은 원래 값으로 직접 되돌려 주세요.</p><Button variant="destructive" onClick={() => { comparisonFlight.current?.abort(); setComparing(false); changeWorkflow(state => ({ ...state, active: null, history: [{ ...state.active, decision: 'CANCELLED', completed_at: new Date().toISOString() }, ...state.history].slice(0, 100) })); setDialog(null); }}>중단 기록 남기기</Button></> : dialog && <div className="setup-method"><p><strong>{dialog.session?.car_name} · {dialog.session?.track_name}</strong></p><p>A · {dialog.baseline_file}</p><p>B · {dialog.candidate_file || '미연결'}</p><p>처음 체감 · {labelFor(phases, dialog.issue.phase)} / {labelFor(speeds, dialog.issue.speed)} / {labelFor(symptoms, dialog.issue.symptom)} / 불편도 {dialog.issue.severity}/5</p><p>상황 · {dialog.issue.note || '메모 없음'}</p><p>주행 후 · {dialog.feedback.side_effects || '추가 메모 없음'}</p>{dialog.comparison && <Findings comparison={dialog.comparison} />}<p>내 결정 · {dialog.decision === 'CANCELLED' ? '실험 중단' : labelFor(decisions, dialog.decision)}</p><Button variant="outline" disabled={Boolean(active) || !selectableFile(nextBaseline(dialog))} onClick={() => { patchDraft({ ...dialog.issue, filename: nextBaseline(dialog), corner_id: '' }); setDialog(null); }}>이 기준으로 다음 실험</Button></div>}
     </DialogContent></Dialog>
   </section>;
 }

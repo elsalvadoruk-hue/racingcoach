@@ -1,10 +1,78 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import SourcePicker from './SourcePicker';
 import { activateSession, labRequest } from './sessionData';
 
 jest.mock('./sessionData', () => ({ ...jest.requireActual('./sessionData'), labRequest: jest.fn() }));
 jest.mock('../analysis/analysisClient', () => ({ requestJson: jest.fn(async () => ({ health: { enabled: false }, job: null })) }));
+
+test('file and reference choices omit known empty or zero-valid recordings and retain pending metadata', async () => {
+  const session = { kind: 'LIVE_LOCAL', filename: 'good.ibt', defaultTarget: 2, defaultReference: 2,
+    session: { track_length_m: 1000 }, corners: [], laps: [{ lap_number: 2, status: 'VALID', lap_time_s: 90 }] };
+  activateSession(session);
+  labRequest.mockImplementation(async route => {
+    if (route === 'files') return { files: [
+      { name: 'good.ibt', detected_laps: 1, valid_laps: 1 },
+      { name: 'empty.ibt', detected_laps: 0, valid_laps: 0 },
+      { name: 'coaching.ibt', detected_laps: 3, valid_laps: 0, analyzable: true },
+      { name: 'pending.ibt', detected_laps: null, valid_laps: null },
+    ] };
+    if (route === 'session') return session;
+    if (route === 'references') return { files: [] };
+    throw new Error(route);
+  });
+  render(<SourcePicker target="2" reference="2" external={[]} onApply={jest.fn()} />);
+  await waitFor(() => expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled());
+  for (const label of ['주행 파일 · IBT', '기준 주행 파일 · IBT']) {
+    const options = within(screen.getByLabelText(label)).getAllByRole('option').map(option => option.value);
+    expect(options.sort()).toEqual(['good.ibt', 'pending.ibt']);
+  }
+  activateSession({ ...session, filename: '', laps: [] });
+});
+
+test('a pending recording found to have zero valid laps cannot be compared or request references', async () => {
+  const session = { kind: 'LIVE_LOCAL', filename: 'good.ibt', defaultTarget: 2, defaultReference: 2,
+    session: { track_length_m: 1000 }, corners: [], laps: [{ lap_number: 2, status: 'VALID', lap_time_s: 90 }] };
+  activateSession(session);
+  labRequest.mockImplementation(async (route, body) => {
+    if (route === 'files') return { files: [{ name: 'good.ibt' }, { name: 'pending.ibt' }] };
+    if (route === 'references') return { files: [] };
+    if (route === 'session') return { ...session, filename: body.filename, laps: [] };
+    throw new Error(route);
+  });
+  const onApply = jest.fn();
+  render(<SourcePicker target="2" reference="2" external={[]} onApply={onApply} />);
+  await waitFor(() => expect(screen.getByLabelText('주행 파일 · IBT').options).toHaveLength(2));
+  fireEvent.change(screen.getByLabelText('주행 파일 · IBT'), { target: { value: 'pending.ibt' } });
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('유효 랩'));
+  expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeDisabled();
+  expect(labRequest).not.toHaveBeenCalledWith('references', expect.objectContaining({ filename: 'pending.ibt' }), expect.anything());
+  expect([...screen.getByLabelText('주행 파일 · IBT').options].map(option => option.value)).not.toContain('pending.ibt');
+  expect(onApply).not.toHaveBeenCalled();
+  activateSession({ ...session, filename: '', laps: [] });
+});
+
+test('a pending reference found to have zero valid laps is removed without applying it', async () => {
+  const session = { kind: 'LIVE_LOCAL', filename: 'good.ibt', defaultTarget: 2, defaultReference: 2,
+    session: { track_length_m: 1000 }, corners: [], laps: [{ lap_number: 2, status: 'VALID', lap_time_s: 90 }] };
+  activateSession(session);
+  labRequest.mockImplementation(async route => {
+    if (route === 'files') return { files: [{ name: 'good.ibt' }, { name: 'pending.ibt' }] };
+    if (route === 'references') return { files: [] };
+    if (route === 'session') return session;
+    if (route === 'file-laps') return { laps: [{ lap_number: 2, status: 'INVALID', lap_time_s: 90 }] };
+    throw new Error(route);
+  });
+  const onApply = jest.fn();
+  render(<SourcePicker target="2" reference="2" external={[]} onApply={onApply} />);
+  await waitFor(() => expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled());
+  fireEvent.change(screen.getByLabelText('기준 주행 파일 · IBT'), { target: { value: 'pending.ibt' } });
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('유효 랩'));
+  expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeDisabled();
+  expect([...screen.getByLabelText('기준 주행 파일 · IBT').options].map(option => option.value)).not.toContain('pending.ibt');
+  expect(onApply).not.toHaveBeenCalled();
+  activateSession({ ...session, filename: '', laps: [] });
+});
 
 test('LMU automatic baseline permits another file with unknown weather and explains the relaxed policy', async () => {
   const laps = [{ lap_number: 2, status: 'UNVERIFIED', measurement_eligible: true, lap_time_s: 120 }];

@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { initialModeForFile } from './analysisShared';
 import { API_BASE } from './analysisClient';
+import { isSelectableRecording } from '../lib/recordingFiles';
 
 export function useTelemetryEvents({
   initialLoading, activeTrialRef, analysisRequestRef, loadExternalReferences, loadFiles, loadStatus,
@@ -34,18 +35,17 @@ export function useTelemetryEvents({
       if (unlocked || (signatureRef.current ? signature !== signatureRef.current : telemetry.file_name !== selectedFileRef.current)) {
         signatureRef.current = signature;
         const generation = ++eventGeneration;
-        if (activeTrialRef.current) {
-          setNewFileNotice(telemetry.file_name);
-          await loadFiles();
-          return;
-        }
         const previousFile = selectedFileRef.current;
         const refreshedFiles = await loadFiles();
         const fileEntry = refreshedFiles.find((item) => item.name === telemetry.file_name);
         const selectedByRefresh = !previousFile && selectedFileRef.current === telemetry.file_name;
         if (cancelled || generation !== eventGeneration || (selectedFileRef.current !== previousFile && !selectedByRefresh)) return;
         // An empty/out/locked recording must never erase the last usable run.
-        if (fileEntry?.analyzable === false || telemetry.analyzable === false) return;
+        if ((fileEntry && !isSelectableRecording(fileEntry)) || !isSelectableRecording(telemetry)) return;
+        if (activeTrialRef.current) {
+          setNewFileNotice(telemetry.file_name);
+          return;
+        }
         analysisRequestRef.current.controller?.abort();
         setLoading(true);
         setSelectedFile(telemetry.file_name);

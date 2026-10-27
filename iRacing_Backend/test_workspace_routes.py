@@ -257,6 +257,46 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['files'][0]['name'], 'actual.csv')
 
+    def test_fast_catalogs_expose_selection_from_cached_counts_without_sample_reads(self):
+        paths = [source.path for source in self.sources.values()]
+        def visibility(path):
+            if path.name == 'baseline.ibt':
+                return {'valid_laps': 0, 'complete_laps': 1, 'detected_laps': 1,
+                        'analyzable': True, 'status': 'COACHING_ONLY'}
+            return {'valid_laps': None, 'detected_laps': None, 'metadata_pending': True}
+        with patch.object(api, 'list_ibt_files', return_value=paths), \
+             patch.object(api, 'quick_file_visibility', side_effect=visibility) as quick, \
+             patch.object(api, 'telemetry_file_visibility', side_effect=AssertionError('deep scan')), \
+             patch.object(api.repository, 'load', side_effect=AssertionError('sample read')):
+            payloads = [self.post('files', {}).json(), self.client.get('/api/files').json()]
+        self.assertEqual(quick.call_count, 4)
+        for payload in payloads:
+            self.assertEqual(payload['filter_policy'], 'EXCLUDE_CONFIRMED_EMPTY_OR_NO_USABLE_LAPS')
+            self.assertEqual([row['selectable'] for row in payload['files']], [False, True])
+            self.assertIsNone(payload['files'][1]['valid_laps'])
+            self.assertIsNone(payload['files'][1]['complete_laps'])
+
+    def test_preview_of_known_zero_returns_counts_without_references_or_analysis(self):
+        for scenario in ('empty', 'incomplete', 'coaching-only'):
+            with self.subTest(scenario=scenario):
+                source = self.partial_recording()
+                if scenario == 'empty':
+                    source.laps.clear()
+                elif scenario == 'incomplete':
+                    source.laps[0].complete = False
+                with patch.object(api, 'load_analysis', side_effect=AssertionError('analysis')), \
+                     patch('workspace_routes.select_personal_reference', side_effect=AssertionError('reference search')), \
+                     patch.object(api, 'list_external_reference_metadata', side_effect=AssertionError('catalog search')):
+                    response = self.post('session', {'filename': 'baseline.ibt', 'preview': True})
+                self.assertEqual(response.status_code, 200, response.text)
+                result = response.json()
+                self.assertFalse(result['selectable'])
+                self.assertEqual(result['valid_laps'], 0)
+                self.assertEqual(result['laps'], [])
+                self.assertEqual(result['availability']['detected_laps'], len(source.laps))
+                self.assertIsNone(self.state['analysis_result'])
+                self.assertNotIn('analysisResult', result)
+
     def test_reference_catalog_exposes_existing_recommendations_without_private_catalog_paths(self):
         catalog = {'files': [{'name': 'first.csv', 'usable': True, 'compatible': True}],
                    'recommended_selection': ['first.csv'], 'directory': 'private-reference-directory',

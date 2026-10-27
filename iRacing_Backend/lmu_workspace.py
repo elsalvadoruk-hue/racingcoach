@@ -20,6 +20,7 @@ from lmu_telemetry import LmuTelemetryUnavailable
 from lmu_session_metrics import session_metrics
 from lmu_driving_summary import driving_summary
 from lmu_control_channels import control_values
+from recording_selection import FILTER_POLICY, is_selectable_recording
 
 
 UNSUPPORTED = {
@@ -235,10 +236,11 @@ class LmuWorkspace:
                                    track_config=summary.metadata.get('track_layout'))
                     except ValueError:
                         row.update(status='UNAVAILABLE', reason='LMU 기록의 형식 또는 시간·거리 축을 확인하세요.')
+                row['selectable'] = is_selectable_recording(row)
                 rows.append(row)
             except FileNotFoundError:
                 continue
-        return {'provider': 'LMU', 'files': rows, 'reference_status': 'VALIDITY_UNVERIFIED'}
+        return {'provider': 'LMU', 'files': rows, 'reference_status': 'VALIDITY_UNVERIFIED', 'filter_policy': FILTER_POLICY}
 
     def request(self, route, body):
         if route == 'files':

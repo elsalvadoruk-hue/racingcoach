@@ -173,6 +173,20 @@ describe('recordings arriving while the LMU screen stays open', () => {
     expect(opened()).toHaveLength(2);
   });
 
+  test('zero measurements do not replace the current run and positive measurements later become a new version', async () => {
+    const { result } = await mount();
+    catalog = [recording('next', 1, { valid_laps: null, measurement_laps: 0 }), ...catalog];
+    await tick(); await tick();
+    expect(result.current.selectedFile).toBe('old');
+    expect(opened()).toHaveLength(1);
+    catalog[0] = recording('next', 1, { valid_laps: null, measurement_laps: 2 });
+    await tick();
+    expect(result.current.selectedFile).toBe('old');
+    await tick();
+    expect(result.current.selectedFile).toBe('next');
+    expect(opened()).toHaveLength(2);
+  });
+
   test('keeps the previous analysis while writing, changing or temporarily locked, then retries', async () => {
     const { result } = await mount();
     catalog = [recording('hypercar', 1, { analyzable: false, status: 'RECORDING' }), ...catalog];
@@ -292,4 +306,16 @@ test('the first screen skips a newer recording without a valid lap and opens the
   const { result } = renderHook(useLmuWorkspace);
   await waitFor(() => expect(result.current.selectedFile).toBe('good'));
   expect(labRequest.mock.calls.map(([route, body]) => [route, body.filename])).toEqual([['files', undefined], ['session', 'good']]);
+});
+
+test('LMU uses positive measurement counts when game validity is unknown and excludes explicit selection failures', async () => {
+  labRequest.mockResolvedValueOnce({ files: [
+    { ...file('hidden'), selectable: false },
+    { ...file('empty'), detected_laps: 0 },
+    { ...file('no-measurements'), valid_laps: null, measurement_laps: 0 },
+    { ...file('measured'), detected_laps: 3, complete_laps: 2, valid_laps: null, measurement_laps: 2 },
+  ] }).mockResolvedValueOnce(session('measured'));
+  const { result } = renderHook(useLmuWorkspace);
+  await waitFor(() => expect(result.current.selectedFile).toBe('measured'));
+  expect(labRequest.mock.calls.map(([route, body]) => [route, body.filename])).toEqual([['files', undefined], ['session', 'measured']]);
 });

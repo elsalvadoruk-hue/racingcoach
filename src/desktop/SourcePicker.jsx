@@ -11,6 +11,7 @@ import { requestJson } from '../analysis/analysisClient';
 import { AnalysisProgressBar, useAnalysisProgress } from './AnalysisProgress';
 import { retainPrimary, selectPrimary } from '../analysis/externalReferenceSelection';
 import { useGarage61Collection } from './useGarage61Collection';
+import { isSelectableRecording } from '../lib/recordingFiles';
 
 // The server returns codes; the driver reads a sentence.
 const REFERENCE_REASONS = {
@@ -20,6 +21,8 @@ const REFERENCE_REASONS = {
 const referenceReason = reason => REFERENCE_REASONS[reason] || '조건이 맞는 내 기준 랩이 없습니다.';
 // A downloaded recording is used like any other, but it is not the driver's own lap.
 const importedLabel = item => (item?.imported ? ` · 가져온 기록${item.driver_name ? ` (${item.driver_name})` : ''}` : '');
+const selectableSession = session => Boolean(session) && isSelectableRecording(lapCounts(session.laps || []));
+const unavailableMessage = '유효 랩 또는 측정 가능한 완주 랩이 없어 선택 목록에서 제외했습니다. 다른 주행 파일을 선택하세요.';
 
 const COLLECTION_TITLES = {
   SKIPPED_COOLDOWN: 'Garage61 재수집 생략',
@@ -85,7 +88,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   selectedRef.current = selected;
   const [refreshingReferences, setRefreshingReferences] = useState(false);
   const collection = useGarage61Collection({ filename: file,
-    enabled: !lmu && Boolean(analysisWorkspace) && session?.filename === file && session.kind === 'LIVE_LOCAL',
+    enabled: !lmu && Boolean(analysisWorkspace) && session?.filename === file && session.kind === 'LIVE_LOCAL' && selectableSession(session),
     onCollected: filename => setCollectedFile({ filename }),
   });
   const pauseAutomaticSelection = analysisWorkspace?.pauseAutomaticSelection;
@@ -94,11 +97,14 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   useEffect(() => () => importController.current?.abort(), [lmu]);
   useEffect(() => {
     const controller = new AbortController();
-    labRequest('files', {}, controller.signal).then(p => { setFiles(current => [...(p.files || []), ...current.filter(row => !(p.files || []).some(item => item.name === row.name))]); if (!data.filename) setFile(current => current || p.files?.find(f => f.analyzable !== false)?.name || ''); }).catch(e => { if (e.name !== 'AbortError') setError(e.message); });
+    labRequest('files', {}, controller.signal).then(p => {
+      setFiles(current => [...(p.files || []).map(row => ({ ...row, ...current.find(item => item.name === row.name) })), ...current.filter(row => !(p.files || []).some(item => item.name === row.name))]);
+      if (!data.filename) setFile(current => current || p.files?.find(isSelectableRecording)?.name || '');
+    }).catch(e => { if (e.name !== 'AbortError') setError(e.message); });
     return () => controller.abort();
   }, []);
   useEffect(() => {
-    if (!file) { setSession(null); return; }
+    if (!file) { setSession(null); setBusy(false); return; }
     let live = true;
     let progressId = null;
     const controller = new AbortController();
@@ -111,6 +117,17 @@ export default function SourcePicker({ target, reference, external, onApply, ana
         ...(trial ? { reference_mode: trial.reference_mode, external_reference_files: trial.reference_files || [] } : {}) }, controller.signal);
       if (!live) return;
       if (progressId) { endProgress(progressId); progressId = null; }
+      const counts = lapCounts(next.laps || []);
+      setFiles(current => {
+        const previous = current.find(row => row.name === file);
+        const row = { ...previous, name: file, ...counts, best_lap_s: fileBestLap(next.laps || []),
+          recording_time: next.session?.recording_time || previous?.recording_time };
+        return previous ? current.map(item => item.name === file ? row : item) : [...current, row];
+      });
+      if (!isSelectableRecording(counts)) {
+        setSession(null); setOwn(''); setBase(''); setFile(''); setReferenceFile('');
+        setError(unavailableMessage); return;
+      }
       setLoadingStage('references');
       let references;
       // This lookup also supplies the initial automatic reference. The lap
@@ -148,13 +165,23 @@ export default function SourcePicker({ target, reference, external, onApply, ana
         setReferenceFile(personal.filename || next.defaultReferenceFile || file);
         setBase(String(personal.lap ?? personal.lap_number ?? next.defaultReference ?? ''));
       }
-      setFiles(current => current.map(row => row.name === file ? { ...row, ...lapCounts(next.laps), best_lap_s: fileBestLap(next.laps), recording_time: next.session?.recording_time || row.recording_time } : row));
       if (changedFile) {
         setOwn(next.defaultTarget == null ? '' : String(next.defaultTarget));
         if (!personal) setBase(String(next.defaultReference ?? ''));
         setSelected(nextSelected); setMode(nextSelected.length ? 'GARAGE61' : 'LOCAL');
       }
-    })().catch(e => { if (live) { setError(e.message); setSession(null); } }).finally(() => { if (progressId) endProgress(progressId); if (live) setBusy(false); });
+    })().catch(async e => {
+      if (!live) return;
+      setError(e.message); setSession(null);
+      if (e.status === 422) {
+        const catalog = await labRequest('files', {}, controller.signal).catch(() => null);
+        if (!live || !catalog) return;
+        setFiles(catalog.files || []);
+        if (!isSelectableRecording(catalog.files?.find(row => row.name === file))) {
+          setFile(''); setReferenceFile(''); setOwn(''); setBase('');
+        }
+      }
+    }).finally(() => { if (progressId) endProgress(progressId); if (live) setBusy(false); });
     return () => { live = false; controller.abort(); if (progressId) endProgress(progressId); };
   }, [file, external, lmu, beginProgress, endProgress]);
   useEffect(() => {
@@ -189,6 +216,11 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     labRequest('file-laps', { filename: referenceFile }, controller.signal).then(next => {
       if (controller.signal.aborted) return;
       const available = next.laps || [];
+      const counts = lapCounts(available);
+      setFiles(current => current.map(row => row.name === referenceFile ? { ...row, ...counts } : row));
+      if (!isSelectableRecording(counts)) {
+        setReferenceLaps([]); setBase(''); setReferenceFile(''); setError(unavailableMessage); return;
+      }
       setReferenceLaps(available);
       setBase(current => available.some(l => String(l.lap_number) === current && measurableLap(l))
         ? current : String(available.filter(measurableLap).at(-1)?.lap_number ?? ''));
@@ -245,6 +277,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
       if (!mounted.current || controller.signal.aborted) return;
       const imported = result.file;
       setFiles(current => [...current.filter(row => row.name !== imported.name), imported]);
+      if (!isSelectableRecording(imported)) { setImportError(unavailableMessage); return; }
       if (destination === 'source') {
         setFile(imported.name); setReferenceFile(imported.name); setReferenceLaps([]);
       } else {
@@ -264,7 +297,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     }
   }
   async function apply() {
-    if (importBusy || importError) return;
+    if (importBusy || importError || !selectableSession(session) || !isSelectableRecording(files.find(row => row.name === file))) return;
     setBusy(true); setError('');
     setLoadingStage('comparison');
     const progressId = session.kind === 'LIVE_LOCAL' ? beginProgress() : null;
@@ -282,6 +315,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     } catch (e) { if (mounted.current) setError(e.message); } finally { if (progressId) endProgress(progressId); if (mounted.current) setBusy(false); }
   }
   const options = session?.laps || [];
+  const selectableFiles = files.filter(isSelectableRecording);
   const baseOptions = referenceFile && referenceFile !== file ? referenceLaps : options;
   const ownLap = options.find(l => String(l.lap_number) === own && (measurableLap(l) || l.lap_number === session.defaultTarget));
   const best = options.find(l => isBestLap(l, options));
@@ -311,8 +345,8 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     <FieldGroup>
     <Field><FieldLabel htmlFor="source-file">주행 파일 · {lmu ? 'LMU DuckDB' : 'IBT'}</FieldLabel><NativeSelect id="source-file" disabled={importBusy} value={file} onChange={e => { setImportError(''); setFile(e.target.value); setReferenceFile(e.target.value); setReferenceLaps([]); }}>
       {!file && <NativeSelectOption value="">{lmu ? 'LMU 파일을 선택하세요' : 'IBT 파일을 선택하세요'}</NativeSelectOption>}
-      {data.filename && !files.some(f => f.name === data.filename) && <NativeSelectOption value={data.filename} title={data.file_name || data.filename}>{fileChoiceLabel({ ...data.session, ...lapCounts(data.laps), name: data.filename, file_name: data.file_name, best_lap_s: fileBestLap(data.laps) })}</NativeSelectOption>}
-      {files.map(f => <NativeSelectOption key={f.name} value={f.name} title={f.display_name || f.file_name || f.name} disabled={f.analyzable === false} className={`${sessionTypeTone(f)}-file-option${f.valid_laps === 0 || f.complete_laps === 0 ? ' file-option-faint' : ''}`}>{fileChoiceLabel(f)}</NativeSelectOption>)}
+      {data.filename && selectableSession(data) && !files.some(f => f.name === data.filename) && <NativeSelectOption value={data.filename} title={data.file_name || data.filename}>{fileChoiceLabel({ ...data.session, ...lapCounts(data.laps), name: data.filename, file_name: data.file_name, best_lap_s: fileBestLap(data.laps) })}</NativeSelectOption>}
+      {selectableFiles.map(f => <NativeSelectOption key={f.name} value={f.name} title={f.display_name || f.file_name || f.name} className={`${sessionTypeTone(f)}-file-option`}>{fileChoiceLabel(f)}</NativeSelectOption>)}
     </NativeSelect>{lmu && <Button variant="outline" disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)} onClick={() => openDuckdb('source')}>DuckDB 파일 열기…</Button>}<div className="source-lap-summary" data-testid="source-lap-summary">{busy ? '랩 상태 확인 중…' : session && <><Badge variant="secondary">{fileLapLabel(lapCounts(options))}</Badge><Badge variant="outline" className={`session-badge session-${sessionTypeTone(session)}`}>{sessionTypeLabel(session)}</Badge><span>완주 {lapCounts(options).complete_laps}랩</span>{best && <Badge variant="outline" className="best-lap">★ 베스트 {best.lap_number}랩 · {lapTime(best.lap_time_s)}</Badge>}</>}</div></Field>
     <Field><FieldLabel htmlFor="target-lap">내 주행</FieldLabel><NativeSelect id="target-lap" className={isBestLap(ownLap, options) ? 'best-lap-select' : ''} value={own} disabled={importBusy || busy} onChange={e => setOwn(e.target.value)}>{options.map((l, index) => <NativeSelectOption key={`${l.lap_number}-${l.status}-${index}`} value={String(l.lap_number)} disabled={!allowed(l)} className={lapClass(l)}>{label(l)}</NativeSelectOption>)}</NativeSelect><p>{ownLap ? `${lapStatus(ownLap)} 랩${!lapIsComplete(ownLap) ? ' · 완주 랩이 아니며 관측된 정상 구간만 비교합니다.' : ownLap.measurement_eligible ? ' · 기록된 측정값을 비교하며 게임 유효성은 확인 필요입니다.' : ownLap.status !== 'VALID' ? ' · 관측된 정상 구간만 비교합니다.' : ''}` : '비교할 수 있는 랩을 선택하세요.'} · 연한 표시는 완주 유효 랩이 아니거나 비교 자료가 없는 랩입니다.</p></Field>
     </FieldGroup>
@@ -326,7 +360,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     <FieldGroup className="source-picker-reference">
     <Field><FieldLabel htmlFor="reference-mode">기준 종류</FieldLabel><NativeSelect id="reference-mode" value={mode} onChange={e => { setMode(e.target.value); if (e.target.value === 'LOCAL') chooseAutomatic(); }} disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)}><NativeSelectOption value="LOCAL">내 기준 랩</NativeSelectOption><NativeSelectOption disabled={lmu || !refs.length} value="GARAGE61">Garage61 · 내려받은 기준</NativeSelectOption></NativeSelect></Field>
     {mode === 'LOCAL' && <Field><FieldLabel htmlFor="reference-selection">기준 선택 방식</FieldLabel><NativeSelect id="reference-selection" value={referenceSelection} disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)} onChange={e => { if (e.target.value === 'AUTO') chooseAutomatic(); else setReferenceSelection('MANUAL'); }}><NativeSelectOption value="AUTO">{lmu ? '비슷한 조건의 가장 빠른 랩 · 자동 (가져온 기록 포함)' : '비슷한 조건의 내 베스트 랩 · 자동'}</NativeSelectOption><NativeSelectOption value="MANUAL">파일·랩 직접 선택</NativeSelectOption></NativeSelect>{referenceSelection === 'AUTO' && personalReference && <p role="status">{personalReference.filename ? `자동 기준: ${personalReference.file_name || files.find(f => f.name === personalReference.filename)?.file_name || personalReference.filename} · ${personalReference.lap ?? personalReference.lap_number}랩 · ${lapTime(personalReference.lap_time_s)}${importedLabel(personalReference)}` : referenceReason(personalReference.reason)}{personalReference.filename === file && String(personalReference.lap ?? personalReference.lap_number) === own ? ' · 선택한 내 주행이 베스트 랩입니다.' : ''}</p>}</Field>}
-    {mode === 'LOCAL' && <Field><FieldLabel htmlFor="lmu-reference-file">기준 주행 파일 · {lmu ? 'LMU' : 'IBT'}</FieldLabel><NativeSelect id="lmu-reference-file" value={referenceFile || file} onChange={e => { setImportError(''); setReferenceSelection('MANUAL'); setReferenceFile(e.target.value); }} disabled={importBusy || busy || referenceSelection === 'AUTO' || Boolean(analysisWorkspace?.activeTrial)}>{referenceFile && !files.some(f => f.name === referenceFile) && <NativeSelectOption value={referenceFile} title={referenceFile}>{fileChoiceLabel({ name: referenceFile })}</NativeSelectOption>}{files.filter(f => f.analyzable !== false).map(f => <NativeSelectOption key={f.name} value={f.name}>{fileChoiceLabel(f)}{f.name === file ? ' · 같은 파일' : ''}{importedLabel(f)}</NativeSelectOption>)}</NativeSelect>{lmu && <Button variant="outline" disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)} onClick={() => openDuckdb('reference')}>기준 DuckDB 파일 열기…</Button>}<p>같은 차량·트랙·레이아웃의 다른 기록도 기준으로 선택할 수 있습니다.</p></Field>}
+    {mode === 'LOCAL' && <Field><FieldLabel htmlFor="lmu-reference-file">기준 주행 파일 · {lmu ? 'LMU' : 'IBT'}</FieldLabel><NativeSelect id="lmu-reference-file" value={referenceFile || file} onChange={e => { setImportError(''); setReferenceSelection('MANUAL'); setReferenceFile(e.target.value); }} disabled={importBusy || busy || referenceSelection === 'AUTO' || Boolean(analysisWorkspace?.activeTrial)}>{referenceFile && !files.some(f => f.name === referenceFile) && (referenceFile === file ? selectableSession(session) : !referenceLaps.length || isSelectableRecording(lapCounts(referenceLaps))) && <NativeSelectOption value={referenceFile} title={referenceFile}>{fileChoiceLabel({ name: referenceFile })}</NativeSelectOption>}{selectableFiles.map(f => <NativeSelectOption key={f.name} value={f.name}>{fileChoiceLabel(f)}{f.name === file ? ' · 같은 파일' : ''}{importedLabel(f)}</NativeSelectOption>)}</NativeSelect>{lmu && <Button variant="outline" disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)} onClick={() => openDuckdb('reference')}>기준 DuckDB 파일 열기…</Button>}<p>같은 차량·트랙·레이아웃의 다른 기록도 기준으로 선택할 수 있습니다.</p></Field>}
     {mode === 'LOCAL' ? <Field><FieldLabel htmlFor="reference-lap">비교 기준</FieldLabel><NativeSelect id="reference-lap" className={isBestLap(baseOptions.find(l => String(l.lap_number) === base), baseOptions) ? 'best-lap-select' : ''} value={base} onChange={e => { setReferenceSelection('MANUAL'); setBase(e.target.value); }} disabled={importBusy || busy || referenceBusy || referenceSelection === 'AUTO' || Boolean(analysisWorkspace?.activeTrial)}>{baseOptions.map((l, index) => <NativeSelectOption key={`${l.lap_number}-${l.status}-${index}`} value={String(l.lap_number)} disabled={!measurableLap(l)} className={!measurableLap(l) ? 'lap-option-faint' : undefined}>{label(l)}</NativeSelectOption>)}</NativeSelect>{referenceBusy && <p role="status">기준 파일의 랩 확인 중…</p>}</Field> : <>
       <Field><FieldLabel htmlFor="reference-files">Garage61 기준 · Ctrl 키로 여러 랩 선택</FieldLabel><select id="reference-files" multiple size={5} value={selected} onChange={e => { const next = [...e.target.selectedOptions].map(o => o.value); setSelected(current => retainPrimary(current, next)); }} disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)}>{refs.map(r => <option key={r.name} value={r.name}>{r.driver_name || '드라이버'} · {lapTime(r.lap_time_s)} · {r.car_name}</option>)}</select><p>선택 {selected.length}개 · 대표 한 랩과 비교하고, 나머지는 구간별 손실을 확인하는 보조 기록으로 사용합니다.</p>{!busy && !error && !referenceNotice && !refs.length && <p>이 차량·트랙과 맞는 내려받은 기준이 없습니다.</p>}</Field>
       <Field><FieldLabel htmlFor="primary-reference">Garage61 대표 기준</FieldLabel><NativeSelect id="primary-reference" value={selected[0] || ''} onChange={e => setSelected(current => selectPrimary(current, e.target.value))} disabled={importBusy || busy || !selected.length || Boolean(analysisWorkspace?.activeTrial)}>
@@ -343,6 +377,6 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     {error && <p role="alert" className="loss">{error}</p>}
     {referenceError && <p role="alert">{referenceError}</p>}
     {referenceNotice && <p role="status">{referenceNotice}</p>}
-    <Button disabled={importBusy || Boolean(importError) || busy || referenceBusy || personalBusy || Boolean(referenceError) || !session || !own || (mode === 'LOCAL' && !baseOptions.some(l => String(l.lap_number) === base && measurableLap(l))) || (mode === 'GARAGE61' && !selected.length)} onClick={apply}>{busy ? `${loadingLabel}…` : '선택한 랩 비교하기'}</Button>
+    <Button disabled={importBusy || Boolean(importError) || busy || referenceBusy || personalBusy || Boolean(referenceError) || !selectableSession(session) || !own || (mode === 'LOCAL' && !baseOptions.some(l => String(l.lap_number) === base && measurableLap(l))) || (mode === 'GARAGE61' && !selected.length)} onClick={apply}>{busy ? `${loadingLabel}…` : '선택한 랩 비교하기'}</Button>
   </div>;
 }

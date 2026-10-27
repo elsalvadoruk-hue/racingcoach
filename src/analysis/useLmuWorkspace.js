@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { activateSession, currentSessionResult, labRequest, LMU_SESSION_KEY, rememberSession } from '../desktop/sessionData';
 import { useHoverHelpSetting } from '../components/HelpGuide';
 import { useAnalysisProgress } from '../desktop/AnalysisProgress';
+import { isSelectableRecording } from '../lib/recordingFiles';
 
 const unavailable = error => [400, 404, 409, 422].includes(error.status);
 export const LMU_RECORDING_POLL_MS = 5000;
 const fileVersion = file => JSON.stringify([file.file_signature, file.status, file.analyzable,
-  file.detected_laps, file.complete_laps, file.valid_laps]);
+  file.selectable, file.detected_laps, file.complete_laps, file.valid_laps, file.measurement_laps]);
 const versions = files => new Map(files.map(file => [file.name, fileVersion(file)]));
 
 export function useLmuWorkspace() {
@@ -51,9 +52,10 @@ export function useLmuWorkspace() {
         let lastError;
         for (const [index, file] of files.entries()) {
           if (controller.signal.aborted) return;
-          // A recording without one valid lap has no lap times or reference to show:
-          // open the newest one that does. It stays available in the file picker.
-          if (file.analyzable !== true || !(file.valid_laps > 0)) continue;
+          // Only confirmed lap availability can trigger automatic replacement.
+          // LMU measurements remain usable while game validity is unknown.
+          if (file.analyzable !== true || !isSelectableRecording(file)
+            || !(file.measurement_laps > 0 || file.valid_laps > 0)) continue;
           if (!initial && (file.auto_load === false || state.handled.get(file.name) === fileVersion(file)
             || previous.get(file.name) !== fileVersion(file))) continue;
           const filename = file.name;

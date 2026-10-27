@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { initialModeForFile } from './analysisShared';
 import { readDesktopLaps } from './desktopSelection';
+import { isSelectableRecording } from '../lib/recordingFiles';
 
 export function useWorkspaceInitialization({
   initializationAttempt = 0,
@@ -26,13 +27,13 @@ export function useWorkspaceInitialization({
         void loadGarage61ApiStatus();
         if (cancelled) return;
         const selected = selectedFileRef.current;
-        const available = filePayload.filter(file => file.analyzable !== false).map(file => file.name);
+        const available = filePayload.filter(isSelectableRecording).map(file => file.name);
         const candidates = [...new Set([
-          ...(selected && !filePayload.some(file => file.name === selected && file.analyzable === false) ? [selected] : []),
+          ...(selected && !filePayload.some(file => file.name === selected && !isSelectableRecording(file)) ? [selected] : []),
           ...available,
-          ...(telemetry?.file_name && telemetry.analyzable !== false ? [telemetry.file_name] : []),
+          ...(telemetry?.file_name && isSelectableRecording(telemetry) ? [telemetry.file_name] : []),
         ])];
-        if (activeTrialRef.current) candidates.splice(1);
+        if (activeTrialRef.current) candidates.splice(selected ? 1 : 0);
         let ownedFile = selected;
         for (const firstFile of candidates) {
           if (cancelled || selectedFileRef.current !== ownedFile) return;

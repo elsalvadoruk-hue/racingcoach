@@ -232,6 +232,20 @@ class LmuHistoryClockTests(unittest.TestCase):
 
 @unittest.skipUnless(duckdb, 'LMU 전용 의존성을 설치하지 않은 환경입니다.')
 class LmuRecordingsTests(unittest.TestCase):
+    def test_lmu_catalog_preserves_measurement_eligibility_and_unknown_counts(self):
+        import lmu_recordings
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'drive.duckdb'
+            path.write_bytes(b'synthetic')
+            for info, selectable in (({'measurement_laps': 2, 'valid_laps': None, 'analyzable': True}, True),
+                                     ({'measurement_laps': 0, 'valid_laps': None}, False),
+                                     ({'valid_laps': None, 'metadata_pending': True}, True)):
+                with self.subTest(info=info), patch.object(lmu_recordings, 'recordings', return_value=[path]):
+                    row = lmu_recordings.files_payload(lambda _: info)['files'][0]
+                self.assertEqual(row['selectable'], selectable)
+                self.assertEqual(row['measurement_laps'], info.get('measurement_laps'))
+                self.assertIsNone(row['valid_laps'])
+
     def test_catalog_versions_change_and_imported_references_do_not_auto_open(self):
         import lmu_recordings
         with tempfile.TemporaryDirectory() as folder:

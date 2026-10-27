@@ -11,6 +11,7 @@ import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyContent } from '
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead } from '../components/ui/table';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip';
 import { cn } from '../lib/utils';
+import { isSelectableRecording } from '../lib/recordingFiles';
 import CornerMap from '../components/CornerMap';
 import LapOverlay, { PanBar } from '../components/LapOverlay';
 import { CHANNELS, data, laps, length, comparisonFor, loadOverlay, signed, number, lapTime, durationTime, distanceDifference, cornerLabel, readNames, activateSession, labRequest, rememberSession, currentSessionResult, measurableLap } from './sessionData';
@@ -208,7 +209,7 @@ function Workspace({ onSession, runtime, analysisWorkspace, busy, progress, fail
     let live = true;
     Promise.all([labRequest('files'), labRequest('references', { filename: data.filename })]).then(([catalog, refs]) => {
       const sameTrack = f => f.track_platform_id && data.session.track_platform_id ? String(f.track_platform_id) === String(data.session.track_platform_id) : f.track_name === data.session.track_name && f.track_config === data.session.track_config;
-      if (live) setOverlaySources({ files: catalog.files.filter(f => f.name !== data.filename && f.analyzable !== false && sameTrack(f)), references: (refs.files || []).filter(r => r.usable !== false && r.compatible !== false).map(r => ({ ...r, label: `${r.driver_name || 'Garage61'} · ${lapTime(r.lap_time_s)}` })) });
+      if (live) setOverlaySources({ files: catalog.files.filter(f => f.name !== data.filename && isSelectableRecording(f) && sameTrack(f)), references: (refs.files || []).filter(r => r.usable !== false && r.compatible !== false).map(r => ({ ...r, label: `${r.driver_name || 'Garage61'} · ${lapTime(r.lap_time_s)}` })) });
     }).catch(e => { if (live) setNotice(e.message); });
     return () => { live = false; };
   }, []);

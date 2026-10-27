@@ -124,6 +124,20 @@ class ReliabilityTests(unittest.TestCase):
             self.assertEqual(api.resolve_telemetry_file(), older)
             self.assertEqual(api.resolve_telemetry_file(newer.name), newer)
 
+    def test_default_file_selection_skips_confirmed_zero_but_preserves_explicit_coaching_only(self):
+        newer, older = self.directory / 'coaching-only.ibt', self.directory / 'valid.ibt'
+        with patch.object(api, '_list_raw_ibt_files', return_value=[newer, older]), patch.object(
+                api, 'telemetry_file_visibility', side_effect=lambda path: {
+                    'analyzable': True, 'valid_laps': 0 if path == newer else 1, 'status': 'COACHING_ONLY'}):
+            self.assertEqual(api.resolve_telemetry_file(), older)
+            self.assertEqual(api.resolve_telemetry_file(newer.name), newer)
+
+    def test_default_file_selection_does_not_invent_zero_for_unknown_counts(self):
+        path = self.directory / 'pending.ibt'
+        with patch.object(api, '_list_raw_ibt_files', return_value=[path]), patch.object(
+                api, 'telemetry_file_visibility', return_value={'analyzable': None, 'valid_laps': None}):
+            self.assertEqual(api.resolve_telemetry_file(), path)
+
     def test_retry_honors_long_body_and_standard_header_wait(self):
         self.assertEqual(collector.retry_delay({}, {"details": {"retryAfterSeconds": 65}}, 0), 65)
         self.assertEqual(collector.retry_delay({"Retry-After": "120"}, {"details": {"retryAfterSeconds": 65}}, 0), 120)

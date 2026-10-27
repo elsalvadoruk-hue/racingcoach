@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import re
+from recording_selection import FILTER_POLICY, is_selectable_recording
 
 FILE_ID = re.compile(r'^[a-f0-9]{24}$')
 
@@ -49,7 +50,7 @@ def files_payload(visibility, limit=250):
     from lmu_imports import import_dir
     imported = import_dir().resolve()
     fields = ('car_name', 'car_path', 'track_name', 'track_path', 'track_config', 'track_platform_id', 'analyzable',
-              'reason', 'detected_laps', 'complete_laps', 'valid_laps', 'metadata_pending', 'status', 'retryable',
+              'reason', 'detected_laps', 'complete_laps', 'valid_laps', 'measurement_laps', 'metadata_pending', 'status', 'retryable',
               'session_type', 'session_duration_s', 'suggested_session_mode', 'best_lap_s', 'recording_time')
     rows = []
     for path in recordings(limit):
@@ -70,5 +71,6 @@ def files_payload(visibility, limit=250):
             if recording_busy(path) or signature != [after.st_size, after.st_mtime_ns]:
                 row.update(analyzable=False, status='RECORDING', retryable=True,
                            reason='LMU가 아직 이 파일을 기록 중입니다.')
+        row['selectable'] = is_selectable_recording(row)
         rows.append(row)
-    return {'provider': 'LMU', 'files': rows}
+    return {'provider': 'LMU', 'files': rows, 'filter_policy': FILTER_POLICY}

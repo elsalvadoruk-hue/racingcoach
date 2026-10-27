@@ -8,6 +8,7 @@ import { useWorkspaceInitialization } from './useWorkspaceInitialization';
 import { useTelemetryEvents } from './useTelemetryEvents';
 import { useCollectorPolling } from './useCollectorPolling';
 import { useAnalysisProgress } from '../desktop/AnalysisProgress';
+import { isSelectableRecording } from '../lib/recordingFiles';
 
 export function useAnalysisWorkspace() {
   const workspaceMounted = useRef(true);
@@ -142,8 +143,8 @@ export function useAnalysisWorkspace() {
     filesRef.current = nextFiles;
     setFiles(nextFiles);
     setFileIndex({ index_status: payload.index_status, pending_count: payload.pending_count, index_signature: payload.index_signature });
-    const restored = nextFiles.find((file) => file.name === restoredFileRef.current && file.analyzable !== false);
-    const firstAnalyzable = restored || nextFiles.find((file) => file.analyzable !== false);
+    const restored = nextFiles.find((file) => file.name === restoredFileRef.current && isSelectableRecording(file));
+    const firstAnalyzable = restored || (!activeTrialRef.current && nextFiles.find(isSelectableRecording));
     if (!selectedFileRef.current && firstAnalyzable) {
       restoreFileDraft(firstAnalyzable.name);
       setSelectedFile(firstAnalyzable.name);
@@ -156,7 +157,7 @@ export function useAnalysisWorkspace() {
     const payload = await requestJson('/api/status');
     setStatus(payload);
     const telemetry = payload.telemetry;
-    if (telemetry?.file_name && telemetry.analyzable !== false && !selectedFileRef.current && !restoredFileRef.current) {
+    if (telemetry?.file_name && isSelectableRecording(telemetry) && !selectedFileRef.current && !restoredFileRef.current) {
       restoreFileDraft(telemetry.file_name);
       setSelectedFile(telemetry.file_name);
       selectedFileRef.current = telemetry.file_name;
@@ -329,6 +330,7 @@ export function useAnalysisWorkspace() {
 
   const maybeStartGarage61Collection = useCallback(async (filename, referencePayload = null) => {
     if (!filename || !workspaceMounted.current || selectedFileRef.current !== filename) return null;
+    if (!isSelectableRecording(filesRef.current.find(file => file.name === filename))) return null;
     const health = referencePayload?.collector_health || (await loadGarage61CollectorStatus(filename))?.health;
     if (!workspaceMounted.current || selectedFileRef.current !== filename) return null;
     if (!health?.enabled || !health?.needs_collection) return null;
@@ -364,7 +366,7 @@ export function useAnalysisWorkspace() {
       const effectiveFilename = filename || selectedFileRef.current || null;
       if (!effectiveFilename || effectiveFilename !== selectedFileRef.current) return null;
       const knownFile = filesRef.current.find((item) => item.name === effectiveFilename);
-      if (knownFile?.analyzable === false) {
+      if (knownFile?.analyzable === false || (forceAutoLaps && !isSelectableRecording(knownFile))) {
         const unavailable = new Error(knownFile.eligibility_reason || knownFile.reason || '이 파일은 분석할 유효랩이 없습니다.');
         unavailable.status = 422;
         setError(unavailable.message); onFailure?.(unavailable); return null;
@@ -434,6 +436,12 @@ export function useAnalysisWorkspace() {
           }),
         });
         if (!isCurrent()) return null;
+        if (forceAutoLaps && !isSelectableRecording(payload.data_quality)) {
+          await loadFiles();
+          const unavailable = new Error('유효 랩 또는 측정 가능한 완주 랩이 없어 자동 불러오기에서 제외했습니다.');
+          unavailable.status = 422;
+          throw unavailable;
+        }
         if (payload.data_quality?.analysis_scope === 'UNAVAILABLE') {
           const unavailable = new Error('이 주행에는 유효한 완주 랩이나 분석 가능한 정상 구간이 없습니다.');
           unavailable.status = 422;
@@ -536,7 +544,7 @@ export function useAnalysisWorkspace() {
 
   const handleFileChange = async (filename) => {
     const fileEntry = files.find((item) => item.name === filename);
-    if (fileEntry?.analyzable === false) return;
+    if (fileEntry && !isSelectableRecording(fileEntry)) return;
     analysisRequestRef.current.controller?.abort();
     setAnalysis(null);
     setLoading(true);
@@ -555,7 +563,7 @@ export function useAnalysisWorkspace() {
     setReferenceLapManual(false);
     const referencePayload = await loadExternalReferences(filename, true);
     if (selectedFileRef.current !== filename) return;
-    await runAnalysis({
+    const result = await runAnalysis({
       includeAI: false,
       filename,
       sessionModeOverride: nextMode,
@@ -564,7 +572,7 @@ export function useAnalysisWorkspace() {
       forceAutoLaps: true,
       externalReferencesOverride: (referencePayload.applied_selection || referencePayload.recommended_selection || []).slice(0, referencePayload.display_limit || referencePayload.max_selection || 9),
     });
-    void maybeStartGarage61Collection(filename, referencePayload);
+    if (result) void maybeStartGarage61Collection(filename, referencePayload);
   };
 
   const commitSessionMode = async (nextMode, nextPitRule, replaceExistingMode = false) => {
@@ -674,7 +682,7 @@ export function useAnalysisWorkspace() {
   const analysisIsCurrent = Boolean(analysisSnapshot && analysisContextKey(analysisSnapshot) === analysisContextKey(desiredContext));
   const canStartTrial = Boolean(analysis && analysisIsCurrent && !loading && !activeTrial);
   const currentContext = { ...(selectedFileEntry || {}), ...(session || {}), name: selectedFile };
-  const canAttachTrial = Boolean(activeTrial && selectedFile !== activeTrial.baseline_file && selectedFileEntry?.analyzable !== false
+  const canAttachTrial = Boolean(activeTrial && selectedFile !== activeTrial.baseline_file && isSelectableRecording(selectedFileEntry)
     && analysis && sameVehicleAndTrack(activeTrial.context, currentContext));
   const displayComparison = cleanSectionOnly ? null : hasExternalTrace ? { target_lap: comparison?.target_lap ?? analysis?.lap_selection?.target_lap,
     reference_lap: externalReferenceAnalysis.aggregate?.reference_label || '선택한 Garage61 기준',
@@ -744,7 +752,7 @@ export function useAnalysisWorkspace() {
     if (!current) return [];
     const here = comparisonContext(current);
     const stamp = (name) => { const found = /(\d{4})-(\d{2})-(\d{2}) (\d{2})-(\d{2})/.exec(name); return found ? `${found[1]}-${found[2]}-${found[3]} ${found[4]}:${found[5]}` : name; };
-    return files.filter((item) => item.name !== current.name && item.analyzable !== false
+    return files.filter((item) => item.name !== current.name && isSelectableRecording(item)
       && comparisonContext(item).track === here.track && comparisonContext(item).config === here.config)
       .map((item) => ({ name: item.name, label: `${stamp(item.name)} · ${item.car_name || ''}` }));
   }, [files, analysisSnapshot?.filename]);

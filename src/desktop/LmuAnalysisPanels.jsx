@@ -10,6 +10,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '.
 import CornerConsistency from '../components/CornerConsistency';
 import { requestJson } from '../analysis/analysisClient';
 import { data, labRequest, measurableLap, number, signed, lapTime } from './sessionData';
+import { isSelectableRecording } from '../lib/recordingFiles';
 
 export const lmuPost = (path, body, signal) => requestJson(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
 
@@ -43,26 +44,27 @@ export function LmuLapSelection({ selections, onChange, disabled = false }) {
   const id = useId();
   const [files, setFiles] = useState([]), [filename, setFilename] = useState(data.filename || '');
   const [available, setAvailable] = useState([]), [error, setError] = useState(''), [loading, setLoading] = useState(false);
+  const selectedFileAllowed = isSelectableRecording(files.find(file => file.name === filename) || {});
   useEffect(() => {
     const controller = new AbortController();
     labRequest('files', {}, controller.signal).then(result => {
-      if (!controller.signal.aborted) setFiles((result.files || []).filter(file => file.analyzable !== false));
+      if (!controller.signal.aborted) setFiles(result.files || []);
     }).catch(e => { if (!controller.signal.aborted) setError(e.message); });
     return () => controller.abort();
   }, []);
   useEffect(() => {
     setAvailable([]);
-    if (!filename) return undefined;
+    if (!filename || !selectedFileAllowed) { setLoading(false); return undefined; }
     const controller = new AbortController(); setLoading(true); setError('');
     labRequest('file-laps', { filename }, controller.signal).then(result => {
       if (!controller.signal.aborted) setAvailable((result.laps || []).filter(measurableLap));
     }).catch(e => { if (!controller.signal.aborted) setError(e.message); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
-  }, [filename]);
+  }, [filename, selectedFileAllowed]);
   const fileLabel = key => files.find(file => file.name === key)?.display_name || files.find(file => file.name === key)?.file_name || key;
-  return <FieldGroup><Field><FieldLabel htmlFor={`${id}-file`}>측정 랩을 추가할 주행</FieldLabel><NativeSelect id={`${id}-file`} value={filename} onChange={event => setFilename(event.target.value)} disabled={disabled}><NativeSelectOption value="">주행 선택</NativeSelectOption>{files.map(file => <NativeSelectOption key={file.name} value={file.name}>{file.display_name || file.file_name || file.name}</NativeSelectOption>)}</NativeSelect></Field>
+  return <FieldGroup><Field><FieldLabel htmlFor={`${id}-file`}>측정 랩을 추가할 주행</FieldLabel><NativeSelect id={`${id}-file`} value={filename} onChange={event => setFilename(event.target.value)} disabled={disabled}><NativeSelectOption value="">주행 선택</NativeSelectOption>{filename && !selectedFileAllowed && <NativeSelectOption value={filename} disabled>{fileLabel(filename)} · 선택 불가</NativeSelectOption>}{files.filter(isSelectableRecording).map(file => <NativeSelectOption key={file.name} value={file.name}>{file.display_name || file.file_name || file.name}</NativeSelectOption>)}</NativeSelect></Field>
     <LmuFeedback error={error} loading={loading} />
-    <div className="flex flex-wrap gap-2" aria-label="추가할 측정 랩">{available.map(lap => {
+    <div className="flex flex-wrap gap-2" aria-label="추가할 측정 랩">{(selectedFileAllowed ? available : []).map(lap => {
       const selected = selections.some(item => item.file_id === filename && item.lap_number === lap.lap_number);
       return <Button key={lap.lap_number} size="sm" variant={selected ? 'secondary' : 'outline'} disabled={disabled || (!selected && selections.length >= 6)} aria-pressed={selected} onClick={() => onChange(selected ? selections.filter(item => item.file_id !== filename || item.lap_number !== lap.lap_number) : [...selections, { file_id: filename, lap_number: lap.lap_number }])}>랩 {lap.lap_number} · {lapTime(lap.lap_time_s)}</Button>;
     })}</div>

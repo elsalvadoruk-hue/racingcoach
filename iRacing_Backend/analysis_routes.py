@@ -12,6 +12,7 @@ import asyncio
 import json
 from analysis_models import AnalyzeRequest, ComparisonDetailRequest, LapOverlayRequest
 import analysis_progress
+from recording_selection import FILTER_POLICY, is_selectable_recording
 
 logger = logging.getLogger("iRacingSetupTuner")
 
@@ -89,11 +90,13 @@ def register_routes(app, services: AnalysisRoutesServices):
                     "size_bytes": path.stat().st_size,
                     "modified_at": path.stat().st_mtime,
                     **{key: visibility.get(key) for key in ("eligible", "analyzable", "comparison_ready", "coaching_ready", "clean_segment_count", "metadata_pending", "status", "reason", "error", "retryable")},
-                    "lap_count": visibility.get("detected_laps", 0),
+                    "selectable": is_selectable_recording(visibility),
+                    "lap_count": visibility.get("detected_laps"),
                     "best_lap_s": visibility.get("best_lap_s"),
                     "recording_time": visibility.get("recording_time"),
-                    "complete_laps": visibility.get("complete_laps", 0),
-                    "valid_laps": visibility.get("valid_laps", 0),
+                    "complete_laps": visibility.get("complete_laps"),
+                    "valid_laps": visibility.get("valid_laps"),
+                    "measurement_laps": visibility.get("measurement_laps"),
                     "car_name": visibility.get("car_name") or "Unknown Car",
                     "car_path": visibility.get("car_path") or "",
                     "track_name": visibility.get("track_name") or "Unknown Track",
@@ -117,7 +120,7 @@ def register_routes(app, services: AnalysisRoutesServices):
             "memory_enabled": services.get_memory_store() is not None,
             "minimum_display_laps": services.get_min_display_laps(),
             "minimum_display_valid_laps": services.get_min_display_valid_laps(),
-            "filter_policy": "SHOW_ALL_WITH_AVAILABILITY_REASON",
+            "filter_policy": FILTER_POLICY,
         }
 
     @app.get("/api/status")
@@ -128,7 +131,7 @@ def register_routes(app, services: AnalysisRoutesServices):
             visibility = await asyncio.to_thread(services.quick_file_visibility, path) if path else None
             return {
                 "telemetry": {"file_name": path.name, "file_signature": list(services.file_signature(path)),
-                              **visibility} if path else None,
+                              **visibility, "selectable": is_selectable_recording(visibility)} if path else None,
                 "shared_state": services.shared_state_summary(),
                 "ai_enabled": services.get_ai_client() is not None, "ai": services.ai_runtime_info(), "memory": services.memory_runtime_info(),
                 "listing_policy": "HEADER_AND_PERSISTENT_INDEX_FIRST",

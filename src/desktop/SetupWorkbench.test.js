@@ -58,3 +58,42 @@ test('resumed production trial attaches B, records feeling and comparison, and r
   expect(stored.preferences.output).toBe('keep');
   expect(stored.drafts.unrelated.text).toBe('keep');
 });
+
+test('a saved empty baseline stays visible but disabled and cannot revive unusable catalog candidates', async () => {
+  labRequest.mockImplementation(async route => route === 'files' ? { files: [
+    { name: 'before.ibt', valid_laps: 0, analyzable: true },
+    { name: 'empty.ibt', detected_laps: 0, analyzable: true },
+    { name: 'after.ibt', valid_laps: 2 },
+  ] } : { corners: [], session: {}, setup: {} });
+  render(<Harness />);
+  const select = screen.getByLabelText('변경 전 주행 · A');
+  await waitFor(() => expect(within(select).queryByRole('option', { name: /empty/ })).not.toBeInTheDocument());
+  await waitFor(() => expect(within(select).getByRole('option', { name: /before/ })).toBeDisabled());
+  expect(within(select).getByRole('option', { name: /after/ })).toBeEnabled();
+  expect(select).toHaveValue('before.ibt');
+  expect(screen.getByRole('button', { name: '이 변경으로 실험 시작' })).toBeDisabled();
+});
+
+test('a frozen trial keeps its baseline and Garage61 references while empty new B files are excluded', async () => {
+  localStorage.setItem(WORKFLOW_KEY, JSON.stringify({ version: 1, preferences: {}, drafts: {}, history: [],
+    activeTrial: { id: 'frozen-id', baseline_file: 'before.ibt', candidate_file: null,
+      goal: 'COMFORT', reference_mode: 'SINGLE', reference_files: ['cached.csv'],
+      context: { car_name: 'Car', track_name: 'Track', track_config: 'Layout' },
+      adjustment: { setting: 'brake_bias_pct', original_value: 52, value: 53 },
+      feedback: { phase: 'ENTRY', speed: 'LOW', symptom: 'BRAKING', text: '' },
+      driver_feedback: { change: '', rating: null, side_effects: '' } } }));
+  labRequest.mockImplementation(async route => route === 'files' ? { files: [
+    { name: 'before.ibt', valid_laps: 0 },
+    { name: 'empty.ibt', valid_laps: 0, analyzable: true },
+    { name: 'after.ibt', valid_laps: 2, metadata_pending: true },
+  ] } : { corners: [], session: {}, setup: {} });
+  render(<Harness />);
+  const select = screen.getByLabelText('변경 후 새 주행 · B');
+  await waitFor(() => expect(within(select).getByRole('option', { name: /after/ })).toBeInTheDocument());
+  expect(within(select).queryByRole('option', { name: /empty/ })).not.toBeInTheDocument();
+  expect(screen.getByLabelText('변경 전 주행 · A')).toHaveValue('before.ibt');
+  expect(screen.getByLabelText('변경 전 주행 · A')).toBeDisabled();
+  expect(JSON.parse(localStorage.getItem(WORKFLOW_KEY)).activeTrial).toMatchObject({
+    baseline_file: 'before.ibt', reference_mode: 'SINGLE', reference_files: ['cached.csv'],
+  });
+});

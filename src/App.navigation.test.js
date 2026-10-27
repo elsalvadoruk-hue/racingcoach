@@ -147,6 +147,98 @@ test('startup skips an empty newest recording and keeps the previous usable run 
   expect(requests().map(request => request.filename)).toEqual(['B.ibt']);
 });
 
+test.each([
+  { detected_laps: 0 }, { lap_count: 0 }, { complete_laps: 0 }, { valid_laps: 0 }, { selectable: false },
+])('startup excludes confirmed unusable recordings from restored and status candidates: %p', async unavailable => {
+  const newest = { ...files[0], ...unavailable };
+  localStorage.setItem('iracing-tuner.workflow.v1', JSON.stringify({ version: 1, preferences: { selectedFile: newest.name } }));
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.includes('/api/files') ? response({ files: [newest, files[1]] })
+    : url.endsWith('/api/status') ? response({ telemetry: { ...newest, file_name: newest.name, file_signature: [1] } })
+    : original(url, options));
+  const { result } = await ready();
+  expect(result.current.selectedFile).toBe('B.ibt');
+  expect(result.current.files).toEqual([newest, files[1]]);
+  expect(requests().map(request => request.filename)).toEqual(['B.ibt']);
+});
+
+test('pending unknown lap counts remain candidates until the file is read', async () => {
+  const pending = { ...files[0], analyzable: null, metadata_pending: true,
+    detected_laps: null, lap_count: null, complete_laps: null, valid_laps: null };
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.includes('/api/files') ? response({ files: [pending, files[1]] }) : original(url, options));
+  const { result } = await ready();
+  expect(result.current.selectedFile).toBe(pending.name);
+  expect(requests().map(request => request.filename)).toEqual([pending.name]);
+});
+
+test.each([false, true])('a zero-valid-lap SSE recording preserves analysis and trial ownership (trial=%s)', async withTrial => {
+  let source, catalog = files;
+  global.EventSource = class { constructor() { source = this; } close() {} };
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.includes('/api/files') ? response({ files: catalog }) : original(url, options));
+  const { result } = await ready();
+  if (withTrial) act(() => result.current.beginTrial({ setting: 'brake_bias_pct', original_value: 55, value: 54 }));
+  const previousAnalysis = result.current.analysis;
+  const unusable = { ...files[1], analyzable: true, detected_laps: 3, valid_laps: 0, status: 'COACHING_ONLY' };
+  catalog = [unusable, files[0]];
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { ...unusable, file_name: unusable.name, file_signature: [2] } }) }));
+  expect(result.current.selectedFile).toBe('A.ibt');
+  expect(result.current.analysis).toBe(previousAnalysis);
+  expect(result.current.newFileNotice).toBe('');
+  expect(requests().map(request => request.filename)).toEqual(['A.ibt']);
+  expect(result.current.activeTrial?.baseline_file || null).toBe(withTrial ? 'A.ibt' : null);
+});
+
+test('zero-valid-lap files stay in the raw catalog but cannot be chosen or added to expert overlays', async () => {
+  const unusable = { ...files[1], valid_laps: 0, status: 'COACHING_ONLY' };
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.includes('/api/files') ? response({ files: [files[0], unusable, files[2]] }) : original(url, options));
+  const { result } = await ready();
+  const previousAnalysis = result.current.analysis;
+  await act(async () => result.current.handleFileChange(unusable.name));
+  expect(result.current.selectedFile).toBe('A.ibt');
+  expect(result.current.analysis).toBe(previousAnalysis);
+  expect(result.current.files).toContainEqual(unusable);
+  expect(result.current.overlayFiles.map(file => file.name)).toEqual(['C.ibt']);
+  expect(requests().map(request => request.filename)).toEqual(['A.ibt']);
+});
+
+test('an unavailable saved recording never selects another automatic baseline during a frozen trial', async () => {
+  const trial = { id: 'frozen-trial', baseline_file: 'A.ibt', reference_mode: 'LOCAL', reference_files: [],
+    adjustment: { setting: 'brake_bias_pct', original_value: 55, value: 54 } };
+  localStorage.setItem('iracing-tuner.workflow.v1', JSON.stringify({ version: 1, activeTrial: trial,
+    preferences: { selectedFile: 'A.ibt' } }));
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.includes('/api/files')
+    ? response({ files: [{ ...files[0], valid_laps: 0 }, files[1]] }) : original(url, options));
+  const { result } = renderHook(useAnalysisWorkspace);
+  await waitFor(() => expect(result.current.initialLoading).toBe(false));
+  expect(result.current.activeTrial).toEqual(trial);
+  expect(result.current.analysis).toBeNull();
+  expect(requests()).toEqual([]);
+});
+
+test('a selected trial candidate that becomes unusable keeps its analysis without allowing attachment', async () => {
+  let source, catalog = files;
+  global.EventSource = class { constructor() { source = this; } close() {} };
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.includes('/api/files') ? response({ files: catalog }) : original(url, options));
+  const { result } = await ready();
+  act(() => result.current.beginTrial({ setting: 'brake_bias_pct', original_value: 55, value: 54 }));
+  await act(async () => result.current.handleFileChange('B.ibt'));
+  expect(result.current.canAttachTrial).toBe(true);
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { file_name: 'B.ibt', file_signature: [1] } }) }));
+  const previousAnalysis = result.current.analysis;
+  const unavailable = { ...files[1], valid_laps: 0 };
+  catalog = [unavailable, files[0]];
+  await act(async () => source.onmessage({ data: JSON.stringify({ telemetry: { ...unavailable, file_name: 'B.ibt', file_signature: [2] } }) }));
+  expect(result.current.selectedFile).toBe('B.ibt');
+  expect(result.current.analysis).toBe(previousAnalysis);
+  expect(result.current.canAttachTrial).toBe(false);
+  expect(result.current.activeTrial.baseline_file).toBe('A.ibt');
+});
+
 test('startup tries the previous recording when pending metadata proves the latest has no usable laps', async () => {
   const original = global.fetch.getMockImplementation();
   global.fetch.mockImplementation((url, options) => {
@@ -352,14 +444,26 @@ test('local, aggregate and single modes send exact reference selections', async 
 });
 
 test('clean corner observations never invent a valid lap comparison', async () => {
+  const { result } = await ready();
   const original = global.fetch.getMockImplementation();
   global.fetch.mockImplementation((url, options) => url.endsWith('/api/analyze') ? response({ ...analysisFor('A.ibt'), comparison: null,
     data_quality: { valid_laps: 0, coaching_ready: true, analysis_scope: 'CLEAN_SEGMENTS_ONLY', clean_segment_count: 1 },
     coaching: { clean_segment_corners: [{ id: 'C1', label: 'T1', lap_number: 2, target: { min_speed_kph: 75 } }] } }) : original(url, options));
-  const { result } = await ready();
+  await act(async () => result.current.runAnalysis());
   expect(result.current.cleanSectionOnly).toBe(true);
   expect(result.current.displayComparison).toBeNull();
   expect(result.current.comparisonCorners).toHaveLength(1);
+});
+
+test('startup skips a pending file when analysis confirms zero valid laps and keeps the next valid run', async () => {
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.endsWith('/api/analyze') && JSON.parse(options.body).filename === 'A.ibt'
+    ? response({ ...analysisFor('A.ibt'), comparison: null,
+      data_quality: { valid_laps: 0, complete_laps: 2, coaching_ready: true, analysis_scope: 'CLEAN_SEGMENTS_ONLY' } })
+    : original(url, options));
+  const { result } = await ready();
+  expect(result.current.analysisSnapshot.filename).toBe('B.ibt');
+  expect(requests().map(request => request.filename)).toEqual(['A.ibt', 'B.ibt']);
 });
 
 test('desktop selection updates existing origin preferences and telemetry ownership', async () => {

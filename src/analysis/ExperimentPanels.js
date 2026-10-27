@@ -9,6 +9,7 @@ import { Input } from "../components/ui/input";
 import { ErrorMessage, MetricMini } from './WorkspaceUi';
 import { assignedModeForFile, comparisonContextLabel, cx, formatNumber, formatSigned, lapBadgeClass, sameVehicleAndTrack, sessionModeLabel } from './analysisShared';
 import { requestJson } from './analysisClient';
+import { isSelectableRecording } from '../lib/recordingFiles';
 
 export function LearningEffectSummary({ result, memoryRecord }) {
   const effects = result?.effect_profile?.overall_corner_deltas || {};
@@ -80,7 +81,7 @@ export function ExperimentManager({ files = [], sessionMode, preferredBaseline =
 
   useEffect(() => {
     if (trial || !preferredBaseline || preferredBaselineRef.current === preferredBaseline) return;
-    if (files.some((file) => file.name === preferredBaseline)) {
+    if (files.some((file) => file.name === preferredBaseline && isSelectableRecording(file))) {
       preferredBaselineRef.current = preferredBaseline;
       setBaseline(preferredBaseline);
       setCandidate('');
@@ -98,7 +99,7 @@ export function ExperimentManager({ files = [], sessionMode, preferredBaseline =
   const candidateFiles = useMemo(() => {
     if (!baselineFile) return [];
     return files.filter(
-      (file) => file.analyzable !== false && file.name !== baselineFile.name && sameVehicleAndTrack(file, baselineFile)
+      (file) => isSelectableRecording(file) && file.name !== baselineFile.name && sameVehicleAndTrack(file, baselineFile)
     );
   }, [baselineFile, files]);
 
@@ -109,10 +110,10 @@ export function ExperimentManager({ files = [], sessionMode, preferredBaseline =
       setCandidate('');
       return;
     }
-    if (!files.some((file) => file.name === baseline)) {
-      const preferred = files.some((file) => file.name === preferredBaseline)
+    if (!files.some((file) => file.name === baseline && isSelectableRecording(file))) {
+      const preferred = files.some((file) => file.name === preferredBaseline && isSelectableRecording(file))
         ? preferredBaseline
-        : files.find((file) => file.analyzable !== false)?.name || '';
+        : files.find(isSelectableRecording)?.name || '';
       setBaseline(preferred);
     }
   }, [baseline, files, preferredBaseline, trial]);
@@ -140,6 +141,7 @@ export function ExperimentManager({ files = [], sessionMode, preferredBaseline =
   };
 
   const compare = async () => {
+    if (!isSelectableRecording(baselineFile || {}) || !isSelectableRecording(files.find(file => file.name === candidate) || {})) return;
     requestRef.current.controller?.abort();
     const requestId = requestRef.current.id + 1;
     const controller = new AbortController();
@@ -209,7 +211,7 @@ export function ExperimentManager({ files = [], sessionMode, preferredBaseline =
           type="button"
           onClick={compare}
           data-help="abResult"
-          disabled={loading || !baseline || !candidate || baseline === candidate || baselineFile?.analyzable === false}
+          disabled={loading || !baseline || !candidate || baseline === candidate || !isSelectableRecording(baselineFile || {}) || !isSelectableRecording(files.find(file => file.name === candidate) || {})}
           className="self-end  coach-primary-action px-5 py-3 text-base   transition  disabled:cursor-not-allowed disabled: disabled:"
         >
           {loading ? '비교 중' : 'A/B 결과 확인'}
@@ -415,8 +417,8 @@ export function FileSelect({ label, value, onChange, files, disabled = false, hi
                   type="button"
                   role="option"
                   aria-selected={isSelected}
-                  disabled={file.analyzable === false}
-                  aria-disabled={file.analyzable === false}
+                  disabled={!isSelectableRecording(file)}
+                  aria-disabled={!isSelectableRecording(file)}
                   onClick={() => chooseFile(file.name)}
                   className={cx(
                     'flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition disabled:cursor-not-allowed disabled:opacity-55 sm:text-base',

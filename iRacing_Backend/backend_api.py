@@ -1280,6 +1280,7 @@ def list_ibt_files(limit: int = 50) -> list[Path]:
 
 def resolve_telemetry_file(filename: Optional[str] = None) -> Optional[Path]:
     import lmu_recordings
+    from recording_selection import is_selectable_recording
     if lmu_recordings.is_lmu_name(filename):
         path = lmu_recordings.resolve(filename)
         if path is not None and lmu_recordings.recording_busy(path):
@@ -1289,7 +1290,7 @@ def resolve_telemetry_file(filename: Optional[str] = None) -> Optional[Path]:
     if filename:
         wanted = Path(filename).name
         return next((path for path in files if path.name == wanted), None)
-    return next((path for path in files if telemetry_file_visibility(path).get("analyzable")), None)
+    return next((path for path in files if is_selectable_recording(telemetry_file_visibility(path))), None)
 
 
 shared_sync_state: dict[str, Any] = new_analysis_state()
