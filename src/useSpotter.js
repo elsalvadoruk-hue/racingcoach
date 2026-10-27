@@ -8,6 +8,7 @@ import { readAlerts, voiceEventAllowed } from './lib/voiceAlerts';
 
 const SETTINGS_KEY = 'iracing.spotter.settings';
 export const RADIO_RENDER_TIMEOUT_MS = 8000;
+const MAX_PLAYBACK_ATTEMPTS = 3;
 export const SPOTTER_VOICES = [['Fenrir', '남성 · 기본'], ['Algieba', '남성'], ['Schedar', '남성'], ['Aoede', '여성']];
 const DEFAULT_SETTINGS = { voice: 'Fenrir', formation_calls: 5, repeat_seconds: 3, clear_delay: .15, traffic_enabled: true, pit_box_enabled: false };
 const savedSettings = game => {
@@ -83,6 +84,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       ...(Number.isInteger(omitted) && omitted >= 0 ? { dropped_parts: omitted } : {}) }, status, reason);
   }, []);
   const radioQueue = useRef(new Map()), heard = useRef(new Set()), rendering = useRef(null), processing = useRef(new Set()), lastCall = useRef(0), resumed = useRef(new Map());
+  const playbackFailures = useRef(new Map());
   const cancelRender = useCallback(reason => {
     rendering.current?.cancel(reason);
   }, []);
@@ -116,7 +118,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     state.current = { active: false };
     overlapPending.current = null;
     for (const event of radioQueue.current.values()) if (!output.current.standby && !heard.current.has(event.id)) logEvent(event, 'cancelled', 'spotter_disabled');
-    radioQueue.current.clear(); heard.current.clear(); rendered.current.clear();
+    radioQueue.current.clear(); heard.current.clear(); rendered.current.clear(); playbackFailures.current.clear();
     clearTimeout(release.current);
     cancelPriority?.();
     setEnabled(false); setPreparing(false); setView(null);
@@ -193,7 +195,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     cancelRender('game_changed');
     const ticket = ++epoch.current;
     setReadyGame(null); clips.current = null; state.current = { active: false };
-    overlapPending.current = null; radioQueue.current.clear(); heard.current.clear(); rendered.current.clear();
+    overlapPending.current = null; radioQueue.current.clear(); heard.current.clear(); rendered.current.clear(); playbackFailures.current.clear();
     clearTimeout(release.current); cancelPriority?.(); setView(null);
     const apply = async () => {
       setSettingsBusy(true);
@@ -230,7 +232,11 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       backend_version: state.current.backend_version, key, text: selected?.text };
     const status = (value, reason) => { logEvent(event, value, reason); onStatus?.(value, reason); };
     if (audio && !settings.muted && settings.volume > 0) {
-      try { return await settings.play(audio, 'audio/mpeg', { priority: 3, channel: 'spotter', valid, onStatus: status }); }
+      // Connection status is informational: skip it if any sentence is playing.
+      // No delayed notice survives a reconnect; overlap warnings retain priority 3.
+      try { return await settings.play(audio, 'audio/mpeg', { priority: key === 'unavailable' ? 1 : 3,
+        interrupt: key !== 'unavailable', whilePlaying: key === 'unavailable' ? valid : undefined,
+        channel: 'spotter', valid, onStatus: status }); }
       catch { status('failed', 'playback_error'); return false; }
     }
     status(audio ? 'muted' : 'failed', audio ? 'volume_or_mute' : 'missing_clip');
@@ -275,6 +281,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     if (!current.radio?.connected || occupied(current, applied.current.alerts) || Date.now() - lastFrame.current > 600) return;
     const events = [...radioQueue.current.values()].filter((event) => !heard.current.has(event.id)
       && !processing.current.has(event.id) && Date.now() < event.local_expires
+      && Date.now() >= (playbackFailures.current.get(event.id)?.retryAt || 0)
       && voiceEventAllowed(event, applied.current.alerts, settings.wallAlerts)
       && (!event.immediate || !closeBattle(current))
       // The corner drill's warm-up voice is part of a drill the driver started: always played.
@@ -363,7 +370,20 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         // second or two, less than their own sentence, and were never heard to the end.
         onStatus: (status, reason) => {
           logEvent(event, status, reason, droppedParts);
-          if (status === 'started') began = true;
+          if (status === 'started') { began = true; playbackFailures.current.delete(event.id); }
+          if (!began && status === 'failed' && ticket === epoch.current && radioQueue.current.has(event.id)) {
+            const attempts = (playbackFailures.current.get(event.id)?.attempts || 0) + 1;
+            // Refresh failed media, then retry on fresh frames after 0.5/1 seconds.
+            // Each event owns its budget; other calls and safety warnings stay free.
+            rendered.current.delete(event.id);
+            playbackFailures.current.set(event.id, { attempts,
+              retryAt: attempts >= MAX_PLAYBACK_ATTEMPTS ? Infinity : Date.now() + 500 * 2 ** (attempts - 1) });
+            if (attempts >= MAX_PLAYBACK_ATTEMPTS) {
+              heard.current.add(event.id);
+              if (heard.current.size > 256) heard.current.delete(heard.current.values().next().value);
+              acknowledge();
+            }
+          }
           if (!began || !['completed', 'interrupted', 'failed'].includes(status)) return;
           const resumes = resumed.current.get(event.id) || 0;
           if (!event.immediate && status === 'interrupted' && RESUMABLE.includes(reason) && resumes < MAX_RESUMES) {
@@ -458,6 +478,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         }
         radioQueue.current = nextQueue;
         for (const id of rendered.current.keys()) if (!radioQueue.current.has(id)) rendered.current.delete(id);
+        for (const id of playbackFailures.current.keys()) if (!radioQueue.current.has(id)) playbackFailures.current.delete(id);
         clearTimeout(release.current);
         if (occupied(frame, applied.current.alerts)) setPriorityGate?.(true);
         else if (occupied(previous, applied.current.alerts) || frame.events?.length) {

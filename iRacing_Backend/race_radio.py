@@ -191,7 +191,7 @@ class RaceRadio:
         return allowed(category(key), self.alerts, self.wall_alerts)
 
     def emit(self, key, now, text=None, role='spotter', priority=1, ttl=18, condition=None, cooldown=30, group=None, delay=0, speech_key=None, speech_text=None,
-             speech_parts=None, part_categories=None, screen_parts=None, alert_category=None, immediate=False):
+             speech_parts=None, part_categories=None, screen_parts=None, alert_category=None, immediate=False, prepared_only=False):
         # iRacing can raise start bits in Offline Testing too. Their race wording
         # needs an actual race; safety flags keep their existing independent rules.
         if key in RACE_START_CALLS and str(self.metadata.get('session_type') or '').strip().lower() != 'race':
@@ -244,6 +244,8 @@ class RaceRadio:
                              **speech})
         if immediate:
             self.pending[-1]['immediate'] = True
+        if prepared_only:
+            self.pending[-1]['prepared_only'] = True
         event = self.pending[-1]
         if key in ('position', 'briefing') or (part_categories is not None and category('position') in names):
             self.track_delivery(event, position=num(self.latest.get('class_position')) if key != 'briefing' else None)
@@ -486,8 +488,20 @@ class RaceRadio:
                           else ('quali_p1', {'gap': others[0] - best}) if others else ('quali_alone', {}))
             if result:
                 self.quali_called = lap
-                self.say(result[0], now, result[1], ttl=40, cooldown=0,
-                         condition=('lap', lap), group='quali_result')
+                key, values = result
+                seed = self.variant_counts.get(key, 0)
+                screen = radio_phrases.build(key, seed, **values)
+                ranges = radio_phrases.PREPARED.get(key, radio_phrases.RANGES)
+                # Match the spoken rounding, including the 3.0-second boundary.
+                in_range = all(radio_phrases.FORMATS[name](value) in
+                               (radio_phrases.FORMATS[name](v) for v in ranges[name])
+                               for name, value in values.items())
+                spoken = screen if in_range else radio_phrases.build('position_now', seed, pos=values.get('pos', 1))
+                # Keep the measured gap on screen. Outside the full-sentence catalog,
+                # use existing neutral rank speech (spotter voice); never synthesize.
+                # Ranks beyond its catalog also remain visible without automatic TTS.
+                self.emit(key, now, screen['text'], role=spoken['engineer'], speech_text=spoken['text'],
+                          ttl=40, cooldown=0, condition=('lap', lap), group='quali_result', prepared_only=True)
             elif now - self.lap_done_at >= 3.2:
                 self.quali_called = lap
         position, old_lap = num(sample.get('class_position')), num(previous.get('lap_completed'))

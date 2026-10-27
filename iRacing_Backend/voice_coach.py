@@ -981,7 +981,8 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             return {'event': None}
         # A cached mandatory sentence can play immediately during a cloud question.
         on_disk, cached_only = coach.radio_audio_mode(event)
-        if event.get('immediate') and not on_disk:
+        prepared_only = event.get('immediate') or event.get('prepared_only')
+        if prepared_only and not on_disk:
             return {'event': None, 'missing_prepared_audio': True}
         if coach.custom_packs.has_selection(event.get('engineer','spotter')) and not on_disk:
             return {'event':None,'missing_custom_audio':True}
@@ -1004,14 +1005,14 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
                     parts, dropped_parts = await coach.radio_audio_parts(event, cached_only)
                     audio = parts[0]
                 elif event.get('speech_text'):
-                    reader = coach.fixed_audio.read_prepared if event.get('immediate') else coach.fixed_audio.phrase
+                    reader = coach.fixed_audio.read_prepared if prepared_only else coach.fixed_audio.phrase
                     audio = await asyncio.to_thread(reader, event['engineer'], event['speech_text'])
                 elif event.get('speech_key'):
                     audio = await asyncio.to_thread(coach.fixed_audio.clip, event['speech_key'])
                 else:
                     audio = await asyncio.to_thread(coach.synthesize_answer, event['text'], event['engineer'])
             except Exception as exc:
-                if event.get('immediate'):
+                if prepared_only:
                     return {'event': None, 'missing_prepared_audio': True}
                 raise HTTPException(status_code=422, detail=service_error(exc)) from exc
             with coach.live.lock:

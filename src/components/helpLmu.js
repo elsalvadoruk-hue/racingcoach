@@ -2,6 +2,7 @@
 // backend phrases are ready; the current raw-capture stage does not enable calls.
 export const LMU_SECTIONS = [
   { id: 'differences', title: '1. iRacing과 다른 점', blocks: [
+    '앱은 드라이버 리포트에서 시작합니다. 왼쪽 “드라이버”에서 전체·30일·90일 기록과 측정 페이스·편차, 경기 결과와 입력 성향을 확인하세요. 기존 기록은 백그라운드로 가져오며 주행·분석 중에는 기다립니다. 선택한 주행의 체감을 저장·수정·삭제하고 도전을 선택·취소하거나 달성 이력을 확인할 수 있습니다. 성향과 주행 변화의 자세히에서 뜻·예시·근거를 봅니다. 미확인 수치는 —와 이유로 표시하고 공식 결과·실력 향상을 만들어내지 않습니다.',
     'LMU 기록도 iRacing과 같은 분석을 거치고, 주행 중 음성 코치도 같은 기능이 LMU를 읽습니다. 다른 점만 여기 모았습니다.',
     { list: [
       '주행 기록은 IBT 대신 LMU가 남기는 DuckDB 파일입니다. LMU 게임 설정에서 텔레메트리 자동 기록을 켜야 합니다.',
