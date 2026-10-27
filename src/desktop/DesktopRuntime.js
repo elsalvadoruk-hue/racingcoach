@@ -4,6 +4,7 @@ import { controlsFromHost, workspaceFromHash } from './labControlState';
 import { listAudioDevices } from './labAudioDevices';
 import { voiceCapability } from './labVoiceCapability';
 import { useGame } from '../lib/gameContext';
+import { useDriveEndNavigation } from './useDriveEndNavigation';
 
 const RuntimeContext = createContext(null);
 
@@ -24,6 +25,7 @@ export function useLabControls() {
 
 function RuntimeBridge({ host, children }) {
   const { selectedGame } = useGame();
+  useDriveEndNavigation(host.status?.drive_lifecycle, selectedGame);
   const { apiBase } = host;
   const [overlay, setOverlay] = useState(null), [overlayBusy, setOverlayBusy] = useState(false);
   const [devices, setDevices] = useState([]), [message, setMessage] = useState(''), [deviceBusy, setDeviceBusy] = useState(false);

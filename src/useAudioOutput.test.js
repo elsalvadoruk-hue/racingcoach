@@ -271,8 +271,10 @@ test.each(['coach', 'spotter'])('answers from %s and replay retain the speaker c
   expect(players[0].volume).toBe(.45);
   fireEvent.click(screen.getByRole('button', { name: '답변 다시 듣기' }));
   await waitFor(() => expect(players[1]?.play).toHaveBeenCalled());
-  // Playback status reports can arrive asynchronously; the test tone needs no content request.
-  const contentRequests = () => fetchMock.mock.calls.filter(([url]) => !url.endsWith('/radio-delivery'));
+  // Delivery reports and the live status poll can arrive while local audio starts.
+  const contentRequests = () => fetchMock.mock.calls.filter(([url, options = {}]) =>
+    !url.endsWith('/radio-delivery') &&
+    !(url.endsWith('/api/live-coach/status') && (options.method || 'GET').toUpperCase() === 'GET'));
   const requests = contentRequests().length;
   fireEvent.click(screen.getByRole('button', { name: '테스트 소리' }));
   await waitFor(() => expect(players[2]?.play).toHaveBeenCalled());

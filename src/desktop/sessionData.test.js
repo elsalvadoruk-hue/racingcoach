@@ -31,8 +31,8 @@ test('Garage61 fallback clears the external identity and later successful select
   expect(external.referenceFallback).toBeNull();
 });
 
-test('the app keeps its summary start page and explicit desktop navigation', () => {
-  expect(workspaceFromHash('')).toBe('summary');
+test('the app starts on the driver report and keeps explicit desktop navigation', () => {
+  expect(workspaceFromHash('')).toBe('driver');
   expect(workspaceFromHash('#corners')).toBe('corners');
   expect(workspaceFromHash('#guide-setup')).toBe('guide');
   expect(workspaceFromHash('#unexpected')).toBe('summary');

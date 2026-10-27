@@ -62,3 +62,20 @@ test('standby explains who speaks without consuming reports and recovers after t
   await waitFor(() => expect(screen.getByText('자동 보고 활성 · 상황 변화를 확인 중')).toBeVisible(), { timeout: 3500 });
   expect(global.fetch.mock.calls.some(([url]) => url.endsWith('/reports'))).toBe(true);
 });
+
+test('the silent desktop monitor observes drive status promptly without enabling radio or recording', async () => {
+  jest.useFakeTimers();
+  const view = render(<LiveCoach apiBase="http://test" monitor visible={false}>{() => <output>드라이버 리포트</output>}</LiveCoach>);
+  await act(async () => jest.advanceTimersByTime(0));
+  const statusCalls = () => global.fetch.mock.calls.filter(([url]) => url.endsWith('/status')).length;
+  const baseline = statusCalls();
+  expect(baseline).toBeGreaterThan(0);
+  await act(async () => jest.advanceTimersByTime(2499));
+  expect(statusCalls()).toBe(baseline);
+  await act(async () => jest.advanceTimersByTime(1));
+  expect(statusCalls()).toBe(baseline + 1);
+  expect(global.fetch.mock.calls.some(([url]) => url.endsWith('/reports') || url.endsWith('/captures'))).toBe(false);
+  view.unmount();
+  await act(async () => jest.advanceTimersByTime(10000));
+  expect(statusCalls()).toBe(baseline + 1);
+});

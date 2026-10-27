@@ -88,3 +88,21 @@ test('LMU header overlay requests include its selected game', async () => {
   await act(async () => runtime.change('overlay', true));
   expect(global.fetch.mock.calls.every(([url]) => new URL(url).searchParams.get('game') === 'lmu')).toBe(true);
 });
+
+test('the persistent radio bridge forwards a new drive completion to desktop navigation', async () => {
+  const lifecycle = { lifecycle_id: 'bridge-test', completed_serial: 0, phase: 'DRIVING', active_drive: true };
+  mockHost.status.drive_lifecycle = lifecycle;
+  const navigate = jest.fn();
+  window.addEventListener('coach-navigate', navigate);
+  try {
+    const { rerender } = render(<DesktopRuntimeProvider apiBase={mockHost.apiBase}><output>분석 화면</output></DesktopRuntimeProvider>);
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    mockHost.status = { ...mockHost.status, drive_lifecycle: { ...lifecycle, completed_serial: 1, phase: 'ENDED', active_drive: false,
+      last_completed: { serial: 1, game: 'iracing', reason: 'OFF_TRACK', drive_id: 'drive-1' } } };
+    rerender(<DesktopRuntimeProvider apiBase={mockHost.apiBase}><output>새 기록 분석 화면</output></DesktopRuntimeProvider>);
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate.mock.calls[0][0].detail).toBe('summary');
+    rerender(<DesktopRuntimeProvider apiBase={mockHost.apiBase}><output>다른 랩 분석 화면</output></DesktopRuntimeProvider>);
+    expect(navigate).toHaveBeenCalledTimes(1);
+  } finally { window.removeEventListener('coach-navigate', navigate); }
+});

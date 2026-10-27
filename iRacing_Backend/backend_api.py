@@ -4021,6 +4021,15 @@ async def load_analysis(request: AnalyzeRequest, *, update_current_analysis: boo
             logger.warning('Personal reference indexing failed: %s', exc)
         snapshot_session = snapshot.get("session", {})
         file_hash = str(snapshot_session.get("file_hash") or "")
+        # Actual driving history is independent of the analysis mode and of the
+        # optional memory save. Reuse the content hash already computed above.
+        try:
+            from driver_history_index import index_telemetry as index_driver_history
+            await asyncio.to_thread(index_driver_history, telemetry, file_hash)
+        except Exception as exc:
+            # A missing/locked history store must not discard a successful
+            # analysis or expose recording paths through the analysis result.
+            logger.warning('Driver history indexing failed (%s)', type(exc).__name__)
         target_mode = str(snapshot_session.get("session_mode") or request.session_mode.value)
         memory_payload: dict[str, Any] = {
             "enabled": memory_store is not None,

@@ -199,10 +199,23 @@ class LmuIbtReader:
                         official_track_id=official_track_id(metadata_in.get('track_name'), layout))
         from lmu_personal_reference import recording_conditions
         metadata['lmu_lap_conditions'] = recording_conditions(reader, summary)
-        return ParsedTelemetry(path=self.path, signature=file_signature(self.path), tick_rate=TICK_RATE,
-                               buffer_length=0, record_count=len(time), data_offset=0, session_text='',
-                               session_info=session_info, variables={}, channels=channels,
-                               metadata=metadata, setup={}, laps=laps)
+        telemetry = ParsedTelemetry(path=self.path, signature=file_signature(self.path), tick_rate=TICK_RATE,
+                                    buffer_length=0, record_count=len(time), data_offset=0, session_text='',
+                                    session_info=session_info, variables={}, channels=channels,
+                                    metadata=metadata, setup={}, laps=laps)
+        # The uniform analysis axis hides native gaps/resets and changes the
+        # sample count. Keep only compact facts from the GPS array read above;
+        # the history adapter must never reopen this DuckDB to reconstruct it.
+        from driver_history_summary import compact_lmu_clock
+        gps_spec = specs['gps time']
+        try:
+            telemetry._driver_history_lmu_clock = compact_lmu_clock(
+                gps if gps_spec.unit == 's' else None, gps_spec.frequency_hz, metadata_in.get('recording_time'))
+        except Exception:
+            # Optional history evidence must never make an otherwise usable
+            # analysis fail. Missing proof is explicitly UNAVAILABLE downstream.
+            telemetry._driver_history_lmu_clock = None
+        return telemetry
 
     # ------------------------------------------------------------------
     @staticmethod

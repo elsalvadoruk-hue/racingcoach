@@ -10,6 +10,7 @@ export function controlsFromHost(host, overlay) {
 
 export function workspaceFromHash(hash) {
   const value = hash.replace(/^#/, '');
+  if (!value) return 'driver';
   if (value.startsWith('guide-')) return 'guide';
-  return ['summary', 'corners', 'laps', 'expert', 'setup', 'live', 'overlay', 'history', 'settings', 'guide'].includes(value) ? value : 'summary';
+  return ['driver', 'summary', 'corners', 'laps', 'expert', 'setup', 'live', 'overlay', 'history', 'settings', 'guide'].includes(value) ? value : 'summary';
 }

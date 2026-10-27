@@ -169,6 +169,68 @@ class LmuIbtTests(unittest.TestCase):
 
 
 @unittest.skipUnless(duckdb, 'LMU 전용 의존성을 설치하지 않은 환경입니다.')
+class LmuHistoryClockTests(unittest.TestCase):
+    def test_history_preserves_native_samples_gaps_and_resets_without_rereading(self):
+        from driver_history_summary import build_source_summary
+        from lmu_ibt import LmuIbtReader
+        from lmu_telemetry import LmuTelemetryReader
+
+        cases = (
+            ('native-100hz', [10., 10.01, 10.02, 10.03, 10.04], 3, [5], False, False),
+            ('native-gap', [10., 10.01, 11., 11.01], 61, [4], True, False),
+            ('native-reset', [10., 10.01, 10.005, 10.02, 10.03], 2, [2, 3], False, True),
+        )
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {
+            'IRACING_DATA_DIR': folder,
+            'IRACING_LMU_STEERING_PATH': str(Path(folder) / 'steering.json'),
+            'IRACING_LMU_CAR_MODELS_PATH': str(Path(folder) / 'models.json'),
+            'IRACING_LMU_LAP_VERDICTS_PATH': str(Path(folder) / 'verdicts.json'),
+        }):
+            for name, native, resampled_count, counts, gap, reset in cases:
+                with self.subTest(name=name):
+                    path = Path(folder) / (name + '.duckdb')
+                    connection = duckdb.connect(str(path))
+                    connection.execute('CREATE TABLE metadata (key VARCHAR, value VARCHAR)')
+                    connection.executemany('INSERT INTO metadata VALUES (?,?)', [
+                        ('TrackName', 'Synthetic Track'), ('TrackLayout', 'GP'), ('CarName', 'Synthetic GT3'),
+                        ('CarClass', 'GT3'), ('SessionType', 'Practice'), ('RecordingTime', '2026-10-20T10_00_00Z')])
+                    connection.execute('CREATE TABLE channelsList (channelName VARCHAR, frequency DOUBLE, unit VARCHAR)')
+                    connection.execute("INSERT INTO channelsList VALUES ('GPS Time',100,'s')")
+                    connection.execute('CREATE TABLE "GPS Time" AS SELECT CAST(unnest(?) AS DOUBLE) AS value', [native])
+                    connection.close()
+                    telemetry = LmuIbtReader(path).parse()
+                    # Existing shared analysis remains on its original 60 Hz axis.
+                    self.assertEqual(telemetry.record_count, resampled_count)
+                    self.assertEqual(telemetry.tick_rate, 60)
+                    with patch.object(LmuTelemetryReader, '_connection', side_effect=AssertionError('no reread')):
+                        observations = build_source_summary(telemetry, 'a' * 64)['observations']
+                    self.assertEqual([row['coverage']['sample_count'] for row in observations], counts)
+                    reasons = set().union(*(set(row['coverage']['reasons']) for row in observations))
+                    self.assertEqual('SAMPLE_GAP' in reasons, gap)
+                    self.assertEqual('SESSION_CLOCK_RESET' in reasons, reset)
+                    if reset:
+                        self.assertTrue(all(row['recorded_at'] is None for row in observations))
+                        self.assertTrue(all(row['coverage']['time_basis'] == 'SOURCE_RELATIVE' for row in observations))
+                    elif gap:
+                        self.assertEqual(observations[0]['coverage']['intervals'], [
+                            [1792490400., 1792490400.01], [1792490401., 1792490401.01]])
+                    else:
+                        self.assertEqual(observations[0]['coverage']['intervals'], [[1792490400., 1792490400.04]])
+                    self.assertTrue(all(row['identity_status'] == 'SOURCE_ONLY' for row in observations))
+                    self.assertNotIn('_driver_history_lmu_clock', telemetry.metadata)
+                    self.assertNotIn('_driver_history_lmu_clock', telemetry.channels)
+                    if name == 'native-100hz':
+                        with patch('driver_history_summary.compact_lmu_clock', side_effect=OverflowError('injected')):
+                            recovered = LmuIbtReader(path).parse()
+                        np.testing.assert_array_equal(recovered.channels['SessionTime'], telemetry.channels['SessionTime'])
+                        self.assertEqual(recovered.record_count, telemetry.record_count)
+                        self.assertEqual(recovered.metadata, telemetry.metadata)
+                        missing, = build_source_summary(recovered, 'b' * 64)['observations']
+                        self.assertEqual(missing['coverage']['status'], 'UNAVAILABLE')
+                        self.assertEqual(missing['coverage']['sample_count'], 0)
+
+
+@unittest.skipUnless(duckdb, 'LMU 전용 의존성을 설치하지 않은 환경입니다.')
 class LmuRecordingsTests(unittest.TestCase):
     def test_catalog_versions_change_and_imported_references_do_not_auto_open(self):
         import lmu_recordings

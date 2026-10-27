@@ -31,6 +31,8 @@ ANALYSIS_CHANNELS = {
     # Session/lap state
     "SessionTime",
     "SessionTick",
+    "SessionNum",
+    "IsReplayPlaying",
     "SessionFlags",
     "Lap",
     "LapCompleted",

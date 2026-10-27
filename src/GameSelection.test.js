@@ -79,6 +79,8 @@ beforeEach(() => {
     } else if (path === '/api/lmu/history') {
       payload = { records: [], total: 0, tracks: [], cars: [], session_types: [] };
     } else if (path === '/api/lmu/practice/tasks') payload = { tasks: [] };
+    else if (path === '/api/driver-report') payload = { schema_version: 1, game: new URL(url).searchParams.get('game'), period_days: 30,
+      state: 'EMPTY', overview: { title: '나의 주행 이야기를 시작해요' }, career: {}, pace: {}, recent_drives: [] };
     else if (path === '/api/files') payload = { files: [] };
     else if (path === '/api/settings') payload = { version: '1.4.3', settings: { telemetry_dirs: [] }, google: {}, garage61: {}, audio: {}, telemetry_folders: [] };
     else if (path === '/api/status') payload = { telemetry: null, ai_enabled: false };
@@ -126,6 +128,8 @@ test('LMU automatically opens the latest measurable drive and the common picker 
   const previousSelection = JSON.stringify({ filename: 'preserved-iracing.ibt', target_lap: 9, reference_lap: 4 });
   localStorage.setItem(LAST_SESSION_KEY, previousSelection);
   render(<App />);
+  await screen.findByRole('region', { name: 'LMU 드라이버 리포트' });
+  fireEvent.click(screen.getByRole('button', { name: '주행 분석', exact: true }));
   await screen.findByText('오늘의 연습 과제');
   expect(screen.queryByTestId('lap-time-use')).not.toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: '분석할 주행을 선택하세요.' })).not.toBeInTheDocument();

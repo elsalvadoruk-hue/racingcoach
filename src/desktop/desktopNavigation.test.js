@@ -1,4 +1,13 @@
 import { desktopDestination, requestedCornerLocation, openVoiceCorner } from './desktopNavigation';
+import { workspaceFromHash } from './labControlState';
+
+test('the driver report deep link is independent of the currently selected analysis', () => {
+  expect(desktopDestination('driver')).toEqual({ workspace: 'driver', anchor: null });
+  expect(workspaceFromHash('#driver')).toBe('driver');
+  expect(workspaceFromHash('#settings')).toBe('settings');
+  expect(workspaceFromHash('')).toBe('driver');
+  expect(workspaceFromHash('#summary')).toBe('summary');
+});
 
 test('legacy manual links keep their destination and the settings/history anchor', () => {
   expect(desktopDestination('ab-manager')).toMatchObject({ workspace: 'setup' });

@@ -9,7 +9,7 @@ const routes = {
   'ab-manager': ['setup'], briefing: ['setup'], 'engineer-briefing': ['setup'], 'setup-decision': ['setup'],
   decision: ['setup'], 'tire-snapshot': ['setup'], 'ride-aero': ['setup'], 'damper-velocity': ['setup'], 'gg-diagram': ['setup'],
 };
-const workspaces = ['summary', 'corners', 'laps', 'expert', 'setup', 'live', 'overlay', 'history', 'settings', 'guide'];
+const workspaces = ['driver', 'summary', 'corners', 'laps', 'expert', 'setup', 'live', 'overlay', 'history', 'settings', 'guide'];
 
 export function desktopDestination(section) {
   const id = typeof section === 'object' ? section?.id : section;

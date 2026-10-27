@@ -59,4 +59,6 @@ def create_application(version, lifespan, overlay):
     # live coach (game_sdk.AutoGameSdk); DuckDB stays a request-time dependency.
     from lmu_routes import register_routes as register_lmu_routes
     register_lmu_routes(app)
+    from driver_history_routes import register_routes as register_driver_history_routes
+    register_driver_history_routes(app)
     return app

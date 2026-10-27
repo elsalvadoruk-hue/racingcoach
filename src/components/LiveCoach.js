@@ -226,7 +226,8 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
       catch (failure) { if (!stopped) setError(errorMessage(failure)); }
       finally { running = false; }
     };
-    load(); const id = setInterval(load, !visible && !armed && !wallEnabled && !spotter.enabled ? 15000 : 1200);
+    // The desktop also watches drive-end events while the radio is off.
+    load(); const id = setInterval(load, !visible && !armed && !wallEnabled && !spotter.enabled ? (monitor ? 2500 : 15000) : 1200);
     if (visible) request('/notes').then((data) => { if (!stopped) setNotes(data.notes || []); }).catch(() => {});
     return () => { stopped = true; clearInterval(id); };
   }, [monitor, visible, armed, wallEnabled, spotter.enabled, request, setLiveGame]);

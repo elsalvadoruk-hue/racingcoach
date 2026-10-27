@@ -4,6 +4,7 @@ from live_coaching import LiveCoaching
 from live_energy import EnergyWatch
 from live_views import LiveViews
 from live_reporting import LiveReporting
+from live_drive_lifecycle import DriveLifecycle, sdk_boolean
 
 from collections import deque
 import ctypes
@@ -102,6 +103,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.clock = clock
         self.sdk_factory = sdk_factory
         self.lock = threading.RLock()
+        self.drive_lifecycle = DriveLifecycle()
         self.stop_event = threading.Event()
         self.thread = None
         self.samples = deque(maxlen=self.SAMPLE_RATE_HZ * self.BUFFER_SECONDS)
@@ -390,7 +392,8 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                     'message': self.message if context['connected'] else f'{GAME_NAMES.get(self.game, "iRacing")} 실시간 데이터 대기 · 저장된 주행 분석은 계속 사용할 수 있습니다.' if self.state == 'CONNECTED' else self.message,
                     'hotkey': 'F8', 'hotkey_supported': os.name == 'nt', 'hotkey_down': self.hotkey_down,
                     'hotkey_serial': self.hotkey_serial, 'hotkey_events': [e for e in self.hotkey_events if e['serial'] > after],
-                    'buffer_seconds': self.BUFFER_SECONDS, 'sample_rate_target_hz': self.SAMPLE_RATE_HZ}
+                    'buffer_seconds': self.BUFFER_SECONDS, 'sample_rate_target_hz': self.SAMPLE_RATE_HZ,
+                    'drive_lifecycle': self.drive_lifecycle.view()}
 
     def hotkey_state(self, after=0):
         # Push-to-talk edges only; the event socket must not rebuild the coaching context.
@@ -424,17 +427,39 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self.setup_advisor.reset()
 
     def _tick(self, sdk):
+        try:
+            return self._read_tick(sdk)
+        except Exception:
+            # Logic/read errors are not evidence that the driver left a game.
+            with self.lock:
+                self.drive_lifecycle.observe_unknown()
+            raise
+
+    def _read_tick(self, sdk):
         """One read of whichever game is connected (iRacing SDK or the LMU adapter)."""
         if not sdk.is_initialized:
             self.state = 'WAITING'
             self.message = getattr(sdk, 'waiting_message', None) or 'iRacing을 실행하고 차량에 탑승하면 연결됩니다.'
-            if not sdk.startup():
+            started = sdk.startup()
+            if not started:
+                with self.lock:
+                    if sdk_boolean(started) is False:
+                        self.drive_lifecycle.observe_disconnected(getattr(sdk, 'game', None) or self.game, self.clock())
+                    else:
+                        self.drive_lifecycle.observe_unknown()
                 return False
-        if not sdk.is_connected:
+        connected = sdk.is_connected
+        if not connected:
+            lifecycle_game = getattr(sdk, 'game', None) or self.game
             self._note_link('DISCONNECTED', sdk)
             self._reset_live('DISCONNECTED')
             sdk.shutdown()
             self.state = 'WAITING'
+            with self.lock:
+                if sdk_boolean(connected) is False:
+                    self.drive_lifecycle.observe_disconnected(lifecycle_game, self.clock())
+                else:
+                    self.drive_lifecycle.observe_unknown()
             return None
         sdk.freeze_var_buffer_latest()
         try:
@@ -504,6 +529,8 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                         self.traffic_log.fail(self.run_id)
         finally:
             sdk.unfreeze_var_buffer_latest()
+        with self.lock:
+            self.drive_lifecycle.observe_sample(self.game, sample, self.clock())
         return True
 
     def _note_link(self, link, sdk):
