@@ -2,8 +2,8 @@
 
 TOKEN_SETTINGS = '설정 → 설치 설정 → Garage61 개인 API 토큰'
 TOKEN_MISSING_MESSAGE = (
-    f'Garage61 API 토큰이 등록되지 않았거나 읽을 수 없습니다. {TOKEN_SETTINGS}에서 '
-    '토큰을 저장한 뒤 Garage61 다시 확인을 누르세요. 내 랩 비교는 계속 사용할 수 있습니다.'
+    'Garage61 토큰을 등록하지 않아 내 주행 데이터끼리 비교합니다. '
+    f'Garage61 비교를 사용하려면 {TOKEN_SETTINGS}에서 토큰을 저장한 뒤 Garage61 다시 확인을 누르세요.'
 )
 PERMISSION_MESSAGE = (
     f'Garage61 자료 접근 권한이 없습니다. Garage61에서 driving_data 권한과 계정의 자료 접근 권한을 '

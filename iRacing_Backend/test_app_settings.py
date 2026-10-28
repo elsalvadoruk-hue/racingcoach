@@ -38,8 +38,9 @@ class Garage61ConnectionMessageTests(unittest.TestCase):
         with patch.object(api, '_garage61_api_token_local', return_value=('', '')), \
                 patch.object(api.urllib.request, 'urlopen') as network:
             status = api.garage61_api_connection_status()
-        self.assertEqual(status['error_code'], 'API_TOKEN_MISSING')
-        self.assertIn('설정 → 설치 설정', status['message'])
+        self.assertFalse(status['configured'])
+        self.assertNotIn('error_code', status)
+        self.assertIn('내 주행 데이터', status['message'])
         network.assert_not_called()
 
     def test_authentication_and_permission_errors_offer_settings_recovery(self):

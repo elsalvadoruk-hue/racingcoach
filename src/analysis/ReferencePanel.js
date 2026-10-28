@@ -42,7 +42,7 @@ export function ExternalReferencePanel({
     api_token_configured: health?.collection_policy?.api_token_configured,
     preferred_mode: health?.collection_policy?.preferred_mode,
   };
-  const job = collector?.job || null;
+  const job = capabilities?.api_token_configured === false ? null : collector?.job || null;
   const collectorBusy = Boolean(job?.busy);
   const jobState = job?.state || 'IDLE';
   const progress = Math.max(0, Math.min(100, Math.round(Number(job?.progress || 0) * 100)));
@@ -66,7 +66,7 @@ export function ExternalReferencePanel({
             </p>
             <p className="mt-2 max-w-5xl text-sm leading-relaxed text-muted-foreground">
               IBT에서 차량·트랙·레이아웃·노면온도·기온·연료·습도·바람·강수·가능한 BOP/타이어 조건을 읽습니다.
-              Garage61 API로 최대 1,000개 후보를 조건별 단계 검색하고, 공개 telemetry만 내려받습니다. 토큰이 없으면 설정 → 설치 설정 → Garage61 개인 API 토큰에서 등록하세요. Playwright 설치 없이 이용할 수 있습니다.
+              Garage61 API로 최대 1,000개 후보를 조건별 단계 검색하고, 공개 telemetry만 내려받습니다. 토큰이 없으면 오류 없이 내 주행 데이터끼리 비교합니다. Garage61을 사용하려면 설정 → 설치 설정 → Garage61 개인 API 토큰에서 등록하세요. 등록한 토큰의 인증·권한 문제는 오류로 안내하며 Playwright 설치 없이 이용할 수 있습니다.
               CSV를 검증한 뒤 대표 실주행 한 랩으로 속도·페달·라인·시간차를 비교합니다. 조건이 맞는 다른 드라이버의 기록은 구간별 손실과 개선 방향을 확인하는 보조 자료로 사용합니다. 아래 요약은 속도 손실과 GPS 차이가 큰 상위 2개 구간을 표시합니다.
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">

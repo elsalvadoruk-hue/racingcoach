@@ -166,7 +166,7 @@ test('opening the current recording shows loading instead of claiming that Garag
     analysisWorkspace={{ game: 'iracing' }} />);
   await waitFor(() => expect(finish).toBeDefined());
   expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
-  expect(screen.getByText('Garage61 기준 불러오는 중')).toBeInTheDocument();
+  expect(screen.getByText('비교 기준 불러오는 중')).toBeInTheDocument();
   expect(screen.queryByText('이 차량·트랙과 맞는 내려받은 Garage61 기준이 없습니다.')).not.toBeInTheDocument();
   const request = labRequest.mock.calls.find(([route]) => route === 'references');
   expect(request[2].aborted).toBe(false);
@@ -188,9 +188,9 @@ test('file reading and reference lookup remain separate loading phases', async (
   await waitFor(() => expect(finishSession).toBeDefined());
   expect(screen.getByText('주행 파일 읽는 중')).toBeInTheDocument();
   await act(async () => finishSession(session('B.ibt')));
-  expect(screen.getByText('Garage61 기준 불러오는 중')).toBeInTheDocument();
+  expect(screen.getByText('비교 기준 불러오는 중')).toBeInTheDocument();
   expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
-  expect(screen.getByRole('button', { name: 'Garage61 기준 불러오는 중…' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '비교 기준 불러오는 중…' })).toBeDisabled();
   await act(async () => finishReferences({ ...catalogs['B.ibt'], personalReference: personalReference('B.ibt') }));
   await ready();
   expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();

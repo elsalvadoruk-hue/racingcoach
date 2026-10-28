@@ -14,7 +14,7 @@ from garage61_auth import TOKEN_MISSING_MESSAGE
 
 TERMINAL_STATES = {
     "COMPLETE", "PARTIAL", "FAILED", "CANCELLED",
-    "SKIPPED_CACHE_SUFFICIENT", "SKIPPED_COOLDOWN",
+    "SKIPPED_CACHE_SUFFICIENT", "SKIPPED_COOLDOWN", "SKIPPED_NO_TOKEN",
 }
 
 
@@ -162,6 +162,14 @@ class Garage61CollectorManager:
                 return active
 
             mode = self.preferred_mode(str(request_payload.get("collector_mode") or "AUTO"))
+            if mode == "API" and not self.api_token_configured():
+                return {
+                    "state": "SKIPPED_NO_TOKEN",
+                    "message": TOKEN_MISSING_MESSAGE,
+                    "can_start": False,
+                    "collector_mode": mode,
+                    "busy": False,
+                }
             worker_path = self.api_collector_path if mode == "API" else self.crawler_path
             if not worker_path.exists():
                 return {
@@ -171,16 +179,6 @@ class Garage61CollectorManager:
                     "collector_mode": mode,
                     "busy": False,
                 }
-            if mode == "API" and not self.api_token_configured():
-                return {
-                    "state": "FAILED",
-                    "message": TOKEN_MISSING_MESSAGE,
-                    "error_code": "API_TOKEN_MISSING",
-                    "can_start": False,
-                    "collector_mode": mode,
-                    "busy": False,
-                }
-
             job_id = str(uuid.uuid4())
             paths = self._paths(job_id)
             now = time.time()

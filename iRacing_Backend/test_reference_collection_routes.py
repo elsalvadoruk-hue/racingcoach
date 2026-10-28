@@ -58,6 +58,21 @@ class CollectionRouteTests(unittest.TestCase):
         self.assertFalse(reply.json()["job"]["busy"])
         self.manager.start.assert_not_called()
 
+    def test_no_token_skips_normally_before_cache_cooldown_or_disabled_policy(self):
+        self.health.update(enough_data=True, cache_fresh=True, last_context_scan_age_hours=0,
+                           collection_policy={'api_token_configured': False})
+        for enabled in (False, True):
+            self.enabled = enabled
+            for force in (False, True):
+                with self.subTest(enabled=enabled, force=force):
+                    response = self.start(force=force)
+                    self.assertEqual(response.status_code, 200)
+                    job = response.json()['job']
+                    self.assertEqual(job['state'], 'SKIPPED_NO_TOKEN')
+                    self.assertNotIn('error_code', job)
+                    self.assertFalse(job['busy'])
+        self.manager.start.assert_not_called()
+
     def test_cooldown_is_explicit_even_when_no_compatible_files_were_found(self):
         self.health["last_context_scan_age_hours"] = 14.9 / 60
         for _ in range(2):

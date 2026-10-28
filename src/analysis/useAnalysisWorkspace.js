@@ -227,6 +227,9 @@ export function useAnalysisWorkspace() {
         setSelectedExternalReferences(activeTrialRef.current.reference_files);
         const nextRecommended = (payload.recommended_selection || []).slice(0, payload.display_limit || payload.max_selection || 9);
         if (JSON.stringify(nextRecommended) !== JSON.stringify(activeTrialRef.current.reference_files)) setPendingReferences(nextRecommended);
+      } else if (payload.api_token_configured === false) {
+        appliedSelection = [];
+        setSelectedExternalReferences([]);
       } else if (autoSelect) {
         const draftReferences = readDraft(effectiveFilename).referenceFiles;
         const available = new Set(nextFiles.filter((item) => item.usable !== false).map((item) => item.name));
@@ -333,7 +336,7 @@ export function useAnalysisWorkspace() {
     if (!isSelectableRecording(filesRef.current.find(file => file.name === filename))) return null;
     const health = referencePayload?.collector_health || (await loadGarage61CollectorStatus(filename))?.health;
     if (!workspaceMounted.current || selectedFileRef.current !== filename) return null;
-    if (!health?.enabled || !health?.needs_collection) return null;
+    if (!health?.enabled || !health?.needs_collection || health?.collection_policy?.api_token_configured === false) return null;
     const contextKey = health?.context?.context_key || `${filename}:unknown`;
     if (collectorAutoContextRef.current === contextKey) return null;
     collectorAutoContextRef.current = contextKey;

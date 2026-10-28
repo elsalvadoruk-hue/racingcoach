@@ -7,6 +7,7 @@ import logging
 import math
 from fastapi import HTTPException, Query
 import asyncio
+from garage61_auth import TOKEN_MISSING_MESSAGE
 from analysis_models import Garage61CollectRequest
 
 logger = logging.getLogger("iRacingSetupTuner")
@@ -82,14 +83,22 @@ def register_routes(app, services: ReferenceRoutesServices):
 
     @app.post("/api/garage61/collector/start")
     async def start_garage61_collector(payload: Garage61CollectRequest) -> dict[str, Any]:
-        if not services.get_garage61_auto_collect_enabled():
-            raise HTTPException(status_code=503, detail="Garage61 자동 수집이 비활성화되어 있습니다.")
         path = await asyncio.to_thread(services.resolve_telemetry_file, payload.filename)
         if path is None:
             raise HTTPException(status_code=404, detail="선택한 IBT 파일을 찾을 수 없습니다.")
         telemetry = await asyncio.to_thread(services.get_repository().load, path)
         references = await asyncio.to_thread(services.list_external_reference_metadata, telemetry)
         health = await asyncio.to_thread(services.garage61_reference_health, telemetry, path.name, references)
+
+        if health.get('collection_policy', {}).get('api_token_configured') is False:
+            return {"status": "success", "health": health, "job": {
+                "state": "SKIPPED_NO_TOKEN", "filename": path.name,
+                "context_key": health['context']['context_key'],
+                "message": TOKEN_MISSING_MESSAGE, "busy": False,
+            }}
+
+        if not services.get_garage61_auto_collect_enabled():
+            raise HTTPException(status_code=503, detail="Garage61 자동 수집이 비활성화되어 있습니다.")
 
         if not payload.force and health.get("enough_data") and health.get("cache_fresh"):
             return {

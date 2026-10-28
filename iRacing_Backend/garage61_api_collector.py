@@ -24,7 +24,7 @@ API_BASE = os.getenv("GARAGE61_API_BASE", "https://garage61.net/api/v1").rstrip(
 USER_AGENT = "iRacing-Setup-Tuner/2.8.0 Garage61-API"
 _active_status: Optional["StatusWriter"] = None
 
-TERMINAL_STATES = {"COMPLETE", "PARTIAL", "FAILED", "CANCELLED", "SKIPPED_CACHE_SUFFICIENT"}
+TERMINAL_STATES = {"COMPLETE", "PARTIAL", "FAILED", "CANCELLED", "SKIPPED_CACHE_SUFFICIENT", "SKIPPED_NO_TOKEN"}
 REQUIRED_CSV_COLUMNS = {"Speed", "LapDistPct", "Brake", "Throttle", "SteeringWheelAngle"}
 CSV_NAME_RE = re.compile(
     r"^Garage 61 - (?P<driver>.+?) - (?P<car>.+?) - (?P<track>.+?) - "
@@ -875,13 +875,12 @@ def run(request_path: Path, status_path: Path, reference_dir: Path, token_file: 
     token, token_source = _token_from_sources(reference_dir, token_file)
     if not token:
         status.update(
-            "FAILED",
+            "SKIPPED_NO_TOKEN",
             TOKEN_MISSING_MESSAGE,
             1.0,
-            error_code="API_TOKEN_MISSING",
             token_configured=False,
         )
-        return 3
+        return 0
 
     try:
         status.update("AUTHENTICATING", "Garage61 API 인증을 확인합니다.", 0.05, token_configured=True)

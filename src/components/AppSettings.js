@@ -99,7 +99,7 @@ export default function AppSettings({ apiBase, visible = true, fetcher = fetch }
     <section className="rounded-lg border border-border p-4">
       <h3 className="text-sm font-semibold text-foreground">Garage61 개인 API 토큰</h3>
       <p className="mt-2 text-sm text-foreground">{view.garage61.token_present ? '토큰 등록됨' : '토큰이 등록되지 않았습니다.'}</p>
-      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">Garage61에서 driving_data 권한을 포함한 개인 API 토큰을 발급받아 저장하세요. 토큰 등록됨은 저장 상태이며 인증 성공을 뜻하지 않습니다. 비교창에서 Garage61 다시 확인을 누르면 수집을 다시 시도합니다. 일반 수집에는 Playwright 설치가 필요 없습니다.</p>
+      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">토큰을 등록하지 않으면 오류 없이 내 주행 데이터끼리 비교합니다. Garage61을 사용하려면 driving_data 권한을 포함한 개인 API 토큰을 발급받아 저장하세요. 토큰 등록됨은 저장 상태이며 인증 성공을 뜻하지 않습니다. 등록한 토큰의 인증·권한에 문제가 있으면 오류를 안내합니다. 토큰을 저장한 뒤 비교창을 다시 열면 수집을 시도합니다. 오류가 있으면 Garage61 다시 확인으로 재시도하세요. 일반 수집에는 Playwright 설치가 필요 없습니다.</p>
       <div className="mt-3 flex flex-wrap gap-2">
         <input type="password" autoComplete="off" className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-sm text-foreground" value={token}
           onChange={(event) => setToken(event.target.value)} placeholder="토큰 붙여 넣기" aria-label="Garage61 토큰" />

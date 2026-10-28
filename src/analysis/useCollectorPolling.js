@@ -52,7 +52,7 @@ export function useCollectorPolling({
           return;
         }
 
-        const terminal = ['COMPLETE', 'PARTIAL', 'FAILED', 'CANCELLED', 'SKIPPED_CACHE_SUFFICIENT', 'SKIPPED_COOLDOWN'].includes(job.state);
+        const terminal = ['COMPLETE', 'PARTIAL', 'FAILED', 'CANCELLED', 'SKIPPED_CACHE_SUFFICIENT', 'SKIPPED_COOLDOWN', 'SKIPPED_NO_TOKEN'].includes(job.state);
         if (!terminal) {
           nextDelayMs = 5000;
           return;

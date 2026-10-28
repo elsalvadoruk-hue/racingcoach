@@ -17,13 +17,13 @@ class Garage61AuthenticationTests(unittest.TestCase):
         self.manager = Garage61CollectorManager(
             Path(worker.__file__).parent, self.root / 'references', self.root / 'jobs')
 
-    def test_auto_without_token_explains_registration_without_starting_process(self):
+    def test_auto_without_token_normally_skips_without_starting_process(self):
         with patch.object(self.manager, 'api_token_configured', return_value=False), \
                 patch('garage61_collector_manager.subprocess.Popen') as process:
             result = self.manager.start({'collector_mode': 'AUTO'})
-        self.assertEqual(result['state'], 'FAILED')
-        self.assertEqual(result['error_code'], 'API_TOKEN_MISSING')
-        self.assertIn('설정 → 설치 설정 → Garage61 개인 API 토큰', result['message'])
+        self.assertEqual(result['state'], 'SKIPPED_NO_TOKEN')
+        self.assertNotIn('error_code', result)
+        self.assertIn('내 주행 데이터', result['message'])
         self.assertNotIn('Playwright', result['message'])
         process.assert_not_called()
 
@@ -41,12 +41,13 @@ class Garage61AuthenticationTests(unittest.TestCase):
             result = worker.run(request, status, self.root / 'references', None)
         return result, json.loads(status.read_text(encoding='utf-8')), api.call_count
 
-    def test_worker_missing_token_uses_settings_instead_of_nonexistent_batch_file(self):
+    def test_worker_missing_token_normally_skips_without_network(self):
         result, status, calls = self.run_worker('', AssertionError('network must not run'))
-        self.assertEqual(result, 3)
+        self.assertEqual(result, 0)
         self.assertEqual(calls, 0)
-        self.assertEqual(status['error_code'], 'API_TOKEN_MISSING')
-        self.assertIn('설정 → 설치 설정', status['message'])
+        self.assertEqual(status['state'], 'SKIPPED_NO_TOKEN')
+        self.assertNotIn('error_code', status)
+        self.assertIn('내 주행 데이터', status['message'])
         self.assertNotIn('.bat', status['message'])
 
     def test_invalid_token_and_forbidden_access_have_distinct_actionable_messages(self):

@@ -382,7 +382,7 @@ function Workspace({ onSession, runtime, analysisWorkspace, busy, progress, fail
     <Dialog open={dialog === 'laps'} onOpenChange={open => !open && setDialog(null)}><DialogContent className="desktop-source-dialog"
       onOpenAutoFocus={() => { sourceDialogOpener.current = document.activeElement; }}
       onCloseAutoFocus={event => { if (sourceDialogOpener.current?.isConnected) { event.preventDefault(); sourceDialogOpener.current.focus(); } }}>
-      <DialogHeader><DialogTitle>비교할 주행 선택</DialogTitle><DialogDescription>{lmu ? 'LMU 기록 파일에서 내 랩과 비교 기준 랩을 선택하세요.' : '내 IBT 기록과 내려받은 Garage61 기준을 선택하세요.'}</DialogDescription></DialogHeader><SourcePicker analysisWorkspace={analysisWorkspace} target={lap} reference={reference} external={external} onApply={applyComparison} /></DialogContent></Dialog>
+      <DialogHeader><DialogTitle>비교할 주행 선택</DialogTitle><DialogDescription>{lmu ? 'LMU 기록 파일에서 내 랩과 비교 기준 랩을 선택하세요.' : '내 주행과 비교할 기준 랩을 선택하세요.'}</DialogDescription></DialogHeader><SourcePicker analysisWorkspace={analysisWorkspace} target={lap} reference={reference} external={external} onApply={applyComparison} /></DialogContent></Dialog>
   </div></TooltipProvider>;
 }
 

@@ -148,6 +148,52 @@ test('LMU never checks or starts Garage61 collection', async () => {
   expect(requestJson.mock.calls.filter(([url]) => url.includes('/garage61/collector'))).toHaveLength(0);
 });
 
+test('no token uses personal comparison even with cached recommendations and old external selection', async () => {
+  const original = labRequest.getMockImplementation();
+  labRequest.mockImplementation(async (route, body, signal) => route === 'references'
+    ? { files: refs, recommended_selection: ['new.csv'], api_token_configured: false,
+      personalReference: { filename: body.filename, lap: 2 } }
+    : original(route, body, signal));
+  requestJson.mockResolvedValue({ health: { ...health('A.ibt'), collection_policy: { api_token_configured: false } },
+    job: { state: 'FAILED', busy: false, message: 'old authentication failure' } });
+  render(<SourcePicker target="2" reference="2" external={['new.csv']} onApply={onApply} analysisWorkspace={{ game: 'iracing' }} />);
+  await ready();
+  expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
+  expect(screen.queryByRole('option', { name: 'Garage61 · 내려받은 기준' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('status', { name: 'Garage61 수집 상태' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Garage61 다시 확인' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.queryByText('Garage61 수집 실패')).not.toBeInTheDocument();
+  expect(starts()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: '선택한 랩 비교하기' }));
+  await waitFor(() => expect(onApply).toHaveBeenCalled());
+  const body = labRequest.mock.calls.find(([route]) => route === 'comparison')[1];
+  expect(body).toMatchObject({ reference_mode: 'LOCAL', external_reference_files: [] });
+});
+
+test('registering a token can surface authentication errors and deleting it clears them on recheck', async () => {
+  let configured = false;
+  requestJson.mockImplementation(async url => ({
+    health: { ...health('A.ibt'), collection_policy: { api_token_configured: configured } },
+    job: url.endsWith('/start') ? { state: 'FAILED', busy: false, error_code: 'API_TOKEN_INVALID', message: '토큰 인증 실패 (HTTP 401)' } : null,
+  }));
+  const view = await open();
+  expect(screen.queryByRole('button', { name: 'Garage61 다시 확인' })).not.toBeInTheDocument();
+  expect(starts()).toHaveLength(0);
+  configured = true;
+  view.unmount();
+  await open();
+  expect(await screen.findByRole('alert')).toHaveTextContent('HTTP 401');
+  expect(starts()).toHaveLength(1);
+  configured = false;
+  fireEvent.click(screen.getByRole('button', { name: 'Garage61 다시 확인' }));
+  await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  expect(screen.queryByRole('status', { name: 'Garage61 수집 상태' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Garage61 다시 확인' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(starts()).toHaveLength(1);
+});
+
 test('a busy collector waits for the other context before downloading the previewed recording', async () => {
   jest.useFakeTimers();
   let otherBusy = true;

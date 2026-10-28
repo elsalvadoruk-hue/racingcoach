@@ -529,6 +529,7 @@ test.each(['references', 'health'])('a late desktop %s response cannot collect f
 test.each([
   { enabled: false, needs_collection: true },
   { enabled: true, needs_collection: false },
+  { enabled: true, needs_collection: true, collection_policy: { api_token_configured: false } },
 ])('desktop adoption respects collection policy %j', async (health) => {
   const original = global.fetch.getMockImplementation();
   global.fetch.mockImplementation((url, options) => url.includes('/api/external-references')
@@ -536,6 +537,22 @@ test.each([
   const { result } = await ready();
   await act(async () => result.current.adoptDesktopAnalysis({ filename: 'C.ibt', defaultTarget: 3, defaultReference: 2,
     external: [], session: {}, analysisResult: analysisFor('C.ibt') }, {}));
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/garage61/collector/start'))).toHaveLength(0);
+});
+
+test('no token ignores cached recommendations and the saved Garage61 selection on startup', async () => {
+  localStorage.setItem('iracing.desktop.last-session.v1', JSON.stringify({ filename: 'A.ibt',
+    target_lap: 2, reference_lap: 1, external_reference_files: ['cached.csv'] }));
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.includes('/api/external-references')
+    ? response({ files: [{ name: 'cached.csv', usable: true }], recommended_selection: ['cached.csv'],
+      api_token_configured: false,
+      collector_health: { enabled: true, needs_collection: false, collection_policy: { api_token_configured: false } } })
+    : original(url, options));
+  const { result } = await ready();
+  expect(result.current.selectedExternalReferences).toEqual([]);
+  expect(result.current.analysisSnapshot.referenceMode).toBe('LOCAL');
+  expect(requests()[0]).toMatchObject({ external_reference_files: [] });
   expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/garage61/collector/start'))).toHaveLength(0);
 });
 

@@ -10,6 +10,8 @@ import numpy as np
 from fastapi.testclient import TestClient
 from test_rolling_best import BackToBackLaps, api
 
+reference_catalog = api.list_external_reference_metadata
+
 
 class WorkspacePersonalReferenceTests(BackToBackLaps, unittest.TestCase):
     def setUp(self):
@@ -79,6 +81,26 @@ class WorkspacePersonalReferenceTests(BackToBackLaps, unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json()['defaultReferenceFile'], 'best.ibt')
         self.assertEqual(response.json()['referenceFallback'], 'GARAGE61_UNAVAILABLE')
+
+    def test_no_token_uses_personal_best_even_with_cached_garage61_selection(self):
+        with patch.object(api, 'list_external_reference_metadata', return_value={
+                'api_token_configured': False,
+                'files': [{'name': 'cached.csv', 'usable': True, 'compatible': True}],
+                'recommended_selection': ['cached.csv']}):
+            response = self.post(reference_mode='SINGLE', external_reference_files=['cached.csv'])
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()['defaultReferenceFile'], 'best.ibt')
+        self.assertEqual(response.json()['initialComparison']['referenceTime'], 100)
+
+    def test_no_token_health_is_normal_personal_mode_without_collection(self):
+        with patch.object(api.garage61_collector, 'api_token_configured', return_value=False), \
+                patch.object(api, 'GARAGE61_AUTO_COLLECT_ENABLED', True), \
+                patch.object(api, '_external_reference_paths', return_value=[]):
+            catalog = reference_catalog(self.sources['current.ibt'])
+            health = api.garage61_reference_health(self.sources['current.ibt'], 'current.ibt', catalog)
+        self.assertFalse(catalog['api_token_configured'])
+        self.assertFalse(health['needs_collection'])
+        self.assertEqual(health['recommendation'], 'USE_PERSONAL')
 
     def test_manual_other_file_revalidated_and_weather_mismatch_rejected(self):
         response = self.post('comparison', reference_selection='MANUAL', reference_filename='best.ibt', reference_lap=2)

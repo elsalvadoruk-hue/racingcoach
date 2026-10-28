@@ -787,6 +787,7 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
         "directory": str(EXTERNAL_REFERENCE_DIR),
         "catalog_path": str(EXTERNAL_REFERENCE_CATALOG_PATH),
         "files": display_files,
+        "api_token_configured": garage61_collector.api_token_configured(),
         "recommended_selection": recommended,
         "recommended_primary": recommended[0] if recommended else None,
         "selection_policy": "FIRST_FILE_PRIMARY_REMAINING_SUPPORT",
@@ -922,6 +923,7 @@ def garage61_reference_health(
         and distinct_driver_count >= GARAGE61_MIN_DISTINCT_DRIVERS
     )
     needs_collection = not enough_data or not fresh
+    token_configured = garage61_collector.api_token_configured()
     reasons: list[str] = []
     if usable_count < GARAGE61_MIN_USABLE_REFERENCES:
         reasons.append(f"조건 유사 + 더 빠른 CSV {usable_count}/{GARAGE61_MIN_USABLE_REFERENCES}")
@@ -934,6 +936,8 @@ def garage61_reference_health(
         recommendation = "BACKGROUND_REFRESH"
     elif needs_collection:
         recommendation = "COLLECT_NOW"
+    if not token_configured:
+        recommendation = "USE_PERSONAL"
     return {
         "enabled": GARAGE61_AUTO_COLLECT_ENABLED,
         "context": context,
@@ -950,7 +954,7 @@ def garage61_reference_health(
         "last_context_scan_age_seconds": None if age_hours is None else age_hours * 3600.0,
         "cache_fresh": fresh,
         "enough_data": enough_data,
-        "needs_collection": bool(GARAGE61_AUTO_COLLECT_ENABLED and needs_collection),
+        "needs_collection": bool(token_configured and GARAGE61_AUTO_COLLECT_ENABLED and needs_collection),
         "reasons": reasons,
         "recommendation": recommendation,
         "collection_policy": {
@@ -959,7 +963,7 @@ def garage61_reference_health(
             "browser_fallback": False,
             "cache_first": True,
             "preferred_mode": garage61_collector.preferred_mode(),
-            "api_token_configured": garage61_collector.api_token_configured(),
+            "api_token_configured": token_configured,
             "api_candidate_limit": 1000,
             "condition_query_strategy": "STRICT_THEN_PROGRESSIVE_RELAXATION",
             "telemetry_validation": True,
@@ -1013,7 +1017,7 @@ def garage61_api_connection_status() -> dict[str, Any]:
         "api_base": GARAGE61_API_BASE,
     }
     if not token:
-        base.update(message=TOKEN_MISSING_MESSAGE, error_code="API_TOKEN_MISSING")
+        base.update(message=TOKEN_MISSING_MESSAGE)
         return base
     req = urllib.request.Request(
         f"{GARAGE61_API_BASE}/me",

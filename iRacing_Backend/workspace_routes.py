@@ -240,6 +240,7 @@ def register_routes(app, services: WorkspaceRoutesServices):
                               'lap_time_s', 'usable', 'compatible', 'condition_similarity', 'validation_error')
                     personal = await asyncio.to_thread(select_personal_reference, services, telemetry, body.get('target_lap'))
                     result = {'files': [{key: row.get(key) for key in fields} for row in catalog['files']],
+                              'api_token_configured': catalog.get('api_token_configured'),
                               'recommended_selection': catalog.get('recommended_selection', []), 'personalReference': personal}
                 elif route == 'overlay':
                     result = await asyncio.to_thread(services.lap_overlay_payload, telemetry, LapOverlayRequest(**body))
@@ -256,6 +257,8 @@ def register_routes(app, services: WorkspaceRoutesServices):
                             catalog = await asyncio.to_thread(services.list_external_reference_metadata, telemetry,
                                 retained_files=body.get('external_reference_files') or [])
                             usable = {row.get('name') for row in catalog.get('files', []) if row.get('usable') and row.get('compatible')}
+                            if catalog.get('api_token_configured') is False:
+                                usable = set()
                         except (OSError, ValueError):
                             usable = set()
                         selected_files = body.get('external_reference_files') or []

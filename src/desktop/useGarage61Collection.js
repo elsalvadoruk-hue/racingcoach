@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { requestJson } from '../analysis/analysisClient';
 
 const POLL_MS = 5000;
-const TERMINAL = new Set(['COMPLETE', 'PARTIAL', 'FAILED', 'CANCELLED', 'SKIPPED_CACHE_SUFFICIENT', 'SKIPPED_COOLDOWN']);
+const TERMINAL = new Set(['COMPLETE', 'PARTIAL', 'FAILED', 'CANCELLED', 'SKIPPED_CACHE_SUFFICIENT', 'SKIPPED_COOLDOWN', 'SKIPPED_NO_TOKEN']);
 
 // A picker can preview another recording without changing the active analysis.
 // Follow that recording's collection independently and leave started workers
@@ -11,6 +11,7 @@ export function useGarage61Collection({ filename, enabled, onCollected }) {
   const [state, setState] = useState(null);
   const [attempt, setAttempt] = useState(0);
   const collected = useRef(onCollected);
+  const tokenState = useRef(null);
   collected.current = onCollected;
   const retry = useCallback(() => setAttempt(value => value + 1), []);
 
@@ -59,6 +60,16 @@ export function useGarage61Collection({ filename, enabled, onCollected }) {
       try {
         const payload = await requestJson(`/api/garage61/collector/status?filename=${encodeURIComponent(filename)}`, { signal: controller.signal });
         if (!live()) return;
+        const configured = payload?.health?.collection_policy?.api_token_configured;
+        if (typeof configured === 'boolean') {
+          const previous = tokenState.current;
+          tokenState.current = { filename, configured };
+          if (previous?.filename === filename && previous.configured !== configured) collected.current?.(filename);
+        }
+        if (payload?.health?.collection_policy?.api_token_configured === false) {
+          show('SKIPPED_NO_TOKEN', { ...payload, job: null }, '');
+          return;
+        }
         if (matches(payload) && payload.job.busy) { follow(payload); return; }
         if (watchedJob && matches(payload) && payload.job.job_id === watchedJob && TERMINAL.has(payload.job.state)) {
           finish(payload); return;
@@ -85,7 +96,7 @@ export function useGarage61Collection({ filename, enabled, onCollected }) {
         if (live()) show('FAILED', null, `Garage61 자료를 받지 못했습니다. ${error.message}`);
       }
     };
-    show('CHECKING', null, '선택한 주행에 필요한 Garage61 자료와 다운로드 상태를 확인하고 있습니다.');
+    show('CHECKING', null, '');
     void check();
     return () => { controller.abort(); clearTimeout(timer); };
   }, [filename, enabled, attempt]);
