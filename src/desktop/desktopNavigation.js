@@ -9,7 +9,7 @@ const routes = {
   'ab-manager': ['setup'], briefing: ['setup'], 'engineer-briefing': ['setup'], 'setup-decision': ['setup'],
   decision: ['setup'], 'tire-snapshot': ['setup'], 'ride-aero': ['setup'], 'damper-velocity': ['setup'], 'gg-diagram': ['setup'],
 };
-const workspaces = ['driver', 'summary', 'corners', 'laps', 'expert', 'setup', 'live', 'overlay', 'history', 'settings', 'guide'];
+const workspaces = ['driver', 'summary', 'corners', 'laps', 'expert', 'battle', 'setup', 'live', 'overlay', 'history', 'settings', 'guide'];
 
 export function desktopDestination(section) {
   const id = typeof section === 'object' ? section?.id : section;
@@ -51,5 +51,28 @@ export async function openVoiceCorner(workspace, note) {
     if (sameAsReference) workspace.setReferenceLapManual?.(false);
   }
   workspace.navigateToSection('corner-inputs', { id: note.corner_id || note.id, distance_pct: note.distance_pct, lap_number: lap });
+  return true;
+}
+
+// A battle pass: compare that lap, against another lap of the same file when one is named.
+export async function openBattleCorner(workspace, { lap, corner, pct, referenceLap = null, filename }) {
+  if (workspace.activeTrial || workspace.loading) {
+    workspace.setError?.('진행 중 실험의 랩과 기준을 유지합니다. 실험 종료 후 배틀 랩을 비교하세요.');
+    return false;
+  }
+  if (!Number.isInteger(Number(lap))) return false;
+  const sameReference = referenceLap == null || Number(workspace.referenceLap) === Number(referenceLap);
+  if (Number(workspace.comparison?.target_lap) !== Number(lap) || !sameReference) {
+    const result = await workspace.runAnalysis({ includeAI: false, persistMemory: false, targetLapOverride: Number(lap),
+      ...(referenceLap == null ? {} : { referenceLapOverride: Number(referenceLap), referenceFilenameOverride: filename,
+        referenceSelectionOverride: 'MANUAL', externalReferencesOverride: [], referenceModeOverride: 'LOCAL' }) });
+    if (!result || Number(result.comparison?.target_lap) !== Number(lap)) {
+      workspace.setError?.('이 랩은 비교 대상으로 사용할 수 없습니다.');
+      return false;
+    }
+    workspace.setTargetLapManual?.(true);
+    if (referenceLap != null) workspace.setReferenceLapManual?.(true);
+  }
+  workspace.navigateToSection('corner-inputs', { id: corner, distance_pct: pct, lap_number: Number(lap) });
   return true;
 }

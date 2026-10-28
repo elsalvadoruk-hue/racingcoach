@@ -18,7 +18,7 @@ import { Field, FieldLabel } from '../components/ui/field';
 import { Switch } from '../components/ui/switch';
 import { GameSettingsNotice } from '../lib/gameContext';
 
-export const workspaceLabels = { driver: '드라이버 리포트', summary: '주행 요약', corners: '코너 비교', laps: '랩 분석', expert: '전문가 보기', setup: '셋업 실험', live: '음성 코치', overlay: '오버레이', history: '기록', settings: '설정', guide: '사용 가이드' };
+export const workspaceLabels = { driver: '드라이버 리포트', summary: '주행 요약', corners: '코너 비교', laps: '랩 분석', expert: '전문가 보기', battle: '배틀 분석', setup: '셋업 실험', live: '음성 코치', overlay: '오버레이', history: '기록', settings: '설정', guide: '사용 가이드' };
 
 function ExistingPanel({ title, description, children, id, collapsible = false }) {
   if (collapsible) return <Card asChild id={id}><details>

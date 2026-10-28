@@ -4492,6 +4492,9 @@ _handlers = register_workspace_routes(app, WorkspaceRoutesServices(
     json_safe=lambda *args, **kwargs: json_safe(*args, **kwargs),
     align_reference_grid=lambda *args, **kwargs: _on_distance_axis(*args, **kwargs),
     flush_race_timing=lambda: live_telemetry.flush_race_timing(),
+    get_corner_definition_store=lambda: _CORNER_DEFINITION_STORE,
+    traffic_log_folder=lambda: live_telemetry.traffic_log.folder,
+    flush_traffic_log=lambda: live_telemetry.traffic_log.flush_wait(),
 ))
 workspace_request = _handlers.workspace_request
 # LMU recordings run through the same analysis workspace (lmu_routes).

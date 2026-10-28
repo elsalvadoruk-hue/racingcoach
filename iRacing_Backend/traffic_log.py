@@ -17,16 +17,20 @@ from oval_spotter import is_oval, OVAL_FIELDS, POLICY_VERSION
 
 logger = logging.getLogger('iRacingLive')
 FORMAT = 'iracing-coach-traffic'
+# Version 3 adds LMU's position across the track (path lateral, track half-width) for every
+# nearby car and for us, at the end of each list so readers that zip by name keep working.
 FIELDS = ['idx', 'class_id', 'gap_m', 'est_time_s', 'lap_completed', 'position',
-          'class_position', 'on_pit_road', 'track_surface', 'local_x_m', 'local_z_m']
+          'class_position', 'on_pit_road', 'track_surface', 'local_x_m', 'local_z_m',
+          'path_lateral_m', 'track_edge_m']
 OWN_FIELDS = ['lap_completed', 'distance_pct', 'speed_mps', 'brake', 'throttle',
-              'steering_rad', 'car_left_right', 'on_pit_road']
+              'steering_rad', 'car_left_right', 'on_pit_road', 'path_lateral_m', 'track_edge_m']
 # Version 2: the own lap position to 6 places (3 places was ~5 m on a 5 km track).
-OWN_DIGITS = [3, 6, 3, 3, 3, 3, 3, 3]
+OWN_DIGITS = [3, 6, 3, 3, 3, 3, 3, 3, 2, 2]
 ARRAYS = {'distance_pct': 'CarIdxLapDistPct', 'lap_completed': 'CarIdxLapCompleted',
           'position': 'CarIdxPosition', 'class_position': 'CarIdxClassPosition',
           'on_pit_road': 'CarIdxOnPitRoad', 'track_surface': 'CarIdxTrackSurface',
-          'est_time_s': 'CarIdxEstTime', 'class_id': 'CarIdxClass'}
+          'est_time_s': 'CarIdxEstTime', 'class_id': 'CarIdxClass',
+          'path_lateral_m': 'CarIdxPathLateral', 'track_edge_m': 'CarIdxTrackEdge'}
 
 
 def finite(value):
@@ -162,10 +166,14 @@ class TrafficLog:
             cars.append([idx, rounded(class_id), rounded(gap, 2), rounded(at('est_time_s', idx)),
                          rounded(at('lap_completed', idx)), rounded(at('position', idx)),
                          rounded(at('class_position', idx)), rounded(at('on_pit_road', idx)),
-                         rounded(surface), rounded(position.get('x_m'), 2), rounded(position.get('z_m'), 2)])
+                         rounded(surface), rounded(position.get('x_m'), 2), rounded(position.get('z_m'), 2),
+                         rounded(at('path_lateral_m', idx), 2), rounded(at('track_edge_m', idx), 2)])
         # Only detached primitive values cross threads; SDK arrays are never queued.
+        player = snapshot.get('player_idx')
+        mine = {**sample, **({key: at(key, player) for key in ('path_lateral_m', 'track_edge_m')}
+                             if player is not None else {})}
         row = {'t': round(session_time, 3),
-               'own': [rounded(sample.get(k), d) for k, d in zip(OWN_FIELDS, OWN_DIGITS)], 'c': cars}
+               'own': [rounded(mine.get(k), d) for k, d in zip(OWN_FIELDS, OWN_DIGITS)], 'c': cars}
         if oval:
             row['oval'] = [rounded(sample.get(key), 6) for key in OVAL_FIELDS]
         with self._condition:
@@ -182,7 +190,7 @@ class TrafficLog:
 
     def _header(self, snapshot):
         identity = snapshot['identity']
-        header = {'format': FORMAT, 'version': 2, 'game': snapshot.get('game'), 'run_id': self.run_id,
+        header = {'format': FORMAT, 'version': 3, 'game': snapshot.get('game'), 'run_id': self.run_id,
                 'track': identity.get('track_name'), 'track_id': identity.get('track_id'),
                 'track_config': identity.get('track_config'), 'track_length_m': snapshot['track_length_m'],
                 'car': identity.get('car_path'), 'player_idx': snapshot.get('player_idx'),

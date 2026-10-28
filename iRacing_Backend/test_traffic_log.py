@@ -67,7 +67,7 @@ class TrafficLogTests(unittest.TestCase):
         log.record(self.snapshot(), 'run', 1.)
         log.close()
         header, rows = read(next(self.folder.glob('traffic-*.jsonl.gz')))
-        self.assertEqual(header['version'], 2)
+        self.assertGreaterEqual(header['version'], 2)   # 3 added LMU track position
         self.assertEqual(rows[0]['own']['distance_pct'], .123457)
 
     def test_only_live_race_with_folder_is_recorded_including_pit_road(self):
@@ -137,6 +137,28 @@ class TrafficLogTests(unittest.TestCase):
         self.assertEqual(rows[0]['c'][0]['local_x_m'], 3.)
         self.assertEqual(rows[0]['c'][0]['local_z_m'], -4.)
         self.assertEqual(sdk['CarLeftRight'], 2)
+
+    def test_lmu_position_across_the_track_for_us_and_nearby_cars(self):
+        raw = frame(others=((5, (3., 0., -4.), 0.),))
+        raw['scoring_cars'] = [car(0, 2, 1000., lateral=-1.234, edge=6.5), car(5, 1, 1004., lateral=2.5, edge=6.4)]
+        sdk = read_all(*adapter([raw]), 1)
+        names = set(sdk.var_headers_names)
+        sample = {key: sdk[name] if name in names else None for key, name in CHANNELS.items()}
+        identity = session_identity(sdk['WeekendInfo'], sdk['DriverInfo'])
+        log = self.new_log()
+        log.record(traffic_snapshot(sdk, names, sample, identity), 'run', 100.); log.close()
+        header, rows = read(log.path)
+        self.assertEqual(header['version'], 3)
+        self.assertEqual((rows[0]['own']['path_lateral_m'], rows[0]['own']['track_edge_m']), (-1.23, 6.5))
+        near = rows[0]['c'][0]
+        self.assertEqual((near['idx'], near['path_lateral_m'], near['track_edge_m']), (5, 2.5, 6.4))
+
+    def test_iracing_has_no_position_across_the_track(self):
+        log = self.new_log()
+        log.record(self.snapshot(), 'run', 1.); log.close()
+        _, rows = read(log.path)
+        self.assertIsNone(rows[0]['own']['path_lateral_m'])
+        self.assertTrue(all(c['path_lateral_m'] is None for c in rows[0]['c']))
 
     def test_write_error_logs_once_and_stops_only_that_run(self):
         log = self.new_log()
