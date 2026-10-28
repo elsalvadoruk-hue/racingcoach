@@ -53,8 +53,10 @@ export const BATTLE_REASONS = {
 };
 
 export const OUTCOMES = { passed: '내가 추월', lost: '추월당함', held: '자리 지킴', behind: '뒤에서 따라감' };
-export const VERDICTS = { ahead: '다음 코너 입구에서 내가 앞', alongside: '다음 제동 구간에서 옆에 붙음', closer: '상대에게 더 가까이', further: '앞선 거리를 더 벌림' };
-
-export function bestAdvice(corner) {
-  return corner.best && (!corner.usual || corner.best.gain_s > corner.usual.gain_s) ? corner.best : corner.usual;
-}
+export const SIM_REASONS = {
+  INSUFFICIENT_DYNAMICS: '페달과 속도 변화 자료가 부족해 차량 반응을 계산하지 못했습니다.',
+  DISCONTINUOUS_SCENE: '연속된 1초 이상의 배틀 기록이 필요합니다.',
+  SHORT_RIVAL_HISTORY: '계산 시작 전 상대의 속도 변화를 확인할 기록이 부족합니다.',
+};
+export const RESPONSES = { track_pace: '코너 속도에 맞춰 달림', brakes: '상대가 더 감속함', holds_speed: '상대가 현재 속도를 유지함' };
+export const SIM_STATUS = { OVERLAP_POSSIBLE: '차량 겹침 가능 · 우열 보류', MODEL_UNCERTAIN: '오차가 커 우열 보류', EFFECT_WITHIN_ERROR: '차이가 오차보다 작음 · 우열 보류', CONDITIONAL: '가정에 따른 비교 · 우열 보류' };

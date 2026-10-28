@@ -10,12 +10,9 @@ Estimated: the rival's position across the track (iRacing never reports it). Whi
 signal can only mean that car, it is that side at least a car width away; otherwise it is a
 range growing from the last known side, clipped to the spread of our own lines.
 
-'What if' for each corner of a battle uses only our own other passes of that corner in the
-same race, starting at about the same speed, with the rival held to what it really did:
-  * usual: our solo median, moved to our entry speed (the default, least biased);
-  * best: our quickest such pass. Shown only when it beats what picking the best of N passes
-    gives by chance, and does not need more minimum speed than the car close ahead had.
-Checked on three races (Hockenheim, Spa x2) in logs/battle-iracing-precise-20261028/.
+Battle alternatives start from the same battle state and integrate a calibrated vehicle
+response with several conditional rival reactions. See battle_simulation.py. No pass is
+transplanted, and unknown road boundaries do not permit invented overtaking lines.
 """
 from __future__ import annotations
 
@@ -28,6 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
+from battle_simulation import VERSION, alternatives, fit_vehicle
+
 FORMAT = 'iracing-coach-traffic'
 CHANNELS = ('SessionTime', 'Lap', 'LapDistPct', 'Lat', 'Lon', 'Speed', 'Brake', 'Throttle',
             'SteeringWheelAngle', 'Gear', 'OnPitRoad')
@@ -38,7 +37,7 @@ SIDE_MAX_M = 2 * CAR_WIDTH_M + .5      # iRacing's side-detection reach is not p
 LATERAL_RATE_MPS = 2.5                 # sideways drift between two known positions
 NEAR_M, EPISODE_MIN_S, JOIN_S = 20., 4., .6
 SOLO_CLEAR_M, BATTLE_NEAR_M = 30., 15.
-ENTRY_MATCH_KPH, MIN_PASSES, MIN_GAIN_S = 5., 5, .05
+MIN_PASSES = 5
 GRID = 2000
 BRAKE_ON, FULL_THROTTLE = .05, .95
 MAX_LOGS = 30
@@ -138,6 +137,10 @@ def _clean_laps(ch):
         if n < 1 or len(idx) < 600:
             continue
         pct = ch['LapDistPct'][idx]
+        if any(not np.isfinite(ch[key][idx]).all() for key in CHANNELS):
+            continue
+        if np.max(np.diff(ch['SessionTime'][idx])) > .1:
+            continue
         if pct[0] > .02 or pct[-1] < .98 or np.any(np.diff(pct) < -.5):
             continue
         if np.any(ch['OnPitRoad'][idx] > 0) or np.nanmin(ch['Speed'][idx]) < 8:
@@ -194,31 +197,6 @@ def _pass(ch, idx, c, length_m):
         'segment_s': _time_at(pct, t, end) - t_entry, 'turns': 'L' if ch['SteeringWheelAngle'][idx][k_min] > 0 else 'R',
         't_entry': t_entry, 't_exit': _time_at(pct, t, c['exit']), 't_end': _time_at(pct, t, end),
     }
-
-
-def entry_model(passes):
-    """Segment time against entry speed at a corner, and our lap-to-lap noise around it."""
-    if len(passes) < MIN_PASSES:
-        return None
-    x = np.array([p['entry_kph'] for p in passes]); y = np.array([p['segment_s'] for p in passes])
-    b = 0.0 if np.ptp(x) < 1 else float(np.polyfit(x, y, 1)[0])
-    resid = y - (np.median(y - b * x) + b * x)
-    solo = np.array([p['solo'] for p in passes])
-    pool = resid[solo] if solo.sum() >= MIN_PASSES else resid
-    return {'slope': b, 'noise_s': float(1.4826 * np.median(np.abs(pool - np.median(pool))))}
-
-
-_BEST_OF = {}
-
-
-def best_of_n(n, sims=20000):
-    """Expected advantage, in noise units, of the best of n passes over a typical one."""
-    if n < 2:
-        return 0.0
-    if n not in _BEST_OF:
-        rng = np.random.default_rng(7)
-        _BEST_OF[n] = float(-np.mean(np.min(rng.standard_normal((sims, n)), axis=1)))
-    return _BEST_OF[n]
 
 
 # ---- the whole analysis -------------------------------------------------------------------
@@ -356,7 +334,8 @@ def analyse(telemetry, ch, header, rows, definitions, names):
                            'throttle': round(float(ch['Throttle'][ti]), 3), 'gear': int(ch['Gear'][ti]),
                            'steer_deg': round(math.degrees(float(ch['SteeringWheelAngle'][ti])), 1),
                            'pct': round(float(own_pct[k]), 5), 'gap_m': round(gc, 2), 'gap_clamped': clamped,
-                           'beside': side, 'rival_pct': round(float(pct_r), 5), 'rival_lat': [round(lo, 2), round(hi, 2)]})
+                           'beside': side, 'rival_pct': round(float(pct_r), 5), 'rival_lat': [round(lo, 2), round(hi, 2)],
+                           'other_nearby': sum(1 for other, gap in near_at.get(k, []) if other != car and abs(gap) < 30)})
         for n, f in enumerate(frames):
             a, b = frames[max(n - 3, 0)], frames[min(n + 3, len(frames) - 1)]
             if b['t'] - a['t'] > .3:
@@ -370,7 +349,7 @@ def analyse(telemetry, ch, header, rows, definitions, names):
                        'beside_s': round(sum(1 for f in frames if f['beside']) * float(header.get('rate_s') or .1), 1),
                        'frames': frames})
 
-    # corner passes, solo baseline, what if
+    # Locate battle corners; other passes calibrate dynamics, never replace this pass.
     passes = {c['id']: [] for c in windows}
     for n, idx in laps:
         for c in windows:
@@ -384,17 +363,6 @@ def analyse(telemetry, ch, header, rows, definitions, names):
                     near[car] = min(near.get(car, 1e9), abs(g))
             p.update(lap=n, solo=not any(g < SOLO_CLEAR_M for g in near.values()), near=near)
             passes[c['id']].append(p)
-    models = {cid: entry_model(ps) for cid, ps in passes.items()}
-
-    for s in scenes:
-        rows_ = []
-        for c in windows:
-            for p in passes[c['id']]:
-                if p['t_end'] < s['t0'] or p['t_entry'] > s['t1'] or p['near'].get(s['rival'], 1e9) > BATTLE_NEAR_M:
-                    continue
-                rows_.append(_corner_advice(s, c, p, passes[c['id']], models[c['id']], gap_of))
-        s['corners'] = rows_
-
     step = 4
     geometry = {'ref': [[round(float(ref[0, i]), 2), round(float(ref[1, i]), 2)] for i in range(0, GRID, step)],
                 'normal': [[round(float(normal[0, i]), 4), round(float(normal[1, i]), 4)] for i in range(0, GRID, step)],
@@ -403,68 +371,47 @@ def analyse(telemetry, ch, header, rows, definitions, names):
                 'band_right': [[round(float(ref[0, i] + normal[0, i] * spread_lo[i]), 2),
                                 round(float(ref[1, i] + normal[1, i] * spread_lo[i]), 2)] for i in range(0, GRID, step)],
                 'grid': GRID // step}
-    advices = [r for s in scenes for r in s['corners'] if r.get('best') or r.get('usual')]
-    top = max(advices, key=lambda r: (r.get('best') or r.get('usual'))['gain_s'], default=None)
+    models = {}
+    for s in scenes:
+        rows_ = []
+        for c in windows:
+            for p in passes[c['id']]:
+                if p['t_end'] < s['t0'] or p['t_entry'] > s['t1'] or p['near'].get(s['rival'], 1e9) > BATTLE_NEAR_M:
+                    continue
+                if p['lap'] not in models:
+                    models[p['lap']] = fit_vehicle(ch, p['lap'], [n for n, _ in laps])
+                rows_.append(_corner_advice(s, c, p, gap_of, models[p['lap']], geometry, length))
+        s['corners'] = rows_
+
+    advices = [(scene, row, alt) for scene in scenes for row in scene['corners']
+               for alt in row['alternatives'] if alt['rankable']]
+    top = max(advices, key=lambda item: min(item[2]['progress_range_m']), default=None)
     return {'status': 'READY', 'laps_used': len(laps), 'enough_laps': len(laps) >= MIN_PASSES,
-            'calibration': calibration,
+            'calibration': calibration, 'simulation_version': VERSION,
             'assumptions': {'car_length_m': CAR_LENGTH_M, 'car_width_m': CAR_WIDTH_M, 'side_max_m': SIDE_MAX_M,
-                            'lateral_rate_mps': LATERAL_RATE_MPS, 'entry_match_kph': ENTRY_MATCH_KPH},
+                            'lateral_rate_mps': LATERAL_RATE_MPS},
             'geometry': geometry, 'scenes': scenes,
             'summary': {'battles': len(scenes), 'side_by_side': sum(1 for s in scenes if s['beside_s'] > 0),
                         'passed': sum(1 for s in scenes if s['outcome'] == 'passed'),
                         'lost': sum(1 for s in scenes if s['outcome'] == 'lost'),
-                        'top': None if top is None else {'scene': next(s['id'] for s in scenes if top in s['corners']),
-                                                         'label': top['label'], 'lap': top['lap'],
-                                                         'gain_s': (top.get('best') or top.get('usual'))['gain_s']}}}
+                        'top': None if top is None else {'scene': top[0]['id'], 'label': top[1]['label'],
+                                                         'lap': top[1]['lap'], 'action': top[2]['label'],
+                                                         'progress_m': top[2]['progress_delta_m']}}}
 
 
-def _corner_advice(scene, c, me, pool_all, model, gap_of):
+
+def _corner_advice(scene, c, me, gap_of, model, geometry, length):
     frames = scene['frames']
     beside = {f['beside'] for f in frames if f['beside'] and me['t_entry'] <= f['t'] <= me['t_exit']}
     row = {'corner': c['id'], 'label': c['label'], 'lap': me['lap'], 't_entry': round(me['t_entry'], 2),
            't_exit': round(me['t_exit'], 2), 't_end': round(me['t_end'], 2), 'turns': me['turns'],
            'we_were': None if len(beside) != 1 else ('outside' if next(iter(beside)) == me['turns'] else 'inside'),
            'gap_entry_m': gap_of(scene['rival'], me['t_entry']), 'gap_next_m': gap_of(scene['rival'], me['t_end']),
-           'actual': _numbers(me), 'usual': None, 'best': None, 'noise_s': None if model is None else round(model['noise_s'], 3)}
-    if model is None:
-        row['why_not'] = 'TOO_FEW_PASSES'
-        return row
-    b = model['slope']
-    end_mps = me['end_kph'] / 3.6
-
-    def outcome(gain_s):
-        g = row['gap_next_m']
-        if g is None:
-            return None, None
-        pred = round(g - gain_s * end_mps, 2)
-        verdict = ('ahead' if g > 0 and pred <= -CAR_LENGTH_M else 'alongside' if g > CAR_LENGTH_M and pred <= CAR_LENGTH_M
-                   else 'closer' if g > 0 else 'further')
-        return pred, verdict
-
-    solo = [p for p in pool_all if p['solo'] and p is not me]
-    if len(solo) >= 3:
-        gain = me['segment_s'] - float(np.median([p['segment_s'] + b * (me['entry_kph'] - p['entry_kph']) for p in solo]))
-        if gain >= max(MIN_GAIN_S, model['noise_s']):
-            pred, verdict = outcome(gain)
-            med = {k: float(np.median([p[k] for p in solo if p[k] is not None])) if any(p[k] is not None for p in solo) else None
-                   for k in ('brake_m', 'min_kph', 'exit_kph', 'full_throttle_m', 'end_kph')}
-            row['usual'] = {'gain_s': round(gain, 3), 'gap_next_pred_m': pred, 'verdict': verdict, 'laps': len(solo),
-                            'numbers': {k: None if v is None else round(v, 1) for k, v in med.items()}}
-    pool = [p for p in pool_all if p is not me and abs(p['entry_kph'] - me['entry_kph']) <= ENTRY_MATCH_KPH]
-    if pool:
-        best = min(pool, key=lambda p: p['segment_s'] + b * (me['entry_kph'] - p['entry_kph']))
-        gain = me['segment_s'] - (best['segment_s'] + b * (me['entry_kph'] - best['entry_kph']))
-        chance = model['noise_s'] * best_of_n(len(pool))
-        close = [f['rival_speed_kph'] for f in frames
-                 if me['t_entry'] <= f['t'] <= me['t_exit'] and 0 < f['gap_m'] < 15 and 'rival_speed_kph' in f]
-        capped = bool(close) and best['min_kph'] > min(close) + 2
-        if gain >= MIN_GAIN_S and gain > chance + model['noise_s'] and not capped:
-            pred, verdict = outcome(gain)
-            row['best'] = {'gain_s': round(gain, 3), 'gap_next_pred_m': pred, 'verdict': verdict, 'lap': best['lap'],
-                           'solo': best['solo'], 'candidates': len(pool), 'chance_s': round(chance, 3),
-                           'numbers': _numbers(best)}
-        elif capped:
-            row['why_not'] = 'RIVAL_AHEAD'
+           'actual': _numbers(me)}
+    simulation = alternatives(scene, row, model, geometry, length)
+    row.update(simulation=simulation, alternatives=simulation['alternatives'])
+    if simulation['status'] != 'READY':
+        row['why_not'] = simulation['reason']
     return row
 
 
@@ -503,7 +450,7 @@ def battle_report(telemetry, *, traffic_folder, corner_store, reader):
     if found is None:
         return {'status': 'UNAVAILABLE', 'reason': reason}
     log_path, header, rows = found
-    key = (str(path), stat.st_size, stat.st_mtime_ns, str(log_path), log_path.stat().st_mtime_ns)
+    key = (VERSION, str(path), stat.st_size, stat.st_mtime_ns, str(log_path), log_path.stat().st_mtime_ns)
     with _CACHE_LOCK:
         if key in _CACHE:
             _CACHE.move_to_end(key)

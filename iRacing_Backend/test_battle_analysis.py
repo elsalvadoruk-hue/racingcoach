@@ -129,25 +129,25 @@ class BattleAnalysisTests(unittest.TestCase):
         # beside us on the left: at least a car width left of our own line
         self.assertTrue(all(f['rival_lat'][0] >= ba.CAR_WIDTH_M - 1 for f in beside))
 
-    def test_usual_drive_is_the_advice_for_the_slow_corner(self):
+    def test_corner_has_conditional_trajectories_instead_of_a_transplanted_pass(self):
         write_log(self.folder, self.ch)
         scene = next(s for s in self.report()['scenes'] if s['rival'] == 7)
         corner = next(c for c in scene['corners'] if c['corner'] == 'C1')
         self.assertEqual(corner['label'], 'T1 Synthetic')
-        self.assertIsNotNone(corner['usual'])
-        # the battle lap lost about the extra time at C1 against our usual pass
-        self.assertGreater(corner['usual']['gain_s'], .2)
-        self.assertGreater(corner['usual']['numbers']['min_kph'], corner['actual']['min_kph'])
-        self.assertIn(corner['usual']['verdict'], ('ahead', 'alongside', 'closer', 'further'))
+        self.assertNotIn('usual', corner)
+        self.assertNotIn('best', corner)
+        self.assertEqual(corner['simulation']['status'], 'READY')
+        self.assertNotIn(BATTLE_LAP, corner['simulation']['training_laps'])
+        for alt in corner['alternatives']:
+            self.assertGreater(len(alt['responses'][0]['trajectory']), 10)
+            self.assertNotIn('gain_s', alt)
 
-    def test_best_pass_is_not_offered_when_it_needs_more_speed_than_the_car_ahead(self):
+    def test_no_effect_actions_are_not_presented_as_different_choices(self):
         write_log(self.folder, self.ch)
         scene = next(s for s in self.report()['scenes'] if s['rival'] == 7)
         corner = next(c for c in scene['corners'] if c['corner'] == 'C1')
-        if corner['best'] is not None:
-            close = [f['rival_speed_kph'] for f in scene['frames'] if corner['t_entry'] <= f['t'] <= corner['t_exit']
-                     and 0 < f['gap_m'] < 15 and 'rival_speed_kph' in f]
-            self.assertTrue(not close or corner['best']['numbers']['min_kph'] <= min(close) + 2)
+        self.assertTrue(corner['simulation']['omitted'])
+        self.assertTrue(all(item['reason'] == 'NO_EFFECT_UNDER_TRAFFIC' for item in corner['simulation']['omitted']))
 
     def test_no_side_signal_means_nose_to_tail(self):
         write_log(self.folder, self.ch, side=False)
@@ -169,12 +169,6 @@ class BattleAnalysisTests(unittest.TestCase):
         first.rename(self.folder / 'traffic-20261028-200001-Synthetic.jsonl.gz')
         write_log(self.folder, self.ch)
         self.assertEqual(self.report()['reason'], 'AMBIGUOUS_TRAFFIC_LOG')
-
-    def test_best_of_n_grows_with_the_number_of_passes(self):
-        self.assertEqual(ba.best_of_n(1), 0)
-        self.assertLess(ba.best_of_n(2), ba.best_of_n(5))
-        self.assertAlmostEqual(ba.best_of_n(10), 1.54, delta=.05)
-
 
 if __name__ == '__main__':
     unittest.main()

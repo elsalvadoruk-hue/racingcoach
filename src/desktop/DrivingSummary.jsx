@@ -26,7 +26,7 @@ function BattleBanner({ filename, game, onOpen }) {
   if (report?.status !== 'READY' || !report.summary?.battles) return null;
   const { battles, side_by_side: beside, top } = report.summary;
   return <div className="summary-battle" role="status"><strong>배틀 {battles}번{beside ? ` · 나란히 ${beside}` : ''}</strong>
-    {top && <span>가장 큰 기회: {top.label} · {top.lap}랩 {top.gain_s.toFixed(2)}초</span>}
+    {top?.action && <span>대응 비교: {top.label} · {top.lap}랩 {top.action}</span>}
     <Button variant="outline" size="sm" onClick={onOpen}>배틀 분석 보기<ArrowRight data-icon="inline-end" /></Button></div>;
 }
 

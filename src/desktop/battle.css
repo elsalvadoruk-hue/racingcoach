@@ -38,6 +38,20 @@
 .battle-car-rival { fill:var(--battle-rival); fill-opacity:.9; stroke:var(--battle-rival); stroke-width:1.5; }
 .battle-car-rival.is-estimated { fill-opacity:.35; stroke-dasharray:3 3; }
 .battle-car-nose { stroke:hsl(var(--background)); stroke-width:2; }
+.battle-trail-alternative { fill:none; stroke:var(--battle-estimated); stroke-width:3; stroke-dasharray:7 4; }
+.battle-comparison-actual { fill:none; stroke:var(--battle-me); stroke-width:2; }
+.battle-trail-response { fill:none; stroke:hsl(var(--driver-style-steering)); stroke-width:1.5; stroke-dasharray:3 4; opacity:.8; }
+.battle-trail-baseline { fill:none; stroke:hsl(var(--muted-foreground)); stroke-width:2; opacity:.65; }
+.battle-car-alternative { fill:var(--battle-estimated); fill-opacity:.15; stroke:var(--battle-estimated); stroke-width:2; stroke-dasharray:4 2; }
+.battle-car-response { fill:none; stroke:hsl(var(--driver-style-steering)); stroke-width:1.5; stroke-dasharray:3 2; }
+.battle-comparison-distance { stroke:var(--battle-estimated); stroke-width:1; }
+.battle-comparison-caption { position:absolute; bottom:6px; right:8px; max-width:calc(100% - 80px); font-size:11px; color:var(--battle-estimated); padding:3px 6px; border-radius:4px; background:hsl(var(--background) / .9); }
+.battle-map-legend .alternative { border:2px dashed var(--battle-estimated); }
+.battle-map-legend .response { border:1px dashed hsl(var(--driver-style-steering)); }
+.battle-map-legend .baseline { background:hsl(var(--muted-foreground)); height:2px; }
+.battle-action-options { flex-direction:column; align-items:stretch; gap:4px; }
+.battle-action-options [role="radio"] { justify-content:flex-start; }
+.battle-scenario-buttons { display:flex; justify-content:space-between; flex-wrap:wrap; gap:4px; }
 .battle-scale { stroke:hsl(var(--muted-foreground)); stroke-width:2; }
 .battle-scale-label,.battle-chart-label { fill:hsl(var(--muted-foreground)); font-size:11px; font-family:inherit; }
 .battle-readout { position:absolute; left:10px; top:10px; display:flex; flex-direction:column; gap:2px; min-width:220px; padding:8px 10px; font-size:12px; border:1px solid hsl(var(--border)); border-radius:6px; background:hsl(var(--background) / .88); }

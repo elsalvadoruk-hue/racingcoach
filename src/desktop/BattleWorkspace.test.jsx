@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import BattleWorkspace from './BattleWorkspace';
 import { forgetBattle, loadBattle } from './battleReport';
 import { requestJson } from '../analysis/analysisClient';
@@ -10,25 +10,35 @@ jest.mock('./RacePositionChart', () => ({ __esModule: true, default: ({ filename
 
 const ring = Array.from({ length: 500 }, (_, i) => { const a = i / 500 * 2 * Math.PI; return [300 * Math.cos(a), 300 * Math.sin(a)]; });
 const normal = ring.map(([x, y]) => [x / 300, y / 300]);
-const frame = (t, gap, beside = null) => ({ t, me: [300 * Math.cos(t / 10), 300 * Math.sin(t / 10)], speed_kph: 150, brake: 0, throttle: 1,
-  gear: 4, steer_deg: 5, pct: t / 62.8, gap_m: gap, gap_clamped: false, beside, rival_pct: t / 62.8 + gap / 1885, rival_lat: beside ? [2.25, 4.6] : [-1, 1] });
-const pass = { brake_m: -40, min_kph: 92, exit_kph: 140, full_throttle_m: 20, end_kph: 210 };
-const corner = (id, extra) => ({ corner: id, label: `T${id.slice(1)}`, lap: 6, t_entry: 2, t_exit: 4, t_end: 6, turns: 'L', we_were: 'inside',
-  gap_entry_m: 6, gap_next_m: 3, actual: pass, usual: null, best: null, noise_s: .05, ...extra });
+const frame = (t, gap = 8, beside = null) => ({ t, me: [300 * Math.cos(t / 10), 300 * Math.sin(t / 10)], speed_kph: 108, brake: 0, throttle: .6,
+  gear: 4, steer_deg: 5, pct: t / (20 * Math.PI), gap_m: gap, gap_clamped: false, beside, rival_pct: (30 * t + gap) / (600 * Math.PI), rival_lat: [-1, 1] });
+const trajectory = (factor = 0) => Array.from({ length: 21 }, (_, i) => {
+  const t = 1 + i / 10, distance = 30 * (t - 1) - factor * (t - 1) ** 2;
+  const f = frame((30 + distance) / 30, 8 + factor * (t - 1) ** 2);
+  return { ...f, t, speed_kph: 108 - factor * (t - 1) * 7.2, distance_m: distance,
+    rival: frame(t + 8 / 30).me };
+});
+const alternative = (id, label, factor) => ({ id, label, status: 'MODEL_UNCERTAIN', rankable: false,
+  start_t: 1, end_t: 3, horizon_s: 2, trajectory: trajectory(factor), progress_range_m: [-5, -1], position_error_m: 3,
+  responses: ['track_pace', 'brakes', 'holds_speed'].map((id, i) => ({ id, trajectory: trajectory(factor + i * .2), baseline: trajectory(i * .2) })) });
+const alternatives = [alternative('follow', '앞차에 맞춰 진입', .5), alternative('earlier_brake', '제동을 먼저 시작', 1)];
+const corner = { corner: 'C1', label: 'T1', lap: 6, t_entry: 2, gap_entry_m: 6, alternatives,
+  simulation: { status: 'READY', start_t: 1, end_t: 3,
+    baselines: ['track_pace', 'brakes', 'holds_speed'].map((id, i) => ({ id, trajectory: trajectory(i * .2) })), baseline_error_m: 3,
+    validation: { distance_p90_m: 2 }, omitted: [{ id: 'lift' }] } };
 const report = {
   status: 'READY', laps_used: 8, enough_laps: true,
   calibration: { edges: 12, median_m: 4.9, p10_p90_m: [4.6, 5.2], bias_m: .26 },
-  assumptions: { car_length_m: 4.64, car_width_m: 2.05, side_max_m: 4.6, lateral_rate_mps: 2.5, entry_match_kph: 5 },
+  assumptions: { car_length_m: 4.64, car_width_m: 2.05, side_max_m: 4.6, lateral_rate_mps: 2.5 },
   geometry: { ref: ring, normal, band_left: ring, band_right: ring, grid: 500 },
   scenes: [
     { id: 'B1', rival: 7, lap: 6, t0: 0, t1: 8, outcome: 'passed', beside_s: 1.5,
-      frames: [frame(0, 8), frame(2, 4, 'L'), frame(4, 0, 'L'), frame(6, -3), frame(8, -6)],
-      corners: [corner('C1', { usual: { gain_s: .32, gap_next_pred_m: -6, verdict: 'ahead', laps: 5, numbers: { ...pass, brake_m: -46, min_kph: 99 } },
-        best: { gain_s: .45, gap_next_pred_m: -9, verdict: 'ahead', lap: 3, solo: true, candidates: 6, chance_s: .07, numbers: { ...pass, min_kph: 101 } } }),
-      corner('C2', { why_not: 'RIVAL_AHEAD' })] },
-    { id: 'B2', rival: 9, lap: 2, t0: 20, t1: 30, outcome: 'held', beside_s: 0, frames: [frame(20, -5), frame(25, -6), frame(30, -7)], corners: [] },
+      frames: Array.from({ length: 81 }, (_, i) => frame(i / 10, 8 - i / 8, i > 20 && i < 40 ? 'L' : null)),
+      corners: [corner, { corner: 'C2', label: 'T2', lap: 6, t_entry: 5, alternatives: [], why_not: 'INSUFFICIENT_DYNAMICS' }] },
+    { id: 'B2', rival: 9, lap: 2, t0: 20, t1: 30, outcome: 'held', beside_s: 0,
+      frames: [frame(20, -5), frame(25, -6), frame(30, -7)], corners: [] },
   ],
-  summary: { battles: 2, side_by_side: 1, passed: 1, lost: 0, top: { scene: 'B1', label: 'T1', lap: 6, gain_s: .45 } },
+  summary: { battles: 2, side_by_side: 1, passed: 1, lost: 0, top: null },
 };
 
 beforeEach(() => {
@@ -39,59 +49,63 @@ beforeEach(() => {
     disconnect() {}
   };
 });
-afterEach(() => jest.clearAllMocks());
+afterEach(() => { jest.clearAllMocks(); jest.useRealTimers(); });
 
-test('shows the battles, the advice for the slow corner and the corner it cannot improve', async () => {
+test('shows conditional actions, errors and the actual corner without substituting another lap', async () => {
   requestJson.mockResolvedValue(report);
   const onOpenCorner = jest.fn();
   render(<BattleWorkspace filename="race.ibt" game="iracing" onOpenCorner={onOpenCorner} />);
   expect(await screen.findByText('배틀 2번 · 나란히 1 · 추월 1 · 추월당함 0')).toBeInTheDocument();
   expect(requestJson).toHaveBeenCalledWith('/api/workspace/battle', expect.objectContaining({ body: JSON.stringify({ filename: 'race.ibt' }) }));
-  expect(screen.getByRole('button', { name: /6랩 · 상대 #7/ })).toHaveAttribute('aria-pressed', 'true');
-  const card = screen.getByRole('article', { name: 'T1 6랩 제안' });
-  expect(card).toHaveTextContent('다음 코너 입구에서 내가 앞');
-  expect(card).toHaveTextContent('입구 46m 전');
-  expect(card).toHaveTextContent('6m 일찍');
-  expect(card).toHaveTextContent('0.32초 빨리');
-  expect(card).toHaveTextContent('평소 혼자 달린 5랩의 중앙값');
-  fireEvent.click(screen.getByRole('radio', { name: '이 레이스 최고' }));
-  expect(card).toHaveTextContent('0.45초 빨리');
-  expect(card).toHaveTextContent('3랩 혼자 주행 · 비슷한 진입 6번 중 가장 빠름');
-  fireEvent.click(screen.getByRole('button', { name: /코너 비교에서 보기/ }));
-  expect(onOpenCorner).toHaveBeenCalledWith(expect.objectContaining({ corner: 'C1', lap: 6 }), 3);
-  fireEvent.click(screen.getByText('제안이 없는 코너 1곳'));
-  expect(screen.getByText(/앞차보다 빠른 속도가 필요해 제외/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: /T1 · 6랩/ }));
-  expect(screen.getByText(/점선: T1만 이렇게 탔을 때/)).toBeInTheDocument();
+  const card = screen.getByRole('article', { name: 'T1 6랩 대응 비교' });
+  expect(card).toHaveTextContent('오차가 커 우열 보류');
+  expect(card).toHaveTextContent('기본 대응 모형');
+  expect(card).toHaveTextContent('위치 차이 3.0m');
+  fireEvent.click(within(card).getByRole('button', { name: /실제 코너 보기/ }));
+  expect(onOpenCorner).toHaveBeenCalledWith(expect.objectContaining({ corner: 'C1', lap: 6 }), 6);
+  fireEvent.click(screen.getByText('대안을 계산하지 못한 코너 1곳'));
+  expect(screen.getByText(/페달과 속도 변화 자료가 부족/)).toBeInTheDocument();
+  expect(screen.queryByText(/초 빨리/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: /2랩 · 상대 #9/ }));
-  expect(screen.getByText(/평소 혼자 달릴 때만큼 달렸습니다/)).toBeInTheDocument();
+  expect(screen.getByText(/구별되는 대안을 계산하지 못했습니다/)).toBeInTheDocument();
 });
 
-test('compares next corner entry speed for the usual and best passes', async () => {
-  const speedCorner = { ...report.scenes[0].corners[0],
-    usual: { ...report.scenes[0].corners[0].usual, numbers: { ...pass, end_kph: 214 } },
-    best: { ...report.scenes[0].corners[0].best, numbers: { ...pass, end_kph: 208 } } };
-  requestJson.mockResolvedValue({ ...report, scenes: [{ ...report.scenes[0], corners: [speedCorner] }] });
+test('draws same-time ghost cars and paths; action and rival response change the visual result', async () => {
+  requestJson.mockResolvedValue(report);
   render(<BattleWorkspace filename="race.ibt" game="iracing" onOpenCorner={jest.fn()} />);
-  const card = await screen.findByRole('article', { name: 'T1 6랩 제안' });
-  const speedCells = () => within(within(card).getByRole('row', { name: /다음 코너 입구 속도/ })).getAllByRole('cell');
-  expect(speedCells()[0]).toHaveTextContent('210 km/h');
-  expect(speedCells()[1]).toHaveTextContent('214 km/h · +4');
-  fireEvent.click(within(card).getByRole('radio', { name: '이 레이스 최고' }));
-  expect(speedCells()[0]).toHaveTextContent('210 km/h');
-  expect(speedCells()[1]).toHaveTextContent('208 km/h · -2');
+  const map = await screen.findByRole('img', { name: '내 차 중심의 배틀 장면' });
+  const slider = screen.getByRole('slider', { name: '장면 시간' });
+  expect(slider).toHaveValue('10');
+  expect(within(map).getByLabelText('같은 시각의 대안 차량')).toHaveAttribute('data-time', '1');
+  fireEvent.change(slider, { target: { value: '20' } });
+  const ghost = () => within(map).getByLabelText('대안 내 차').getAttribute('points');
+  const first = ghost(), actual = within(map).getByLabelText('실제 내 차').getAttribute('points');
+  const path = within(map).getByLabelText('선택한 대응 경로').getAttribute('points');
+  fireEvent.click(screen.getByRole('radio', { name: '제동을 먼저 시작' }));
+  fireEvent.change(slider, { target: { value: '20' } });
+  expect(ghost()).not.toEqual(first);
+  expect(within(map).getByLabelText('실제 내 차')).toHaveAttribute('points', actual);
+  expect(within(map).getByLabelText('선택한 대응 경로').getAttribute('points')).not.toEqual(path);
+  const second = ghost();
+  fireEvent.change(screen.getByRole('combobox', { name: '상대 반응 가정' }), { target: { value: 'brakes' } });
+  expect(ghost()).not.toEqual(second);
+  expect(within(map).getByLabelText('같은 시각의 대안 차량')).toHaveAttribute('data-time', '2');
+  fireEvent.change(slider, { target: { value: '40' } });
+  expect(within(map).queryByLabelText('대안 내 차')).toBeNull();
+  expect(screen.getByText(/대안 계산 구간 밖/)).toBeInTheDocument();
 });
 
-test('does not invent a next corner entry speed or difference when either is missing', async () => {
-  const speedCorner = { ...report.scenes[0].corners[0], actual: { ...pass, end_kph: null },
-    usual: { ...report.scenes[0].corners[0].usual, numbers: { ...pass, end_kph: null } } };
-  requestJson.mockResolvedValue({ ...report, scenes: [{ ...report.scenes[0], corners: [speedCorner] }] });
-  render(<BattleWorkspace filename="race.ibt" game="iracing" onOpenCorner={jest.fn()} />);
-  const card = await screen.findByRole('article', { name: 'T1 6랩 제안' });
-  const speedCells = () => within(within(card).getByRole('row', { name: /다음 코너 입구 속도/ })).getAllByRole('cell');
-  expect(speedCells().map(cell => cell.textContent)).toEqual(['—', '—']);
-  fireEvent.click(within(card).getByRole('radio', { name: '이 레이스 최고' }));
-  expect(speedCells().map(cell => cell.textContent)).toEqual(['—', '210 km/h']);
+test('comparison playback stops at the supported horizon', async () => {
+  jest.useFakeTimers();
+  requestJson.mockResolvedValue(report);
+  const { unmount } = render(<BattleWorkspace filename="race.ibt" game="iracing" onOpenCorner={jest.fn()} />);
+  await screen.findByRole('button', { name: '비교 재생' });
+  fireEvent.click(screen.getByRole('button', { name: '비교 재생' }));
+  act(() => { jest.advanceTimersByTime(5000); });
+  expect(screen.getByRole('slider', { name: '장면 시간' })).toHaveValue('30');
+  expect(screen.getByRole('button', { name: '재생', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  unmount();
+  jest.useRealTimers();
 });
 
 test('says why there is nothing to show and can look again', async () => {
@@ -112,13 +126,13 @@ test('compact playback controls retain speed selection, scrubbing and graph seek
   fireEvent.change(speed, { target: { value: '1' } });
   expect(speed).toHaveValue('1');
   const time = screen.getByRole('slider', { name: '장면 시간' });
-  fireEvent.change(time, { target: { value: '4' } });
-  expect(time).toHaveValue('4');
+  fireEvent.change(time, { target: { value: '80' } });
+  expect(time).toHaveValue('80');
   expect(screen.getByRole('button', { name: '재생', exact: true })).toHaveAttribute('aria-pressed', 'false');
   const graph = screen.getByRole('img', { name: '앞뒤 간격과 페달' });
   jest.spyOn(graph, 'getBoundingClientRect').mockReturnValue({ left: 0, width: 800 });
   fireEvent.click(graph, { clientX: 416 });
-  expect(time).toHaveValue('2');
+  expect(time).toHaveValue('40');
   expect(screen.getByRole('heading', { name: '배틀 분석', exact: true })).toBeInTheDocument();
 });
 
@@ -133,7 +147,7 @@ test('a failed request offers a retry', async () => {
 test('few clean laps are pointed out', async () => {
   requestJson.mockResolvedValue({ ...report, laps_used: 3, enough_laps: false });
   render(<BattleWorkspace filename="race.ibt" game="iracing" onOpenCorner={jest.fn()} />);
-  expect(await screen.findByText(/깨끗한 랩이 3개뿐/)).toBeInTheDocument();
+  expect(await screen.findByText(/완주·비피트 랩이 3개뿐/)).toBeInTheDocument();
 });
 
 test('LMU shows the position chart and does not ask for battle scenes', async () => {
