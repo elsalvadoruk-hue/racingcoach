@@ -201,6 +201,7 @@ _DATABASE_GIVEN = bool(os.getenv('IRACING_TUNER_DB_PATH', '').strip())
 app_settings.apply_environment()
 
 from garage61_collector_manager import Garage61CollectorManager
+from garage61_auth import TOKEN_MISSING_MESSAGE, PERMISSION_MESSAGE, authentication_error
 from analysis_support import (
     CornerDefinitionStore,
     FileMetadataIndex,
@@ -299,7 +300,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "2.4.1"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "2.4.2"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -955,7 +956,7 @@ def garage61_reference_health(
         "collection_policy": {
             "blocking_analysis": False,
             "api_first": True,
-            "browser_fallback": True,
+            "browser_fallback": False,
             "cache_first": True,
             "preferred_mode": garage61_collector.preferred_mode(),
             "api_token_configured": garage61_collector.api_token_configured(),
@@ -1012,7 +1013,7 @@ def garage61_api_connection_status() -> dict[str, Any]:
         "api_base": GARAGE61_API_BASE,
     }
     if not token:
-        base["message"] = "Garage61 API token이 설정되지 않았습니다."
+        base.update(message=TOKEN_MISSING_MESSAGE, error_code="API_TOKEN_MISSING")
         return base
     req = urllib.request.Request(
         f"{GARAGE61_API_BASE}/me",
@@ -1037,10 +1038,13 @@ def garage61_api_connection_status() -> dict[str, Any]:
             "driving_data": "driving_data" in list(payload.get("apiPermissions") or []),
             "message": "Garage61 API 연결 정상",
         })
+        if not base["driving_data"]:
+            base.update(message=PERMISSION_MESSAGE, error_code="API_PERMISSION_DENIED")
         return base
     except urllib.error.HTTPError as exc:
         trace = exc.headers.get("X-G61-Trace", "")
-        base.update({"http_status": exc.code, "trace": trace, "message": f"Garage61 API 인증 실패 HTTP {exc.code}"})
+        base.update({"http_status": exc.code, "trace": trace, "message": f"Garage61 API 연결 확인 실패 HTTP {exc.code}"})
+        base.update(authentication_error(exc.code))
         return base
     except Exception as exc:
         base["message"] = f"Garage61 API 연결 확인 실패: {str(exc)[:200]}"

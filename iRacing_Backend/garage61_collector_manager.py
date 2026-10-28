@@ -10,6 +10,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
+from garage61_auth import TOKEN_MISSING_MESSAGE
+
 TERMINAL_STATES = {
     "COMPLETE", "PARTIAL", "FAILED", "CANCELLED",
     "SKIPPED_CACHE_SUFFICIENT", "SKIPPED_COOLDOWN",
@@ -54,9 +56,8 @@ def _load_json(path: Path) -> dict[str, Any]:
 class Garage61CollectorManager:
     """Single-worker manager with Garage61 API-first collection.
 
-    The API worker is used whenever a token is configured. The old Playwright
-    crawler remains available as a fallback for installations without an API
-    token and for manual troubleshooting.
+    Automatic collection requires an API token. The old Playwright crawler is
+    available only when explicitly requested for manual troubleshooting.
     """
 
     def __init__(
@@ -108,7 +109,7 @@ class Garage61CollectorManager:
             return "API"
         if mode in {"BROWSER", "PLAYWRIGHT"}:
             return "BROWSER"
-        return "API" if self.api_token_configured() and self.api_collector_path.exists() else "BROWSER"
+        return "API"
 
     def capabilities(self) -> dict[str, Any]:
         return {
@@ -165,7 +166,7 @@ class Garage61CollectorManager:
             if not worker_path.exists():
                 return {
                     "state": "FAILED",
-                    "message": f"Garage61 {mode} collector file not found: {worker_path}",
+                    "message": "Garage61 수집 파일이 없습니다. 앱을 최신 버전으로 업데이트한 뒤 다시 확인하세요.",
                     "can_start": False,
                     "collector_mode": mode,
                     "busy": False,
@@ -173,7 +174,8 @@ class Garage61CollectorManager:
             if mode == "API" and not self.api_token_configured():
                 return {
                     "state": "FAILED",
-                    "message": f"Garage61 API token is not configured. Save it to {self.token_file}.",
+                    "message": TOKEN_MISSING_MESSAGE,
+                    "error_code": "API_TOKEN_MISSING",
                     "can_start": False,
                     "collector_mode": mode,
                     "busy": False,

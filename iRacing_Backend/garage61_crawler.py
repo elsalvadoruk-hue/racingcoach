@@ -2635,7 +2635,7 @@ def run_auto(args: argparse.Namespace, request: dict[str, Any], status: StatusWr
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        status.update("FAILED", "Playwright가 설치되어 있지 않습니다. install_garage61_crawler.bat을 먼저 실행하십시오.", progress=1.0)
+        status.update("FAILED", "브라우저 수집에 필요한 Playwright를 사용할 수 없습니다. 일반 수집은 설정 → 설치 설정 → Garage61 개인 API 토큰에서 토큰을 저장한 뒤 API 방식으로 이용하세요.", progress=1.0)
         return 2
 
     imported_before = 0 if args.no_import_downloads else import_downloaded_csvs(args.downloads_dir.expanduser(), reference_dir)

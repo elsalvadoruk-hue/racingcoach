@@ -33,6 +33,27 @@ KEY = {"type": "service_account", "project_id": "shared-project", "private_key":
        "client_email": "coach@shared-project.iam.gserviceaccount.com"}
 
 
+class Garage61ConnectionMessageTests(unittest.TestCase):
+    def test_missing_token_does_not_call_provider(self):
+        with patch.object(api, '_garage61_api_token_local', return_value=('', '')), \
+                patch.object(api.urllib.request, 'urlopen') as network:
+            status = api.garage61_api_connection_status()
+        self.assertEqual(status['error_code'], 'API_TOKEN_MISSING')
+        self.assertIn('설정 → 설치 설정', status['message'])
+        network.assert_not_called()
+
+    def test_authentication_and_permission_errors_offer_settings_recovery(self):
+        for http, code in [(401, 'API_TOKEN_INVALID'), (403, 'API_PERMISSION_DENIED')]:
+            with self.subTest(http=http), \
+                    patch.object(api, '_garage61_api_token_local', return_value=('synthetic', 'environment')), \
+                    patch.object(api.urllib.request, 'urlopen', side_effect=api.urllib.error.HTTPError(
+                        'https://example.invalid', http, 'synthetic', {}, None)):
+                status = api.garage61_api_connection_status()
+            self.assertEqual(status['error_code'], code)
+            self.assertFalse(status['connected'])
+            self.assertIn('설정 → 설치 설정', status['message'])
+
+
 class DataFolderTests(unittest.TestCase):
     def test_the_folder_follows_the_database_then_the_location_file_then_the_project(self):
         with patch.dict(os.environ, {"IRACING_TUNER_DB_PATH": str(_root / "memory.sqlite3")}):

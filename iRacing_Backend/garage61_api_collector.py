@@ -18,6 +18,8 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from garage61_auth import TOKEN_MISSING_MESSAGE, PERMISSION_MESSAGE, authentication_error
+
 API_BASE = os.getenv("GARAGE61_API_BASE", "https://garage61.net/api/v1").rstrip("/")
 USER_AGENT = "iRacing-Setup-Tuner/2.8.0 Garage61-API"
 _active_status: Optional["StatusWriter"] = None
@@ -874,7 +876,7 @@ def run(request_path: Path, status_path: Path, reference_dir: Path, token_file: 
     if not token:
         status.update(
             "FAILED",
-            "Garage61 API token이 없습니다. set_garage61_api_token.bat로 토큰을 저장하십시오.",
+            TOKEN_MISSING_MESSAGE,
             1.0,
             error_code="API_TOKEN_MISSING",
             token_configured=False,
@@ -886,7 +888,8 @@ def run(request_path: Path, status_path: Path, reference_dir: Path, token_file: 
         me = api_json("me", token)
         permissions = list(me.get("apiPermissions") or [])
         if "driving_data" not in permissions:
-            raise RuntimeError("Garage61 token does not include driving_data permission")
+            status.update("FAILED", PERMISSION_MESSAGE, 1.0, error_code="API_PERMISSION_DENIED")
+            return 4
         status.update(
             "RESOLVING_IDS",
             "IBT 차량/트랙을 Garage61 API ID로 매핑합니다.",
@@ -1127,13 +1130,14 @@ def run(request_path: Path, status_path: Path, reference_dir: Path, token_file: 
         )
         return 0
     except Garage61ApiError as exc:
+        auth = authentication_error(exc.status)
         status.update(
             "FAILED",
-            f"Garage61 API 오류 HTTP {exc.status}: {str(exc)[:240]}",
+            auth.get("message") or f"Garage61 API 오류 HTTP {exc.status}: {str(exc)[:240]}",
             1.0,
             api_http_status=exc.status,
             api_trace=exc.trace,
-            error_code="GARAGE61_API_HTTP_ERROR",
+            error_code=auth.get("error_code", "GARAGE61_API_HTTP_ERROR"),
         )
         return 4
     except Exception as exc:

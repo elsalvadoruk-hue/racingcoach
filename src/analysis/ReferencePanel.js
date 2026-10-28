@@ -66,7 +66,7 @@ export function ExternalReferencePanel({
             </p>
             <p className="mt-2 max-w-5xl text-sm leading-relaxed text-muted-foreground">
               IBT에서 차량·트랙·레이아웃·노면온도·기온·연료·습도·바람·강수·가능한 BOP/타이어 조건을 읽습니다.
-              Garage61 API를 우선 사용해 최대 1,000개 후보를 조건별 단계 검색하고, 공개 telemetry만 내려받습니다. API 토큰이 없을 때만 기존 브라우저 수집기를 fallback으로 사용합니다.
+              Garage61 API로 최대 1,000개 후보를 조건별 단계 검색하고, 공개 telemetry만 내려받습니다. 토큰이 없으면 설정 → 설치 설정 → Garage61 개인 API 토큰에서 등록하세요. Playwright 설치 없이 이용할 수 있습니다.
               CSV를 검증한 뒤 대표 실주행 한 랩으로 속도·페달·라인·시간차를 비교합니다. 조건이 맞는 다른 드라이버의 기록은 구간별 손실과 개선 방향을 확인하는 보조 자료로 사용합니다. 아래 요약은 속도 손실과 GPS 차이가 큰 상위 2개 구간을 표시합니다.
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
@@ -81,7 +81,7 @@ export function ExternalReferencePanel({
                 {apiStatus?.connected ? 'API CONNECTED' : capabilities?.api_token_configured ? 'API TOKEN SET' : 'API TOKEN 없음'}
               </span>
               <span className="rounded-lg border border-primary/25 bg-primary/10 px-2.5 py-1 font-semibold text-primary">
-                {capabilities?.preferred_mode === 'API' ? 'API FIRST' : 'BROWSER FALLBACK'}
+                API 수집
               </span>
               {apiStatus?.user_slug && <span className="rounded-lg border border-border bg-muted px-2.5 py-1 text-muted-foreground">{apiStatus.user_slug}</span>}
               {apiStatus?.subscription_plan && <span className="rounded-lg border border-border bg-muted px-2.5 py-1 text-muted-foreground">Plan {apiStatus.subscription_plan}</span>}
