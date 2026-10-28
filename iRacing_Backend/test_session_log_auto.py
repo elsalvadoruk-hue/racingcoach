@@ -59,14 +59,71 @@ class AutoSendTests(unittest.TestCase):
         self.assertEqual(uploader.run_once(), 1)
         self.assertEqual(self.sent[0][1], 'log-drive-a.zip')
 
-    def test_the_new_notice_with_corner_traces_invalidates_previous_consent(self):
-        self.assertEqual(CONSENT_VERSION, 3)
-        with mock.patch.object(session_log_auto, 'CONSENT_VERSION', 2):
-            session_log_auto.set_enabled(True, 2, now=1000.)
+    def test_the_new_notice_with_oval_practice_invalidates_previous_consent(self):
+        self.assertEqual(CONSENT_VERSION, 4)
+        with mock.patch.object(session_log_auto, 'CONSENT_VERSION', 3):
+            session_log_auto.set_enabled(True, 3, now=1000.)
         self.assertFalse(session_log_auto.status()['enabled'])
         self.runs = [run('drive-a', 2000., 3000.)]
         self.assertEqual(self.uploader.run_once(), 0)
         self.assertEqual(self.sent, [])
+
+    def test_changed_consent_is_reported_read_only_with_history_and_no_export(self):
+        session_log_auto.save({'consent':{'version':3,'given_at':1000.},
+                              'runs':{'already-sent':{'sent_at':2000.,'ended_at':1500.}}})
+        before=session_log_auto.path().read_bytes()
+        status=session_log_auto.status()
+        self.assertIs(status.get('reconsent_required'),True)
+        self.assertEqual(status.get('previous_consent_version'),3)
+        self.assertTrue(status.get('consent_changes'))
+        self.assertFalse(status['enabled'])
+        self.assertEqual(status['sent'],1)
+        self.runs=[run('after-patch',2000.,3000.)]
+        self.assertEqual(self.uploader.run_once(),0)
+        self.assertEqual(self.export_options,[])
+        self.assertEqual(self.sent,[])
+        self.assertEqual(session_log_auto.path().read_bytes(),before)
+
+    def test_reagree_uses_new_time_and_explicit_opt_out_clears_renewal(self):
+        session_log_auto.save({'consent':{'version':3,'given_at':1000.},'runs':{}})
+        renewed=session_log_auto.set_enabled(True,CONSENT_VERSION,now=50_000.)
+        self.assertFalse(renewed.get('reconsent_required'))
+        self.assertEqual(renewed['consented_at'],50_000.)
+        self.runs=[run('while-paused',2000.,3000.),run('after-renewal',60_000.,61_000.)]
+        self.assertEqual(self.uploader.run_once(),1)
+        self.assertEqual([x[1] for x in self.sent],['log-after-renewal.zip'])
+        session_log_auto.save({'consent':{'version':3,'given_at':1000.},'runs':{}})
+        off=session_log_auto.set_enabled(False)
+        self.assertFalse(off.get('reconsent_required'))
+        self.assertFalse(off['enabled'])
+
+    def test_current_consent_and_never_enabled_install_do_not_need_renewal(self):
+        self.assertIs(session_log_auto.status().get('reconsent_required'),False)
+        session_log_auto.set_enabled(True,CONSENT_VERSION,now=1000.)
+        value=session_log_auto.status()
+        self.assertTrue(value['enabled'])
+        self.assertIs(value.get('reconsent_required'),False)
+        self.assertEqual(value['consented_at'],1000.)
+
+    def test_http_status_and_consent_version_guard_survive_an_upgrade(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from types import SimpleNamespace
+        import settings_routes
+        session_log_auto.save({'consent':{'version':3,'given_at':1000.},'runs':{}})
+        app=FastAPI()
+        settings_routes.register_routes(app,SimpleNamespace())
+        with TestClient(app) as client:
+            endpoint='/api/session-logs/auto'
+            state=client.get(endpoint).json()
+            self.assertTrue(state['reconsent_required'])
+            self.assertEqual(state['previous_consent_version'],3)
+            self.assertEqual(client.put(endpoint,json={'enabled':True,'consent_version':3}).status_code,422)
+            self.assertFalse(client.get(endpoint).json()['enabled'])
+            response=client.put(endpoint,json={'enabled':True,'consent_version':CONSENT_VERSION})
+            self.assertEqual(response.status_code,200)
+            self.assertTrue(response.json()['enabled'])
+            self.assertFalse(response.json()['reconsent_required'])
 
     def test_nothing_is_sent_without_consent_and_turning_on_needs_the_shown_notice(self):
         self.runs = [run('a', 10_000, 20_000)]

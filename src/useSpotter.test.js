@@ -26,6 +26,69 @@ const frame = (raw, key = null, extra = {}) => ({ type: 'spotter', active: true,
 const send = (socket, message) => act(() => socket.onmessage({ data: JSON.stringify(message) }));
 const enable = async (result) => act(async () => result.current.toggle());
 
+test.each(['banter', 'oval'])('%s candidates are observed once without audio, render or radio acknowledgement', async (kind) => {
+  const recordDelivery = jest.fn();
+  const method = kind === 'oval' ? 'observeOval' : 'observeBanter';
+  recordDelivery[method] = jest.fn();
+  audio.audioBusy = () => false;
+  const { result } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));
+  await enable(result);
+  const message = frame(1, null, { radio: { run_id: 'run', session_time: 20, events: [] },
+    [kind === 'oval' ? 'oval_shadow' : 'banter_shadow']: [{ run_id: 'run', candidate_id: 'one', session_time: 19 }, { run_id: 'old', candidate_id: 'old' }] });
+  send(sockets[0], message);
+  send(sockets[0], message);
+  expect(recordDelivery[method]).toHaveBeenCalledTimes(1);
+  expect(recordDelivery[method]).toHaveBeenCalledWith(expect.objectContaining({ candidate_id: 'one', session_time: 20, pending_audio: false }));
+  expect(recordDelivery).not.toHaveBeenCalled();
+  expect(audio.play).not.toHaveBeenCalled();
+  expect(fetch.mock.calls.filter(([url]) => url.includes('/render') || url.includes('/ack'))).toHaveLength(0);
+});
+
+test('an optional shadow observer failure leaves overlap warnings working', async () => {
+  const recordDelivery = jest.fn();
+  recordDelivery.observeBanter = () => { throw Error('synthetic'); };
+  const { result } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));
+  await enable(result);
+  send(sockets[0], frame(2, 'left', { radio: { run_id: 'run', session_time: 20, events: [] },
+    banter_shadow: [{ run_id: 'run', candidate_id: 'one', session_time: 19 }] }));
+  expect(audio.play).toHaveBeenCalledWith('left', 'audio/mpeg', expect.any(Object));
+});
+
+test.each([true, false])('oval overlap uses optional cached audio when present=%s and logs the actual fallback', async (available) => {
+  const recordDelivery = jest.fn();
+  if (available) manifest.clips.oval_inside = { text: '안쪽 차량.', audio_base64: 'inside-audio' };
+  const { result } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));
+  await enable(result);
+  send(sockets[0], frame(2, null, { profile: 'ASPHALT_OVAL', current_audio_key: 'oval_inside',
+    events: [{ serial: 1, key: 'left', audio_key: 'oval_inside', text: '안쪽 차량.', state: 2, run_id: 'run', expires_in_ms: 500 }] }));
+  expect(audio.play).toHaveBeenCalledWith(available ? 'inside-audio' : 'left', 'audio/mpeg', expect.objectContaining({ priority: 3 }));
+  expect(result.current.view.last_text).toBe(available ? '안쪽 차량.' : 'left');
+  expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({ key: 'left', text: available ? '안쪽 차량.' : 'left' }), 'started', '');
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/prepare'))).toHaveLength(1);
+});
+
+test('oval ready reconnect uses the current side clip and a profile change invalidates it', async () => {
+  manifest.clips.oval_outside = { text: '바깥쪽 차량.', audio_base64: 'outside-audio' };
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  send(sockets[0], frame(2, null, { type: 'ready', profile: 'ASPHALT_OVAL', current_key: 'left', current_audio_key: 'oval_outside' }));
+  expect(audio.play).toHaveBeenCalledWith('outside-audio', 'audio/mpeg', expect.any(Object));
+  const valid = audio.play.mock.calls[0][2].valid;
+  expect(valid()).toBe(true);
+  send(sockets[0], frame(2, null, { profile: 'ROAD', current_key: 'left' }));
+  expect(valid()).toBe(false); expect(audio.cancelPriority).toHaveBeenCalledWith(3);
+});
+
+test('an oval raw clear candidate keeps the confirmed overlap audio until confirmation', async () => {
+  manifest.clips.oval_inside = { text: '안쪽 차량.', audio_base64: 'inside-audio' };
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  send(sockets[0], frame(2, null, { type: 'ready', profile: 'ASPHALT_OVAL', current_key: 'left', current_audio_key: 'oval_inside' }));
+  const valid = audio.play.mock.calls[0][2].valid, calls = audio.cancelPriority.mock.calls.length;
+  send(sockets[0], frame(1, null, { profile: 'ASPHALT_OVAL', state: 2, occupied: true, current_audio_key: null }));
+  expect(valid()).toBe(true); expect(audio.cancelPriority).toHaveBeenCalledTimes(calls);
+});
+
 test('editing LMU preserves iRacing settings and resends the connected game on transition', async () => {
   localStorage.setItem('iracing.spotter.settings', JSON.stringify({ repeat_seconds: 5 }));
   let context = { selectedGame: 'lmu', activeGame: 'iracing', liveGame: 'iracing' };

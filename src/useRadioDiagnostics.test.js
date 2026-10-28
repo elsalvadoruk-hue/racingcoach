@@ -53,3 +53,38 @@ test('a setting that starts during another request is sent when that request fin
   expect(fetch).toHaveBeenCalledTimes(2);
   expect(JSON.parse(fetch.mock.calls[1][1].body).events[0].event_id).toBe('setting');
 });
+
+test('shadow diagnostics stay out of actual playback counters and retry on the timer', async () => {
+  fetch.mockRejectedValueOnce(new Error('offline'));
+  const { result } = renderHook(() => useRadioDiagnostics('http://synthetic'));
+  await act(async () => result.current.observeBanter({ candidate_id: 'shadow', run_id: 'run', muted: false }));
+  expect(fetch).toHaveBeenCalledTimes(1);
+  const body = JSON.parse(fetch.mock.calls[0][1].body);
+  expect(body.events).toEqual([]);
+  expect(body.banter[0].candidate_id).toBe('shadow');
+  await act(async () => jest.advanceTimersByTime(1000));
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual(body);
+});
+
+test('shadow observations arriving during a request flush after it finishes', async () => {
+  let finish;
+  fetch.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const { result } = renderHook(() => useRadioDiagnostics('http://synthetic'));
+  act(() => result.current.observeBanter({ candidate_id: 'first' }));
+  act(() => result.current.observeBanter({ candidate_id: 'second' }));
+  await act(async () => finish({ ok: true }));
+  expect(fetch).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(fetch.mock.calls[1][1].body).banter).toEqual([{ candidate_id: 'second' }]);
+});
+
+test('oval observations retry independently without actual playback records', async () => {
+  fetch.mockRejectedValueOnce(new Error('offline'));
+  const { result } = renderHook(() => useRadioDiagnostics('http://synthetic'));
+  await act(async () => result.current.observeOval({ candidate_id: 'oval', run_id: 'run', muted: false }));
+  const body = JSON.parse(fetch.mock.calls[0][1].body);
+  expect(body.events).toEqual([]);
+  expect(body.oval).toEqual([{ candidate_id: 'oval', run_id: 'run', muted: false }]);
+  await act(async () => jest.advanceTimersByTime(1000));
+  expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual(body);
+});

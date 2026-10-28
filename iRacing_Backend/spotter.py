@@ -10,6 +10,7 @@ from race_radio import STATIC_CALLS
 from radio_audio import spoken_form
 from radio_phrases import SPOTTER_VOICES  # noqa: F401  (the voices the spotter can be given)
 import radio_variations
+from oval_spotter import classify, audio_key, OPTIONAL_CLIPS, POLICY_VERSION
 
 # iRacing CarLeftRight: 0=off, 1=clear, 2=left, 3=right,
 # 4=one on each side, 5=two left, 6=two right. All classes count.
@@ -81,7 +82,21 @@ class Spotter:
         self.serial = 0
         self.events = deque(maxlen=64)
         self.variants = {}
+        self.profile, self.profile_reason, self.direction = 'UNKNOWN', 'UNKNOWN_TRACK_TYPE', None
         self.reset()
+
+    def configure_track(self, identity):
+        profile, reason = classify(identity)
+        direction = str(identity.get('track_direction') or '').strip().lower() if profile == 'ASPHALT_OVAL' else None
+        if (profile, reason, direction) != (self.profile, self.profile_reason, self.direction):
+            self.reset()
+        self.profile, self.profile_reason, self.direction = profile, reason, direction
+
+    def _audio_key(self, key):
+        return audio_key(key, self.direction) if self.profile == 'ASPHALT_OVAL' else None
+
+    def _label(self, key):
+        return OPTIONAL_CLIPS.get(self._audio_key(key), PHRASES.get(key, '주변 차량 겹침 없음'))
 
     def reset(self):
         self.run_id = None
@@ -133,11 +148,11 @@ class Spotter:
             return
         if raw != self.confirmed:
             closing = sample.get('side_closing_mps')
-            if (arriving and type(closing) in (int, float) and closing == closing
+            if (self.profile != 'ASPHALT_OVAL' and arriving and type(closing) in (int, float) and closing == closing
                     and closing > self.PASSING_MPS):
                 return          # sweeping past; called if it settles beside us
             relative = sample.get('side_relative_mps')
-            if (arriving and type(relative) in (int, float) and relative == relative
+            if (self.profile != 'ASPHALT_OVAL' and arriving and type(relative) in (int, float) and relative == relative
                     and relative < -self.WE_PASS_MPS):
                 self.passing = raw
                 return          # we are passing it; called if it comes back to our speed
@@ -154,7 +169,7 @@ class Spotter:
             if corner is not None and corner >= self.CORNER_REARM_S:
                 self.corner_armed = True
             before_corner = corner is not None and corner <= self.CORNER_SECONDS and self.corner_armed
-            if now - self.last_call >= self.repeat_seconds and (self.holds < self.HOLD_REPEATS or before_corner):
+            if now - self.last_call >= self.repeat_seconds and (self.profile == 'ASPHALT_OVAL' or self.holds < self.HOLD_REPEATS or before_corner):
                 self.holds += 1
                 self.corner_armed = self.corner_armed and not before_corner
                 self._emit(HOLD_KEYS[raw], now)
@@ -186,6 +201,9 @@ class Spotter:
         self.variants[key] = variant + 1
         self.events.append({'serial': self.serial, 'key': key, 'text': VARIANTS[key][variant], 'variant': variant,
                             'state': self.confirmed, 'run_id': self.run_id, 'at': now})
+        selected = self._audio_key(key)
+        if selected:
+            self.events[-1].update(audio_key=selected, text=OPTIONAL_CLIPS[selected])
 
     def view(self, now, after=0, connected=True):
         from voice_alerts import category, allowed
@@ -196,12 +214,14 @@ class Spotter:
                   and allowed(category(e['key']), self.alerts)
                   and e['state'] == self.raw == self.confirmed and e['run_id'] == self.run_id
                   and 0 <= now - e['at'] < self.EVENT_SECONDS]
+        current = STATE_KEYS.get(self.confirmed) if active and self.raw == self.confirmed and self.alerts.get('overlap') is not False else None
         return {'active': active, 'state': self.confirmed if active else None,
+                'profile': self.profile, 'profile_reason': self.profile_reason, 'policy_version': POLICY_VERSION,
                 'sent_at': now,
                 'raw_state': self.raw if active else None, 'run_id': self.run_id if active else None,
                 'occupied': active and (self.raw != 1 or self.confirmed in STATE_KEYS), 'serial': self.serial, 'events': events,
-                'current_key': STATE_KEYS.get(self.confirmed) if active and self.raw == self.confirmed and self.alerts.get('overlap') is not False else None,
-                'state_label': PHRASES.get(STATE_KEYS.get(self.raw), '주변 차량 겹침 없음') if active else '차량 데이터 대기'}
+                'current_key': current, 'current_audio_key': self._audio_key(current) if current else None,
+                'state_label': (('포장 오벌 · ' if self.profile == 'ASPHALT_OVAL' else '') + self._label(STATE_KEYS.get(self.raw))) if active else '차량 데이터 대기'}
 
 
 class AlongsideSpeed:
@@ -275,4 +295,14 @@ class SpotterAudio:
                         temporary.replace(path)
                     choices.append({'text': text, 'audio_base64': base64.b64encode(data).decode('ascii')})
                 clips[key] = {**choices[0], 'variants': choices}
-            return {'voice': self.voice(), 'clips': clips, 'cached': True, 'clip_count': sum(len(v) for v in VARIANTS.values())}
+            # Oval clips are optional and strictly cache-only, including /prepare.
+            for key, text in OPTIONAL_CLIPS.items():
+                digest = hashlib.sha256(json.dumps([self.voice(), spoken_form(text)], ensure_ascii=False).encode()).hexdigest()
+                try:
+                    data = (self.directory / f'{digest}.mp3').read_bytes()
+                except OSError:
+                    continue
+                if len(data) >= 100:
+                    clips[key] = {'text': text, 'audio_base64': base64.b64encode(data).decode('ascii')}
+            return {'voice': self.voice(), 'clips': clips, 'cached': True,
+                    'clip_count': sum(len(v.get('variants', [v])) for v in clips.values())}

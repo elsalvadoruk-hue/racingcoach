@@ -1,4 +1,4 @@
-"""Local-only race traffic observations. No driver names or export integration."""
+"""Local traffic observations for races and confirmed asphalt-oval practice. No names."""
 from __future__ import annotations
 
 import gzip
@@ -13,6 +13,7 @@ import time
 import threading
 
 from race_engineer import parse_measure
+from oval_spotter import is_oval, OVAL_FIELDS, POLICY_VERSION
 
 logger = logging.getLogger('iRacingLive')
 FORMAT = 'iracing-coach-traffic'
@@ -78,6 +79,7 @@ class TrafficLog:
         self._flush_requested = self._closed = self._drop_logged = False
         self.dropped_rows = 0
         self.worker = None
+        self._flush_ticket = self._flushed_ticket = 0
         # Starting a thread is not part of the SDK record() deadline.
         if self.folder is not None:
             self.worker = threading.Thread(target=self._write, name='traffic-log-writer', daemon=True)
@@ -124,7 +126,9 @@ class TrafficLog:
         if self.failed or not snapshot or not finite(session_time):
             return
         sample = snapshot['sample']
-        if (str(snapshot.get('session_type') or '').lower() != 'race'
+        oval = self._run.header.get('spotter_profile') == 'ASPHALT_OVAL' if self._run else False
+        kind = str(snapshot.get('session_type') or '').strip().lower()
+        if ((kind != 'race' and not (oval and kind == 'practice'))
                 or not sample.get('on_track') or sample.get('is_replay')):
             return
         if self.last_time is not None and session_time - self.last_time < self.RATE_S - 1e-8:
@@ -162,6 +166,8 @@ class TrafficLog:
         # Only detached primitive values cross threads; SDK arrays are never queued.
         row = {'t': round(session_time, 3),
                'own': [rounded(sample.get(k), d) for k, d in zip(OWN_FIELDS, OWN_DIGITS)], 'c': cars}
+        if oval:
+            row['oval'] = [rounded(sample.get(key), 6) for key in OVAL_FIELDS]
         with self._condition:
             if self._closed or self._run.failed:
                 return
@@ -176,12 +182,18 @@ class TrafficLog:
 
     def _header(self, snapshot):
         identity = snapshot['identity']
-        return {'format': FORMAT, 'version': 2, 'game': snapshot.get('game'), 'run_id': self.run_id,
+        header = {'format': FORMAT, 'version': 2, 'game': snapshot.get('game'), 'run_id': self.run_id,
                 'track': identity.get('track_name'), 'track_id': identity.get('track_id'),
                 'track_config': identity.get('track_config'), 'track_length_m': snapshot['track_length_m'],
                 'car': identity.get('car_path'), 'player_idx': snapshot.get('player_idx'),
                 'classes': snapshot.get('classes') or {}, 'rate_s': self.RATE_S,
                 'near_m': self.NEAR_M, 'fields': FIELDS, 'own_fields': OWN_FIELDS}
+        if is_oval(identity):
+            header.update(version=3, spotter_profile='ASPHALT_OVAL', spotter_policy=POLICY_VERSION,
+                          track_type=identity.get('track_type'), track_direction=identity.get('track_direction'),
+                          session_type=snapshot.get('session_type'), oval_fields=OVAL_FIELDS,
+                          rules={key: identity.get(key) for key in ('course_cautions', 'restarts', 'standing_start')})
+        return header
 
     def _new_file(self, header):
         self.folder.mkdir(parents=True, exist_ok=True)
@@ -208,6 +220,19 @@ class TrafficLog:
             self._flush_requested = True
             self._condition.notify()
 
+    def flush_wait(self, timeout=2.):
+        """Export path only: acknowledge the queued tail after gzip is closed."""
+        if self.worker is None:
+            return True
+        if self._closed:
+            return not self.worker.is_alive()
+        with self._condition:
+            self._flush_ticket += 1
+            ticket = self._flush_ticket
+            self._flush_requested = True
+            self._condition.notify_all()
+            return self._condition.wait_for(lambda: self._flushed_ticket >= ticket, timeout=timeout)
+
     def _write_rows(self, run, rows):
         """Worker-only filesystem operations, deliberately outside the queue lock."""
         initial = run.path is None
@@ -229,6 +254,7 @@ class TrafficLog:
                 self._queue.clear()
                 closed = self._closed
                 self._flush_requested = False
+                ticket = self._flush_ticket
                 dropped = self.dropped_rows if not self._drop_logged else 0
                 self._drop_logged |= bool(dropped)
             if dropped:
@@ -250,6 +276,9 @@ class TrafficLog:
                     if not run.failure_logged:
                         run.failure_logged = True
                         logger.exception('Race traffic log failed; recording stopped for this run')
+            with self._condition:
+                self._flushed_ticket = max(self._flushed_ticket, ticket)
+                self._condition.notify_all()
             if closed:
                 return
             deadline = time.monotonic() + self.FLUSH_S
@@ -274,5 +303,7 @@ def read(path):
                 continue
             item['own'] = dict(zip(header.get('own_fields') or OWN_FIELDS, item.get('own') or []))
             item['c'] = [dict(zip(header.get('fields') or FIELDS, c)) for c in item.get('c') or []]
+            if 'oval' in item:
+                item['oval'] = dict(zip(header.get('oval_fields') or OVAL_FIELDS, item['oval']))
             rows.append(item)
     return header, rows

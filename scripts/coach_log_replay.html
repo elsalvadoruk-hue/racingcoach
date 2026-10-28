@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<title>스포터 기록 재생</title>
+<style>
+:root{color-scheme:dark;font:16px/1.6 system-ui,sans-serif;background:#111820;color:#e4edf5}body{max-width:1100px;margin:30px auto;padding:0 20px}h1{font-size:26px}h2{font-size:18px;margin:0 0 12px}.muted{color:#afc0ce}.notice{border-left:3px solid #efb65d;padding:10px 16px;background:#242b30}.panel{background:#1b2632;border:1px solid #354657;border-radius:12px;padding:20px;margin-top:16px}.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}button,select{font:inherit;color:inherit;background:#263b4e;border:1px solid #637e94;border-radius:7px;padding:6px 12px}button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #6fe1d4;outline-offset:3px}input[type=range]{width:100%;accent-color:#6fe1d4}#state{font-size:25px;color:#6fe1d4;font-weight:650}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 ui-monospace,monospace}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #354657}#clock{font-variant-numeric:tabular-nums}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.empty{padding:25px}@media(max-width:700px){.grid{grid-template-columns:1fr}body{padding:0 12px}}
+</style>
+<h1>스포터 기록 재생</h1><p id="identity" class="muted"></p>
+<p class="notice">기록된 관측과 무전 이력을 탐색합니다. 최대 10Hz 자료이며 실제 판단·소리·차량 위치의 정확한 재현이 아닙니다. 구간 사이를 보간하지 않습니다.</p>
+<section class="panel"><div class="controls"><button id="prev" aria-label="이전 표본">이전</button><button id="play">재생</button><button id="next" aria-label="다음 표본">다음</button><label>속도 <select id="speed"><option value="1">1배</option><option value="2">2배</option><option value="5">5배</option></select></label><span id="clock"></span></div>
+<input id="seek" type="range" min="0" value="0" aria-label="기록 표본 탐색"><p id="boundary" class="notice" role="status"></p>
+<label>관측 사건으로 이동 <select id="events"><option value="">사건 선택</option></select></label></section>
+<div class="grid"><section class="panel"><h2>관측된 주변 상태</h2><div id="state"></div><p id="own"></p><pre id="signals"></pre></section>
+<section class="panel"><h2>이 표본까지의 최근 무전 이력</h2><div id="radio"></div><p class="muted">같은 구간의 최근 4초·최대 6행입니다. 대응하지 못한 이력은 아래 기록에서 확인합니다.</p></section></div>
+<section class="panel"><h2>주변 차량의 기록값</h2><p class="muted">gap_m은 트랙 진행 방향의 거리입니다. 좌우 위치로 해석하지 않습니다.</p><table><thead><tr><th>차량 idx</th><th>gap_m</th><th>피트 기록</th></tr></thead><tbody id="cars"></tbody></table></section>
+<section class="panel"><h2>위트 무전 무음 평가</h2><p class="muted">실제 소리는 재생하지 않습니다. 가상 선택 문구와 보류 이유를 확인합니다. 과거 로그에서 추출한 후보는 계속 보류합니다.</p><div id="banter"></div><details><summary>전체 무음 평가와 근거</summary><pre id="allbanter"></pre></details></section>
+<section class="panel"><h2>검수 결과와 전체 무전 이력</h2><p id="summary"></p><details><summary>검토 신호</summary><pre id="findings"></pre></details><details><summary>전체 무전 이력</summary><pre id="allradio"></pre></details></section>
+<section class="panel"><h2>오벌 절차 무음 관측</h2><p class="muted">후보·보류·취소와 게임 신호를 대조합니다. 추월·피트 출구 허가는 확정하지 않습니다.</p><div id="procedures"></div><details><summary>전체 절차 관측과 근거</summary><pre id="allprocedures"></pre></details><details><summary>기능별 관측·미관측</summary><pre id="coverage"></pre></details></section>
+<script type="application/json" id="payload">__COACH_REPLAY_DATA__</script>
+<script>
+'use strict';
+const data=JSON.parse(document.getElementById('payload').textContent), frames=data.frames, review=data.review;
+const $=id=>document.getElementById(id), labels={0:'비활성',1:'겹침 없음',2:'왼쪽',3:'오른쪽',4:'양쪽',5:'왼쪽 두 대',6:'오른쪽 두 대'};
+let position=0,timer=null;
+const fmt=v=>v===null||v===undefined?'미기록':String(v);
+function stop(){clearTimeout(timer);timer=null;$('play').textContent='재생'}
+function render(){
+ const f=frames[position];$('seek').value=position;
+ if(!f){$('clock').textContent='주변 차량 자료 없음';$('state').textContent='기록 부족';$('boundary').textContent='무전 이력과 검수 자료만 확인할 수 있습니다.';return}
+ $('clock').textContent=`세션 ${fmt(f.t)}초 · 표본 ${position+1}/${frames.length}`;
+ $('boundary').textContent=f.boundary?'구간 시작 · 이전 구간과 상태를 이어 비교하지 않습니다.':'같은 구간의 기록 표본';
+ $('state').textContent=labels[f.own.car_left_right]||'겹침 신호 미확인';
+ $('own').textContent=`완료 랩 ${fmt(f.own.lap_completed)} · 속도 ${fmt(f.own.speed_mps)} m/s · 피트 ${fmt(f.own.on_pit_road)}`;
+ $('signals').textContent=JSON.stringify(f.oval,null,2);
+ $('radio').replaceChildren();
+ let start=position;while(start>0&&!frames[start].boundary&&f.t-frames[start-1].t<=4)start--;
+ const recent=frames.slice(start,position+1).flatMap(frame=>frame.radio).slice(-6);
+ for(const e of recent){const p=document.createElement('p');p.textContent=`${fmt(e.session_time)}초 · ${fmt(e.status)} · ${fmt(e.key)} · ${e.text||''} ${e.reason||''}`;$('radio').append(p)}
+ if(!recent.length)$('radio').textContent='최근 대응 이력 없음';
+ $('banter').replaceChildren();
+ const shadow=frames.slice(start,position+1).flatMap(frame=>frame.banter||[]).slice(-6);
+ for(const e of shadow){const p=document.createElement('p');p.textContent=`${fmt(e.session_time)}초 · ${fmt(e.status)} · ${e.selected?.text||'가상 선택 없음'} · ${(e.reasons||[]).join(', ')}`;$('banter').append(p)}
+ if(!shadow.length)$('banter').textContent='최근 대응 무음 평가 없음';
+ $('procedures').replaceChildren();
+ const procedures=frames.slice(start,position+1).flatMap(frame=>frame.procedures||[]).slice(-6);
+ for(const e of procedures){const p=document.createElement('p');p.textContent=`${fmt(e.session_time)}초 · ${fmt(e.kind)} · ${fmt(e.status)} · ${e.proposed_text||''} · ${(e.reasons||[]).join(', ')}`;$('procedures').append(p)}
+ if(!procedures.length)$('procedures').textContent='최근 대응 절차 관측 없음';
+ $('cars').replaceChildren();for(const c of f.cars){const tr=document.createElement('tr');for(const v of [c.idx,c.gap_m,c.on_pit_road]){const td=document.createElement('td');td.textContent=fmt(v);tr.append(td)}$('cars').append(tr)}
+}
+function step(){
+ if(position>=frames.length-1){stop();return}
+ if(frames[position+1].boundary){position++;render();stop();return}
+ const delay=Math.max(0,(frames[position+1].t-frames[position].t)*1000/Number($('speed').value));
+ timer=setTimeout(()=>{position++;render();step()},delay);
+}
+$('identity').textContent=`${fmt(review.track)} · ${fmt(review.car)} · ${review.profile}`;
+$('summary').textContent=`${review.verdict} · 관측 ${frames.length}행 · 연속 ${review.coverage.segments}구간 · 대응 보류 무전 ${review.coverage.unaligned_radio_rows}행 · 위트 후보 ${review.banter_candidates.length}개`;
+$('findings').textContent=JSON.stringify(review.findings,null,2);
+// The complete radio list includes events with no usable traffic clock.
+$('allradio').textContent=JSON.stringify(review.radio_timeline||[],null,2);
+$('allbanter').textContent=JSON.stringify(review.banter_observations||[],null,2);
+ $('allprocedures').textContent=JSON.stringify(review.procedure_observations||[],null,2);
+ $('coverage').textContent=JSON.stringify(review.feature_coverage||{},null,2);
+$('seek').max=Math.max(0,frames.length-1);
+for(const e of review.navigation||review.events){const option=document.createElement('option');option.value=e.index;option.textContent=`${fmt(e.t)}초 · ${e.kind} ${e.field||''}`;$('events').append(option)}
+$('seek').addEventListener('input',()=>{stop();position=Number($('seek').value);render()});
+$('prev').onclick=()=>{stop();position=Math.max(0,position-1);render()};
+$('next').onclick=()=>{stop();position=Math.min(frames.length-1,position+1);render()};
+$('play').onclick=()=>{if(timer!==null){stop();return}if(!frames.length)return;$('play').textContent='일시정지';step()};
+$('events').onchange=()=>{if($('events').value==='')return;stop();position=Number($('events').value);render()};
+render();
+</script></html>

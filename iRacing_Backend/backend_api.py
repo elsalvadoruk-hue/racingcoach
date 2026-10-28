@@ -3955,7 +3955,7 @@ def session_log_extras(defer: bool = False):
         yield from handling_traces.groups(analyzer, summary, seed)
 
     return (extras.nearby_cars(live_telemetry.traffic_log.folder, live_telemetry.timing_log.folder,
-                              prepare=live_telemetry.flush_race_timing),
+                              prepare=live_telemetry.flush_session_logs),
             extras.own_drive(candidates, metadata_of, analyze, driving=lambda: getattr(live_telemetry, "_link", None) == "DRIVING",
                              defer=defer, app_version=APP_VERSION, traces=trace_groups))
 

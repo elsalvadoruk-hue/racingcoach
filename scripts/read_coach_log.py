@@ -43,6 +43,9 @@ def main() -> int:
         return 1
     started = time.strftime("%Y-%m-%d %H:%M", time.localtime(manifest["started_at"]))
     print(f"{manifest.get('track')} · {manifest.get('car')} · {manifest.get('session_type')} · {started} · {manifest['minutes']}분 · 앱 {manifest.get('app_version')}")
+    spotter = manifest.get('spotter') or {}
+    label = {'ASPHALT_OVAL': '포장 오벌', 'DIRT_OVAL': '더트 오벌', 'ROAD': '로드', 'UNKNOWN': '미확인'}.get(spotter.get('profile'), '미확인')
+    print(f"스포터 분류: {label} · {spotter.get('profile', 'UNKNOWN')} · {spotter.get('reason') or '분류 자료 없음'}")
     events = {event["event_id"] for event in radio}
     done = {event["event_id"] for event in radio if event.get("status") == "completed"}
     print(f"안내 {len(events)}건 가운데 끝까지 들린 것 {len(done)}건 · 보고 {manifest['reports']}건 · 질문 {manifest['questions_in_session']}건"

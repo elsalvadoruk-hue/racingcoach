@@ -15,8 +15,9 @@ class OpusPacks(base_packs.Packs):
         sf.write(encoded,pcm,rate,format='OGG',subtype='OPUS',compression_level=.9)
         self.data=encoded.getvalue();self.hash=hashlib.sha256(self.data).hexdigest()
         self.audio=self.root/'synthetic.ogg';self.audio.write_bytes(self.data)
-    def pack(self,complete=True,version='1'):
+    def pack(self,complete=True,version='1',extra_texts=()):
         texts=list(dict.fromkeys([v[0] for v in VARIANTS.values()] if complete else ['원문']))
+        texts.extend(text for text in extra_texts if text not in texts)
         rows=[{'id':f't{i}','role':'spotter','sourceText':text,'text':'시험 음성','spoken':'시험 음성','eventKey':'test' if text==VARIANTS['test'][0] else 'fixture',
                'audio':f'clips/{self.hash}.ogg','sha256':self.hash,'duration':1} for i,text in enumerate(texts)]
         m={'format':FORMAT,'schemaVersion':2,'packId':'test','version':version,'name':'Opus 시험팩','entries':rows}

@@ -132,6 +132,7 @@ class CustomVoicePacks:
             return {'text':row['text'],'audio_base64':'data:'+audio_mime(row)+';base64,'+base64.b64encode(data).decode('ascii')}
     def spotter(self,default=None):
         from spotter import VARIANTS
+        from oval_spotter import OPTIONAL_CLIPS
         with self.lock:
             clips={}
             for key,texts in VARIANTS.items():
@@ -144,6 +145,10 @@ class CustomVoicePacks:
                         if len(data)>=100:choices.append({'text':text,'audio_base64':base64.b64encode(data).decode('ascii')})
                 if not choices:raise MissingCustomAudio('스포터 기본 음성을 먼저 준비하세요. 준비되지 않은 상황: '+key)
                 clips[key]={**choices[0],'variants':choices}
+            for key,text in OPTIONAL_CLIPS.items():
+                if self.has('spotter',text):
+                    choice={'text':text,'audio_base64':self.audio('spotter',text)}
+                    clips[key]={**choice,'variants':[choice]}
             selected=self.selections['spotter']
             return {'voice':self.loaded[selected][0]['name'],'clips':clips,'cached':True,'custom_pack':selected,'clip_count':sum(len(v['variants']) for v in clips.values())}
     def remove(self,key,delete=False):

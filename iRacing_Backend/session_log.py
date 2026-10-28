@@ -90,10 +90,14 @@ def sessions(store, limit=20):
                           "GROUP BY run_id ORDER BY ended DESC LIMIT ?", (limit,)).fetchall()
         merged = {row['run_id']: dict(row) for row in runs}
         identities = {}
+        driven = set()
         from session_health import MAX_RUNS
         for health in _health_rows(db, limit=max(limit, MAX_RUNS)):
             key = health['run_id']
             identities[key] = json.loads(health['identity_json'])
+            if any(sample.get('on_track') is True and sample.get('is_replay') is False
+                   for sample in json.loads(health['health_json']).get('samples', [])):
+                driven.add(key)
             row = merged.setdefault(key, {'run_id': key, 'started': health['started_at'],
                                           'ended': health['updated_at'], 'events': 0, 'completed': 0})
             row['started'] = min(row['started'], health['started_at'])
@@ -103,7 +107,8 @@ def sessions(store, limit=20):
         for run in runs:
             notes = db.execute("SELECT context_json, source FROM voice_notes WHERE created_at BETWEEN ? AND ? ORDER BY created_at",
                                (run['started'] - 120, run['ended'] + 120)).fetchall()
-            identity = identities.get(run['run_id'], {})
+            observed = identities.get(run['run_id'], {})
+            identity = observed
             session_type, reports, questions = identity.get('session_type'), 0, 0
             for note in notes:
                 context = json.loads(note['context_json'] or '{}')
@@ -113,14 +118,22 @@ def sessions(store, limit=20):
                 session_type = (context.get('pit_wall') or {}).get('session_type') or session_type
                 reports += note['source'] == 'AUTO_REPORT'
                 questions += note['source'] != 'AUTO_REPORT'
+            # A report may predate the live track metadata. Keep the independently
+            # observed identity instead of losing it to a sparse report snapshot.
+            identity = {**identity, **observed}
+            session_type = identity.get('session_type') or session_type
             if not identity:
                 identity = _first_session(db, run['run_id'])
                 session_type = session_type or identity.get('session_type')
+            from oval_spotter import classify
+            profile = classify(identity)[0] if identity.get('game') == 'iracing' else None
             result.append({'run_id': run['run_id'], 'started_at': run['started'], 'ended_at': run['ended'],
                            'minutes': round((run['ended'] - run['started']) / 60, 1), 'calls': run['events'],
                            'completed': run['completed'] or 0, 'reports': reports, 'questions': questions,
                            'track': identity.get('track_name'), 'track_path': identity.get('track_path'),
-                           'car': identity.get('car_name'), 'session_type': session_type})
+                           'car': identity.get('car_name'), 'session_type': session_type,
+                           'game': identity.get('game'), 'spotter_profile': profile,
+                           'has_driving_sample': run['run_id'] in driven})
     return result
 
 
@@ -136,14 +149,21 @@ class Extra:
     info: dict = field(default_factory=dict)
     # Lazy, bounded corner bundles. Called only after the ordinary size rule is resolved.
     supplement: object = None
+    # Optional smaller representation, made only when the full group cannot fit.
+    fallback: object = None
 
 
 # Optional health samples go first, then nearby cars and the driver's own summary.
 EXTRA_ORDER = ('session_health', 'nearby_cars', 'drive_summary')
+# Oval validation prioritises traffic and the independent health record over
+# corner analysis. Other games/profiles keep their existing order.
+OVAL_EXTRA_ORDER = ('drive_summary', 'nearby_cars', 'session_health')
 EXTRA_DESCRIPTIONS = {
+    'banter-shadow.json': 'shadow-only banter evaluations and virtual phrase choices; no actual playback',
+    'oval-procedures.json': 'shadow-only oval procedure signals, candidates, cancellations and client observations; no actual playback',
     'session-health.json': 'bounded backend connection samples; not proof of playback or exact disconnect timing',
     'drive_summary.json.xz': "xz JSON: own laps, every valid lap's corner passes and handling observations (measured values only)",
-    'traffic.packed.xz': 'races: nearby cars (within 200 m, 10 Hz), positions/order/class/pit only, no names (log_pack)',
+    'traffic.packed.xz': 'races and confirmed asphalt-oval practice: nearby cars (within 200 m, up to 10 Hz), no names; oval pacing signals; see export_selection for omitted ranges (log_pack)',
     'timing.packed.xz': "races: every car's lap position and order once a second, no names (log_pack)",
 }
 MAX_SUPPLEMENT_GROUPS = 12
@@ -184,6 +204,10 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
         rows = db.execute('SELECT created_at, event_json FROM radio_delivery WHERE run_id=? ORDER BY id', (run_id,)).fetchall()
         health_rows = _health_rows(db, run_id, 1)
         health = health_rows[0] if health_rows else None
+        banter = [scrub(json.loads(row[0])) for row in db.execute(
+            'SELECT record_json FROM banter_reviews WHERE run_id=? ORDER BY id', (run_id,))]
+        procedures = [scrub(json.loads(row[0])) for row in db.execute(
+            'SELECT record_json FROM oval_procedure_reviews WHERE run_id=? ORDER BY id', (run_id,))]
         if not rows and health is None:
             return None
         started = min(([rows[0]['created_at']] if rows else []) + ([health['started_at']] if health else []))
@@ -194,7 +218,8 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
     if not include_questions:
         # The answer to a microphone question is played like any call; its words stay out with the question.
         radio = [{**event, 'text': None} if event.get('key') == 'answer' else event for event in radio]
-    identity = json.loads(health['identity_json']) if health else {}
+    observed = json.loads(health['identity_json']) if health else {}
+    identity = observed
     reports, session_type, questions = [], identity.get('session_type'), 0
     for note in notes:
         context = json.loads(note['context_json'] or '{}')
@@ -211,6 +236,8 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
         reports.append({'recorded_at': note['created_at'], 'source': note['source'], 'text': None if automatic else note['text'],
                         'reply': note['reply'], 'reply_source': note['reply_source'], 'service_error': note['service_error'],
                         'context': scrub(context)})
+    identity = {**identity, **observed}
+    session_type = identity.get('session_type') or session_type
     if not identity:
         identity = next((event['session'] for event in radio if isinstance(event.get('session'), dict)), {})
         session_type = session_type or identity.get('session_type')
@@ -231,13 +258,27 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
         'files': {'radio.jsonl': 'one line for each change in a call: started, completed, interrupted, expired, cancelled',
                   'reports.jsonl': 'engineer reports with the measured state behind them'},
     }
+    if identity.get('game') == 'iracing':
+        from oval_spotter import classify, POLICY_VERSION
+        profile, reason = classify(identity)
+        manifest['spotter'] = scrub({'profile': profile, 'reason': reason, 'policy_version': POLICY_VERSION,
+                               **{key: identity.get(key) for key in ('track_id', 'track_type', 'track_direction',
+                                   'course_cautions', 'restarts', 'standing_start')}})
     run = {'run_id': run_id, 'started_at': started, 'ended_at': ended, 'identity': identity,
-           'session_type': session_type, 'game': identity.get('game')}
+           'session_type': session_type, 'game': identity.get('game'),
+           # Selection needs clocks/status only; no question text crosses this boundary.
+           'radio_selection': [{key: event.get(key) for key in ('session_time', 'status')} for event in radio]}
     made = []
     if health is not None:
         document = scrub({**json.loads(health['health_json']), 'identity': json.loads(health['identity_json'])})
         made.append(Extra('session_health', {'session-health.json': json.dumps(document, ensure_ascii=False).encode('utf-8')},
                           {'samples': len(document['samples']), 'dropped_samples': document['dropped_samples']}))
+    if banter:
+        selected_banter = banter if len(banter) <= 128 else banter[:8] + banter[-120:]
+        made.append(Extra('banter_shadow', {'banter-shadow.json': json.dumps(selected_banter, ensure_ascii=False).encode('utf-8')}))
+    if procedures:
+        selected_procedures = procedures if len(procedures) <= 256 else procedures[:16] + procedures[-240:]
+        made.append(Extra('oval_procedures', {'oval-procedures.json': json.dumps(selected_procedures, ensure_ascii=False).encode('utf-8')}))
     for provider in extras or ():
         try:
             extra = provider(run)
@@ -255,16 +296,44 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
 
     def build():
         files = dict(manifest['files'])
+        if procedures:
+            count = len(selected_procedures) if any(extra.group == 'oval_procedures' for extra in included) else 0
+            manifest['oval_procedures'] = {'mode':'SHADOW', 'observations':len(procedures),
+                'included_observations':count, 'omitted_observations':len(procedures)-count,
+                'retention':'LATEST_4096_GLOBAL', 'queue_dropped_global':max(r.get('queue_dropped',0) for r in procedures),
+                'actual_playback':False, 'complete_history':False}
+        if banter:
+            count = len(selected_banter) if any(extra.group == 'banter_shadow' for extra in included) else 0
+            manifest['banter_shadow'] = {'mode': 'SHADOW', 'observations': len(banter),
+                'included_observations': count, 'omitted_observations': len(banter) - count,
+                'retention': 'LATEST_2048_GLOBAL', 'eligible': sum(r.get('status') == 'ELIGIBLE_SHADOW' for r in banter),
+                'actual_playback': False}
         for extra in included:
             for name in extra.files:
                 files[name] = EXTRA_DESCRIPTIONS.get(name, extra.group)
         return _zip({**manifest, 'files': files, 'extras': status}, radio, reports, included)
 
     data = build()
-    for group in EXTRA_ORDER:
+    order = ('banter_shadow', 'oval_procedures') + (OVAL_EXTRA_ORDER if (manifest.get('spotter') or {}).get('profile') == 'ASPHALT_OVAL' else EXTRA_ORDER)
+    for group in order:
         if limit is None or len(data) <= limit:
             break
         if any(extra.group == group for extra in included):
+            for index, extra in enumerate(included):
+                if extra.group != group or not callable(extra.fallback):
+                    continue
+                try:
+                    smaller = extra.fallback()
+                except Exception:
+                    logger.exception('A reduced session log extra could not be made')
+                    smaller = None
+                if smaller is not None and smaller.group == group and smaller.files:
+                    included[index] = smaller
+                    status[group] = {'included': True, 'reason': None,
+                                     'bytes': sum(len(part) for part in smaller.files.values()), **smaller.info}
+            data = build()
+            if len(data) <= limit:
+                break
             size = len(data)
             included = [extra for extra in included if extra.group != group]
             status[group].update(included=False, reason='size_limit', file_bytes_with=size)
@@ -359,6 +428,10 @@ def read_extras(data):
         names = set(archive.namelist())
         if 'session-health.json' in names:
             parts['session_health'] = json.loads(archive.read('session-health.json'))
+        if 'banter-shadow.json' in names:
+            parts['banter_shadow'] = json.loads(archive.read('banter-shadow.json'))
+        if 'oval-procedures.json' in names:
+            parts['oval_procedures'] = json.loads(archive.read('oval-procedures.json'))
         if 'drive_summary.json.xz' in names:
             parts['drive_summary'] = drive_summary.unpack(archive.read('drive_summary.json.xz'))
         trace_names = sorted(n for n in names if re.fullmatch(r'handling-traces/[0-9]+\.json\.xz', n))

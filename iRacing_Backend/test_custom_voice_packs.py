@@ -19,8 +19,8 @@ class Packs(unittest.TestCase):
         self.data=b.getvalue();self.hash=hashlib.sha256(self.data).hexdigest();self.audio=self.root/'clip.wav';self.audio.write_bytes(self.data)
         self.manager=CustomVoicePacks(self.root/'installed')
     def tearDown(self):self.temp.cleanup()
-    def pack(self,complete=True,version='1'):
-        rows=[];texts=list(dict.fromkeys([opts[0] for opts in VARIANTS.values()] if complete else ['원문']))
+    def pack(self,complete=True,version='1',extra_texts=()):
+        rows=[];texts=list(dict.fromkeys(([opts[0] for opts in VARIANTS.values()] if complete else ['원문'])+list(extra_texts)))
         for i,t in enumerate(texts):rows.append({'id':f't{i}','role':'spotter','sourceText':t,'text':'커스텀 대본','spoken':'커스텀 대본','audio':f'clips/{self.hash}.wav','sha256':self.hash,'duration':1})
         m={'format':FORMAT,'schemaVersion':1,'packId':'test','version':version,'name':'시험팩','entries':rows};z=self.root/f'pack-{version}.zip'
         export_pack(z,m,{rows[0]['audio']:self.audio});return z
@@ -36,6 +36,14 @@ class Packs(unittest.TestCase):
         info=self.manager.install(self.pack(False));self.assertTrue(info['canSelect'])
         self.manager.select(info['key'])
         with self.assertRaisesRegex(MissingCustomAudio,'기본 음성'):self.manager.spotter()
+    def test_oval_clip_is_optional_and_uses_the_selected_custom_pack(self):
+        from oval_spotter import OPTIONAL_CLIPS
+        text=OPTIONAL_CLIPS['oval_inside']
+        info=self.manager.install(self.pack(extra_texts=[text]));self.manager.select(info['key'])
+        prepared=self.manager.spotter()
+        self.assertEqual(prepared['clips']['oval_inside']['text'],text)
+        self.assertEqual(base64.b64decode(prepared['clips']['oval_inside']['audio_base64'].split(',')[1]),self.data)
+        self.assertNotIn('oval_outside',prepared['clips'])
     def test_tamper_rejected_and_previous_version_preserved(self):
         self.manager.install(self.pack());self.manager.select('test@1');old=self.manager.audio('spotter',VARIANTS['test'][0])
         z=self.pack(version='2')

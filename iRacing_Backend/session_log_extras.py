@@ -19,6 +19,29 @@ from session_log import Deferred, Extra, scrub
 
 MAX_RECORDINGS = 3
 MAX_RECORDING_SECONDS = 7 * 86400
+OVAL_WINDOW_ROWS, OVAL_WINDOWS, OVAL_PACKED_LIMIT = 200, 6, 160_000
+
+
+def _oval_reduction(path, run_id, radio=()):
+    """Lossless rows in bounded windows, explicitly separated by omitted ranges.
+
+    Runs only in the exporter when the full ZIP is too large. No new collection,
+    interpolation or SDK work; the original gzip remains unchanged.
+    """
+    header, rows = log_pack.read_lines(path)
+    if header.get('run_id') != run_id or header.get('spotter_profile') != 'ASPHALT_OVAL' or not rows:
+        return None
+    from oval_review import select_windows
+    width = min(OVAL_WINDOW_ROWS, len(rows))
+    while width:
+        selected, selection = select_windows(header, rows, radio, width, OVAL_WINDOWS)
+        packed = log_pack.pack(scrub({**header, 'export_selection': selection}), selected)
+        if len(packed) <= OVAL_PACKED_LIMIT:
+            return Extra('nearby_cars', {'traffic.packed.xz': packed},
+                         {'coverage': selection['mode'], 'traffic': selection,
+                          'timing': {'included': False, 'reason': 'size_limit'}})
+        width //= 2
+    return None
 
 
 def _header(path):
@@ -57,11 +80,14 @@ def is_race(run):
 def nearby_cars(traffic_folder, timing_folder, *, prepare=None):
     """Extra provider: the run's traffic and timing logs, packed without loss."""
     def provider(run):
-        if not is_race(run):
+        from oval_spotter import is_oval
+        if not is_race(run) and not (str(run.get('session_type') or '').strip().lower() == 'practice'
+                                     and is_oval(run.get('identity') or {})):
             return Extra('nearby_cars', info={'reason': 'not_race'})
         if prepare is not None:
-            prepare(run['run_id'])
-        files, info = {}, {}
+            if prepare(run['run_id']) is False:
+                return Extra('nearby_cars', info={'reason': 'write_pending'})
+        files, info, fallback = {}, {}, None
         for key, folder, pattern in (('traffic', traffic_folder, 'traffic-*.jsonl.gz'),
                                      ('timing', timing_folder, 'timing-*.jsonl.gz')):
             path = find_log(folder, pattern, run['run_id'], run['started_at'])
@@ -70,11 +96,13 @@ def nearby_cars(traffic_folder, timing_folder, *, prepare=None):
             header, rows = log_pack.read_lines(path)
             # The logs hold no names; scrub anyway in case a header ever gains a path.
             files[f'{key}.packed.xz'] = log_pack.pack(scrub(header), rows)
+            if key == 'traffic' and is_oval(run.get('identity') or {}):
+                fallback = lambda path=path: _oval_reduction(path, run['run_id'], run.get('radio_selection', ()))
             info[key] = {'rows': len(rows), 'seconds': round(rows[-1]['t'] - rows[0]['t'], 1) if len(rows) > 1 else 0.,
                          'raw_bytes': path.stat().st_size}
         if not files:
             return Extra('nearby_cars', info={'reason': 'no_log'})
-        return Extra('nearby_cars', files, info)
+        return Extra('nearby_cars', files, info, fallback=fallback)
     return provider
 
 

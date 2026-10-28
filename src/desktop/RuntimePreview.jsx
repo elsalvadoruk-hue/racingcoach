@@ -21,15 +21,16 @@ function DeviceOptions({ devices, kind, selected }) {
 
 // The same switch as in the session log panel: on/off for iRacing and LMU together.
 export function LogSendSwitch({ apiBase }) {
-  const auto = useSessionLogAuto(apiBase);
+  const auto = useSessionLogAuto(apiBase, true, true);
   if (!auto.state?.available) return null;
   // The consent flow stays the same wherever this header switch is placed.
   const on = auto.state.enabled;
+  const renewal = auto.state.reconsent_required;
   return <>
     <Button size="sm" variant={on ? 'default' : 'outline'} aria-pressed={on} aria-label="로그 자동 보내기" disabled={auto.busy}
       className={`runtime-toggle log-send-toggle${on ? ' runtime-toggle-on log-send-on' : ''}`} onClick={() => auto.toggle(!on)}
-      title={on ? '주행이 끝나면 세션 로그를 자동으로 보냅니다 (iRacing·LMU)' : '세션 로그 자동 보내기 꺼짐'}>
-      <CloudUpload data-icon="inline-start" aria-hidden="true" />{!on && <span className="log-send-label">로그 보내기</span>}
+      title={renewal ? '동의 내용이 변경되어 자동 보내기가 중지됐습니다. 눌러서 다시 확인해 주세요.' : on ? '주행이 끝나면 세션 로그를 자동으로 보냅니다 (iRacing·LMU)' : '세션 로그 자동 보내기 꺼짐'}>
+      <CloudUpload data-icon="inline-start" aria-hidden="true" />{!on && <span className="log-send-label">{renewal ? '로그 재동의' : '로그 보내기'}</span>}
     </Button>
     <ConsentDialog auto={auto} />
   </>;

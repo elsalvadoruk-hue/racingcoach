@@ -5,6 +5,7 @@ import { RESUMABLE, MAX_RESUMES, DEFAULT_RATE } from './voiceAudio';
 import { eventSound, playBeep } from './drillBeeps';
 import useVoiceLibrary, { cleanVoiceSettings, voiceSelections } from './lib/voiceLibrary';
 import { readAlerts, voiceEventAllowed } from './lib/voiceAlerts';
+import { banterObservation } from './banterObservation';
 
 const SETTINGS_KEY = 'iracing.spotter.settings';
 export const RADIO_RENDER_TIMEOUT_MS = 8000;
@@ -27,6 +28,11 @@ const savedSettings = game => {
 const storeSettings = (game, value) => writeGameItem(SETTINGS_KEY, game, JSON.stringify(value));
 
 const occupied = (frame, alerts) => frame.occupied && alerts?.overlap !== false;
+// Optional oval clips never trigger a fetch or synthesis. Older packs keep their side calls.
+const overlapClip = (clips, key, audioKey, variant) => {
+  const clip = (audioKey && clips?.[audioKey]?.audio_base64 ? clips[audioKey] : clips?.[key]);
+  return clip?.variants?.length ? clip.variants[(variant ?? 0) % clip.variants.length] : clip;
+};
 // The existing bumper threshold is .7s. Include the car ahead as well as behind.
 const closeBattle = frame => Boolean(frame.occupied) || (frame.radio?.traffic?.nearby || []).some(car => car.close === true
   || (typeof car.gap_estimate_s === 'number' && car.gap_estimate_s >= 0 && car.gap_estimate_s <= .7));
@@ -85,6 +91,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   }, []);
   const radioQueue = useRef(new Map()), heard = useRef(new Set()), rendering = useRef(null), processing = useRef(new Set()), lastCall = useRef(0), resumed = useRef(new Map());
   const playbackFailures = useRef(new Map());
+  const shadowSeen = useRef(new Set());
   const cancelRender = useCallback(reason => {
     rendering.current?.cancel(reason);
   }, []);
@@ -221,11 +228,10 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     // Enabling and edits use their own explicit handlers; this effect resends only on a game transition.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeGame, apiBase, cancelPriority]);
-  const announce = useCallback(async (key, valid, variant = null, onStatus) => {
+  const announce = useCallback(async (key, valid, variant = null, onStatus, audioKey = null) => {
     if (output.current.standby) return false;
     if (key !== 'test' && !voiceEventAllowed({ key }, applied.current.alerts)) return false;
-    const choices = clips.current?.[key]?.variants;
-    const selected = choices?.length ? choices[(variant ?? 0) % choices.length] : clips.current?.[key];
+    const selected = overlapClip(clips.current, key, audioKey, variant);
     const audio = selected?.audio_base64;
     const settings = output.current;
     const event = { id: `${state.current.run_id || 'local'}:overlap:${Date.now()}:${key}`, run_id: state.current.run_id,
@@ -248,7 +254,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     if (!pending || pending.inFlight || pending.delivered || !pending.valid() || Date.now() < pending.retryAt) return;
     if (output.current.muted || output.current.volume === 0) {
       if (!pending.muteLogged) {
-        pending.muteLogged = true; announce(pending.key, pending.valid, pending.variant);
+        pending.muteLogged = true; announce(pending.key, pending.valid, pending.variant, undefined, pending.audioKey);
         if (mounted.current) setView((v) => ({ ...v, delivery_status: 'muted' }));
       }
       return;
@@ -265,7 +271,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       if (status === 'completed' || status === 'started') pending.delivered = true;
       else if (['interrupted', 'failed', 'cancelled'].includes(status)) retry();
       setView((v) => ({ ...v, delivery_status: status }));
-    }).then((started) => {
+    }, pending.audioKey).then((started) => {
       if (overlapPending.current !== pending || !mounted.current) return;
       pending.inFlight = false;
       if (started && !['failed', 'cancelled', 'interrupted'].includes(pending.status)) {
@@ -451,12 +457,36 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         const previous = state.current;
         if (rendering.current && rendering.current.event.run_id !== frame.radio?.run_id) cancelRender('session_changed');
         // A brief raw 'clear' candidate must not cut off a confirmed overlap call.
-        const replaced = (previous.active && !frame.active) || previous.run_id !== frame.run_id || previous.state !== frame.state;
+        const replaced = (previous.active && !frame.active) || previous.run_id !== frame.run_id || previous.state !== frame.state
+          || previous.profile !== frame.profile;
         if (replaced || (frame.raw_state > 1 && frame.raw_state !== frame.state && previous.raw_state !== frame.raw_state)) cancelPriority?.(3);
         if (replaced) overlapPending.current = null;
         if (previous.run_id !== frame.run_id && previous.run_id && !frame.radio?.connected) { cancelPriority?.(3); setPriorityGate?.(false); }
         state.current = frame;
+        // Shadow diagnostics have no render, play, acknowledgement or priority-gate path.
+        if (!output.current.standby && output.current.recordDelivery?.observeBanter) {
+          for (const candidate of frame.banter_shadow || []) {
+            if (candidate.run_id !== frame.radio?.run_id || shadowSeen.current.has(candidate.candidate_id)) continue;
+            shadowSeen.current.add(candidate.candidate_id);
+            if (shadowSeen.current.size > 128) shadowSeen.current.delete(shadowSeen.current.values().next().value);
+            try {
+              output.current.recordDelivery.observeBanter(banterObservation(candidate, frame, output.current,
+                rendering.current || overlapPending.current || radioQueue.current.size));
+            } catch { /* Optional diagnostics cannot interrupt existing radio delivery. */ }
+          }
+        }
         // Calls run from state.current; the panel only needs changes and a slow refresh.
+        if (!output.current.standby && output.current.recordDelivery?.observeOval) {
+          for (const candidate of frame.oval_shadow || []) {
+            if (candidate.run_id !== frame.radio?.run_id || shadowSeen.current.has(candidate.candidate_id)) continue;
+            shadowSeen.current.add(candidate.candidate_id);
+            if (shadowSeen.current.size > 128) shadowSeen.current.delete(shadowSeen.current.values().next().value);
+            try {
+              output.current.recordDelivery.observeOval(banterObservation(candidate, frame, output.current,
+                rendering.current || overlapPending.current || radioQueue.current.size));
+            } catch { /* Diagnostics cannot interrupt radio delivery. */ }
+          }
+        }
         const changed = replaced || frame.type === 'ready' || previous.raw_state !== frame.raw_state || previous.occupied !== frame.occupied
           || frame.events?.length > 0 || previous.radio?.connected !== frame.radio?.connected
           || (previous.radio?.events?.length || 0) !== (frame.radio?.events?.length || 0);
@@ -499,7 +529,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
           return;
         }
         const events = frame.type === 'ready' && frame.current_key
-          ? [{ key: frame.current_key, state: frame.state, run_id: frame.run_id, expires_in_ms: 600 }]
+          ? [{ key: frame.current_key, audio_key: frame.current_audio_key, state: frame.state, run_id: frame.run_id, expires_in_ms: 600 }]
           : (frame.events || []).filter((event) => event.serial > lastSerial);
         lastSerial = Math.max(lastSerial, frame.serial ?? -1);
         // The newest authoritative state replaces pending/playing old calls.
@@ -507,11 +537,12 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         if (!event || !voiceEventAllowed(event, applied.current.alerts) || event.state !== frame.raw_state || event.state !== frame.state
           || event.run_id !== frame.run_id || !(event.expires_in_ms > 0)) { pumpOverlap(); return; }
         const expires = now + Math.min(600, event.expires_in_ms);
-        setView((current) => ({ ...current, last_text: clips.current?.[event.key]?.variants?.[event.variant ?? 0]?.text || clips.current?.[event.key]?.text || event.text, last_spoken_text: null, last_engineer: 'spotter' }));
-        const pending = { key: event.key, variant: event.variant, delivered: false, inFlight: false,
+        setView((current) => ({ ...current, last_text: overlapClip(clips.current, event.key, event.audio_key, event.variant)?.text || event.text, last_spoken_text: null, last_engineer: 'spotter' }));
+        const pending = { key: event.key, audioKey: event.audio_key, variant: event.variant, delivered: false, inFlight: false,
           retryAt: 0, attempts: 0, valid: () => overlapPending.current === pending && !stopped && ticket === epoch.current && state.current.active
             && voiceEventAllowed(event, applied.current.alerts)
             && state.current.state === event.state && state.current.run_id === event.run_id
+            && state.current.profile === frame.profile
             && (state.current.raw_state === event.state || (event.state > 1 && state.current.raw_state === 1))
             && (event.state > 1 || Date.now() < expires) && Date.now() - lastFrame.current < 600 };
         overlapPending.current = pending;

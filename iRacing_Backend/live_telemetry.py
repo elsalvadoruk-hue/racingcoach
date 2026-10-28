@@ -40,6 +40,9 @@ from live_damage import DamageWatch, PitStopWatch, damage_parts, repair_parts
 from live_pit import COLD_TYRE_S, PitKnowledge, PitLossWatch, TyreWatch, stall_estimate, tyre_advice
 from timing_log import TimingLog
 from traffic_log import TrafficLog, traffic_snapshot
+from oval_spotter import track_context, read_pacing
+from banter_shadow import BanterShadow
+from oval_procedures import OvalProcedures
 
 logger = logging.getLogger('iRacingLive')
 
@@ -128,6 +131,8 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.speech_hold_s = HOLD_DEFAULT_S   # seconds before braking/steering in which no call starts; below zero is off
         self.pit_wall = RaceEngineer()
         self.spotter = Spotter()
+        self.banter = BanterShadow()
+        self.oval_procedures = OvalProcedures()
         self.alongside = AlongsideSpeed()     # how fast the car beside us passes (iRacing lap positions)
         self.radio = RaceRadio()
         self.corners = LiveCornerCoach()
@@ -192,6 +197,11 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             if run_id is None or self.timing_log.run_id == run_id:
                 self.timing_log.flush()
 
+    def flush_session_logs(self, run_id=None):
+        """Export-only barrier; the SDK and timing graphs never wait on traffic I/O."""
+        self.flush_race_timing(run_id)
+        return self.traffic_log.flush_wait()
+
     def radio_delivery(self, identifier, status, *, dropped_parts=0):
         with self.lock:
             receipt = self.radio.delivery(identifier, status, dropped_parts=dropped_parts)
@@ -246,6 +256,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self._brief_attempts = {}
                 self.run_id = str(uuid.uuid4())
                 self.identity = identity
+                self.spotter.configure_track(identity)
             self.last_clock = session_time
             if self.samples and self.samples[-1]['session_time'] == session_time:
                 return
@@ -266,7 +277,8 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             # keeps its existing silence. Use this tick's metadata, including the first session sample.
             session_metadata = race if race is not None else self.radio.metadata
             session = str(session_metadata.get('session_type') or '').strip().lower()
-            if ('qual' in session and not is_open_qualifying(session_metadata)) or (session == 'race' and sample.get('session_state') in (1, 2, 3)):
+            if ('qual' in session and not is_open_qualifying(session_metadata)) or (session == 'race' and sample.get('session_state') in (1, 2, 3)
+                    and self.spotter.profile != 'ASPHALT_OVAL'):
                 self.spotter.reset()
             else:
                 self.spotter.ingest(sample, self.run_id, now)
@@ -300,6 +312,9 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self._brief_straight(sample, now)
             self._brief_formation(sample, now)
             self._keep_result(sample)
+            self.banter.ingest(sample, self.run_id, now, self.spotter.profile == 'ASPHALT_OVAL')
+            self.oval_procedures.ingest(sample, self.run_id, now, self.spotter.profile == 'ASPHALT_OVAL',
+                self.radio.metadata.get('session_type') or sample.get('session_type'))
             self.overlay_laps.ingest(sample, self.run_id, self.radio.metadata.get('session_type') or sample.get('session_type'))
             self.samples.append({**sample, 'session_time': session_time, 'wall_time': now, 'run_id': self.run_id})
             self.state = 'CONNECTED'
@@ -324,6 +339,8 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             view['game'] = self.game if self.state == 'CONNECTED' else None
             view['radio'] = self.radio.view(self.clock()) if self.state == 'CONNECTED' else {'connected': False, 'events': [], 'history': [], 'capabilities': {}}
             view['settings'] = self.spotter_settings()
+            view['banter_shadow'] = self.banter.view(self.clock()) if self.state == 'CONNECTED' else []
+            view['oval_shadow'] = self.oval_procedures.view(self.clock()) if self.state == 'CONNECTED' else []
             # Only the beeps travel on the fast path; the attempts table is read with /drill.
             view['drill'] = {'active': self.drill.plan is not None, 'serial': self.drill.serial, 'events': self.drill.events[-6:]}
             return view
@@ -416,6 +433,8 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
 
     def _reset_live(self, reason):
         with self.lock:
+            self.banter.reset()
+            self.oval_procedures.reset()
             self._flush_timing()
             self.overlay_preparation = None
             self.spotter.reset()
@@ -488,8 +507,12 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             # Replay/spectator data must never masquerade as the driver's current car.
             if sample.get('is_replay') or not sample.get('on_track'):
                 self._note_link('REPLAY' if sample.get('is_replay') else 'OFF_TRACK', sdk)
+                with self.lock:
+                    self.banter.reset()
+                    self.oval_procedures.reset()
                 weekend = sdk['WeekendInfo'] or {}
-                identity = {**session_identity(weekend, sdk['DriverInfo'] or {}), 'game': self.game}
+                identity = {**session_identity(weekend, sdk['DriverInfo'] or {}), 'game': self.game,
+                            **track_context(weekend, self.game)}
                 same = all(identity.get(k)==self.identity.get(k) for k in identity)
                 if (same and sample.get('session_num')==self.identity.get('session_num')
                         and sample.get('is_replay') is False and self.run_id
@@ -517,6 +540,10 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 weekend, drivers = sdk['WeekendInfo'] or {}, sdk['DriverInfo'] or {}
                 identity = session_identity(weekend, drivers)
                 identity['game'] = self.game
+                identity.update(track_context(weekend, self.game))
+                if self.game == 'iracing':
+                    player_idx = sdk['PlayerCarIdx'] if 'PlayerCarIdx' in names else drivers.get('DriverCarIdx')
+                    sample.update(read_pacing(sdk, names, player_idx))
                 setup_key=(self.game,identity.get('car_path'),identity.get('subsession_id'),sample.get('session_num'))
                 if setup_key!=getattr(self,'_setup_cache_key',None) or self.clock()-getattr(self,'_setup_read_at',-1e9)>=1:
                     try:setup=sdk['CarSetup'] or {}

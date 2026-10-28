@@ -64,8 +64,20 @@ class RadioDeliveryEvent(BaseModel):
     backend_version: str | None = Field(default=None, max_length=64, pattern=r'^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')
 
 
+class BanterObservation(BaseModel):
+    candidate_id: str = Field(min_length=1, max_length=160)
+    run_id: str = Field(min_length=1, max_length=80)
+    session_time: float = Field(allow_inf_nan=False)
+    audio_busy: bool | None = Field(default=None, strict=True)
+    engineer_busy: bool | None = Field(default=None, strict=True)
+    pending_audio: bool | None = Field(default=None, strict=True)
+    muted: bool | None = Field(default=None, strict=True)
+
+
 class RadioDeliveryBatch(BaseModel):
     events: list[RadioDeliveryEvent] = Field(max_length=64)
+    banter: list[BanterObservation] = Field(default_factory=list, max_length=16)
+    oval: list[BanterObservation] = Field(default_factory=list, max_length=16)
 
 
 class SpotterOptions(BaseModel):
@@ -895,6 +907,14 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             run_id, identity = live.run_id, dict(live.identity)
             session_type = (live.pit_wall.race or {}).get('session_type')
             contexts = [feedback_context(live, event.run_id, time.time()) for event in payload.events]
+            shadow = getattr(live, 'banter', None)
+            procedures = getattr(live, 'oval_procedures', None)
+            for observation in payload.oval:
+                if procedures is not None and observation.run_id == run_id:
+                    procedures.feedback(observation.model_dump(), live.clock())
+            banter = [record for observation in payload.banter
+                      if shadow is not None and observation.run_id == run_id
+                      and (record := shadow.feedback(observation.model_dump(), live.clock())) is not None]
             for event in payload.events:
                 if event.run_id == run_id and callable(getattr(live, 'radio_delivery', None)):
                     live.radio_delivery(event.event_id, event.status, dropped_parts=event.dropped_parts)
@@ -906,6 +926,14 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
                    **({'session': session} if run_id and e.run_id == run_id else {})}
                   for e, context in zip(payload.events, contexts)]
         await asyncio.to_thread(coach.store.record_radio, events)
+        if banter:
+            try:
+                await asyncio.to_thread(coach.store.record_banter, banter)
+            except Exception:
+                logger.exception('Shadow-only banter diagnostics could not be saved')
+            else:
+                with live.lock:
+                    shadow.saved(banter)
         return {'recorded': len(payload.events)}
 
     @router.get('/radio-delivery')

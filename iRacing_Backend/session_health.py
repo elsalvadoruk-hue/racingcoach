@@ -15,6 +15,8 @@ logger = logging.getLogger(__name__)
 MAX_RUNS, MAX_SAMPLES = 64, 128
 POLL_SECONDS, HEARTBEAT_SECONDS = 2., 30.
 IDENTITY_KEYS = ('game', 'track_name', 'track_path', 'track_config', 'car_name', 'car_path')
+OVAL_IDENTITY_KEYS = ('track_id', 'track_type', 'track_direction', 'track_category',
+                      'course_cautions', 'restarts', 'standing_start')
 FEEDBACK_FIELDS = ('session_time', 'lap_number', 'distance_pct', 'on_track', 'is_replay',
                    'on_pit_road', 'session_state', 'session_flags', 'speed_mps', 'brake', 'throttle',
                    'steering_rad', 'steering_lock_ratio', 'workload_in_s', 'corner_in_s', 'speech_hold_s')
@@ -63,6 +65,7 @@ class SessionHealthRecorder:
             self.stopping.wait(POLL_SECONDS)
 
     def run_once(self, *, stopping=False):
+        self._flush_procedures()
         now = self.clock()
         live = self.live
         if not live.lock.acquire(timeout=.05):
@@ -76,16 +79,37 @@ class SessionHealthRecorder:
             if stopping:
                 state = 'BACKEND_STOPPING'
             run_id = live.run_id
+            shadow = getattr(live, 'banter', None)
+            banter = shadow.expired(now) if shadow is not None else []
             identity = {key: value[:200] for key in IDENTITY_KEYS
                         if isinstance(value := live.identity.get(key), str)}
+            if identity.get('game') == 'iracing':
+                from oval_spotter import classify, POLICY_VERSION
+                identity.update({key: value[:200] for key in OVAL_IDENTITY_KEYS
+                                 if isinstance(value := live.identity.get(key), str)})
+                identity['spotter_profile'], identity['spotter_profile_reason'] = classify(live.identity)
+                identity['spotter_policy'] = POLICY_VERSION
             kind = live.radio.metadata.get('session_type')
             if isinstance(kind, str):
                 identity['session_type'] = kind[:80]
             event = {'at': now, 'state': state, 'sample_age_s': round(age, 3),
                      'backend_version': self.backend_version,
                      **{key: scalar(sample.get(key)) for key in ('session_time', 'lap_number', 'on_track', 'is_replay', 'on_pit_road')}}
+            if identity.get('spotter_profile') == 'ASPHALT_OVAL':
+                from oval_spotter import OVAL_FIELDS
+                event['oval'] = {key: scalar(sample.get(key)) for key in OVAL_FIELDS}
+                traffic = getattr(live, 'traffic_log', None)
+                event['traffic_dropped_rows'] = scalar(getattr(traffic, 'dropped_rows', None))
+                event['traffic_failed'] = scalar(getattr(traffic, 'failed', None))
         finally:
             live.lock.release()
+        if banter:
+            try:
+                self.store.record_banter(banter)
+                with live.lock:
+                    shadow.saved(banter)
+            except Exception:
+                logger.exception('Shadow-only banter diagnostics could not be saved')
         signature = (run_id, state, event['on_track'], event['is_replay'], event['on_pit_road'])
         if signature == self.last_signature and (state != 'CONNECTED' or self.last_at is not None and 0 <= now - self.last_at < HEARTBEAT_SECONDS):
             return False
@@ -99,3 +123,22 @@ class SessionHealthRecorder:
             return False
         self.last_signature, self.last_at = signature, now
         return True
+
+    def _flush_procedures(self):
+        # Also runs after disconnect, when live.run_id/samples have already been cleared.
+        if not self.live.lock.acquire(timeout=.05):
+            return
+        try:
+            shadow = getattr(self.live, 'oval_procedures', None)
+            records = shadow.pending() if shadow is not None else []
+        finally:
+            self.live.lock.release()
+        if records:
+            try:
+                self.store.record_oval_procedures(records)
+                with self.live.lock:
+                    shadow.saved(records)
+            except Exception:
+                if self.clock() - self.last_error >= 60:
+                    self.last_error = self.clock()
+                    logger.exception('Shadow-only oval observations could not be saved')

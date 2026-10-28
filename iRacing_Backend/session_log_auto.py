@@ -1,8 +1,8 @@
 """Automatic session-log sending, only with the driver's recorded consent.
 
-One switch covers iRacing and LMU: both games write the same delivery log (radio_delivery),
-and this module never looks at which game a session came from. When it is on, every drive
-that has ended is sent once, as the same file the "보내기" button sends, with:
+One switch covers iRacing and LMU. Completed drives use the same file as the
+"보내기" button. Confirmed asphalt-oval drives can also qualify without radio
+calls, using independent health observations of non-replay driving, with:
 
 - no microphone questions or answers (always left out here),
 - names, session numbers, ratings and paths already removed (session_log.scrub),
@@ -27,10 +27,18 @@ import session_log
 logger = logging.getLogger(__name__)
 
 # Raise when what the consent text says changes: the driver is then asked again.
-# 3 (2026-10-23): selected corner traces in spare space, without nearby-car files.
-CONSENT_VERSION = 3
-FINISHED_AFTER_S = 600       # a drive with no new radio event for 10 minutes has ended
-MIN_CALLS, MIN_MINUTES = 10, 2.  # too little to learn anything from
+# 4 (2026-10-28): confirmed asphalt-oval practice, silent oval drives and pacing
+# signals; bounded traffic windows when the complete oval log does not fit.
+CONSENT_VERSION = 4
+# Update with CONSENT_VERSION when the notice's scope changes, independently of app releases.
+CONSENT_CHANGES = (
+    '확인된 포장 오벌 연습에서도 주변 차량·피트 허용·출발 대열 신호를 보냅니다.',
+    '실제 주행이 확인된 포장 오벌은 2분 이상이면 안내가 없었던 기록도 보냅니다.',
+    '오벌 절차·위트 무전의 무음 평가 근거와 음성 점유 상태·가상 문구를 추가합니다.',
+    '파일이 크면 오벌 주변 차량 기록을 일부 구간으로 줄이고 생략 범위를 표시합니다.',
+)
+FINISHED_AFTER_S = 600       # no new radio/health record for 10 minutes, and not the current run
+MIN_CALLS, MIN_MINUTES = 10, 2.  # confirmed driven asphalt ovals only waive MIN_CALLS
 MAX_ATTEMPTS, RETRY_AFTER_S = 3, 1800
 DAILY_LIMIT = 20             # the receiving script takes 300 a day from everyone together
 CHECK_EVERY_S = 60
@@ -49,17 +57,21 @@ def load():
     if not isinstance(saved, dict):
         saved = {}
     consent = saved.get('consent') if isinstance(saved.get('consent'), dict) else None
-    if consent and consent.get('version') != CONSENT_VERSION:
+    renewal = bool(consent and consent.get('version') != CONSENT_VERSION)
+    previous = consent.get('version') if renewal else None
+    if renewal:
         consent = None   # the notice changed since: ask again
     runs = saved.get('runs') if isinstance(saved.get('runs'), dict) else {}
-    return {'consent': consent, 'runs': runs}
+    return {'consent': consent, 'runs': runs, 'reconsent_required': renewal,
+            'previous_consent_version': previous if type(previous) is int else None}
 
 
 def save(state):
     target = path()
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix('.tmp')
-    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding='utf-8')
+    # Renewal metadata is derived from the recorded consent; never persist stale UI flags.
+    temporary.write_text(json.dumps({key:state[key] for key in ('consent','runs')}, ensure_ascii=False, indent=2), encoding='utf-8')
     temporary.replace(target)
 
 
@@ -81,6 +93,8 @@ def status():
     runs = sorted(({'run_id': run_id, **entry} for run_id, entry in state['runs'].items()),
                   key=lambda entry: -(entry.get('ended_at') or 0))
     return {'enabled': bool(state['consent']), 'consent_version': CONSENT_VERSION,
+            'reconsent_required':state['reconsent_required'], 'previous_consent_version':state['previous_consent_version'],
+            'consent_changes':list(CONSENT_CHANGES) if state['reconsent_required'] else [],
             'consented_at': (state['consent'] or {}).get('given_at'),
             'available': bool(app_settings.log_upload_url()),
             'sent': sum(1 for entry in runs if entry.get('sent_at')),
@@ -126,7 +140,9 @@ class AutoUploader:
             for run in reversed(session_log.sessions(self.store, 30)):     # oldest first
                 entry = state['runs'].get(run['run_id'], {})
                 if (run['run_id'] == current or run['started_at'] < given or now - run['ended_at'] < FINISHED_AFTER_S
-                        or run['calls'] < MIN_CALLS or run['minutes'] < MIN_MINUTES or entry.get('sent_at')
+                        or (run['calls'] < MIN_CALLS and not (run.get('game') == 'iracing'
+                            and run.get('spotter_profile') == 'ASPHALT_OVAL' and run.get('has_driving_sample')))
+                        or run['ended_at'] - run['started_at'] < MIN_MINUTES * 60 or entry.get('sent_at')
                         or entry.get('attempts', 0) >= MAX_ATTEMPTS
                         or now - entry.get('tried_at', 0) < RETRY_AFTER_S or sent_today >= DAILY_LIMIT):
                     continue

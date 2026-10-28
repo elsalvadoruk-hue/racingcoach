@@ -68,6 +68,19 @@ class VoiceNoteStore:
                     run_id TEXT PRIMARY KEY, started_at REAL NOT NULL, updated_at REAL NOT NULL,
                     identity_json TEXT NOT NULL, health_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS banter_reviews (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
+                    candidate_id TEXT NOT NULL, record_json TEXT NOT NULL,
+                    UNIQUE(run_id, candidate_id)
+                );
+                CREATE TABLE IF NOT EXISTS banter_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, record_json TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS oval_procedure_reviews (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
+                    record_id TEXT NOT NULL, record_json TEXT NOT NULL,
+                    UNIQUE(run_id, record_id)
+                );
             ''')
             if 'recent_json' not in {row[1] for row in db.execute('PRAGMA table_info(voice_notes)')}:
                 db.execute("ALTER TABLE voice_notes ADD COLUMN recent_json TEXT NOT NULL DEFAULT ''")
@@ -148,6 +161,33 @@ class VoiceNoteStore:
                         json.dumps(health, ensure_ascii=False, allow_nan=False)))
             db.execute('DELETE FROM session_health WHERE run_id NOT IN '
                        '(SELECT run_id FROM session_health ORDER BY updated_at DESC LIMIT ?)', (MAX_RUNS,))
+
+    def record_oval_procedures(self, records):
+        """Shadow observations only; bounded, idempotent and outside the SDK loop."""
+        with self.connect(timeout=.1) as db:
+            db.executemany('INSERT OR IGNORE INTO oval_procedure_reviews(run_id,record_id,record_json) VALUES(?,?,?)',
+                [(r['run_id'], r['record_id'], json.dumps(r, ensure_ascii=False, allow_nan=False)) for r in records])
+            db.execute('DELETE FROM oval_procedure_reviews WHERE id NOT IN (SELECT id FROM oval_procedure_reviews ORDER BY id DESC LIMIT 4096)')
+
+    def record_banter(self, records):
+        """Virtual choices only. Atomic dedup/history, outside the live SDK loop."""
+        from banter_shadow import choose
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            for record in records:
+                if db.execute('SELECT 1 FROM banter_reviews WHERE run_id=? AND candidate_id=?',
+                              (record['run_id'], record['candidate_id'])).fetchone():
+                    continue
+                history = [json.loads(row[0]) for row in db.execute(
+                    'SELECT record_json FROM banter_history ORDER BY id DESC LIMIT 24')]
+                selected = choose(record, history)
+                db.execute('INSERT INTO banter_reviews(run_id,candidate_id,record_json) VALUES(?,?,?)',
+                           (record['run_id'], record['candidate_id'], json.dumps(selected, ensure_ascii=False, allow_nan=False)))
+                if selected['selected']:
+                    db.execute('INSERT INTO banter_history(record_json) VALUES(?)',
+                               (json.dumps(selected, ensure_ascii=False, allow_nan=False),))
+            db.execute('DELETE FROM banter_reviews WHERE id <= (SELECT COALESCE(MAX(id),0)-2048 FROM banter_reviews)')
+            db.execute('DELETE FROM banter_history WHERE id <= (SELECT COALESCE(MAX(id),0)-24 FROM banter_history)')
 
     def record_radio(self, events):
         with self.connect() as db:
