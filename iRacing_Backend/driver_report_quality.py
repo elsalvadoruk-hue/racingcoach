@@ -30,6 +30,8 @@ def _lap_ratio(drives):
     rows = []
     missing = 0
     for drive in drives:
+        if drive.get('session_type') not in {'RACE', 'QUALIFY'}:
+            continue
         # Different clocks cannot establish additional laps in the same drive.
         bases, verdicts = {}, {}
         for observation in drive['observations']:
@@ -87,18 +89,20 @@ def _lap_ratio(drives):
     invalid = sum(row['state'] == 'INVALID' for row in accepted)
     unknown = len(accepted) - valid - invalid
     denominator = valid + invalid
-    reason = ('완주 랩 중 앱의 분석 판정이 확인된 랩을 분모로 계산합니다. '
+    reason = ('퀄리·레이스의 완주 랩 중 앱의 분석 판정이 확인된 랩을 분모로 계산합니다. '
+              '연습과 세션 종류 미확인 기록은 유효 랩 수와 완주 랩 수 모두에서 제외합니다. '
               '피트·인시던트·랩타임 등 기존 분석 기준이며 게임의 공식 유효 판정이 아닙니다. '
               '판정 미확인 랩과 확인된 리플레이는 제외하고 공유 UTC의 복사 랩은 한 번만 셉니다. '
               '시계가 서로 대응하지 않는 파일은 확인된 가장 큰 묶음만 사용하며 판정이 충돌한 랩은 보류합니다.')
     if unknown or missing:
         reason += f' 판정 미확인 {unknown}랩, 완주 판정 근거가 없는 관측 {missing}개는 비율에 넣지 않았습니다.'
     if not denominator:
-        reason = '완주 랩의 분석 판정이 아직 없습니다. 전체 기록 분석 또는 기존 기록 다시 확인 후 반영됩니다.'
+        reason = '선택 기간에 퀄리·레이스 완주 랩의 분석 판정이 아직 없습니다. 연습과 세션 종류 미확인 기록은 제외합니다. 전체 기록 분석 또는 기존 기록 다시 확인 후 반영됩니다.'
     return _available(valid / denominator * 100. if denominator else None, reason,
                       valid_laps=valid, invalid_laps=invalid, classified_laps=denominator,
                       completed_laps=len(accepted), unknown_laps=unknown,
-                      authority='ANALYSIS_POLICY', scope='SELECTED_PERIOD_COMPLETED_LAPS')
+                      authority='ANALYSIS_POLICY', scope='RACE_QUALIFY_COMPLETED_LAPS',
+                      session_types=['RACE', 'QUALIFY'])
 
 
 def _nonoverlapping(sources):

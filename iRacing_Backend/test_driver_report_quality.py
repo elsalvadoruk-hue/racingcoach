@@ -30,8 +30,34 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(incidents['observed_time_s'], 1200.)
         self.assertEqual(incidents['value'], 9.)
         self.assertEqual(incidents['observation_count'], 2)
-        # This scope restriction is specific to incidents, not the valid-lap card.
-        self.assertEqual(result['valid_lap_ratio']['classified_laps'], 5)
+        self.assertEqual(result['valid_lap_ratio']['classified_laps'], 2)
+
+    def test_valid_ratio_uses_only_competitive_laps_in_both_counts(self):
+        rows = [drive('race'), drive('qualify', offset=1000., validity='INVALID', session_type='QUALIFY'),
+                drive('practice_valid', offset=2000., session_type='PRACTICE'),
+                drive('practice_invalid', offset=3000., validity='INVALID', session_type='PRACTICE'),
+                drive('unknown', offset=4000., session_type='UNKNOWN')]
+        result = build_quality(rows)['valid_lap_ratio']
+        self.assertEqual(result['value'], 50.)
+        self.assertEqual(result['valid_laps'], 1)
+        self.assertEqual(result['invalid_laps'], 1)
+        self.assertEqual(result['classified_laps'], 2)
+        self.assertEqual(result['scope'], 'RACE_QUALIFY_COMPLETED_LAPS')
+        self.assertEqual(result['session_types'], ['RACE', 'QUALIFY'])
+
+    def test_excluded_sessions_cannot_conflict_with_a_competitive_lap(self):
+        result = build_quality([drive(), drive('practice', validity='INVALID', session_type='PRACTICE')])['valid_lap_ratio']
+        self.assertEqual(result['value'], 100.)
+        self.assertEqual(result['unknown_laps'], 0)
+
+    def test_noncompetitive_only_is_unavailable_and_competitive_zero_is_preserved(self):
+        result = build_quality([drive(session_type='PRACTICE')])['valid_lap_ratio']
+        self.assertIsNone(result['value'])
+        self.assertEqual(result['classified_laps'], 0)
+        self.assertIn('퀄리', result['reason'])
+        result = build_quality([drive(validity='INVALID', session_type='QUALIFY')])['valid_lap_ratio']
+        self.assertEqual(result['value'], 0.)
+        self.assertEqual(result['classified_laps'], 1)
 
     def test_practice_only_has_no_competitive_incident_rate_even_with_zero_points(self):
         result = build_quality([drive(points=0, session_type='PRACTICE')])['incidents_per_hour']

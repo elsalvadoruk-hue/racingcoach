@@ -109,7 +109,7 @@ test('malformed or absent growth never claims verified conditions or prints inva
 test('compact style keeps measured values and repeat states while details restore focus',async()=>{
   render(<DriverStyleCard compact style={{items:[{...input,status:'REPEATED',title:'제동 연결형'},
     {...input,id:'throttle',axis:'throttle',title:'스로틀 전개 관측',value:.65,unit:'s'},
-    {...input,id:'excluded',title:'세 번째 축'}],reason:'입력 방식과 빠르기는 별도입니다.'}} />);
+    {...input,id:'excluded',axis:'excluded',title:'세 번째 축'}],reason:'입력 방식과 빠르기는 별도입니다.'}} />);
   expect(screen.getAllByText('0%')).toHaveLength(2);
   expect(screen.getByText('0.65초')).toBeInTheDocument();
   expect(screen.getByText('측정 3 / 전체 3종')).toBeInTheDocument();
@@ -250,28 +250,21 @@ const fullStyle=()=>({items:styleAxes.map((axis,index)=>({...input,id:axis,axis,
   short_label:`조작 종류 ${index+1}`,value:index,meaning:`입력 의미 ${index+1}`,example:`입력 예시 ${index+1}`,
   calculation:`입력 계산 조건 ${index+1}`,interpretation:`입력 해석 한계 ${index+1}`,names:[`성향 A${index+1}`,`성향 B${index+1}`]}))});
 
-test('all nine measured axes are accessible three at a time with repeated evidence first and bounded pages',()=>{
+test('all nine axes stay visible in a fixed grid without paging when repeated evidence changes',()=>{
   const style=fullStyle();style.items[7].status='REPEATED';
   const view=render(<DriverStyleCard compact style={style}/>);
   expect(screen.getByText('측정 9 / 전체 9종')).toBeInTheDocument();
-  expect(screen.getByText('1–3 / 9종')).toBeInTheDocument();
-  const shown=screen.getByLabelText('현재 페이지의 성향 항목');
-  expect(within(shown).getAllByRole('article')).toHaveLength(3);
+  const shown=screen.getByLabelText('운전 성향 전체 항목');
+  expect(within(shown).getAllByRole('button')).toHaveLength(9);
   expect(within(shown).getByText('조작 관측 8')).toBeInTheDocument();
-  expect(within(shown).queryByText('조작 관측 9')).not.toBeInTheDocument();
-  expect(screen.getByRole('button',{name:'이전 성향 3개'})).toBeDisabled();
-  userEvent.click(screen.getByRole('button',{name:'다음 성향 3개'}));
-  expect(screen.getByText('4–6 / 9종')).toBeInTheDocument();
-  expect(within(shown).getByText('조작 관측 3')).toBeInTheDocument();
-  userEvent.click(screen.getByRole('button',{name:'다음 성향 3개'}));
-  expect(screen.getByText('7–9 / 9종')).toBeInTheDocument();
-  expect(within(shown).getByText('조작 관측 9')).toBeInTheDocument();
-  expect(screen.getByRole('button',{name:'다음 성향 3개'})).toBeDisabled();
-  userEvent.click(screen.getByRole('button',{name:'이전 성향 3개'}));
-  expect(screen.getByText('4–6 / 9종')).toBeInTheDocument();
+  expect(within(shown).getByText('조작 종류 9')).toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:'다음 성향 3개'})).not.toBeInTheDocument();
+  const order=within(shown).getAllByRole('button').map(button=>button.getAttribute('aria-label').split(' · ')[0]);
+  style.items[0].status='REPEATED';
+  view.rerender(<DriverStyleCard compact style={style}/>);
+  expect(within(shown).getAllByRole('button').map(button=>button.getAttribute('aria-label').split(' · ')[0])).toEqual(order);
   view.rerender(<DriverStyleCard compact style={{items:style.items.slice(0,2)}}/>);
-  expect(screen.getByText('1–2 / 2종')).toBeInTheDocument();
-  expect(within(shown).getAllByRole('article')).toHaveLength(2);
+  expect(within(shown).getAllByRole('button')).toHaveLength(2);
 });
 
 test('nine-axis details select one meaning at a time and use backend examples and calculation metadata',async()=>{
@@ -298,7 +291,7 @@ test('nine-axis details select one meaning at a time and use backend examples an
   await waitFor(()=>expect(trigger).toHaveFocus());
 });
 
-test('unavailable axes remain selectable with their reason and never fill the measured main list',async()=>{
+test('unavailable axes remain visible and open their own explanation with focus restored',async()=>{
   const style=fullStyle();
   style.items=style.items.map((item,index)=>index<2?item:{...item,status:'UNAVAILABLE',value:null,event_count:0,reason:`입력 채널 부족 ${index+1}`});
   style.input_coverage={source_count:7,current_source_count:2,pending_source_count:5,version:'driver-inputs-v2',reason:'기존 기록의 새 성향 항목을 백그라운드에서 한 번 보완합니다.'};
@@ -306,15 +299,20 @@ test('unavailable axes remain selectable with their reason and never fill the me
   expect(screen.getByText('측정 2 / 전체 9종')).toBeInTheDocument();
   expect(screen.getByText('기존 기록 5개 보완 대기')).toBeInTheDocument();
   expect(screen.queryByText('조작 관측 3')).not.toBeInTheDocument();
-  expect(screen.getByRole('button',{name:'다음 성향 3개'})).toBeDisabled();
-  userEvent.click(screen.getByRole('button',{name:'운전 성향 자세히'}));
+  const grid=screen.getByLabelText('운전 성향 전체 항목');
+  expect(within(grid).getAllByRole('button')).toHaveLength(9);
+  expect(within(grid).getAllByText('측정 대기')).toHaveLength(7);
+  const trigger=within(grid).getByRole('button',{name:/조작 종류 9 ·/});
+  userEvent.click(trigger);
   const dialog=await screen.findByRole('dialog',{name:'운전 성향 자세히'});
   const selector=within(dialog).getByRole('combobox',{name:'설명할 성향 항목'});
   expect(within(selector).getAllByRole('option')).toHaveLength(9);
   expect(within(dialog).getByText(style.input_coverage.reason)).toBeInTheDocument();
-  userEvent.selectOptions(selector,'shift_consistency');
+  expect(selector).toHaveValue('shift_consistency');
   expect(within(dialog).getByText('입력 채널 부족 9')).toBeInTheDocument();
   expect(within(dialog).getByText('입력 의미 9')).toBeInTheDocument();
   expect(within(dialog).getByText('—')).toBeInTheDocument();
   expect(within(dialog).queryByText('—%')).not.toBeInTheDocument();
+  userEvent.keyboard('{Escape}');
+  await waitFor(()=>expect(trigger).toHaveFocus());
 });

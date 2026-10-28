@@ -179,7 +179,8 @@ function GrowthSummary({ pace, quality }) {
   const observedChange = measured && !compared && Number.isFinite(pace.observation_change_pct) ? pace.observation_change_pct : null;
   const spread = measured && pace.lap_count >= 2 && Number.isFinite(pace.mad_pct) && pace.mad_pct >= 0 ? pace.mad_pct : null;
   const valid = quality?.valid_lap_ratio, incidents = quality?.incidents_per_hour;
-  const validAvailable = OBSERVED.has(valid?.status) && Number.isFinite(valid.value) && valid.value >= 0 && valid.value <= 100;
+  const competitiveValidity = valid?.scope === 'RACE_QUALIFY_COMPLETED_LAPS';
+  const validAvailable = competitiveValidity && OBSERVED.has(valid?.status) && Number.isFinite(valid.value) && valid.value >= 0 && valid.value <= 100;
   const incidentsAvailable = OBSERVED.has(incidents?.status) && Number.isFinite(incidents.value) && incidents.value >= 0;
   const metrics = [
     { label: observedChange === null ? '개인 페이스' : '관측 페이스 변화', Icon: Gauge,
@@ -192,8 +193,9 @@ function GrowthSummary({ pace, quality }) {
       note: spread === null ? measured && pace.lap_count === 1 ? '최근 1랩 · 편차는 2랩부터' : '측정 가능한 랩 확인 필요' : pace.status === 'PARTIAL' ? '최근 한 기록의 측정 랩' : '동일 조건의 측정 랩',
       reason: `중앙절대편차 / 랩 중앙값 × 100${pace?.scope ? ` · ${pace.scope}` : ''}` },
     { label: '분석 유효 랩 비율', Icon: ShieldCheck, value: validAvailable ? `${number(valid.value, 1)}%` : DASH,
-      note: validAvailable ? `${number(valid.valid_laps)}/${number(valid.classified_laps)}완주 랩 · 앱 분석 기준` : '완주 랩의 분석 판정 확인 필요',
-      reason: valid?.reason || '게임의 공식 판정과 구분한 앱 분석 기준입니다. 기존 기록을 다시 확인하면 확인 가능한 완주 랩부터 반영합니다.' },
+      note: validAvailable ? `퀄리·레이스 · ${number(valid.valid_laps)}/${number(valid.classified_laps)}완주 랩` : '퀄리·레이스 · 분석 판정 확인 필요',
+      reason: competitiveValidity ? valid?.reason || '퀄리·레이스의 판정이 확인된 완주 랩으로 계산한 앱 분석 기준이며 게임의 공식 판정과 다릅니다.'
+        : '퀄리·레이스 집계 기준을 확인하지 못했습니다. 업데이트 뒤 앱을 다시 실행하세요. 연습과 세션 종류 미확인 기록은 제외합니다.' },
     { label: '시간당 인시던트 점수', Icon: Flag, value: incidentsAvailable ? `${number(incidents.value, 1)}점/h` : DASH,
       note: incidentsAvailable ? `레이스·퀄리 · 트랙 위 ${duration(incidents.observed_time_s)} · ${number(incidents.increase_points)}점 증가` : '레이스·퀄리 관측 근거 확인 필요',
       reason: incidents?.reason || '레이스·퀄리에서 같은 구간의 개인 인시던트 증가점수와 트랙 위 관측시간으로 계산합니다. 연습·세션 종류 미확인 기록은 제외하며 사고 횟수나 공식 경기 전체의 점수가 아닙니다.' },
@@ -245,7 +247,7 @@ function Evidence({ report, gameName, period, triggerRef, open, onOpenChange }) 
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="driver-report-scene driver-report-evidence" onCloseAutoFocus={event => { event.preventDefault(); triggerRef.current?.focus(); }}>
     <DialogHeader><DialogTitle>관측 근거와 기록</DialogTitle><DialogDescription>{gameName} · {period === '0' ? '전체 기간' : `최근 ${period}일`} · 통계와 기록은 선택 기간 기준</DialogDescription></DialogHeader>
     <div className="driver-report-evidence-body">
-      <section aria-label="지표를 읽는 방법"><h3>유효 랩과 인시던트는 어떻게 계산하나요?</h3><p>{report?.quality?.valid_lap_ratio?.reason || '분석 유효 랩 비율은 완주 랩의 앱 분석 판정으로 계산하며 게임의 공식 유효 판정과 다릅니다. 판정 미확인 랩은 제외합니다.'}</p><p>{report?.quality?.incidents_per_hour?.reason || '시간당 인시던트는 레이스·퀄리에서 같은 구간의 개인 누적값 증가점수와 트랙 위 관측시간으로 계산합니다. 연습·세션 종류 미확인 기록은 제외하며 공식 경기 전체 점수나 사고 횟수와 다릅니다.'}</p></section><Separator />
+      <section aria-label="지표를 읽는 방법"><h3>유효 랩과 인시던트는 어떻게 계산하나요?</h3><p>{report?.quality?.valid_lap_ratio?.scope==='RACE_QUALIFY_COMPLETED_LAPS' ? report.quality.valid_lap_ratio.reason : '분석 유효 랩 비율은 퀄리·레이스 완주 랩의 앱 분석 판정으로 계산하며 게임의 공식 유효 판정과 다릅니다. 연습·세션 종류 미확인 기록과 판정 미확인 랩은 제외합니다.'}</p><p>{report?.quality?.incidents_per_hour?.reason || '시간당 인시던트는 레이스·퀄리에서 같은 구간의 개인 누적값 증가점수와 트랙 위 관측시간으로 계산합니다. 연습·세션 종류 미확인 기록은 제외하며 공식 경기 전체 점수나 사고 횟수와 다릅니다.'}</p></section><Separator />
       <section aria-label="관측 범위"><h3>선택 기간에서 어디까지 확인했나요?</h3><dl className="driver-report-evidence-counts"><div><dt>연결한 원본</dt><dd>{number(coverage?.period_source_count)}개</dd></div><div><dt>확인된 세션</dt><dd>{number(coverage?.period_session_count)}개</dd></div><div><dt>출처별 관측</dt><dd>{number(coverage?.period_source_only_count)}개</dd></div><div><dt>전체 저장소의 날짜 미확인</dt><dd>{number(coverage?.undated_count)}개</dd></div><div><dt>선택 기간 관측</dt><dd>{number(coverage?.period_observation_count)}개</dd></div></dl><p>{period === '0' ? '전체 보기에는 날짜 미확인 기록도 포함하며 날짜별 그래프에서는 제외합니다.' : `날짜를 확인하지 못한 관측은 최근 ${period}일 통계에서 제외합니다.`} 세션을 확인하지 못한 출처도 측정 가능한 값은 부분 관측으로 표시합니다. 서로 다른 독립 세션이나 확정된 성장으로 해석하지 않습니다.</p>{coverage?.period_reason ? <p>{coverage.period_reason}</p> : null}</section>
       {Number.isFinite(coverage?.period_measured_lap_count) ? <><Separator /><section aria-label="측정과 누적 범위"><h3>선택 기간의 측정과 관측 범위</h3><dl className="driver-report-evidence-counts driver-report-measurement-counts"><div><dt>연결한 관측</dt><dd>{number(coverage.period_observation_count)}개</dd></div><div><dt>측정 가능 관측</dt><dd>{number(coverage.period_measured_observation_count)}개</dd></div><div><dt>측정 가능한 랩</dt><dd>{number(coverage.period_measured_lap_count)}랩</dd></div><div><dt>리플레이 미확인</dt><dd>{number(coverage.period_replay_unknown_observation_count)}개</dd></div><div><dt>운전량 미확인</dt><dd>{number(coverage.period_driving_unavailable_observation_count)}개</dd></div></dl><p>측정 가능한 랩은 공식 유효 랩 수가 아닙니다. 리플레이 여부가 미확인인 관측은 확인된 구간의 측정값으로만 읽으며, 확정된 실제 주행이나 성장으로 해석하지 않습니다.</p></section></> : null}
       {coverage?.blocking_reason_counts?.length ? <><Separator /><section aria-label="미포함 이유"><h3>누적과 비교에 넣지 못한 이유</h3><ul>{coverage.blocking_reason_counts.map((item, index) => <li key={item.code || index}>{item.reason}{Number.isFinite(item.count) ? ` · ${number(item.count)}개 관측` : ''}</li>)}</ul><p>한 관측에 여러 이유가 있을 수 있어 이유별 개수는 더하지 않습니다.</p></section></> : null}

@@ -15,6 +15,7 @@
 .driver-report-scene *, .driver-report-scene *::before, .driver-report-scene *::after { box-sizing:border-box; }
 .driver-report-scene p, .driver-report-scene h1, .driver-report-scene h2, .driver-report-scene h3, .driver-report-scene dl, .driver-report-scene dd { margin:0; }
 .driver-report-scene button { font-family:var(--driver-report-font); font-size:12px; }
+.driver-report-scene .numeric { font-family:var(--driver-report-font); font-variant-numeric:tabular-nums; }
 .driver-report-scene .driver-report-heading { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:16px; min-width:0; min-height:64px; }
 .driver-report-scene .driver-report-title { display:flex; flex-direction:column; gap:3px; }
 .driver-report-scene .driver-report-title > span { font-size:12px; color:hsl(var(--muted-foreground)); }
@@ -258,14 +259,13 @@
 .driver-report-dashboard .driver-journal-note { margin-top:2px; font-size:12px; line-height:1.4; }
 .driver-report-dashboard .driver-insight-compact-title { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .driver-report-dashboard .driver-insight-compact-title button { flex-shrink:0; }
-.driver-report-dashboard .driver-style-compact-items { display:grid; gap:5px; }
-.driver-report-dashboard .driver-style-compact-item { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:6px; min-width:0; min-height:21px; }
-.driver-report-dashboard .driver-style-compact-item strong { font-size:12px; line-height:1.4; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-.driver-report-dashboard .driver-style-compact-item .numeric { font-size:12px; white-space:nowrap; }
+.driver-report-dashboard .driver-style-compact-items { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; }
+.driver-report-dashboard .driver-report-grid .driver-style-compact-item { display:flex; flex-direction:column; align-items:stretch; justify-content:center; gap:0; min-width:0; height:auto; min-height:35px; padding:1px 6px; white-space:normal; text-align:left; }
+.driver-report-dashboard .driver-style-compact-label { font-size:12px; line-height:1.2; overflow-wrap:anywhere; }
+.driver-report-dashboard .driver-style-compact-reading { display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:2px 4px; min-width:0; }
+.driver-report-dashboard .driver-style-compact-item .numeric { font-size:14px; line-height:1.2; font-weight:550; letter-spacing:-.035em; white-space:nowrap; }
+.driver-report-dashboard .driver-style-compact-status { font-size:12px; line-height:1.2; white-space:nowrap; color:hsl(var(--muted-foreground)); }
 .driver-report-dashboard .driver-style-kind-count { font-size:12px; white-space:nowrap; color:hsl(var(--muted-foreground)); }
-.driver-style-page-controls { display:flex; align-items:center; gap:6px; min-width:0; }
-.driver-style-page-controls > span { font-size:12px; white-space:nowrap; font-variant-numeric:tabular-nums; }
-.driver-report-dashboard .driver-style-page-controls > button { width:28px; flex:0 0 28px; padding:0; }
 .driver-report-dashboard .driver-insight-compact-scope { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:12px; color:hsl(var(--muted-foreground)); }
 .driver-report-dashboard .driver-insight-compact-note { font-size:12px; color:hsl(var(--muted-foreground)); }
 .driver-report-dashboard .driver-growth-compact-periods { display:table; width:100%; border-collapse:collapse; font-size:12px; }
@@ -360,6 +360,14 @@
   .driver-report-dashboard .driver-report-grid .driver-report-eyebrow { display:none; }
   .driver-report-dashboard .driver-report-overview .driver-report-eyebrow,.driver-report-dashboard .driver-report-challenge .driver-report-eyebrow { display:flex; }
   .driver-report-dashboard .driver-report-chart > svg { height:32px; max-height:32px; }
-  .driver-report-dashboard .driver-style-compact-items { gap:5px; }
+  .driver-report-dashboard .driver-style-compact-items { gap:4px; }
   .driver-report-dashboard .driver-growth-compact-periods strong { font-size:19px; }
+}
+@media (max-width:1250px), (max-height:820px) {
+  .driver-report-scene.driver-report-dashboard {
+    overflow-y:auto; grid-template-rows:auto auto auto minmax(780px,1fr) auto;
+  }
+  .driver-report-scene.driver-report-dashboard:has(> .driver-report-error) {
+    grid-template-rows:auto auto auto auto minmax(780px,1fr) auto;
+  }
 }

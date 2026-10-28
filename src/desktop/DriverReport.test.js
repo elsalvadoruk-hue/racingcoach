@@ -89,14 +89,23 @@ test('real finite observations show partial totals and measured laps without inv
 
 test('quality summaries show observed counters and analysis verdicts, including measured zero', async () => {
   const actual = observed();
-  actual.quality = {valid_lap_ratio: {value: 75, status: 'PARTIAL', valid_laps: 3, classified_laps: 4, reason: '앱 판정'},
+  actual.quality = {valid_lap_ratio: {value: 75, status: 'PARTIAL', valid_laps: 3, classified_laps: 4, scope:'RACE_QUALIFY_COMPLETED_LAPS', reason: '앱 판정'},
     incidents_per_hour: {value: 0, status: 'PARTIAL', observed_time_s: 600, increase_points: 0, reason: '개인 카운터'}};
   fetch.mockResolvedValue(response(actual));
   render(<DriverReport apiBase={API} />);
   expect(await screen.findByLabelText('분석 유효 랩 비율 75%')).toBeInTheDocument();
   expect(screen.getByLabelText('시간당 인시던트 점수 0점/h')).toBeInTheDocument();
-  expect(screen.getByText('3/4완주 랩 · 앱 분석 기준')).toBeInTheDocument();
+  expect(screen.getByText('퀄리·레이스 · 3/4완주 랩')).toBeInTheDocument();
   expect(screen.getByText('레이스·퀄리 · 트랙 위 10분 · 0점 증가')).toBeInTheDocument();
+});
+
+test('old all-session validity ratios are withheld until the competitive scope is confirmed', async () => {
+  const actual=observed();
+  actual.quality={valid_lap_ratio:{value:64.4,status:'PARTIAL',valid_laps:854,classified_laps:1326,scope:'SELECTED_PERIOD_COMPLETED_LAPS'}};
+  fetch.mockResolvedValue(response(actual));
+  render(<DriverReport apiBase={API}/>);
+  expect(await screen.findByLabelText('분석 유효 랩 비율 —')).toBeInTheDocument();
+  expect(screen.queryByText('64.4%')).not.toBeInTheDocument();
 });
 
 test('a single lap never displays zero lap-to-lap dispersion even with an old server response', async () => {

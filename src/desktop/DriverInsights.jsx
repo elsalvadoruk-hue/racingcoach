@@ -1,5 +1,5 @@
 import React, { useId, useRef, useState } from 'react';
-import { ChevronDown, ChevronLeft, ChevronRight, TrendingUp } from 'lucide-react';
+import { ChevronDown, TrendingUp } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
@@ -20,6 +20,8 @@ const retention = {MAINTAINED:'이전 수준을 유지한 관측',CHANGED:'이�
 const validPeriod = value => value && typeof value === 'object' && Number.isFinite(value.median_lap_s) && value.median_lap_s > 0;
 const axisLabels = {brake_steer:'제동·조향',throttle:'스로틀 전개',brake_application:'브레이크 밟기',brake_release:'브레이크 놓기',
   throttle_modulation:'가속 페달 조절',steering_application:'핸들 돌리기',steering_corrections:'핸들 수정',coasting:'페달을 쉬는 구간',shift_consistency:'변속 시점 반복'};
+const compactAxes = ['brake_steer','brake_application','brake_release','throttle','throttle_modulation','coasting',
+  'steering_application','steering_corrections','shift_consistency'];
 const inputItems = style => Array.isArray(style?.items) ? style.items.filter(item=>item && typeof item==='object')
   .map((item,index)=>({...item,selectionKey:text(item.id)||text(item.axis)||`input-${index}`}))
   .sort((left,right)=>Number(right.status==='REPEATED')-Number(left.status==='REPEATED')) : [];
@@ -107,30 +109,35 @@ function InsightDetails({ title, children }) {
 }
 
 function CompactStyleCard({style}) {
-  const items=inputItems(style);
+  const rank=item=>{const index=compactAxes.indexOf(text(item.axis)||text(item.id));return index<0?compactAxes.length:index;};
+  const items=inputItems(style).sort((left,right)=>rank(left)-rank(right)||left.selectionKey.localeCompare(right.selectionKey));
   const measured=items.filter(measuredInput);
-  const [page,setPage]=useState(0);
-  const pageCount=Math.max(1,Math.ceil(measured.length/3));
-  const currentPage=Math.min(page,pageCount-1);
-  const visible=measured.slice(currentPage*3,currentPage*3+3);
-  const scope=Array.from(new Set(visible.map(item=>text(item.scope)).filter(Boolean))).join(' / ');
+  const [selected,setSelected]=useState(null);
+  const triggerRef=useRef(null);
+  const openDetails=(event,key='')=>{triggerRef.current=event.currentTarget;setSelected(key);};
+  const scope=Array.from(new Set(items.map(item=>text(item.scope)).filter(Boolean))).join(' / ');
   return <Card className="driver-report-card driver-report-style driver-insight-compact" aria-label="운전 성향 관측">
     <CardHeader><div className="driver-insight-compact-heading"><CardTitle asChild><h2>나의 운전 성향</h2></CardTitle><span className="driver-style-kind-count">측정 {measured.length} / 전체 {items.length}종</span></div></CardHeader>
     <CardContent className="driver-insight-compact-body">
-      {measured.length ? <div className="driver-style-compact-items" aria-label="현재 페이지의 성향 항목">{visible.map(item=><article className="driver-style-compact-item" key={item.selectionKey}>
-        <strong title={`${inputLabel(item)} · ${text(item.title)} · 입력 ${number(item.event_count,0)}회`}>{text(item.title)||inputLabel(item)}</strong>
-        <span className="numeric">{inputValue(item)}</span>
-        <Badge variant="secondary">{inputStatus(item)}</Badge>
-      </article>)}</div> : <p className="driver-insight-compact-note">입력을 측정할 수 있는 기록을 확인하고 있어요.</p>}
-      {pendingSources(style)?<p className="driver-insight-compact-scope" title={text(style.input_coverage.reason)}>기존 기록 {pendingSources(style)}개 보완 대기</p>:scope ? <p className="driver-insight-compact-scope" title={scope}>{scope}</p> : null}
+      {items.length ? <div className="driver-style-compact-items" aria-label="운전 성향 전체 항목">{items.map(item=><Button
+        variant="secondary" className="driver-style-compact-item" key={item.selectionKey}
+        aria-label={`${inputLabel(item)} · ${measuredInput(item)?inputValue(item):'—'} · ${inputStatus(item)} · 설명 보기`}
+        aria-haspopup="dialog" onClick={event=>openDetails(event,item.selectionKey)}
+        title={`${inputLabel(item)} · ${text(item.title)} · ${text(item.reason)||`입력 ${number(item.event_count,0)}회`}`}>
+        <span className="driver-style-compact-label">{item.status==='REPEATED'?text(item.title)||inputLabel(item):inputLabel(item)}</span>
+        <span className="driver-style-compact-reading"><strong className="numeric">{measuredInput(item)?inputValue(item):'—'}</strong><span className="driver-style-compact-status">{inputStatus(item)}</span></span>
+      </Button>)}</div> : <p className="driver-insight-compact-note">입력을 측정할 수 있는 기록을 확인하고 있어요.</p>}
     </CardContent>
-    <CardFooter className="driver-insight-compact-footer"><div className="driver-style-page-controls" role="group" aria-label="성향 항목 페이지">
-      <Button size="sm" variant="outline" aria-label="이전 성향 3개" disabled={currentPage===0} onClick={()=>setPage(currentPage-1)}><ChevronLeft data-icon="inline-start" aria-hidden="true"/></Button>
-      <span aria-live="polite">{measured.length?`${currentPage*3+1}–${Math.min((currentPage+1)*3,measured.length)} / ${measured.length}종`:'측정 대기'}</span>
-      <Button size="sm" variant="outline" aria-label="다음 성향 3개" disabled={currentPage===pageCount-1} onClick={()=>setPage(currentPage+1)}><ChevronRight data-icon="inline-start" aria-hidden="true"/></Button>
-    </div>
-      <InsightDetails title="운전 성향 자세히"><DriverStyleCard style={style} /></InsightDetails>
+    <CardFooter className="driver-insight-compact-footer"><p className="driver-insight-compact-note" title={pendingSources(style)?text(style.input_coverage.reason):scope}>{pendingSources(style)?`기존 기록 ${pendingSources(style)}개 보완 대기`:scope||'항목을 눌러 뜻과 근거를 확인해요.'}</p>
+      <Button size="sm" variant="outline" aria-label="운전 성향 자세히" aria-haspopup="dialog" onClick={openDetails}>자세히</Button>
     </CardFooter>
+    <Dialog open={selected!==null} onOpenChange={open=>{if(!open)setSelected(null);}}>
+      <DialogContent className="driver-report-scene driver-insight-dialog" onCloseAutoFocus={event=>{event.preventDefault();triggerRef.current?.focus();}}>
+        <DialogHeader><DialogTitle>운전 성향 자세히</DialogTitle><DialogDescription>관측 수치의 범위와 표본·방법·보류 이유를 확인합니다.</DialogDescription></DialogHeader>
+        <div className="driver-insight-dialog-body"><DriverStyleCard key={selected??'closed'} style={style} initialSelection={selected||''}/></div>
+        <DialogFooter><DialogClose asChild><Button variant="outline">닫기</Button></DialogClose></DialogFooter>
+      </DialogContent>
+    </Dialog>
   </Card>;
 }
 
@@ -159,15 +166,15 @@ function CompactGrowthCard({growth}) {
   </Card>;
 }
 
-export function DriverStyleCard({style, compact=false}) {
+export function DriverStyleCard({style, compact=false, initialSelection=''}) {
   if(compact) return <CompactStyleCard style={style} />;
-  return <StyleDetailsTabs style={style} />;
+  return <StyleDetailsTabs style={style} initialSelection={initialSelection} />;
 }
 
-function StyleDetailsTabs({style}) {
+function StyleDetailsTabs({style,initialSelection=''}) {
   const items=inputItems(style);
   const measured=items.filter(measuredInput), unavailable=items.filter(item=>!measuredInput(item));
-  const [selected,setSelected]=useState('');
+  const [selected,setSelected]=useState(initialSelection);
   const [tab,setTab]=useState(items.length?'input':'guide');
   const item=items.find(row=>row.selectionKey===selected)||measured[0]||items[0];
   return <section className="driver-style-details" aria-label="운전 성향 관측">
