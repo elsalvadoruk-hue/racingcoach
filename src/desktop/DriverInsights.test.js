@@ -110,11 +110,11 @@ test('compact style keeps measured values and repeat states while details restor
   render(<DriverStyleCard compact style={{items:[{...input,status:'REPEATED',title:'제동 연결형'},
     {...input,id:'throttle',axis:'throttle',title:'스로틀 전개 관측',value:.65,unit:'s'},
     {...input,id:'excluded',axis:'excluded',title:'세 번째 축'}],reason:'입력 방식과 빠르기는 별도입니다.'}} />);
-  expect(screen.getAllByText('0%')).toHaveLength(2);
-  expect(screen.getByText('0.65초')).toBeInTheDocument();
+  expect(screen.getAllByRole('button',{name:/ · 0% ·/})).toHaveLength(2);
+  expect(screen.getByRole('button',{name:/ · 0.65초 ·/})).toBeInTheDocument();
   expect(screen.getByText('측정 3 / 전체 3종')).toBeInTheDocument();
-  expect(screen.getByText('반복 확인')).toBeInTheDocument();
-  expect(screen.getAllByText('관측')).toHaveLength(2);
+  expect(screen.getByRole('button',{name:/ · 반복 확인 ·/})).toBeInTheDocument();
+  expect(screen.queryByText('관측')).not.toBeInTheDocument();
   expect(screen.getByText('GT3 · GP')).toBeInTheDocument();
   expect(screen.getByText('세 번째 축')).toBeInTheDocument();
   expect(screen.queryByText(input.method)).not.toBeInTheDocument();
@@ -250,14 +250,17 @@ const fullStyle=()=>({items:styleAxes.map((axis,index)=>({...input,id:axis,axis,
   short_label:`조작 종류 ${index+1}`,value:index,meaning:`입력 의미 ${index+1}`,example:`입력 예시 ${index+1}`,
   calculation:`입력 계산 조건 ${index+1}`,interpretation:`입력 해석 한계 ${index+1}`,names:[`성향 A${index+1}`,`성향 B${index+1}`]}))});
 
-test('all nine axes stay visible in a fixed grid without paging when repeated evidence changes',()=>{
+test('all nine axes stay in three labeled groups with scope range and stable order when evidence changes',()=>{
   const style=fullStyle();style.items[7].status='REPEATED';
+  style.items=style.items.map((item,index)=>({...item,scope_count:index===8?44:61}));
   const view=render(<DriverStyleCard compact style={style}/>);
   expect(screen.getByText('측정 9 / 전체 9종')).toBeInTheDocument();
   const shown=screen.getByLabelText('운전 성향 전체 항목');
   expect(within(shown).getAllByRole('button')).toHaveLength(9);
-  expect(within(shown).getByText('조작 관측 8')).toBeInTheDocument();
+  expect(within(shown).getByRole('button',{name:/조작 종류 8 · .* · 반복 확인 ·/})).toBeInTheDocument();
   expect(within(shown).getByText('조작 종류 9')).toBeInTheDocument();
+  for(const label of ['제동','가속·타력','조향·변속'])expect(within(within(shown).getByRole('region',{name:label})).getAllByRole('button')).toHaveLength(3);
+  expect(screen.getByText('항목별 관측 범위 · 44–61개 차량·코스 조합')).toBeInTheDocument();
   expect(screen.queryByRole('button',{name:'다음 성향 3개'})).not.toBeInTheDocument();
   const order=within(shown).getAllByRole('button').map(button=>button.getAttribute('aria-label').split(' · ')[0]);
   style.items[0].status='REPEATED';

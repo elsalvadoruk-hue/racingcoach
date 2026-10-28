@@ -1,5 +1,5 @@
 import React, { useId, useRef, useState } from 'react';
-import { ChevronDown, TrendingUp } from 'lucide-react';
+import { ArrowRight, ChevronDown, Disc3, Gauge, ShipWheel, TrendingUp } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
@@ -7,6 +7,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../components/ui/empty';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { NativeSelect, NativeSelectOption, NativeSelectOptGroup } from '../components/ui/native-select';
+import { Separator } from '../components/ui/separator';
 
 const text = value => typeof value === 'string' ? value : '';
 const number = (value, digits=2) => typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString('ko-KR',{maximumFractionDigits:digits}) : '—';
@@ -20,8 +21,12 @@ const retention = {MAINTAINED:'이전 수준을 유지한 관측',CHANGED:'이�
 const validPeriod = value => value && typeof value === 'object' && Number.isFinite(value.median_lap_s) && value.median_lap_s > 0;
 const axisLabels = {brake_steer:'제동·조향',throttle:'스로틀 전개',brake_application:'브레이크 밟기',brake_release:'브레이크 놓기',
   throttle_modulation:'가속 페달 조절',steering_application:'핸들 돌리기',steering_corrections:'핸들 수정',coasting:'페달을 쉬는 구간',shift_consistency:'변속 시점 반복'};
-const compactAxes = ['brake_steer','brake_application','brake_release','throttle','throttle_modulation','coasting',
-  'steering_application','steering_corrections','shift_consistency'];
+const compactStyleGroups = [
+  {id:'braking',label:'제동',Icon:Disc3,axes:['brake_steer','brake_application','brake_release']},
+  {id:'acceleration',label:'가속·타력',Icon:Gauge,axes:['throttle','throttle_modulation','coasting']},
+  {id:'steering',label:'조향·변속',Icon:ShipWheel,axes:['steering_application','steering_corrections','shift_consistency']},
+];
+const compactAxes = compactStyleGroups.flatMap(group=>group.axes);
 const inputItems = style => Array.isArray(style?.items) ? style.items.filter(item=>item && typeof item==='object')
   .map((item,index)=>({...item,selectionKey:text(item.id)||text(item.axis)||`input-${index}`}))
   .sort((left,right)=>Number(right.status==='REPEATED')-Number(left.status==='REPEATED')) : [];
@@ -116,20 +121,37 @@ function CompactStyleCard({style}) {
   const triggerRef=useRef(null);
   const openDetails=(event,key='')=>{triggerRef.current=event.currentTarget;setSelected(key);};
   const scope=Array.from(new Set(items.map(item=>text(item.scope)).filter(Boolean))).join(' / ');
+  const counts=measured.map(item=>item.scope_count).filter(value=>Number.isInteger(value)&&value>0);
+  const range=counts.length===measured.length&&counts.length ? [Math.min(...counts),Math.max(...counts)] : null;
+  const scopeLabel=range?`항목별 관측 범위 · ${number(range[0],0)}${range[0]===range[1]?'':`–${number(range[1],0)}`}개 차량·코스 조합`:scope;
+  const groups=compactStyleGroups.map(group=>({...group,items:items.filter(item=>group.axes.includes(text(item.axis)||text(item.id)))})).filter(group=>group.items.length);
+  const other=items.filter(item=>!compactAxes.includes(text(item.axis)||text(item.id)));
+  if(other.length)groups.push({id:'other',label:'기타 입력',Icon:Gauge,items:other});
   return <Card className="driver-report-card driver-report-style driver-insight-compact" aria-label="운전 성향 관측">
     <CardHeader><div className="driver-insight-compact-heading"><CardTitle asChild><h2>나의 운전 성향</h2></CardTitle><span className="driver-style-kind-count">측정 {measured.length} / 전체 {items.length}종</span></div></CardHeader>
     <CardContent className="driver-insight-compact-body">
-      {items.length ? <div className="driver-style-compact-items" aria-label="운전 성향 전체 항목">{items.map(item=><Button
-        variant="secondary" className="driver-style-compact-item" key={item.selectionKey}
-        aria-label={`${inputLabel(item)} · ${measuredInput(item)?inputValue(item):'—'} · ${inputStatus(item)} · 설명 보기`}
-        aria-haspopup="dialog" onClick={event=>openDetails(event,item.selectionKey)}
-        title={`${inputLabel(item)} · ${text(item.title)} · ${text(item.reason)||`입력 ${number(item.event_count,0)}회`}`}>
-        <span className="driver-style-compact-label">{item.status==='REPEATED'?text(item.title)||inputLabel(item):inputLabel(item)}</span>
-        <span className="driver-style-compact-reading"><strong className="numeric">{measuredInput(item)?inputValue(item):'—'}</strong><span className="driver-style-compact-status">{inputStatus(item)}</span></span>
-      </Button>)}</div> : <p className="driver-insight-compact-note">입력을 측정할 수 있는 기록을 확인하고 있어요.</p>}
+      {items.length ? <div className="driver-style-compact-items" aria-label="운전 성향 전체 항목">{groups.map((group,index)=><section className="driver-style-group" data-group={group.id} aria-label={group.label} key={group.id}>
+        {index>0?<Separator orientation="vertical" className="driver-style-group-divider"/>:null}
+        <div className="driver-style-group-heading"><group.Icon aria-hidden="true"/><h3>{group.label}</h3></div>
+        <div className="driver-style-group-metrics">{group.items.map((item,itemIndex)=><React.Fragment key={item.selectionKey}>
+          {itemIndex>0?<Separator className="driver-style-metric-divider"/>:null}
+          <Button variant="ghost" className="driver-style-compact-item"
+            aria-label={`${inputLabel(item)} · ${measuredInput(item)?inputValue(item):'—'} · ${inputStatus(item)} · 설명 보기`}
+            aria-haspopup="dialog" onClick={event=>openDetails(event,item.selectionKey)}
+            title={`${inputLabel(item)} · ${text(item.title)} · ${text(item.reason)||`입력 ${number(item.event_count,0)}회`}`}>
+            <span className="driver-style-compact-label">{inputLabel(item)}</span>
+            <span className="driver-style-compact-reading"><strong className="numeric">{measuredInput(item)?number(item.value):'—'}</strong>
+              {measuredInput(item)?<span className="driver-style-compact-unit">{item.unit==='s'?'초':text(item.unit)}</span>:<Badge variant="secondary" className="driver-style-compact-status">측정 대기</Badge>}
+              {item.status==='REPEATED'?<span className="driver-style-repeated-dot" aria-hidden="true"/>:null}
+            </span>
+          </Button>
+        </React.Fragment>)}</div>
+      </section>)}</div> : <p className="driver-insight-compact-note">입력을 측정할 수 있는 기록을 확인하고 있어요.</p>}
     </CardContent>
-    <CardFooter className="driver-insight-compact-footer"><p className="driver-insight-compact-note" title={pendingSources(style)?text(style.input_coverage.reason):scope}>{pendingSources(style)?`기존 기록 ${pendingSources(style)}개 보완 대기`:scope||'항목을 눌러 뜻과 근거를 확인해요.'}</p>
-      <Button size="sm" variant="outline" aria-label="운전 성향 자세히" aria-haspopup="dialog" onClick={openDetails}>자세히</Button>
+    <CardFooter className="driver-style-compact-footer"><Separator className="driver-style-footer-divider"/><div className="driver-insight-compact-footer">
+      <p className="driver-insight-compact-note" title={pendingSources(style)?text(style.input_coverage.reason):scope}>{pendingSources(style)?`기존 기록 ${pendingSources(style)}개 보완 대기`:scopeLabel||'항목을 눌러 뜻과 근거를 확인해요.'}</p>
+      <Button size="sm" variant="ghost" aria-label="운전 성향 자세히" aria-haspopup="dialog" onClick={openDetails}>자세히 보기<ArrowRight data-icon="inline-end" aria-hidden="true"/></Button>
+    </div>
     </CardFooter>
     <Dialog open={selected!==null} onOpenChange={open=>{if(!open)setSelected(null);}}>
       <DialogContent className="driver-report-scene driver-insight-dialog" onCloseAutoFocus={event=>{event.preventDefault();triggerRef.current?.focus();}}>
