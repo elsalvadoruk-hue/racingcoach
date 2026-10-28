@@ -135,9 +135,9 @@ export default function RacePositionChart({ filename, onClose, load = requestHis
   };
   return <section className="race-position-workspace" aria-labelledby="race-position-title">
     <div className="race-position-heading"><div><h2 id="race-position-title"><TrendingUp size={19} />경기 순위 변화</h2><p>왼쪽 버튼 + 오른쪽 드래그: 확대 · 왼쪽 드래그: 이전 범위 · 휠: 위아래 · 하단 막대: 좌우</p></div>
-      {onClose && <Button variant="outline" size="sm" onClick={onClose}><ArrowLeft />분석으로 돌아가기</Button>}</div>
+      <Button variant="outline" size="sm" onClick={onClose}><ArrowLeft />분석으로 돌아가기</Button></div>
     {loading ? <div className="race-position-state" role="status">순위 기록을 불러오는 중…</div> : error ? <div className="race-position-state"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert><Button variant="outline" onClick={() => setAttempt(value => value + 1)}>다시 시도</Button></div>
-      : payload?.status !== 'READY' ? <Empty className="race-position-state"><EmptyHeader><EmptyTitle>순위 이력이 없습니다.</EmptyTitle><EmptyDescription>{payload?.reason}</EmptyDescription></EmptyHeader>{onClose && <EmptyContent><Button variant="outline" onClick={onClose}>분석으로 돌아가기</Button></EmptyContent>}</Empty> : <>
+      : payload?.status !== 'READY' ? <Empty className="race-position-state"><EmptyHeader><EmptyTitle>순위 이력이 없습니다.</EmptyTitle><EmptyDescription>{payload?.reason}</EmptyDescription></EmptyHeader><EmptyContent><Button variant="outline" onClick={onClose}>분석으로 돌아가기</Button></EmptyContent></Empty> : <>
         <div className="race-position-toolbar"><Badge variant="secondary">{payload.classes?.find(item => String(item.id) === String(ownClass))?.label || '내 클래스'} · 클래스 순위</Badge>
           <Badge variant="outline">{series.length}대</Badge>
           <ToggleGroup type="multiple" size="sm" className="race-position-event-toggles" value={shownEvents} onValueChange={setShownEvents} aria-label="그래프 표시">

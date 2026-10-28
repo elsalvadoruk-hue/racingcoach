@@ -17,23 +17,11 @@ import { requestJson, API_BASE } from '../analysis/analysisClient';
 import PracticeCoach from '../components/PracticeCoach';
 import SelectedDriveReflection from './SelectedDriveReflection';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
-import { useBattleReport } from './battleReport';
-import './battle.css';
-
-// One line in the summary header: how many battles, and where the biggest chance was.
-function BattleBanner({ filename, game, onOpen }) {
-  const { report } = useBattleReport(filename, game);
-  if (report?.status !== 'READY' || !report.summary?.battles) return null;
-  const { battles, side_by_side: beside, top } = report.summary;
-  return <div className="summary-battle" role="status"><strong>배틀 {battles}번{beside ? ` · 나란히 ${beside}` : ''}</strong>
-    {top?.action && <span>대응 비교: {top.label} · {top.lap}랩 {top.action}</span>}
-    <Button variant="outline" size="sm" onClick={onOpen}>배틀 분석 보기<ArrowRight data-icon="inline-end" /></Button></div>;
-}
 
 const columnNames = { tasks: '오늘의 연습 과제', next: '다음 주행에서 할 일', analysis: '비교·분석' };
 const phaseNames = { braking: '제동', rotation: '회전', drive: '가속', straight_after: '탈출 뒤' };
 
-export default function DrivingSummary({ comparison, names, onCorner, onCompare, onPractice, analysisWorkspace, battleFile = null, game = 'iracing', onBattle }) {
+export default function DrivingSummary({ comparison, names, onCorner, onCompare, onPractice, analysisWorkspace }) {
   // LMU recordings now run through the shared analysis: the practice flow is
   // the iRacing one. Only a payload from the old measurement-only route keeps
   // its limits; the LMU map stays a schematic of the recorded coordinates.
@@ -98,7 +86,7 @@ export default function DrivingSummary({ comparison, names, onCorner, onCompare,
     aria-label={`${columnNames[id]} 넓게 보기`} disabled={open === id} onClick={() => setOpen(id)}>{open === id ? '펼침' : '넓게'}</Button>;
 
   return <section className={cn('driving-summary', plan?.mode?.startsWith('SETUP_') && 'summary-has-setup')} aria-label="주행 요약" data-expanded={open}>
-    <div className="summary-intro"><div><h2>주행 요약</h2><p>과제를 고르면 내용이 바뀝니다. 카드 빈 곳을 누르면 넓게 봅니다.</p></div>{battleFile && <BattleBanner filename={battleFile} game={game} onOpen={onBattle} />}<Button ref={reflectionTrigger} variant="outline" size="sm" onClick={()=>setReflectionOpen(true)}>이 주행 체감 남기기</Button></div>
+    <div className="summary-intro"><div><h2>주행 요약</h2><p>과제를 고르면 내용이 바뀝니다. 카드 빈 곳을 누르면 넓게 봅니다.</p></div><Button ref={reflectionTrigger} variant="outline" size="sm" onClick={()=>setReflectionOpen(true)}>이 주행 체감 남기기</Button></div>
     <div className="summary-columns">
       <Card className={cn('summary-column summary-task', open === 'tasks' && 'is-open')} aria-labelledby="today-task-title" {...columnProps('tasks')}>
         <CardHeader className="summary-column-header"><div className="summary-column-title"><CardTitle asChild><h3 id="today-task-title" className="flex items-center gap-2"><Target />오늘의 연습 과제<Badge variant="secondary">{options.length}개</Badge></h3></CardTitle>{widen('tasks')}</div>

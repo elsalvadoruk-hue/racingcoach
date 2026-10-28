@@ -300,7 +300,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "2.4.2"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "2.4.3"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -4492,9 +4492,6 @@ _handlers = register_workspace_routes(app, WorkspaceRoutesServices(
     json_safe=lambda *args, **kwargs: json_safe(*args, **kwargs),
     align_reference_grid=lambda *args, **kwargs: _on_distance_axis(*args, **kwargs),
     flush_race_timing=lambda: live_telemetry.flush_race_timing(),
-    get_corner_definition_store=lambda: _CORNER_DEFINITION_STORE,
-    traffic_log_folder=lambda: live_telemetry.traffic_log.folder,
-    flush_traffic_log=lambda: live_telemetry.traffic_log.flush_wait(),
 ))
 workspace_request = _handlers.workspace_request
 # LMU recordings run through the same analysis workspace (lmu_routes).

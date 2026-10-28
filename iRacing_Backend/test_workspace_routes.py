@@ -94,21 +94,6 @@ class WorkspaceRouteTests(BackToBackLaps, unittest.TestCase):
         for name, code in (('../secret.ibt', 422), ('missing.ibt', 404)):
             self.assertEqual(self.post('race-positions', {'filename': name}).status_code, code)
 
-    def test_battle_report_flushes_the_traffic_log_then_reads_it(self):
-        order = []
-        def report(telemetry, *, traffic_folder, corner_store, reader):
-            order.append('read')
-            self.assertIs(corner_store, api._CORNER_DEFINITION_STORE)
-            self.assertEqual(traffic_folder, api.live_telemetry.traffic_log.folder)
-            return {'status': 'UNAVAILABLE', 'reason': 'NO_MATCHING_TRAFFIC_LOG'}
-        with patch.object(api.live_telemetry.traffic_log, 'flush_wait', side_effect=lambda: order.append('flush')), \
-             patch('battle_analysis.battle_report', side_effect=report):
-            response = self.post('battle')
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()['reason'], 'NO_MATCHING_TRAFFIC_LOG')
-        self.assertEqual(order, ['flush', 'read'])
-        self.assertEqual(self.post('battle', {'filename': '../secret.ibt'}).status_code, 422)
-
     def test_position_chart_flushes_pending_timing_before_reading_for_both_games(self):
         order = []
         def history(_):

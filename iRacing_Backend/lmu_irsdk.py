@@ -466,10 +466,7 @@ class LmuIrsdk:
         size = max([CHANNEL_ARRAY] + [c['vehicle_id'] + 1 for c in cars])
         arrays = {name: [None] * size for name in (
             'CarIdxLapCompleted', 'CarIdxLapDistPct', 'CarIdxPosition', 'CarIdxClassPosition',
-            'CarIdxLastLapTime', 'CarIdxOnPitRoad', 'CarIdxTrackSurface', 'CarIdxBestLapTime', 'CarIdxF2Time',
-            # Not iRacing variables: LMU reports where each car is across the track (metres
-            # from the centre path, + left) and half the track width there. Recorded for battles.
-            'CarIdxPathLateral', 'CarIdxTrackEdge')}
+            'CarIdxLastLapTime', 'CarIdxOnPitRoad', 'CarIdxTrackSurface', 'CarIdxBestLapTime', 'CarIdxF2Time')}
         drivers = []
         for c in cars:
             i = c['vehicle_id']
@@ -486,8 +483,6 @@ class LmuIrsdk:
             arrays['CarIdxTrackSurface'][i] = -1 if c.get('control_code') == -1 else _surface(
                 c, s if i == player_id else None)
             arrays['CarIdxF2Time'][i] = c.get('time_behind_leader_s')
-            arrays['CarIdxPathLateral'][i] = c.get('path_lateral_m')
-            arrays['CarIdxTrackEdge'][i] = c.get('track_edge_m')
             class_id = c.get('class_id')
             drivers.append({'CarIdx': i, 'UserName': f'{c.get("overall_position") or i}위 차량',
                             'CarClassID': class_id, 'IsSpectator': 0, 'CarIsPaceCar': 0})

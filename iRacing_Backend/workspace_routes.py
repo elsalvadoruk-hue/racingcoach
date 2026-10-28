@@ -47,10 +47,6 @@ class WorkspaceRoutesServices:
     json_safe: Callable[..., Any]
     align_reference_grid: Callable[..., Any]
     flush_race_timing: Callable[..., Any] | None = None
-    # Battle analysis (battle_analysis): this race's traffic log and the saved corners.
-    get_corner_definition_store: Callable[..., Any] | None = None
-    traffic_log_folder: Callable[..., Any] | None = None
-    flush_traffic_log: Callable[..., Any] | None = None
 
 
 def _filename(name):
@@ -190,7 +186,7 @@ def register_routes(app, services: WorkspaceRoutesServices):
         return analysis_progress.status(job_id) or {'percent': None, 'stage': 'unknown'}
 
     @app.post('/api/workspace/{route}')
-    async def workspace_request(route: Literal['files', 'session', 'file-laps', 'references', 'overlay', 'comparison', 'setup-plan', 'setup-compare', 'race-positions', 'battle'],
+    async def workspace_request(route: Literal['files', 'session', 'file-laps', 'references', 'overlay', 'comparison', 'setup-plan', 'setup-compare', 'race-positions'],
                                 body: dict[str, Any] = Body(default_factory=dict)):
         async with request_lock:
             progress = analysis_progress.start(body.get('progress_id')) if route in ('session', 'comparison') else None
@@ -227,16 +223,7 @@ def register_routes(app, services: WorkspaceRoutesServices):
                     response = services.json_safe(result)
                     success = True
                     return response
-                if route == 'battle':
-                    from battle_analysis import battle_report
-                    if services.flush_traffic_log is not None:
-                        await asyncio.to_thread(services.flush_traffic_log)
-                    store = services.get_corner_definition_store() if services.get_corner_definition_store else None
-                    folder = services.traffic_log_folder() if services.traffic_log_folder else None
-                    result = (await asyncio.to_thread(battle_report, telemetry, traffic_folder=folder, corner_store=store,
-                                                      reader=services.get_ibt_reader())
-                              if store is not None else {'status': 'UNAVAILABLE', 'reason': 'NO_CORNERS'})
-                elif route == 'race-positions':
+                if route == 'race-positions':
                     from race_positions import read_history
                     if services.flush_race_timing is not None:
                         await asyncio.to_thread(services.flush_race_timing)
