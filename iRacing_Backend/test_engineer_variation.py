@@ -657,7 +657,9 @@ class PreparationTests(unittest.TestCase):
         self.addCleanup(patch.stopall)
         patch.stopall()
         laps = radio_phrases.RANGES['lap']
-        self.assertEqual((laps[0], laps[-1], len(laps)), (40.0, 570.0, 1701 + 401 + 1801))
+        self.assertEqual((laps[0], laps[-1], len(laps)), (40.0, 570.0, 1701 + 401 + 700 + 1801))
+        self.assertIn(300.0, laps)     # five-minute circuits
+        self.assertIn(369.9, laps)     # first ten seconds after six minutes
         self.assertNotIn(220.0, laps)  # between ordinary circuits and Le Mans
         self.assertIn(238.6, laps)     # Le Mans GT3
         self.assertIn(479.5, laps)     # Nordschleife VLN GT3

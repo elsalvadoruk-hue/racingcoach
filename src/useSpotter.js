@@ -77,7 +77,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const state = useRef({ active: false }), lastFrame = useRef(0), release = useRef(null);
   const standby = Boolean(audioOutput.standby);
   const output = useRef(null);
-  output.current = { play, muted, volume, busy, specialists, audioBusy, level, wallAlerts, recordDelivery, standby };
+  output.current = { play, muted, volume, busy, specialists, audioBusy, canStartLap: audioOutput.canStartLap, level, wallAlerts, recordDelivery, standby };
   const alertRevision = useRef(0);
   const rendered = useRef(new Map()), lastView = useRef(0);
   const logEvent = useCallback((event, status, reason = '', droppedParts) => {
@@ -91,9 +91,14 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   }, []);
   const radioQueue = useRef(new Map()), heard = useRef(new Set()), rendering = useRef(null), processing = useRef(new Set()), lastCall = useRef(0), resumed = useRef(new Map());
   const playbackFailures = useRef(new Map());
+  const pendingPlayback = useRef(new Map());
   const shadowSeen = useRef(new Set());
   const cancelRender = useCallback(reason => {
     rendering.current?.cancel(reason);
+    if (!['condition_or_session_changed', 'session_changed'].includes(reason)) {
+      for (const pending of pendingPlayback.current.values()) { pending.cancelled = true; pending.controller.abort(); }
+      pendingPlayback.current.clear();
+    }
   }, []);
   const previousWallAlerts = useRef(wallAlerts);
   useEffect(() => {
@@ -299,7 +304,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const quietFor = (e) => e.immediate || workloadFor(e);
     // Prepare a short call before its driving window; cloud latency must not
     // consume the only quiet moment after crossing the line.
-    const event = events.find((e) => e.priority >= 2 || (!settings.busy && !settings.audioBusy?.()
+    const event = events.find((e) => e.priority >= 2 || (!settings.busy && (!settings.audioBusy?.() || (e.immediate && settings.canStartLap?.()))
       && ((!e.cached && !rendered.current.has(e.id)) || quietFor(e)) && (e.immediate || Date.now() - lastCall.current > 1200)));
     if (!event || (!event.cached && rendering.current)) return;
     const ticket = epoch.current;
@@ -312,7 +317,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       && (event.priority >= 2 || !output.current.busy)
       && radioQueue.current.has(event.id) && Date.now() < event.local_expires && Date.now() - lastFrame.current < 600;
     processing.current.add(event.id);
-    let flight;
+    let flight, pending;
     try {
       let audio, droppedParts, mime = 'audio/mpeg', text = event.text;
       if (event.cached) {
@@ -363,20 +368,33 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       if (!silent && !audio) return;
       const acknowledge = () => fetch(`${apiBase}/api/live-coach/spotter/radio/${encodeURIComponent(event.id)}/ack`, { method: 'POST' }).catch(() => {});
       let began = false;
+      pending = { controller: new AbortController(), cancelled: false };
+      pendingPlayback.current.set(event.id, pending);
       const started = silent || await output.current.play(audio, mime, {
+        signal: pending.controller.signal,
+        pitBoxDistance: /^pit_box_\d+$/.test(event.key) ? Number(event.key.slice(8)) : undefined,
         channel: event.engineer === 'spotter' ? 'spotter' : 'pitwall',
         // Keep the formation briefing at the pace chosen by listening.
         rate: event.key === 'formation_brief' ? DEFAULT_RATE : undefined,
-        priority: event.priority, interrupt: event.priority >= 2,
+        priority: event.priority, interrupt: event.priority >= 2 || Boolean(event.immediate && output.current.canStartLap?.()),
         valid: () => valid() && (event.priority >= 2 || quietFor(event)),
         startDeadline: event.immediate ? event.local_expires : undefined,
         workloadValid: event.immediate ? undefined : event.key.startsWith('pit_box_') || event.key.startsWith('traffic_') ? valid : event.priority < 2 ? () => workloadFor(event) && !occupied(state.current, applied.current.alerts)
           && Date.now() - lastFrame.current < 600 : undefined,
-        // Nothing here is cut once it has started: pit-box distances and traffic calls live for a
-        // second or two, less than their own sentence, and were never heard to the end.
+        // Expiry alone never cuts a started sentence. A newer pit distance can
+        // replace the older distance; other calls retain their existing priorities.
         onStatus: (status, reason) => {
+          if (pending.cancelled) return; // The queue owner records this cancellation once.
           logEvent(event, status, reason, droppedParts);
-          if (status === 'started') { began = true; playbackFailures.current.delete(event.id); }
+          if (status === 'started') {
+            began = true; pendingPlayback.current.delete(event.id); playbackFailures.current.delete(event.id);
+            heard.current.add(event.id);
+            if (heard.current.size > 256) heard.current.delete(heard.current.values().next().value);
+          }
+          if (!began && status === 'cancelled' && !valid()) {
+            heard.current.add(event.id);
+            if (heard.current.size > 256) heard.current.delete(heard.current.values().next().value);
+          }
           if (!began && status === 'failed' && ticket === epoch.current && radioQueue.current.has(event.id)) {
             const attempts = (playbackFailures.current.get(event.id)?.attempts || 0) + 1;
             // Refresh failed media, then retry on fresh frames after 0.5/1 seconds.
@@ -414,7 +432,10 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         setError(failure.message); heard.current.add(event.id);
         setView((v) => ({ ...v, last_text: event.text, last_spoken_text: null, last_engineer: event.engineer }));
       }
-    } finally { processing.current.delete(event.id); if (flight && rendering.current === flight) rendering.current = null; }
+    } finally {
+      if (pendingPlayback.current.get(event.id) === pending) pendingPlayback.current.delete(event.id);
+      processing.current.delete(event.id); if (flight && rendering.current === flight) rendering.current = null;
+    }
   }, [apiBase, logEvent]);
   useEffect(() => {
     if (!enabled || readyGame !== activeGame) return undefined;
@@ -502,6 +523,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         if (rendering.current && !nextQueue.has(rendering.current.event.id)) cancelRender('condition_or_session_changed');
         for (const event of radioQueue.current.values()) {
           if (!output.current.standby && !nextQueue.has(event.id) && !heard.current.has(event.id)) {
+            const pending = pendingPlayback.current.get(event.id);
+            if (pending) { pending.cancelled = true; pending.controller.abort(); pendingPlayback.current.delete(event.id); }
             const expired = now >= event.local_expires;
             logEvent(event, expired ? 'expired' : 'cancelled', expired ? 'no_playback_window' : 'condition_or_session_changed');
           }

@@ -275,6 +275,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
           let finish;
           const finished = new Promise((resolve) => { finish = resolve; });
           const started = await play(audio, mime, {
+            priority: urgent ? 3 : 0, routineReport: !urgent,
             valid: () => !stopped && mounted.current && epoch === reportEpoch.current && reportAllowed()
               && (urgent ? reportCurrent() : workloadValid()),
             workloadValid: urgent ? undefined : workloadValid,

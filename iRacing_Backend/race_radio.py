@@ -58,6 +58,9 @@ STATIC_CALLS = {
 }
 STATIC_CALLS.update({f'pit_box_{distance}': (f'피트박스 약 {distance}미터.',) + tuple(text.format(distance=distance) for text in radio_variations.PIT_BOX)
                      for distance in PitBoxGuide.THRESHOLDS})
+# Close distances must finish within the next approach stage. A single short
+# wording also keeps random variants from stretching the 20m/10m calls.
+STATIC_CALLS.update({f'pit_box_{distance}': (f'{distance}미터.',) for distance in (50, 20, 10)})
 # The second pack of wordings goes after the first, so the first wording of every call stays where it was.
 STATIC_CALLS.update({key: tuple(STATIC_CALLS[key]) + more for key, more in radio_variations.STATIC.items()})
 

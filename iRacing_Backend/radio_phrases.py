@@ -45,7 +45,7 @@ def tenths(start, stop):
 RANGES = {
     'gap': tenths(.1, 9.9), 'pos': range(1, 61), 'points': range(1, 41), 'left': range(1, 9), 'deg': range(4, 21),
     # Lap times around GT3 pace: ordinary circuits, Le Mans, and the Nordschleife layouts.
-    'lap': tenths(40, 210) + tenths(230, 270) + tenths(390, 570),
+    'lap': tenths(40, 210) + tenths(230, 270) + tenths(300, 369.9) + tenths(390, 570),
     'loss': tenths(.1, 3.0), 'min': (1, 2, 5, 10), 'laps': (1, 2, 5, 10), 'sec': range(5, 181), 'short': range(1, 61),
 }
 # Calls with two numbers are prepared over a narrower grid; None means first use only.

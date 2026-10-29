@@ -120,6 +120,7 @@ export default function useAudioOutput() {
   }, [stop]);
   const isPriorityBlocked = useCallback(() => priorityGate.current || !!player.current?._priority, []);
   const audioBusy = useCallback(() => !!player.current, []);
+  const canStartLap = useCallback(() => !priorityGate.current && (!player.current || player.current._routineReport === true), []);
   const updatePlayback = useCallback((patch) => {
     const next = setPlayback(current => {
       const value = { ...current, ...patch };
@@ -257,27 +258,31 @@ export default function useAudioOutput() {
     saveOutput(id); setMessage('');
     if (selectedGame === activeGame) { stop('output_changed'); radioEffect.warm(effectSettings.current, id); }
   }, [stop, saveOutput, selectedGame, activeGame]);
-  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall', startDeadline } = {}) => {
+  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall', startDeadline, signal, pitBoxDistance, routineReport = false } = {}) => {
     // Multipart calls use their own absolute rate, never a multiplier of the role's rate.
     // Capture it once so every sentence keeps the same speed until this call ends.
     const multipart = Array.isArray(encoded) && encoded.length > 1;
     const speed = clampRate(rate ?? (multipart ? playbackSettings.current.rate
       : channel === 'spotter' ? playbackSettings.current.spotterRate : playbackSettings.current.pitwallRate));
     if (!hostRef.current) return false;   // another tab is the one that speaks
-    if (!valid() || (priority < 3 && priorityGate.current)
-      || (player.current && ((!interrupt) || (priority > 0 && priority <= player.current._priority) || (priority === 0 && player.current._priority > 0)))) return false;
+    const nearerPitBox = priority === 2 && player.current?._priority === 2 && Number.isFinite(pitBoxDistance)
+      && pitBoxDistance > 0 && pitBoxDistance < player.current._pitBoxDistance;
+    if (signal?.aborted || !valid() || (priority < 3 && priorityGate.current)
+      || (player.current && ((!interrupt) || (priority > 0 && priority <= player.current._priority && !nearerPitBox) || (priority === 0 && player.current._priority > 0)))) return false;
     stop('preempted'); setMessage('');
     // A list is one call of several whole sentences: they play back to back and nothing slips in between.
     const rest = Array.isArray(encoded) ? encoded.slice(1) : [];
     const current = new Audio(clipSource(Array.isArray(encoded) ? encoded[0] : encoded, mime));
     current._priority = priority;
+    current._pitBoxDistance = pitBoxDistance;
+    current._routineReport = priority === 0 && routineReport;
     let terminal = false, monitor, metadataReady, deadlineTimer, settle;
     const finished = new Promise(resolve => { settle = resolve; });
     const wait = operation => Promise.race([operation, finished]);
     const finish = (status, reason = '') => {
       if (terminal) return;
       terminal = true;
-      clearInterval(monitor); clearTimeout(deadlineTimer); metadataReady?.(); settle();
+      clearInterval(monitor); clearTimeout(deadlineTimer); signal?.removeEventListener('abort', abortPending); metadataReady?.(); settle();
       onStatus?.(status, reason);
     };
     current._finish = finish;
@@ -288,6 +293,19 @@ export default function useAudioOutput() {
     let sinkId = selected.current;
     let stage = 'routing', began = false, startedLogged = false, partStarted = false, lastProgress = Date.now(), lastPosition = 0;
     const active = (part) => mounted.current && !terminal && player.current === part;
+    const cancelPending = (reason = 'condition_changed') => {
+      if (began || !active(current)) return;
+      finish('cancelled', reason); stop();
+    };
+    const abortPending = () => cancelPending('event_cancelled');
+    signal?.addEventListener('abort', abortPending, { once: true });
+    const mayStart = () => {
+      if (!active(current)) return false;
+      if (!began && (signal?.aborted || !valid() || (priority < 3 && priorityGate.current))) {
+        cancelPending(); return false;
+      }
+      return true;
+    };
     const progress = part => {
       partStarted = true;
       if (part === current) { began = true; clearTimeout(deadlineTimer); }
@@ -301,6 +319,7 @@ export default function useAudioOutput() {
     monitor = setInterval(() => {
       const part = player.current;
       if (terminal || !part || part._finish !== finish) return;
+      if (!began && !mayStart()) return;
       const position = Number(part.currentTime);
       if (partStarted && Number.isFinite(position) && position > lastPosition + .01) {
         lastPosition = position; lastProgress = Date.now();
@@ -352,6 +371,7 @@ export default function useAudioOutput() {
         part.pause(); disposePlayer(part);
         const next = new Audio(clipSource(rest.shift(), mime));
         next._priority = priority; next._finish = finish;
+        next._pitBoxDistance = pitBoxDistance; next._routineReport = current._routineReport;
         partStarted = false; lastProgress = Date.now(); lastPosition = 0;
         next.playbackRate = speed; next.preservesPitch = true;
         next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;
@@ -386,6 +406,7 @@ export default function useAudioOutput() {
       };
       // The silent tail of a clip can be skipped so the sentences sit closer together.
       part.onplaying = () => {
+        if (!active(part) || (part === current && !mayStart())) return;
         part._heard = true;
         progress(part);
         if (part === current) reportStarted();
@@ -427,7 +448,7 @@ export default function useAudioOutput() {
       current._effect?.start(true);
       if (Number.isFinite(startDeadline) && Date.now() >= startDeadline) { finish('cancelled', 'start_deadline'); stop(); return false; }
       stage = 'play'; await wait(current.play());
-      if (!mounted.current || player.current !== current || terminal) return false;
+      if (!mayStart()) return false;
       stage = 'playing'; progress(current);
       reportStarted();
       // Braking or steering never cuts a call that has started: a half sentence distracts more
@@ -443,7 +464,7 @@ export default function useAudioOutput() {
   }, [supported, stop]);
   return { applied: { ...appliedPlayback, outputId: appliedOutput }, outputId, devices, supported, standby: !host,
     message: host ? message : STANDBY_MESSAGE, refresh, refreshing, changeOutput, play, stop, stopNormal,
-    setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, isPlaying,
+    setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, canStartLap, isPlaying,
     volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, rate: playback.rate, changeRate,
     spotterRate: playback.spotterRate, changeSpotterRate, pitwallRate: playback.pitwallRate, changePitwallRate, effect, changeEffect };
 }

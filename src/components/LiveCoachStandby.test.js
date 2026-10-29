@@ -79,3 +79,27 @@ test('the silent desktop monitor observes drive status promptly without enabling
   await act(async () => jest.advanceTimersByTime(10000));
   expect(statusCalls()).toBe(baseline + 1);
 });
+
+test.each([2, 3])('automatic report priority %s participates in lap and safety arbitration', async priority => {
+  jest.useFakeTimers();
+  const fallback = global.fetch;
+  const report = { priority, audio_base64: 'report-clip', note: { id: 7, reply: '상황 보고',
+    context: { report_key: 'fuel_critical', snapshot: { run_id: 'test' } } } };
+  global.fetch = jest.fn(async (url, ...args) => url.endsWith('/reports')
+    ? { ok: true, json: async () => ({ pit_wall: {}, report }) } : fallback(url, ...args));
+  const view = render(<LiveCoach apiBase="http://test" visible />);
+  fireEvent.click(screen.getByRole('button', { name: '자동 보고 시작' }));
+  await act(async () => jest.advanceTimersByTime(2000));
+  const call = output.play.mock.calls.find(([audio]) => audio === 'report-clip');
+  expect(call?.[2]).toEqual(expect.objectContaining({ priority: priority >= 3 ? 3 : 0, routineReport: priority < 3 }));
+  act(() => call[2].onStatus('interrupted', 'preempted'));
+  await act(async () => { await Promise.resolve(); });
+  expect(global.fetch.mock.calls.some(([url]) => url.endsWith('/reports/7/ack'))).toBe(false);
+  await act(async () => jest.advanceTimersByTime(2000));
+  const retry = output.play.mock.calls.filter(([audio]) => audio === 'report-clip');
+  expect(retry).toHaveLength(2);
+  act(() => retry[1][2].onStatus('completed', ''));
+  await act(async () => { await Promise.resolve(); });
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/reports/7/ack'))).toHaveLength(1);
+  view.unmount(); jest.useRealTimers();
+});
