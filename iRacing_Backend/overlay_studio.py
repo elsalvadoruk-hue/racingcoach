@@ -9,6 +9,7 @@ from statistics import median
 import tempfile
 from overlay_diagnostics import impact_card, REQUIREMENTS
 from overlay_automatic import AutomaticDrivingCoach
+from formation_text import FORMATION_ITEMS, FORMATION_DEFAULT
 
 SESSIONS = ('practice', 'qualify', 'race', 'formation')
 MODULES = ('score', 'loss', 'divergence', 'goal', 'change', 'success', 'consistency',
@@ -55,7 +56,7 @@ def select_modules(config, session, dashboard, phase=None):
 
 
 def defaults():
-    return {'slots': deepcopy(PRESETS), 'selected': {s: [key for key in PRESETS[s] if key] for s in SESSIONS},
+    return {'formation_items': FORMATION_DEFAULT[:], 'slots': deepcopy(PRESETS), 'selected': {s: [key for key in PRESETS[s] if key] for s in SESSIONS},
             'modes': {s: 'coach' for s in SESSIONS},
             'graph': {'throttle': True, 'brake': True, 'steering': False, 'gear': True,
                       'future': True, 'feedback': True, 'window': 10},
@@ -69,6 +70,9 @@ def normalize(value, game='iracing'):
         if game == 'lmu':
             result['source'] = 'personal'
         return result
+    chosen = value.get('formation_items')
+    if isinstance(chosen, list) and len(chosen) <= len(FORMATION_ITEMS) and all(k in FORMATION_ITEMS for k in chosen):
+        result['formation_items'] = list(dict.fromkeys(k for k in chosen if k != '1'))
     for name, allowed in (('source', ('auto', 'personal', 'garage61')), ('size', ('small', 'normal', 'large')),
                           ('detail', ('simple', 'standard', 'detailed')), ('timing', ('pass', 'lap'))):
         if value.get(name) in allowed:
@@ -302,6 +306,7 @@ class CoachingDashboard:
         lap_event = (view.get('session_events') or {}).get('lap') or {}
         lap_at = number(lap_event.get('at')) if isinstance(lap_event, dict) else None
         return {'items': items, 'session': session_id(view), 'connected': view.get('connected') is True,
+                'formation': view.get('formation'),
                 'reference': status, 'measured_at': at,
                 'quiet': sample.get('car_left_right') not in (None, 0, 1),
                 'result': (valid or any(items[key]['available'] for key in ('divergence', 'pattern', 'phases', 'common')))

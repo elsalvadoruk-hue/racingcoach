@@ -230,6 +230,7 @@ class LmuIrsdk:
         self.state = 1
         self.left_right = LeftRight()
         self.position_et = None
+        self.projected = {}
 
     # --- connection -----------------------------------------------------
     def startup(self, *_args, **_kwargs):
@@ -267,6 +268,7 @@ class LmuIrsdk:
         self.snapshot = self.last_et = self.received_at = self.scoring = None
         self.vars, self.info = {}, {}
         self.left_right.reset()
+        self.projected.clear()
 
     # --- frame access ---------------------------------------------------
     def freeze_var_buffer_latest(self):
@@ -304,17 +306,42 @@ class LmuIrsdk:
 
     def _hold_scoring(self, s):
         """Bridge frames without aligned scoring (and so without the session's
-        number in its key) are kept on the last scoring for up to two seconds
+        number in its key) are kept on the last scoring for up to four seconds
         of continuous telemetry (the limit below); longer gaps stay unknown."""
         held = self.scoring
         if s.get('session_phase') is not None:
             self.scoring = {key: s.get(key) for key in SCORING_KEYS}
             self.scoring.update(session_key=s.get('session_key'), vehicle_id=s.get('vehicle_id'))
             return s
-        if (held and held['vehicle_id'] == s.get('vehicle_id') and held.get('scoring_et') is not None
+        if (held and held['vehicle_id'] == s.get('vehicle_id')
+                and held.get('session_key') == s.get('session_key') and held.get('scoring_et') is not None
                 and 0 <= s['telemetry_et'] - held['scoring_et'] <= SCORING_HOLD_SECONDS):
-            return {**s, **held}
+            return {**s, **held, 'scoring_held': True}
         return s
+
+    def _project(self, idx, distance, speed, scoring_at, at, length, key):
+        """Integrate successive speeds, rather than current speed times all elapsed time.
+
+        A new scoring anchor is authoritative. Unknown motion and gaps leave
+        position unknown until a new anchor, rather than jumping backwards.
+        """
+        if distance is None or not length or at is None or scoring_at is None:
+            self.projected.pop(idx, None)
+            return distance
+        signature = (key, scoring_at, distance)
+        old = self.projected.get(idx)
+        lag = at - scoring_at
+        result = distance if lag == 0 else None
+        if speed is not None and 0 <= lag <= SCORING_HOLD_SECONDS:
+            if old and old['signature'] == signature:
+                if old['distance'] is not None and old['speed'] is not None and 0 <= at - old['at'] <= .5:
+                    result = old['distance'] + max(0., (speed + old['speed']) * .5) * (at - old['at'])
+            elif lag <= .5:
+                result = distance
+                result += max(0., speed) * lag
+        result = min(result, length * .9999) if result is not None else None
+        self.projected[idx] = {'signature': signature, 'at': at, 'speed': speed, 'distance': result}
+        return result
 
     def unfreeze_var_buffer_latest(self):
         pass
@@ -395,9 +422,8 @@ class LmuIrsdk:
         # Scoring updates ~5 Hz; extrapolate lap distance with measured speed
         # so 30 Hz corner/sector timing does not step. Never cross the line
         # before scoring confirms the new lap.
-        distance = s.get('lap_distance_m')
-        if distance is not None and length and s.get('speed_mps') is not None:
-            distance = min(distance + s['speed_mps'] * lag, length * .9999)
+        distance = self._project(player_id, s.get('lap_distance_m'), s.get('speed_mps'),
+                                 scoring_et, telemetry_et, length, key)
         on_track = (s.get('realtime') is True and s.get('paused') is not True
                     and s.get('control_code') == 0 and s.get('in_garage_stall') is not True
                     and s.get('finish_status') in (0, 1, None))
@@ -409,10 +435,12 @@ class LmuIrsdk:
             self.steering_learned.add(car)
             from lmu_steering import remember
             remember(car_label, math.degrees(abs(steering / ratio)) * 2)
-        warnings = None
-        if s.get('overheating') is not None or s.get('speed_limiter_active') is not None:
-            warnings = ((0x1 if s.get('overheating') else 0) | (0x10 if s.get('speed_limiter_active') else 0)
-                        | (0x100 if s.get('parts_detached') else 0))
+        # Only the limiter has the same meaning in EngineWarnings. LMU's general
+        # overheating icon is not a water-temperature warning, and detached parts
+        # do not establish that optional repairs are available.
+        limiter = s.get('speed_limiter_active')
+        warnings = (0x10 if limiter else 0) if limiter is not None else None
+        energy = virtual_energy_pct(s.get('virtual_energy_raw'))
         wet = s.get('front_tyre_wet')
         maximum = s.get('session_max_laps')
         leader = next((c for c in cars if c.get('overall_position') == 1), None)
@@ -452,7 +480,19 @@ class LmuIrsdk:
             'SideClosingMps': self.left_right.closing,
             'SideRelativeMps': self.left_right.relative,
             # Not an iRacing variable either: LMU virtual energy left, in % (live_energy).
-            'VirtualEnergyPct': virtual_energy_pct(s.get('virtual_energy_raw')),
+            'VirtualEnergyPct': energy,
+            'VirtualEnergySampleTime': telemetry_et if energy is not None else None,
+            'LmuPartsDetached': s.get('parts_detached'), 'LmuOverheating': s.get('overheating'),
+            'LmuLastImpactET': s.get('last_impact_et'), 'LmuLastImpactMagnitude': s.get('last_impact_magnitude'),
+            'LmuLapInvalidated': s.get('lap_invalidated'), 'LmuCountLapFlag': s.get('count_lap_flag'),
+            'LmuTrackLimitsSteps': s.get('track_limits_steps'),
+            'LmuWheels': s.get('wheels'), 'LmuWheelSampleTime': telemetry_et if s.get('wheels') else None,
+            'LmuScoringSampleTime': scoring_et, 'LmuTelemetrySampleTime': telemetry_et,
+            'LmuScoringHeld': s.get('scoring_held', False),
+            'LmuTimeGapAhead': s.get('time_gap_ahead_s'), 'LmuTimeGapBehind': s.get('time_gap_behind_s'),
+            'LmuPlaceGapAhead': s.get('place_gap_ahead_s'), 'LmuPlaceGapBehind': s.get('place_gap_behind_s'),
+            'LmuWarningSampleTime': (telemetry_et if s.get('parts_detached') is not None
+                                    or s.get('overheating') is not None else None),
             'PlayerTrackSurface': _surface(player_row, s) if player_row else None,
             'PlayerCarPosition': s.get('overall_position'), 'PlayerCarClassPosition': s.get('class_position'),
             'PlayerFinishStatus': s.get('finish_status'),
@@ -470,9 +510,8 @@ class LmuIrsdk:
         drivers = []
         for c in cars:
             i = c['vehicle_id']
-            dist = c.get('lap_distance_m')
-            if dist is not None and c.get('speed_mps') is not None and length:
-                dist = min(dist + c['speed_mps'] * lag, length * .9999)
+            dist = distance if i == player_id else self._project(
+                i, c.get('lap_distance_m'), c.get('speed_mps'), scoring_et, telemetry_et, length, key)
             arrays['CarIdxLapCompleted'][i] = c.get('total_laps')
             arrays['CarIdxLapDistPct'][i] = _fraction(dist, length)
             arrays['CarIdxPosition'][i] = c.get('overall_position') or 0

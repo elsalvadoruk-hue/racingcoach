@@ -6,7 +6,7 @@ import statistics
 import re
 from radio_policy import report_window
 from radio_audio import CALLS, speech_fields
-from spotter_context import estimated_gap_s
+from spotter_context import estimated_gap_s, TrafficApproach
 import radio_phrases
 from voice_alerts import category
 
@@ -93,6 +93,8 @@ def read_race(sdk, names, session_num):
             continue
         car = {'idx': idx, 'name': driver.get('UserName') or f'차량 {idx}', 'number': driver.get('CarNumber'), 'class_id': driver.get('CarClassID'),
                'is_pace_car': bool(driver.get('CarIsPaceCar')),
+               'is_ai': bool(driver.get('CarIsAI')),
+               'car_name': driver.get('CarScreenName') or driver.get('CarPath'),
                'class_name': driver.get('CarClassShortName') or driver.get('CarClassName'),
                'class_est_lap_s': positive(driver.get('CarClassEstLapTime')),
                # The pace car is listed among the drivers with no rating of its own.
@@ -102,6 +104,34 @@ def read_race(sdk, names, session_num):
             car[key] = bool(value) if key == 'on_pit_road' and value is not None else numeric(value)
         cars.append(car)
     data['cars'] = cars
+    from formation_text import official_context
+    data.update(official_context(sdk, names, session, data['game'], cars, data['player_idx'], data['state']))
+    repairs = numeric(options.get('FastRepairsLimit')) if isinstance(options, dict) else None
+    data['fast_repairs_limit'] = repairs if repairs is not None and 0 <= repairs < 32767 else None
+    data['sample_time'] = numeric(sdk['SessionTime']) if 'SessionTime' in names else None
+    if data['game'] == 'lmu':
+        scoring = numeric(sdk['LmuScoringSampleTime']) if 'LmuScoringSampleTime' in names else None
+        age = data['sample_time'] - scoring if scoring is not None and data['sample_time'] is not None else None
+        data.update(scoring_sample_time=scoring, position_age_s=age,
+                    position_source=('HELD' if sdk['LmuScoringHeld'] else 'EXTRAPOLATED' if age else 'OBSERVED'))
+        data['direct_gaps'] = {key: numeric(sdk[name]) if name in names else None for key, name in
+                               (('ahead', 'LmuTimeGapAhead'), ('behind', 'LmuTimeGapBehind'),
+                                ('place_ahead', 'LmuPlaceGapAhead'), ('place_behind', 'LmuPlaceGapBehind'))}
+        data['direct_gap_comparison'] = {'available': False, 'reason': '직접 간격에 대상 차량 ID가 없습니다.'}
+        own = next((c for c in cars if c['idx'] == data['player_idx']), {})
+        comparisons = []
+        for delta, name in ((-1, 'place_ahead'), (1, 'place_behind')):
+            targets = [c for c in cars if own.get('position') and c.get('position') == own['position'] + delta]
+            value = data['direct_gaps'][name]
+            if (len(targets) == 1 and value is not None and age is not None and 0 <= age <= .5
+                    and own.get('lap_completed') is not None and own['lap_completed'] == targets[0].get('lap_completed')
+                    and own.get('on_pit_road') is False and targets[0].get('on_pit_road') is False):
+                comparisons.append({'idx': targets[0]['idx'], 'seconds': value, 'source': 'LMU_PLACE_GAP',
+                                    'target_basis': 'UNIQUE_OVERALL_POSITION', 'sample_time': data['sample_time']})
+        if comparisons:
+            data['direct_gap_comparison'] = {'available': True, 'comparisons': comparisons}
+    else:
+        data.update(position_source='OBSERVED', position_age_s=0.)
     return data
 
 
@@ -140,6 +170,7 @@ def choose_role(text, history=()):
 
 class RaceEngineer:
     def __init__(self):
+        self.traffic = TrafficApproach()
         self.auto_pit_loss_s = None   # the measured pit loss (live_views), for the leader's pending stop
         self.reset()
 
@@ -157,6 +188,7 @@ class RaceEngineer:
         self.gap_history = {}
         self.spoken = {}
         self.finish_seen = None
+        self.race_at = None
         # Every car's stint: the lap it last left the pit road on, and its stops. Known from the start
         # only for cars first seen before their first lap was done; otherwise from their first stop.
         self.stints = {}
@@ -166,6 +198,11 @@ class RaceEngineer:
             self.reset()
             self.run_id = run_id
         self.race = race or {}
+        self.race_at = session_time
+        # Standalone pit-wall users collect the same history. LiveTelemetry shares
+        # the radio instance, whose wall-clock ingest happens once per metadata frame.
+        if not getattr(self, 'shared_traffic', False):
+            self.traffic.ingest(self.race, session_time)
         own = next((c for c in self.race.get('cars', []) if c['idx'] == self.race.get('player_idx')), None)
         old_own = self.previous.get(own['idx']) if own else None
         crossed = (own and old_own and numeric(own.get('lap_completed')) is not None
@@ -302,10 +339,23 @@ class RaceEngineer:
             gap = abs(difference) * own_pace if difference is not None and abs(difference) < 1 and own_pace else None
             if gap is not None and abs(difference) < .5:
                 gap = estimated_gap_s(own, car, difference, own_pace)
+            passage = next((c for c in self.traffic.nearby if c['idx'] == car['idx']), {})
+            history_gap = passage.get('time_gap_s')
+            fresh = (self.race_at is not None and numeric(snapshot.get('session_time')) is not None
+                     and 0 <= snapshot['session_time'] - self.race_at <= 2)
+            if history_gap is not None and fresh and difference is not None and abs(difference) < .5:
+                gap = history_gap
+            direct = next((item for item in (race.get('direct_gap_comparison') or {}).get('comparisons') or []
+                           if item['idx'] == car['idx']), {}) if fresh else {}
             stint_laps, stops = self.stint(car)
             return {**car, 'pace_s': car_pace, 'pace_samples': len(self.paces.get(car['idx'], [])),
                     'stint_laps': stint_laps, 'stint_since': (self.stints.get(car['idx']) or {}).get('since'), 'stops': stops,
                     'gap_estimate_s': round(gap, 1) if gap is not None else None,
+                    'gap_source': 'PASSAGE_HISTORY' if history_gap is not None and fresh else 'PACE_ESTIMATE',
+                    'direct_gap_s': direct.get('seconds'), 'direct_gap_source': direct.get('source'),
+                    'direct_gap_difference_s': (round(history_gap - direct['seconds'], 3)
+                                                if history_gap is not None and direct else None),
+                    'position_source': race.get('position_source'), 'position_age_s': race.get('position_age_s'),
                     'pace_advantage_s': round(own_pace - car_pace, 2) if own_pace and car_pace else None,
                     'lap_difference': round(difference, 2) if difference is not None else None}
         def neighbor(offset):

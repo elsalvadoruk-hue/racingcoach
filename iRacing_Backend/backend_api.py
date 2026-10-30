@@ -1612,6 +1612,7 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
         }
 
         compact_analysis = {
+            "game": self.telemetry.metadata.get("game") or "iracing",
             "file": result.get("file"),
             "session": session,
             "session_policy": result.get("session_policy"),
@@ -3787,6 +3788,10 @@ def last_analysed_session(identity: dict[str, Any]) -> Optional[dict[str, Any]]:
                 (identity["car_path"], identity["track_name"], identity.get("track_config") or "")).fetchone()[0]
         if not row:
             return {"sessions": sessions}        # looked, and there is nothing: not the same as being unable to look
+        recorded = json.loads(row[3] or '{}')
+        recorded_game = recorded.get('game') or (recorded.get('session') or {}).get('game') or (recorded.get('metadata') or {}).get('game')
+        if recorded_game != identity.get('game'):
+            return {'sessions': 0, 'game': identity.get('game')}
         saved = _CORNER_DEFINITION_STORE.track_names(identity.get("track_id"), identity.get("track_config"))
         points = (saved or {}).get("points") or [] if (saved or {}).get("confirmed") else []
         losses = []
@@ -3796,7 +3801,7 @@ def last_analysed_session(identity: dict[str, Any]) -> Optional[dict[str, Any]]:
             call = corner_names.spoken_call(near.get("number"), near.get("name"), near.get("spoken")) if near and abs(near["pct"] - apex) <= .012 else None
             if call and call not in losses:
                 losses.append(call)
-        return {"best_lap_s": row[0], "track_temp_c": row[1], "at": row[2], "losses": losses, "sessions": sessions}
+        return {"best_lap_s": row[0], "track_temp_c": row[1], "at": row[2], "losses": losses, "sessions": sessions, "game": recorded_game}
     except Exception as exc:
         logger.warning("Could not read the last session at this track: %s", exc)
         return None
@@ -3865,6 +3870,7 @@ def corner_names_payload(telemetry: ParsedTelemetry) -> dict[str, Any]:
     return {**base, "status": "CONFIRMED" if confirmed else suggestion["status"], "suggestion_status": suggestion["status"],
             "kind": suggestion.get("kind"), "fit_median_m": suggestion.get("fit_median_m"), "confirmed": confirmed, "corners": corners}
 voice_note_store = VoiceNoteStore(os.getenv("IRACING_VOICE_DB_PATH", str(MEMORY_DB_PATH)))
+live_telemetry.notes_lookup = voice_note_store.formation_notes
 voice_coach = VoiceCoach(live_telemetry, voice_note_store, ai_client, GEMINI_VOICE_MODEL)
 from overlay_reference import OverlayReference, GridReference
 

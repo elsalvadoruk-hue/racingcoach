@@ -53,6 +53,9 @@ def draw_coaching(hud):
         dashboard = {'items': {key: {**item, 'available': True} for key, item in items.items()},
                      'result': hud.scene.get() == 'result'}
     presentation = dashboard.get('presentation') if live else None
+    if session == 'formation' and live and presentation and presentation.get('formation'):
+        draw_formation(hud, presentation, config)
+        return
     if presentation:
         items = presentation.get('items') or {}
     layout = presentation['layout'] if presentation else select_modules(config, session, dashboard)
@@ -142,6 +145,63 @@ def draw_coaching(hud):
             text(x, 131, str(item.get('name') or item.get('title') or '')+' · '+str(item.get('metric') or '—')+' '+str(item.get('unit') or ''), 180, 11, 'muted', True)
     hud.live_labels = {}
     hud.draw_footer_notice(card)
+
+
+def draw_formation(hud, presentation, config):
+    """A fixed grid header and lossless short pages, using actual native font metrics."""
+    ticket = ('formation', json.dumps(presentation, sort_keys=True, ensure_ascii=False),
+              config.get('size'), hud.scale_x, hud.scale_y)
+    if getattr(hud, 'coaching_ticket', None) == ticket:
+        return
+    hud.coaching_ticket = ticket
+    hud.canvas.delete('coach')
+    hud.background_canvas.delete('coach')
+    factor = {'small': .9, 'large': 1.1}.get(config.get('size'), 1.)
+    def line(value, y, size=12, color='text', bold=False):
+        value = str(value or '')
+        pixels = max(8, round(size * factor * hud.scale_y))
+        font = hud.font_at_pixels(pixels, bold)
+        while pixels > 7 and font.measure(value) > hud.x(374) - 4:
+            pixels -= 1
+            font = hud.font_at_pixels(pixels, bold)
+        hud.canvas.create_text(hud.x(8), hud.y(y), text=value, font=font,
+                               fill=COLORS[color], anchor='nw', tags=('coach',))
+    grid = presentation.get('grid') or {}
+    line(grid.get('text') or '출발 순위 확인 중', 3, 13, 'accent', True)
+    ids, items = presentation.get('layout', {}).get('ids') or [], presentation.get('items') or {}
+    item = items.get(ids[0]) if ids else None
+    if not item:
+        line('포메이션 · 현재 자료 확인 중', 32, 16, bold=True)
+        line('출발 순위는 공식 입력이 확인되면 표시합니다.', 66)
+        line(grid.get('detail'), 125, 10, 'muted')
+        hud.live_labels = {}
+        return
+    line(item.get('group', '출발 준비') + ' · ' + item.get('title', '') + ' ' + item.get('page', ''), 27, 12, 'muted', True)
+    text = str(item.get('text') or '')
+    pixels = max(8, round(17 * factor * hud.scale_y))
+    # Page size is bounded in the read model; font fitting handles narrow native windows.
+    while True:
+        font = hud.font_at_pixels(pixels, True)
+        rows, row = [], ''
+        for ch in text:
+            if ch == '\n':
+                rows.append(row)
+                row = ''
+            elif row and font.measure(row + ch) > hud.x(374) - 4:
+                rows.append(row)
+                row = ch
+            else:
+                row += ch
+        rows.append(row)
+        if len(rows) <= 3 or pixels <= 7:
+            break
+        pixels -= 1
+    for index, row in enumerate(rows):
+        hud.canvas.create_text(hud.x(8), hud.y(49) + index * font.metrics('linespace'), text=row,
+                               font=font, fill=COLORS['text'], anchor='nw', tags=('coach',))
+    line(item.get('detail'), 118, 10, 'muted')
+    line(grid.get('detail'), 135, 10, 'muted')
+    hud.live_labels = {}
 
 
 def sample_graph(goal, position, options):

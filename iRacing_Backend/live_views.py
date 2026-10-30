@@ -4,6 +4,7 @@ import logging
 import math
 from overlay_session import session_panel
 from live_pit import COLD_TYRE_S, stall_estimate, tyre_advice
+from live_wheels import wheel_view
 logger=logging.getLogger('iRacingLive')
 
 
@@ -49,7 +50,8 @@ class LiveViews:
                     'track_temp_c', 'air_temp_c', 'fuel_l', 'track_wetness', 'tire_compound', 'steering_rad', 'gear',
                     'speed_mps', 'session_flags', 'car_left_right', 'session_time_remaining_s',
                     'workload_in_s', 'corner_in_s',
-                    'pit_sv_fuel', 'pit_sv_flags', 'incidents')
+                    'pit_sv_fuel', 'pit_sv_flags', 'incidents',
+                    'lmu_parts_detached', 'lmu_overheating', 'lmu_warning_sample_time')
             points = []
             for point in reversed(self.samples):
                 if point['wall_time'] < now-16:
@@ -64,7 +66,9 @@ class LiveViews:
             panel = session_panel(kind, latest, self.lap_sectors.delta(), race)
             practice = self.practice.view(latest, self.drill, self.run_id) if panel['kind'] in ('PRACTICE', 'LIVE') else None
             return {'connected': True, 'run_id': self.run_id, 'identity': dict(self.identity),
+                    'formation': self._formation_view(latest),
                     'race_result': self.race_result.view(),
+                    'wheel_observation': wheel_view(latest, self.game),
                     'damage_observation': self.damage.overlay_view(latest),
                     'control_recommendation': self.control_recommendations.view(),
                     # Samples are immutable after append. Keep the bounded history in
@@ -78,8 +82,17 @@ class LiveViews:
                     'corner_zones': [{'entry_pct': row['entry_pct'], 'exit_pct': row['exit_pct']}
                                      for row in getattr(self.corners, 'definitions', [])],
                     'corner_pass': dict(self.corners.last_measurement) if self.corners.last_measurement else None,
+                    'corner_observation': dict(self.corners.last_observation) if self.corners.last_observation else None,
                     'track_length_m': self.radio.metadata.get('track_length_m'),
                     'snapshot': {key: latest.get(key) for key in keys}, 'points': points[::-1]}
+
+    def _formation_view(self, sample):
+        from formation_text import build_formation
+        if sample.get('session_state') not in (1, 2, 3):
+            return {'active': False, 'cards': {}}
+        archive = self.formation_archive.view(self.identity)
+        return build_formation(sample, self.radio.metadata, self.identity, self.formation_context.data, archive,
+                               self.energy.view({}, now=sample.get('session_time')) if self.game == 'lmu' else {})
 
     def _current_snapshot(self):
         """Call under the live lock; every consumer uses the same freshness rule."""
@@ -118,6 +131,7 @@ class LiveViews:
                     'fuel_l_per_lap': max(self.fuel_history) if self.fuel_history else None,
                     'fuel_observed_laps': len(self.fuel_history),
                     'fuel_feedback': list(self.fuel_feedback),
+                    'wheel_observation': wheel_view(latest, self.game),
                     'corner_coach': self.corners.view(),
                     'controls': self.controls.view(),
                     'setup_controls': self.setup_advisor.view(latest),
@@ -142,7 +156,7 @@ class LiveViews:
         self.pit_wall.auto_pit_loss_s = facts.get('pit_loss_auto_s')
         if pit_loss_s is None and facts.get('pit_loss_auto_s'):
             view = self.pit_wall.view(snapshot, fuel_use, fuel_laps, reserve_laps, facts['pit_loss_auto_s'], fuel_save_mode)
-        energy = self.energy.view(view) if self.game == 'lmu' else {}
+        energy = self.energy.view(view, now=snapshot.get('session_time')) if self.game == 'lmu' else {}
         return {**view, **facts, **energy, 'game': self.game,
                 'pit_loss_source': 'INPUT' if pit_loss_s else 'AUTO' if facts.get('pit_loss_auto_s') else None}
 
@@ -176,8 +190,26 @@ class LiveViews:
                                           self.tyres.stints, view.get('pace_s'))
         change = decision == 'change' or (decision != 'keep' and ticked is True)
         stall = stall_estimate(fill, fuel_rate, change, rule) if fill is not None else None
+        stalls = ([stall_estimate(fill, fuel_rate, True, r) for r in ('CONCURRENT', 'SEQUENTIAL')]
+                  if fill is not None and fuel_rate and (change and rule is None or decision is None and ticked is None) else [])
+        if decision is None and ticked is None:
+            stalls.append(stall_estimate(fill, fuel_rate, False, rule))
+            stall = None
+        # These service constants were measured in iRacing. LMU pit_state alone
+        # supplies neither service completion nor a comparable release time.
+        if self.game == 'lmu':
+            stall, stalls = None, []
+        stalls = [v for v in stalls if v is not None]
         auto = transit + stall + (COLD_TYRE_S if change else 0.) if transit and stall is not None else None
         return {'pit_transit_loss_s': transit, 'pit_stall_estimate_s': round(stall, 1) if stall is not None else None,
+                'pit_stall_range_s': [round(min(stalls), 1), round(max(stalls), 1)] if stalls else None,
+                'pit_loss_range_s': ([round(transit + min(stalls), 1), round(transit + max(stalls) + COLD_TYRE_S, 1)]
+                                     if transit and stalls else None),
+                'pit_transit_samples': len(known_track.get('transit_loss_s_samples') or []),
+                'pit_transit_evidence': known_track.get('transit_evidence') or [],
+                'pit_learning_rejected_reason': self.pit_loss.rejected_reason,
+                'pit_service_supported': self.game != 'lmu',
+                'pit_service_unknown_reason': ('LMU 피트 상태만으로 작업 완료·수리시간·출발 가능 여부를 확인할 수 없습니다.' if self.game == 'lmu' else None),
                 'pit_loss_auto_s': round(auto, 1) if auto is not None else None, 'fuel_rate_lps': fuel_rate,
                 'tyre_wear_pct_per_lap': wear, 'tyre_laps_on_set': on_set, 'tyre_stints_on_set': self.tyres.stints, 'tyre_decision': decision,
                 'tyre_parts': [[key, values] for key, values in parts], 'pit_rule': rule,

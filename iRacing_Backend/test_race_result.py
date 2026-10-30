@@ -7,7 +7,7 @@ class RaceResultTests(unittest.TestCase):
         self.a=RaceResultTracker();self.t=0.
         self.s=dict(is_replay=False,on_track=True,session_state=3,class_position=11,
                     lap_completed=0,session_flags=0,lap_best_s=None)
-        self.r=dict(session_type='Race',player_idx=0,cars=[
+        self.r=dict(session_type='Race',player_idx=0,official_grid={'class_position':11, 'overall':15, 'source':'SDK_PRESTART'},cars=[
             dict(idx=0,class_id=7,class_name='GT3',best_lap_s=107.236),
             dict(idx=1,class_id=7,best_lap_s=106.842),dict(idx=2,class_id=9,best_lap_s=95.)])
     def tick(self,run='a',**changes):

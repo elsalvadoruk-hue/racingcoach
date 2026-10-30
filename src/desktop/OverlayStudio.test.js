@@ -121,3 +121,22 @@ test('default automatic coaching works without a preview reference and explains 
   expect(within(guide).getByRole('table')).toBeInTheDocument();
   expect(within(guide).getByText(/연습 목표·성공률은 선택 기능/)).toBeInTheDocument();
 });
+
+test('formation selections persist independently and fixed grid cannot be disabled', async () => {
+  const {fetcher}=fixture(); render(<OverlayStudio fetcher={fetcher}/>);
+  await waitFor(() => expect(screen.getByRole('button',{name:'저장·적용'})).toBeEnabled());
+  fireEvent.mouseDown(screen.getByRole('tab',{name:'포메이션'}),{button:0,ctrlKey:false});
+  const choices=await screen.findByLabelText('포메이션 표시 항목');
+  expect(within(choices).getByRole('switch',{name:/공식 출발 순위/})).toBeDisabled();
+  expect(within(choices).getByRole('switch',{name:/바퀴별 온도/})).toBeDisabled();
+  const fuel=within(choices).getByRole('switch',{name:/현재 연료/});
+  expect(fuel).toBeChecked(); fireEvent.click(fuel);
+  fireEvent.click(screen.getByRole('button',{name:'저장·적용'}));
+  await screen.findByText('구성을 저장했습니다. 주행 오버레이와 창 미리보기에 적용됩니다.');
+  const write=fetcher.mock.calls.find(([url, options])=>options?.method==='PUT' && !url.includes('/session'));
+  const config=JSON.parse(write[1].body).config;
+  expect(config.formation_items).not.toContain('8');
+  expect(config.graph.window).toBe(10);
+  expect(config.selected.formation).toEqual(['reference','live']);
+  expect(screen.getByText(/무전 OFF·음소거·브리핑 0개/)).toBeInTheDocument();
+});

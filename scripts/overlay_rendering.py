@@ -201,6 +201,11 @@ class OverlayRendering:
         options = (content(self)[0].get('graph') or {})
         if not options.get('feedback', True):
             reference, detail = '', ''
+        if content(self)[1] == 'formation':
+            presentation = (self.live_view.get('dashboard') or {}).get('presentation') or {}
+            grid = presentation.get('grid') or {}
+            reference = self.fit_text(grid.get('text') or '출발 순위 확인 중', 374, 10)
+            detail = ''
         delta = (self.live_view.get('feedback') or {}).get('delta_s')
         delta_color = ('warning' if delta > .005 else 'success' if delta < -.005 else 'text') if type(delta) in (int, float) else 'muted'
         for name, value in (('title', self.fit_text(title, 290, 12, True)),

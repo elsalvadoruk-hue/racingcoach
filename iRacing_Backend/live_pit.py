@@ -109,10 +109,12 @@ class PitKnowledge:
         with self.lock:
             return dict(self._load()['cars'].get(self.car_key(identity)) or {})
 
-    def learn(self, identity, transit_loss_s=None, fuel_rate_lps=None, wear_pct_per_lap=None):
+    def learn(self, identity, transit_loss_s=None, fuel_rate_lps=None, wear_pct_per_lap=None, transit_context=None):
         """Add one measurement; the stored value is the median of the last ten."""
         with self.lock:
             data, changed = self._load(), False
+            if transit_context is not None and transit_context.get('eligible') is not True:
+                transit_loss_s = None
             for section, key, name, value, low, high in (
                     ('tracks', self.track_key(identity), 'transit_loss_s', transit_loss_s, 5., 120.),
                     ('cars', self.car_key(identity), 'fuel_rate_lps', fuel_rate_lps, .2, 6.),
@@ -123,6 +125,9 @@ class PitKnowledge:
                 entry = data[section].setdefault(key, {})
                 samples = (entry.get(name + '_samples') or [])[-9:] + [round(value, 3)]
                 entry[name + '_samples'], entry[name] = samples, round(statistics.median(samples), 3)
+                if name == 'transit_loss_s':
+                    entry['transit_evidence'] = (entry.get('transit_evidence') or [])[-9:] + [
+                        {**(transit_context or {'source': 'LEGACY_UNCLASSIFIED'}), 'value_s': round(value, 3)}]
                 changed = True
             if changed:
                 self._save(data)
@@ -138,7 +143,7 @@ def stall_estimate(fuel_l, fuel_rate_lps, tyres, pit_rule):
         return fuel_s + RELEASE_S
     if pit_rule == 'SEQUENTIAL':
         return fuel_s + SEQUENTIAL_EXTRA_S
-    return max(fuel_s + RELEASE_S, TYRE_STALL_S)
+    return max(fuel_s + RELEASE_S, TYRE_STALL_S) if pit_rule == 'CONCURRENT' else None
 
 
 def tyre_advice(race_s, pit_rule, fuel_l, fuel_rate_lps, wear_pct_per_lap, laps_on_set, next_stint_laps, tyres_ticked=None, wet=False,
@@ -246,6 +251,11 @@ class PitLossWatch:
 
     def reset(self):
         self.lap, self.lap_started, self.touched, self.block = None, None, False, None
+        self.previous = None
+        self.lap_bad = False
+        self.outside_stop_at = None
+        self.last_measurement = None
+        self.rejected_reason = None
 
     def ingest(self, sample, normal_lap_s):
         """Returns the transit loss in seconds once, when the first clean lap after a stop begins."""
@@ -256,6 +266,35 @@ class PitLossWatch:
         pit = sample.get('on_pit_road') is True
         speed = finite(sample.get('speed_mps'))
         stalled = pit and speed is not None and speed < .5
+        old = self.previous
+        self.previous = dict(sample)
+        reason = None
+        if type(sample.get('on_pit_road')) is not bool or speed is None:
+            reason = 'MISSING_PIT_OBSERVATION'
+        elif sample.get('is_replay') is True or sample.get('session_state') not in (4, 5):
+            reason = 'NOT_RACING'
+        elif int(finite(sample.get('session_flags')) or 0) & 0xC108:
+            reason = 'CAUTION'
+        elif any((finite(sample.get(k)) or 0) > 0 for k in ('tow_time_s', 'pit_repair_left_s', 'pit_optional_repair_left_s')):
+            reason = 'TOW_OR_REPAIR'
+        elif sample.get('track_surface') in (-1, 0):
+            reason = 'OFF_TRACK'
+        elif old and (not 0 < at - (finite(old.get('session_time')) or 0) <= 1
+                      or sample.get('incidents') != old.get('incidents')):
+            reason = 'GAP_OR_INCIDENT'
+        elif old and finite(sample.get('lmu_last_impact_et')) is not None and (old['session_time'] < sample['lmu_last_impact_et'] <= at):
+            reason = 'IMPACT'
+        if not pit and speed is not None and speed < 2:
+            if self.outside_stop_at is None:
+                self.outside_stop_at = at
+            if at - self.outside_stop_at >= 2:
+                reason = 'OUTSIDE_PIT_WAIT'
+        else:
+            self.outside_stop_at = None
+        if reason:
+            self.lap_bad, self.rejected_reason = True, reason
+            if self.block:
+                self.block['invalid'] = True
         if self.lap is None:
             self.lap, self.lap_started, self.touched = lap, None, True     # joined mid-lap: this lap is not timed
             return None
@@ -264,21 +303,25 @@ class PitLossWatch:
             if lap == self.lap + 1 and self.lap_started is not None:
                 if self.touched:
                     block = self.block or {'time': 0., 'laps': 0, 'stall': 0.}
+                    block['invalid'] = block.get('invalid', False) or self.lap_bad
                     block['time'] += at - self.lap_started
                     block['laps'] += 1
                     self.block = block
                 elif self.block:
                     block, self.block = self.block, None
                     # One or two laps hold the whole stop; what they took beyond normal laps, less the standing time.
-                    if normal_lap_s and block['laps'] <= 2 and block['stall'] > 1:
+                    if normal_lap_s and block['laps'] <= 2 and block['stall'] > 1 and not block.get('invalid'):
                         found = block['time'] - block['laps'] * normal_lap_s - block['stall']
+                        self.last_measurement = {'eligible': True, 'source': 'LIVE_CONTINUOUS', 'laps': block['laps'],
+                                                 'normal_lap_s': normal_lap_s, 'stall_s': block['stall'], 'at': at}
             else:
                 self.block = None
             self.lap, self.lap_started, self.touched = lap, at, False
+            self.lap_bad = bool(reason)
         if pit:
             self.touched = True
         if stalled:
-            block = self.block or {'time': 0., 'laps': 0, 'stall': 0.}
+            block = self.block or {'time': 0., 'laps': 0, 'stall': 0., 'invalid': self.lap_bad}
             previous = block.get('stalled_at')
             if previous is not None and 0 < at - previous < 1:
                 block['stall'] += at - previous

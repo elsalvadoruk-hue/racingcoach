@@ -3,8 +3,28 @@ export const sessions = {
   practice: { name: '연습', en: 'PRACTICE', title: '켜고 달리면, 조작 관측부터.', description: '과제 없이 자동 관측하고, 코너 비교 자료가 준비되면 결과도 함께 표시합니다.', preset: '자동 주행 코칭', icon: 'target', slots: ['live', 'score', 'pattern', 'consistency'] },
   qualify: { name: '퀄리', en: 'QUALIFYING', title: '한 랩을 완성하는 데 집중하세요.', description: '자동 조작 관측과 준비된 비교 기록으로 한 랩을 확인합니다.', preset: '한 랩 완성', icon: 'timer', slots: ['live', 'score', 'personal', 'loss'] },
   race: { name: '레이스', en: 'RACE', title: '빠른 한 번보다, 꾸준한 페이스.', description: '과제 없이 조작을 관측하고, 반복 통과와 접촉 전후 변화를 살펴봅니다.', preset: '꾸준한 페이스', icon: 'flag', slots: ['live', 'stint', 'consistency', 'impact'] },
-  formation: { name: '포메이션', en: 'FORMATION', title: '출발 전에 비교 기준을 확인하세요.', description: '출발 준비 중에는 조작 평가를 보류하고 그린 후 자동 관측을 시작합니다.', preset: '출발 준비', icon: 'flag', slots: ['reference', 'live', null, null] },
+  formation: { name: '포메이션', en: 'FORMATION', title: '출발 정보와 지난번 기록을 확인하세요.', description: '출발 순위는 고정하고 준비된 정보를 순환합니다. 음성·분석·과제 없이 현재 자료를 표시하며 그린에 종료합니다.', preset: '출발 준비', icon: 'flag', slots: ['reference', 'live', null, null] },
 };
+
+export const formationItems = [
+  ['1', '공식 출발 순위', '현재 순위로 대체하지 않음 · 항상 표시'],
+  ['6', '공식 정렬 안내', '게임의 공식 열·행·따라갈 차량 입력', 'iracing'],
+  ['8', '현재 연료', '현재 관측 리터 · 0도 표시'],
+  ['9', '현재 날씨', '노면·기온·젖음 관측과 게임 선언'],
+  ['10', '바퀴별 온도', 'FL/FR/RL/RR 타이어·브레이크 실측 °C', 'lmu'],
+  ['14', '지난 경기 기록', '지난번 돌아보기 · 날짜와 경기 베스트'],
+  ['15', '클래스 필드', '유효 iRating이 모두 확인된 같은 클래스 SoF', 'iracing'],
+  ['16', '그리드 앞뒤 차량', '공식 출발 슬롯의 차량·퀄리 기록'],
+  ['17', '해당 경기 퀄리', '같은 경기 퀄리 · 레이스 베스트와 별도'],
+  ['20', '경기 규정', '게임이 제공한 규정만 표시'],
+  ['21', '지난 관측 구간', '지난번 돌아보기 · 저장된 분석의 근거 있는 구간'],
+  ['22', '가상 에너지', '현재 유효 잔량 %', 'lmu'],
+  ['23', 'iRating 상승 기준 추정', '유지 기준과 구분 · 공식 증감 보장 없음', 'iracing'],
+  ['24', '내 유효 랩 기록', '지난번 돌아보기 · 개인 베스트와 조건이 맞는 최근 중앙값'],
+  ['25', '출발부터 결과까지', '지난번 돌아보기 · 같은 경기·순위 기준·결과 상태'],
+  ['27', '내 트랙 메모', '지난번 돌아보기 · 직접 쓴 문장과 날짜 · 수정·삭제 반영'],
+].map(([id, name, desc, game]) => ({ id, name, desc, game }));
+export const formationDefaults = ['8', '9', '10', '14', '15', '16', '17', '20', '21', '22', '23', '24', '25', '27'];
 
 export const modules = [
   { id: 'live', number: 'AUTO', name: '자동 주행 코칭', desc: '과제·비교 기록 없이 조작 관측', group: '자동', sessions: ['practice', 'qualify', 'race', 'formation'], title: '직전 제동 해제 → 가속 연결', detail: '해제 5% 이하 → 가속 25% 이상 · 각 150ms 유지한 입력에서 관측', metric: '0.42', unit: 's', tone: 'neutral', stats: [['최근 무입력', '1.20s'], ['동시 입력', '0.18s']] },
@@ -79,6 +99,7 @@ export const demoGoals = {
   steering: { name: '조향', title: '탈출에서 조향을 먼저 풀어보세요', detail: 'C4 · 가속 복귀 위치와 함께 확인하세요.', metric: '연결', unit: '에 집중' },
 };
 export function initialConfig() { return {
+  formation_items: [...formationDefaults],
   slots: Object.fromEntries(Object.entries(sessions).map(([id, s]) => [id, [...s.slots]])),
   selected: Object.fromEntries(Object.entries(sessions).map(([id, s]) => [id, s.slots.filter(Boolean)])),
   modes: Object.fromEntries(Object.keys(sessions).map(id => [id, 'coach'])),

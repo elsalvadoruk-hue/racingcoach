@@ -132,6 +132,14 @@ class VoiceNoteStore:
             rows = db.execute(f'SELECT {columns} FROM voice_notes ORDER BY created_at DESC LIMIT ?', (limit,)).fetchall()
         return [self.decode(row) for row in rows]
 
+    def formation_notes(self, identity=None):
+        """User-authored text only; no sample trails or assistant replies."""
+        if not self.available:
+            return []
+        with self.connect() as db:
+            rows = db.execute(f"SELECT {self.COLUMNS} FROM voice_notes WHERE source IN ('TEXT','VOICE') ORDER BY updated_at DESC LIMIT 200").fetchall()
+        return [self.decode(row) for row in rows]
+
     def recents(self, note_ids):
         """Sample trails for the few notes that can actually match a file."""
         note_ids, found = list(note_ids), {}

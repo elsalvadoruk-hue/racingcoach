@@ -21,6 +21,12 @@ CORNER = {'id': 'C1', 'entry_pct': .30, 'apex_pct': .35, 'exit_pct': .40}
 LENGTH = 4000.
 
 
+def solo_race(sample):
+    return {'session_type': 'Race', 'sample_time': sample['session_time'], 'player_idx': 0, 'cars': [
+        {'idx': 0, 'class_id': 1, 'lap_completed': sample['lap_number'] - 1,
+         'distance_pct': sample['distance_pct'], 'on_pit_road': False, 'track_surface': 3, 'last_lap_s': 80.}]}
+
+
 class Session:
     """Consecutive laps at constant progress; only the corner inputs change between laps."""
     def __init__(self, sink):
@@ -36,7 +42,7 @@ class Session:
             sample = {'distance_pct': pct, 'session_time': self.clock, 'lap_number': self.lap_number,
                       'speed_mps': corner_speed if inside else 60., 'brake': .8 if brake_at <= pct < .34 else 0.,
                       'throttle': 1. if pct < brake_at or pct >= throttle_at else 0.,
-                      'on_track': True, 'is_replay': False, 'on_pit_road': False, 'incidents': 0, 'session_flags': 0,
+                      'traffic_context': 'SOLO', 'on_track': True, 'is_replay': False, 'on_pit_road': False, 'incidents': 0, 'session_flags': 0,
                       'car_left_right': beside if inside and beside else 1, 'lap_last_s': 80.}
             if not (skip and skip[0] < pct < skip[1]):
                 self.sink(sample)
@@ -169,7 +175,7 @@ class LiveCornerTests(unittest.TestCase):
 
         def feed(sample):
             now[0] = sample['session_time']
-            live.ingest(IDENTITY, {**sample, 'session_num': 0, 'session_state': 4, 'steering_rad': 0.})
+            live.ingest(IDENTITY, {**sample, 'session_num': 0, 'session_state': 4, 'steering_rad': 0.}, solo_race(sample))
             events = [e for e in live.radio.view(now[0])['events'] if e['key'] == 'corner_focus']
             seen.update({e['id']: e for e in events})
             if seen and not events:
@@ -270,7 +276,7 @@ class CornerPauseTests(unittest.TestCase):
             IDENTITY, {**sample, 'session_num': 0, 'session_state': 4, 'steering_rad': 0.}))
         run.lap(); run.lap(); run.lap(.4)
         sample = {'session_time': run.clock, 'distance_pct': .25, 'lap_number': 4,
-                  'on_track': True, 'on_pit_road': False, 'is_replay': False,
+                  'traffic_context': 'SOLO', 'on_track': True, 'on_pit_road': False, 'is_replay': False,
                   'speed_mps': 0., 'brake': 1., 'throttle': 0., 'incidents': 0,
                   'session_num': 0, 'session_state': 4, 'session_flags': 0, 'steering_rad': 0.}
         live.radio.corner_revision = live.corners.revision
@@ -394,7 +400,7 @@ class CornerGeometryTests(unittest.TestCase):
 
         def feed(sample):
             clock[0] = sample['session_time']
-            live.ingest(IDENTITY, {**sample, 'session_num': 0, 'session_state': 4, 'steering_rad': 0.})
+            live.ingest(IDENTITY, {**sample, 'session_num': 0, 'session_state': 4, 'steering_rad': 0.}, solo_race(sample))
             events = [e for e in live.radio.view(clock[0])['events'] if e['key'] == 'corner_focus']
             if events and not delivered:
                 delivered.append(next(e for e in live.radio.pending if e['id'] == events[0]['id']))
@@ -427,7 +433,7 @@ class ReviewAnswerTests(unittest.TestCase):
                      'last_lap': {'lap': 6, 'compared': 9, 'losses': [loss], 'loss_count': 1, 'best_gain': None, 'total_loss_s': .31},
                      'last_corner': {**loss, 'lap': 7}, 'focus': None}
         sample = {'session_time': 100., 'run_id': 'r', 'session_num': 0, 'lap_number': 7, 'distance_pct': .5, 'speed_mps': 40.,
-                  'brake': 0., 'throttle': 1., 'steering_rad': 0., 'on_track': True, 'is_replay': False, 'on_pit_road': False}
+                  'brake': 0., 'throttle': 1., 'steering_rad': 0., 'traffic_context': 'SOLO', 'on_track': True, 'is_replay': False, 'on_pit_road': False}
         self.context = {'connected': True, 'snapshot': sample, 'recent': [{**sample, 'session_time': 99.8, 'gear': 4}, sample],
                         'identity': IDENTITY, 'corner_coach': self.view}
 
@@ -559,7 +565,7 @@ class HazardTests(unittest.TestCase):
 
     def test_radio_calls_hazard_under_local_yellow_but_not_under_caution_or_in_pits(self):
         base = {'session_num': 0, 'lap_number': 4, 'speed_mps': 50., 'brake': 0., 'throttle': 1., 'steering_rad': 0.,
-                'on_track': True, 'is_replay': False, 'on_pit_road': False, 'session_state': 4}
+                'traffic_context': 'SOLO', 'on_track': True, 'is_replay': False, 'on_pit_road': False, 'session_state': 4}
         for flags, pit, expected in [(0, False, True), (0x8, False, True), (0x4000, False, False), (0, True, False)]:
             radio2 = RaceRadio()
             for t in range(2):
@@ -584,7 +590,7 @@ class CloseBehindTests(unittest.TestCase):
 
     def test_radio_respects_the_traffic_switch_and_expires_when_the_car_drops_back(self):
         base = {'session_num': 0, 'lap_number': 4, 'speed_mps': 50., 'brake': 0., 'throttle': 1., 'steering_rad': 0.,
-                'on_track': True, 'is_replay': False, 'on_pit_road': False, 'session_state': 4, 'session_flags': 0}
+                'traffic_context': 'SOLO', 'on_track': True, 'is_replay': False, 'on_pit_road': False, 'session_state': 4, 'session_flags': 0}
         for enabled in (True, False):
             radio = RaceRadio()
             radio.traffic_enabled = enabled

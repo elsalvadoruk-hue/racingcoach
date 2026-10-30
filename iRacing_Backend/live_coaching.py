@@ -24,7 +24,9 @@ class LiveCoaching:
     def _coach_corners(self, identity, sample, now):
         # Coaching is optional; a fault here must never reset the spotter.
         try:
-            self.corners.ingest(sample, identity, now, self.radio.metadata.get('track_length_m'))
+            from spotter_context import traffic_context
+            context = traffic_context(self.radio.metadata, sample.get('session_time'))
+            self.corners.ingest({**sample, 'traffic_context': context}, identity, now, self.radio.metadata.get('track_length_m'))
             self.radio.corner_revision = self.corners.revision
             pending = self.corners.focus
             if pending is None:
@@ -99,11 +101,12 @@ class LiveCoaching:
         wear = self.tyres.ingest(sample)
         if wear:
             self.pit_knowledge.learn(identity, wear_pct_per_lap=wear)
-        laps = [item['time'] for item in self.radio.laps]
+        laps = [item['time'] for item in self.formation_records.records]
         transit = self.pit_loss.ingest(sample, statistics.median(laps) if len(laps) >= 3 else None)
         if transit:
             changed, self._tyres_fitted = self.tyres.fitted_lap != self._tyres_fitted, self.tyres.fitted_lap
-            self.pit_knowledge.learn(identity, transit_loss_s=transit - (COLD_TYRE_S if changed else 0.))
+            self.pit_knowledge.learn(identity, transit_loss_s=transit - (COLD_TYRE_S if changed else 0.),
+                                     transit_context=self.pit_loss.last_measurement)
         # Stopped in the stall with a repair on offer: say what it costs while the driver can still skip it.
         stop = self.pit_stop.ingest(sample, self.pit_wall.race.get('tank_capacity_l'))
         if len(self.pit_stop.rates) > measured:

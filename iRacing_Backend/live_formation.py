@@ -137,23 +137,38 @@ class RaceHistory:
                 self.data = {}
             self.data.setdefault('version', self.VERSION)
             self.data.setdefault('races', {})
+            self.data.setdefault('records', {})
         return self.data
 
     @staticmethod
     def key(identity):
         car, track = str(identity.get('car_id') or '').strip(), str(identity.get('track_id') or '').strip()
-        return f"{car}|{track}|{identity.get('track_config') or ''}" if car and track else None
+        base = f"{car}|{track}|{identity.get('track_config') or ''}" if car and track else None
+        return f"{identity['game']}|{base}" if base and identity.get('game') else base
 
     def add(self, identity, result):
         key = self.key(identity or {})
         if not key:
             return False
         entry = {name: finite(result.get(name)) for name in ('class_position', 'class_cars', 'best_lap_s', 'track_temp_c')}
+        entry.update({key: result.get(key) for key in ('id', 'game', 'start_position', 'start_source', 'status', 'provisional',
+                                                      'overall_start', 'overall_finish', 'qualifying', 'valid_laps') if key in result})
         entry['at'] = finite(result.get('at')) or time.time()
         with self.lock:
             races = self._load()['races'].setdefault(key, [])
+            if entry.get('id'):
+                races[:] = [r for r in races if r.get('id') != entry['id']]
             races.append(entry)
             del races[:-self.KEEP]
+            records = self.data['records'].setdefault(key, {'best_s': None, 'recent': [], 'seen': []})
+            for lap in result.get('valid_laps') or []:
+                lap_id = str(result.get('id')) + ':' + str(lap.get('lap'))
+                seconds = finite(lap.get('time'))
+                if lap_id in records['seen'] or seconds is None or not 20 < seconds < 1800:
+                    continue
+                records['seen'] = (records['seen'] + [lap_id])[-200:]
+                records['recent'] = (records['recent'] + [lap])[-100:]
+                records['best_s'] = min(records['best_s'] or seconds, seconds)
             if self.path:
                 try:
                     self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -174,6 +189,11 @@ class RaceHistory:
         key = self.key(identity or {})
         with self.lock:
             return len(self._load()['races'].get(key) or []) if key else 0
+
+    def records(self, identity):
+        from copy import deepcopy
+        with self.lock:
+            return deepcopy(self._load()['records'].get(self.key(identity)) or {})
 
 
 FAMILIAR_FROM = 11      # from this time at a track on, it is no longer counted
@@ -222,6 +242,13 @@ class FormationBrief:
         self.next_at = 0.
         self.driven = 0.
         self.last_pct = None
+        self.origin = None
+        self.span = None
+        self.last_at = None
+        self.active = False
+        self.blocked = None
+        self.completed = False
+        self.planned_calls = self.calls
 
     def planned(self, known, run_id):
         """This lap's calls: the race first, the send-off last, the rest drawn anew for each race."""
@@ -242,20 +269,45 @@ class FormationBrief:
         picked = set(random.Random(str(run_id)).sample(range(len(others)), min(wanted, len(others))))
         return first + kept + [topic for index, topic in enumerate(others) if index in picked] + [CLOSING]
 
-    def step(self, sample, facts, run_id, now):
+    def step(self, sample, facts, run_id, now, *, allow_output=True):
         """The next call to say as (name, role, [(phrase key, values)]), or None."""
         if run_id != self.run:
             self.reset()
             self.run = run_id
+        if sample.get('session_state') != 3:
+            self.active = False
+            self.last_pct = self.last_at = None
+            return None
+        if not self.active:
+            self.reset()
+            self.run, self.active = run_id, True
+        if self.planned_calls != self.calls:
+            self.reset()
+            self.run, self.active = run_id, True
         speed, pct = finite(sample.get('speed_mps')), finite(sample.get('distance_pct'))
         rolling = (sample.get('session_state') == 3 and sample.get('on_pit_road') is False and sample.get('on_track') is True
-                   and sample.get('is_replay') is False and speed is not None and speed >= self.ROLLING_MPS and pct is not None)
+                   and sample.get('is_replay') is False and speed is not None and speed >= self.ROLLING_MPS
+                   and pct is not None and 0 <= pct < 1)
         if not rolling:
             self.last_pct = None
             return None
+        at = finite(sample.get('session_time'))
+        at = now if at is None else at
+        if self.origin is None:
+            self.origin, self.span = pct, 1 - pct
         if self.last_pct is not None:
-            self.driven += (pct - self.last_pct) % 1 if (pct - self.last_pct) % 1 < .2 else 0.
-        self.last_pct = pct
+            step = (pct - self.last_pct) % 1
+            if step >= .2 or self.last_at is not None and not 0 <= at - self.last_at <= 2:
+                self.blocked = '위치 점프 또는 연결 공백으로 이번 구간의 안내를 중지했습니다.'
+            else:
+                self.driven += step
+        self.last_pct, self.last_at = pct, at
+        if self.driven >= self.span:
+            self.completed = True
+        if self.blocked or self.completed:
+            return None
+        if not allow_output:
+            return None
         known = {name: value for name, value in facts.items() if value is not None and value is not False}
         if self.plan is None:
             self.plan = self.planned(known, run_id)
@@ -264,12 +316,21 @@ class FormationBrief:
         # Evenly over the lap: call k of n belongs at FIRST_AT + k/(n-1) of the way to LAST_AT.
         last = len(self.plan) - 1
         due = self.LAST_AT if last == 0 and self.plan[0] is CLOSING else self.FIRST_AT + (self.LAST_AT - self.FIRST_AT) * (self.said / last if last else 0)
-        if self.driven < due:
+        if self.driven / self.span < due:
             return None
         topic = self.plan[self.said]
         self.said += 1
         chosen = usable(topic, known)
         if not chosen:
             return None
+        length = finite(facts.get('track_length_m'))
+        if length and (self.span - self.driven) * length / speed < len(chosen) * self.SENTENCE_S + 2:
+            self.blocked = '스타트라인까지 남은 시간이 부족해 남은 안내를 생략했습니다.'
+            return None
         self.next_at = now + len(chosen) * self.SENTENCE_S + self.PAUSE_S
         return topic[0], topic[1], chosen
+
+    def view(self):
+        return {'planned': len(self.plan or []), 'generated': self.said, 'origin_pct': self.origin,
+                'target_pct': 0., 'segment_fraction': self.span, 'driven_fraction': self.driven,
+                'completed': self.completed, 'reason': self.blocked}

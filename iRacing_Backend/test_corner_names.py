@@ -188,7 +188,7 @@ def drive(sink, laps):
         while pct < 1:
             inside = CORNER['entry_pct'] <= pct <= CORNER['exit_pct']
             sink({'distance_pct': pct, 'session_time': clock, 'lap_number': lap, 'speed_mps': (27. if extra else 30.) if inside else 60.,
-                  'brake': .8 if .31 <= pct < .34 else 0., 'throttle': 1. if pct < .31 or pct >= .36 else 0., 'on_track': True, 'is_replay': False,
+                  'brake': .8 if .31 <= pct < .34 else 0., 'throttle': 1. if pct < .31 or pct >= .36 else 0., 'traffic_context': 'SOLO', 'on_track': True, 'is_replay': False,
                   'on_pit_road': False, 'incidents': 0, 'session_flags': 0, 'car_left_right': 1, 'lap_last_s': 80., 'session_num': 0,
                   'session_state': 4, 'steering_rad': 0.})
             clock, pct = clock + 1 / 30, pct + (1 / 80.) * (8. / (8. + extra) if inside else 1.) / 30
@@ -203,7 +203,8 @@ class RadioCallTests(unittest.TestCase):
 
         def feed(sample):
             now[0] = sample['session_time']
-            live.ingest({'car_id': '1', 'track_id': '9', 'track_config': ''}, sample)
+            from test_voice_coach_upgrade import solo_race
+            live.ingest({'car_id': '1', 'track_id': '9', 'track_config': ''}, sample, solo_race(sample))
             spoken.extend(e['speech_text'] for e in live.radio.view(now[0])['events'] if e['key'] == 'corner_focus' and e['speech_text'] not in spoken)
         drive(feed, [0., 0., .4, 0.])
         self.assertEqual(spoken, ['다음 5번 코너. 지난 랩에 0.4초 잃었습니다. 최저속도가 낮았습니다.'])

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Button } from '../components/ui/button';
 import { Alert, AlertDescription } from '../components/ui/alert';
 
-const CONTENT_KEYS = ['slots','selected','modes','graph','source','auto','quiet','size','detail','timing','manual_session'];
+const CONTENT_KEYS = ['formation_items','slots','selected','modes','graph','source','auto','quiet','size','detail','timing','manual_session'];
 
 export default function OverlayNativePreview({ apiBase, fetcher, game, session, config, appearance, scene, availability }) {
   const [result,setResult] = useState(null), [failure,setFailure] = useState(null), [retry,setRetry] = useState(0);

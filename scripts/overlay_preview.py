@@ -59,6 +59,22 @@ def sample_packet(config, session, scene, availability, game):
     if session == 'formation':
         items['live'].update(title='포메이션 · 자동 관측 대기',metric='그린 후 관측',unit='',available=True)
     dashboard = dict(items=items,reference=reference,result=scene=='after',lap_result=scene=='lap',quiet=scene=='traffic')
+    if session == 'formation':
+        from formation_text import build_formation
+        from overlay_presentation import CoachingPresentation
+        sample = {'session_state': 3, 'session_time': 1., 'on_track': True, 'on_pit_road': False, 'is_replay': False,
+                  'fuel_l': 55., 'track_temp_c': 26., 'air_temp_c': 20., 'track_wetness': 1}
+        race = {'game': game, 'session_type': 'Race', 'player_idx': 0,
+                'cars': [{'idx': i, 'class_id': 1 if i < 10 else 2} for i in range(20)]}
+        context = {'official_grid': {'overall': 9, 'class_position': 5, 'source': 'SAMPLE'}} if game == 'iracing' else {}
+        model = build_formation(sample, race, {'game': game}, context)
+        dashboard['formation'] = model
+        dashboard['presentation'] = CoachingPresentation().build(
+            {'run_id': 'sample', 'snapshot': sample, 'connected': True}, dashboard, config, session)
+        comparison, rows = sample_graph(GOAL_BY_KEY['release'], GOAL_BY_KEY['release'].start_m + 65, config['graph'])
+        sample.update(gear=4, speed_mps=48., brake=0., throttle=1.)
+        return dict(mode='live', visible=True, studio=config, studio_session=session, dashboard=dashboard,
+                    snapshot=sample, points=rows, comparison=comparison if ready else None, reference_status=reference)
     layout = select_modules(config, session, dashboard)
     presentation = dict(state='holding',layout=layout,items={key:items[key] for key in layout['ids']},reference=reference)
     if scene == 'traffic':

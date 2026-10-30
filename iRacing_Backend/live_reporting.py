@@ -122,16 +122,24 @@ class LiveReporting:
 
     def _keep_result(self, sample):
         """The chequered flag was taken: remember how this race ended at this track."""
-        result = self.radio.result
-        if not result or self._history_saved == self.run_id:
+        result = self.race_result.view()
+        ticket = (self.run_id, repr(result))
+        if not result or self._history_saved == ticket:
             return
-        self._history_saved = self.run_id
         try:
             race = self.pit_wall.race or {}
             own = next((car for car in race.get('cars') or [] if car.get('idx') == race.get('player_idx')), {})
             mates = [car for car in race.get('cars') or [] if own and car.get('class_id') == own.get('class_id')]
-            self.race_history.add(self.identity, {'class_position': result['class_position'], 'class_cars': len(mates) or None,
-                                                  'best_lap_s': sample.get('lap_best_s'), 'track_temp_c': sample.get('track_temp_c')})
+            entry = {**result, 'at': self.clock(), 'class_position': result.get('finish_position'), 'class_cars': len(mates) or None,
+                     'game': self.game,
+                     'qualifying': self.formation_context.data.get('qualifying'),
+                     'valid_laps': list(self.formation_records.records),
+                     'best_lap_s': sample.get('lap_best_s'), 'track_temp_c': sample.get('track_temp_c')}
+            if not self.race_history.path and not self.history_lookup and not self.notes_lookup:
+                self.race_history.add(self.identity, entry)
+                self._history_saved = ticket
+            elif self.formation_archive.submit(self.identity, self.clock(), entry):
+                self._history_saved = ticket
         except Exception:
             logger.exception('Could not keep the race result')
 
@@ -140,7 +148,10 @@ class LiveReporting:
         try:
             metadata = self.radio.metadata
             if str(metadata.get('session_type') or '').lower() != 'race' or sample.get('session_state') != 3:
+                if sample.get('session_state') != 3:
+                    self.formation.step(sample, {}, self.run_id, now)
                 return
+            self.formation.step(sample, {}, self.run_id, now, allow_output=False)
             if any(event['key'] != 'briefing' and self.radio.valid(event, now) for event in self.radio.pending):
                 return                                   # a flag or the start procedure comes first
             race = self.pit_wall.race or {}
@@ -154,12 +165,13 @@ class LiveReporting:
             rank, target = rating_goal(own.get('irating'), [car.get('irating') for car in joined if car in mates and car is not own])
             laps, seconds = metadata.get('total_laps'), metadata.get('session_duration_s')
             wetness, declared = sample.get('track_wetness'), sample.get('declared_wet')
-            position = sample.get('class_position')
+            grid = self.formation_context.data.get('official_grid') or {}
+            position = grid.get('class_position')
             facts = {
                 'race_laps': laps if type(laps) in (int, float) and 0 < laps < 1000 else None,
                 'race_min': round(seconds / 60) if type(seconds) in (int, float) and 0 < seconds < 100000 and not (type(laps) in (int, float) and 0 < laps < 1000) else None,
                 'class_position': position if type(position) in (int, float) and position > 0 else None,
-                'grid_position': sample.get('position'),
+                'grid_position': grid.get('overall'),
                 'class_cars': len(mates) if len(mates) >= 2 else None,
                 'fuel_l': sample.get('fuel_l') if type(sample.get('fuel_l')) in (int, float) and sample['fuel_l'] >= 1 else None,
                 'pit_speed_kph': metadata.get('pit_speed_limit_kph'),
@@ -169,6 +181,7 @@ class LiveReporting:
                 'dry': type(wetness) in (int, float) and wetness <= 1,
                 'incident_limit': metadata.get('incident_limit'),
                 'multiclass': len(classes) > 1,
+                'track_length_m': metadata.get('track_length_m'),
                 'sof': strength_of_field(car.get('irating') for car in joined) if len(classes) <= 1 else None,
                 'class_sof': strength_of_field(car.get('irating') for car in joined if car in mates) if len(classes) > 1 else None,
                 # "클래스 1위 안에" is no way to say it: a goal of the win has its own sentence.
@@ -176,10 +189,11 @@ class LiveReporting:
             }
             if self.formation.plan is None:
                 # Looked up once, as the formation lap begins.
-                analysed = self.history_lookup(self.identity) if self.history_lookup else None
+                stored = self.formation_archive.view(self.identity)
+                analysed = stored.get('voice_analysed')
                 # "No record of this track" is only said when the analysed sessions could be looked at.
-                self._history = history_facts(self.race_history.last(self.identity), analysed, sample.get('track_temp_c'),
-                                              races=self.race_history.count(self.identity), known=analysed is not None)
+                self._history = history_facts(stored.get('last'), analysed, sample.get('track_temp_c'),
+                                              races=stored.get('count', 0), known=analysed is not None)
             facts.update(getattr(self, '_history', None) or {})
             found = self.formation.step(sample, facts, self.run_id, now)
             if not found:

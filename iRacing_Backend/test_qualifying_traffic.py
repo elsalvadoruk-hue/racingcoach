@@ -240,6 +240,7 @@ class FrontRowTests(unittest.TestCase):
                     cars.append(car(2, .13, class_id=20))
                 live.pit_wall.race = dict(player_idx=0, cars=cars)
                 with patch.object(live.formation, 'step', return_value=None) as step:
+                    live.formation_context.data['official_grid'] = {'overall': 7, 'class_position': 1, 'source': 'SDK_PRESTART'}
                     live._brief_formation({**sample(), 'session_state': 3, 'position': 7, 'class_position': 1}, 0.)
                 facts = step.call_args.args[1]
                 self.assertEqual(facts['multiclass'], other_class)

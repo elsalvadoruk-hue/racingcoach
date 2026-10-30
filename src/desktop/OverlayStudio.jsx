@@ -26,7 +26,7 @@ import { NativeSelect, NativeSelectOption } from '../components/ui/native-select
 import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription, DialogHeader } from '../components/ui/dialog';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '../components/ui/table';
 import { cn } from '../lib/utils';
-import { sessions, modules, byId, games, initialConfig, selectedModules, selectModules, moduleTiming, phaseNames, phaseOrder, moduleRequirements } from './overlayCatalog';
+import { sessions, modules, byId, games, initialConfig, selectedModules, selectModules, moduleTiming, phaseNames, phaseOrder, moduleRequirements, formationItems, formationDefaults } from './overlayCatalog';
 import OverlaySettings from '../components/OverlaySettings';
 import { useGame } from '../lib/gameContext';
 import { API_BASE } from '../analysis/analysisClient';
@@ -76,6 +76,20 @@ function Panel({ title, description, children, footer, className, label }) {
     <CardHeader><CardTitle asChild><h3>{title}</h3></CardTitle>{description && <CardDescription><p>{description}</p></CardDescription>}</CardHeader>
     <CardContent>{children}</CardContent>{footer && <CardFooter>{footer}</CardFooter>}
   </Card>;
+}
+
+function FormationChoices({ config, game, onChange }) {
+  const chosen = config.formation_items || formationDefaults;
+  const toggle = id => onChange({ formation_items: chosen.includes(id) ? chosen.filter(key => key !== id) : [...chosen, id] });
+  return <Panel title="포메이션 표시 항목" description="출발 순위는 고정합니다. 준비된 선택 정보는 8초 간격으로 순환하며 긴 메모는 원문 그대로 나눠 표시합니다." className="library-panel" label="포메이션 표시 항목">
+    <p className="selection-hint">무전 OFF·음소거·브리핑 0개에서도 표시됩니다. 현재 자료에는 분석이나 과제가 필요하지 않습니다.</p>
+    <FieldSet className="library-scroll"><FieldLegend className="sr-only">출발 준비와 지난번 돌아보기</FieldLegend><FieldGroup>{formationItems.map(item => {
+      const unsupported = item.game && item.game !== game;
+      const fixed = item.id === '1';
+      return <Field key={item.id} orientation="horizontal" data-disabled={fixed || unsupported}><FieldLabel htmlFor={`formation-${item.id}`}><span className="module-choice-copy"><b>{item.name}{fixed ? ' · 필수 고정' : ''}</b><small>{unsupported ? `${item.game === 'lmu' ? 'LMU' : 'iRacing'} 전용` : item.desc}</small></span></FieldLabel><Switch id={`formation-${item.id}`} checked={fixed || chosen.includes(item.id)} disabled={fixed || unsupported} onCheckedChange={() => toggle(item.id)} /></Field>;
+    })}</FieldGroup></FieldSet>
+    <p className="selection-hint">공식 출처가 없으면 출발 순위 확인 중으로 표시합니다. 규정 입력이 없으면 규정 없음으로 해석하지 않습니다.</p>
+  </Panel>;
 }
 
 function GalleryFooter({config,session}) {
@@ -132,6 +146,7 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
     if (!data.studio?.selected) throw new Error('오버레이 복수 선택을 사용하려면 앱과 검은 실행창을 완전히 종료한 뒤 다시 실행하세요.');
     if (data.diagnostics_version !== 1) throw new Error('새 코너 진단을 사용하려면 앱과 검은 실행창을 완전히 종료한 뒤 다시 실행하세요.');
     if (data.automatic_version !== 1) throw new Error('과제 없는 자동 주행 코칭을 사용하려면 앱과 검은 실행창을 완전히 종료한 뒤 다시 실행하세요.');
+    if (!Array.isArray(data.studio.formation_items)) throw new Error('포메이션 텍스트를 사용하려면 앱과 검은 실행창을 완전히 종료한 뒤 다시 실행하세요.');
     return data;
   }, [apiBase, fetcher, game]);
   useEffect(() => {
@@ -169,7 +184,7 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
   const save = async () => {
     if (!view || saving.current) return;
     const epoch = generation.current, savedGame = game;
-    const content = {...Object.fromEntries(['slots','selected','modes','graph','source','auto','quiet','size','detail','timing'].map(key => [key, config[key]])), manual_session: session};
+    const content = {...Object.fromEntries(['formation_items','slots','selected','modes','graph','source','auto','quiet','size','detail','timing'].map(key => [key, config[key]])), manual_session: session};
     saving.current = true; setBusy(true); setNotice('');
     try {
       const data = await request('', 'PUT', {config: content, scope, target: {game, car_key: view.settings_target?.car_key || null}});
@@ -181,8 +196,8 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
     } catch (failure) { if (epoch === generation.current) setError(failure.message); }
     finally { saving.current = false; setBusy(false); }
   };
-  const preset = () => { patch({ slots: { ...config.slots, [session]: [...info.slots] }, selected: {...config.selected, [session]: info.slots.filter(Boolean)} }); setScene(session === 'formation' ? 'before' : 'start'); };
-  const green = () => { if (config.auto) { changeSession('race'); setNotice('그린 전환 예시: 저장된 레이스 구성으로 바뀌었습니다.'); } else setNotice('자동 전환이 꺼져 있어 포메이션 구성을 유지합니다.'); };
+  const preset = () => { patch(session === 'formation' ? {formation_items: [...formationDefaults]} : { slots: { ...config.slots, [session]: [...info.slots] }, selected: {...config.selected, [session]: info.slots.filter(Boolean)} }); setScene(session === 'formation' ? 'before' : 'start'); };
+  const green = () => { changeSession('race'); setNotice('그린 전환 예시: 포메이션 텍스트를 종료하고 레이스 구성으로 바뀌었습니다.'); };
   const visibleModules = filter === 'recommended' ? modules.filter(item => item.sessions.includes(session)) : modules;
   return <Dialog open={helpOpen} onOpenChange={setHelpOpen}><div className="overlay-studio">
     <main className="studio-main">
@@ -200,7 +215,7 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
         <div className="session-intro"><Icon aria-hidden="true"/><div><h2>{info.title}</h2><p>{info.description}</p></div><Badge variant="secondary">추천 · {info.preset}</Badge></div>
         <div className="mode-picker"><div><h3>{info.name}에 표시할 화면</h3><p>세션마다 선택하고, 두 방식의 세부 설정을 그대로 유지하세요.</p></div><ToggleGroup disabled={busy || !view} type="single" value={config.modes[session]} onValueChange={value=>value&&patch({modes:{...config.modes,[session]:value}})} aria-label="오버레이 표시 형태"><ToggleGroupItem value="coach"><Layers aria-hidden="true"/><span><b>코칭 카드</b><small>목표·통과 결과·반복 패턴</small></span>{!inputs&&<Check className="mode-check" aria-hidden="true"/>}</ToggleGroupItem><ToggleGroupItem value="inputs"><Activity aria-hidden="true"/><span><b>입력값 그래프</b><small>스로틀·브레이크·조향 비교</small></span>{inputs&&<Check className="mode-check" aria-hidden="true"/>}</ToggleGroupItem></ToggleGroup></div>
         <fieldset className="studio-grid" disabled={busy || !view}>
-          {inputs ? <Panel title="입력값 선택" description="보고 싶은 입력만 켜두세요." className="library-panel graph-controls-panel" label="입력값 그래프 설정" footer={<span>코칭 카드 구성은 그대로 보관됩니다.</span>}><GraphControls config={config} onChange={patch}/></Panel> : <Panel title="표시 항목 · 복수 선택" description="필요한 항목을 모두 체크하세요. 상황에 맞춰 자동으로 표시합니다." className="library-panel" label="표시 항목 목록" footer={<span><span className="legend-dot"/>{selected.length}개 선택 · 한 번에 최대 3개 표시</span>}>
+          {session === 'formation' && !inputs ? <FormationChoices config={config} game={game} onChange={patch}/> : inputs ? <Panel title="입력값 선택" description="보고 싶은 입력만 켜두세요." className="library-panel graph-controls-panel" label="입력값 그래프 설정" footer={<span>코칭 카드 구성은 그대로 보관됩니다.</span>}><GraphControls config={config} onChange={patch}/></Panel> : <Panel title="표시 항목 · 복수 선택" description="필요한 항목을 모두 체크하세요. 상황에 맞춰 자동으로 표시합니다." className="library-panel" label="표시 항목 목록" footer={<span><span className="legend-dot"/>{selected.length}개 선택 · 한 번에 최대 3개 표시</span>}>
             <ToggleGroup type="single" value={filter} onValueChange={v => v && setFilter(v)} aria-label="항목 필터" className="library-filter"><ToggleGroupItem value="recommended">이 세션 추천</ToggleGroupItem><ToggleGroupItem value="all">전체 {modules.length}개</ToggleGroupItem></ToggleGroup>
             <FieldSet className="library-scroll"><FieldLegend className="sr-only">상황별로 표시할 코칭 항목</FieldLegend><FieldGroup>{visibleModules.map(item => { const checked = selected.includes(item.id), unavailable = item.pending || (session === 'formation' && !phaseOrder.formation.includes(item.id)); return <Field key={item.id}><FieldLabel className="module-choice" data-checked={checked} data-pending={item.pending || undefined}><input type="checkbox" checked={checked} disabled={unavailable && !checked} onChange={() => toggleModule(item.id)} aria-label={item.name}/><span className="module-choice-copy"><b>{item.name}</b><small>{item.desc}</small><em>{moduleTiming(item.id, session)}</em></span>{item.pending && <Badge variant="outline">준비 중</Badge>}</FieldLabel></Field>; })}</FieldGroup></FieldSet>
           </Panel>}
@@ -209,14 +224,14 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
             <PreviewStage {...previewProps} />
             <SceneControls {...{ session, scene, onScene: chooseScene, onGreen: green }}/>
             <div className="stage-explanation"><ArrowUpRight aria-hidden="true"/><p>{scene === 'traffic' && config.quiet ? '근접 상황에서는 상세 코칭을 접는 예시입니다. 오른쪽에서 설정을 바꿔 비교하세요.' : scene === 'after' && config.timing === 'lap' ? '결과 표시를 ‘랩 종료’로 설정했습니다. 랩 종료 장면에서 결과를 확인하세요.' : '실제 오버레이의 배치·글꼴·비율입니다. 창·표시 설정의 크기와 불투명도도 반영하며, 좁은 공간에서는 같은 비율로 축소합니다.'}</p></div>
-            <Panel title={<span className="reference-title"><ShieldCheck aria-hidden="true"/>비교 기준</span>} className="reference-panel" label="비교 기준 설정">
+            {session !== 'formation' && <Panel title={<span className="reference-title"><ShieldCheck aria-hidden="true"/>비교 기준</span>} className="reference-panel" label="비교 기준 설정">
               <FieldGroup className="reference-fields"><Field><FieldLabel htmlFor="reference-source">비교할 기록</FieldLabel><NativeSelect id="reference-source" value={config.source} onChange={e => patch({ source: e.target.value })}>{game === 'iracing' && <NativeSelectOption value="auto">자동 · Garage61 없으면 내 기록</NativeSelectOption>}<NativeSelectOption value="personal">비슷한 조건의 내 빠른 기록</NativeSelectOption>{game === 'iracing' && <NativeSelectOption value="garage61">Garage61 기준</NativeSelectOption>}</NativeSelect></Field>
                 <Field><FieldLabel htmlFor="reference-fixture">미리보기 샘플 상황</FieldLabel><NativeSelect id="reference-fixture" value={availability} onChange={e => setAvailability(e.target.value)}><NativeSelectOption value="personal">개인 기록 있음 · 샘플</NativeSelectOption>{game === 'iracing' && <NativeSelectOption value="g61">Garage61·개인 기록 있음 · 샘플</NativeSelectOption>}<NativeSelectOption value="none">조건에 맞는 비교 기록 없음</NativeSelectOption></NativeSelect></Field></FieldGroup>
               <p className="text-sm text-muted-foreground">실제 연결: {view?.reference?.message || '주행 대기'}{view?.reference?.condition_note ? ` · ${view.reference.condition_note}` : ''}</p><div className="reference-status" data-ready={ref.ready}><CircleDot aria-hidden="true"/><div><b>{ref.label}{ref.ready && ` · ${ref.lap}`}</b><p>{ref.message}</p>{ref.ready && <small>{game === 'lmu' ? 'LMU 개인 기록 예시 · 공식 랩 유효성 미확인' : ref.fallback ? 'Garage61 기준이 없어 개인 기록으로 연결한 예시입니다.' : '선택한 출처의 기준을 사용하는 예시입니다.'}</small>}</div><Badge variant="outline">{ref.ready ? '샘플 연결' : '비교 대기'}</Badge></div>
-            </Panel>
+            </Panel>}
           </section>
           <div className="settings-column">
-            {inputs ? <Panel title="그래프 보조 정보" description="그래프에 함께 표시할 항목입니다." className="slots-panel" label="그래프 보조 정보 설정"><GraphExtras config={config} onChange={patch}/></Panel> : <Panel title="상황별 자동 표시" description={`${selected.length}개 선택 · 측정된 정보 중 최대 3개를 표시합니다.`} className="slots-panel" label="상황별 표시 안내">
+            {session === 'formation' && !inputs ? <Panel title="출발 전 텍스트" description="출발 순위와 참가 규모는 고정하고, 지원되는 선택 항목만 읽을 시간에 맞춰 순환합니다."><p>14·21·24·25·27번은 지난번 돌아보기입니다. 그린에 포메이션 텍스트를 종료합니다. 기존 입력값 그래프 설정은 보존합니다.</p></Panel> : inputs ? <Panel title="그래프 보조 정보" description="그래프에 함께 표시할 항목입니다." className="slots-panel" label="그래프 보조 정보 설정"><GraphExtras config={config} onChange={patch}/></Panel> : <Panel title="상황별 자동 표시" description={`${selected.length}개 선택 · 측정된 정보 중 최대 3개를 표시합니다.`} className="slots-panel" label="상황별 표시 안내">
               <div className="phase-plan">{Object.entries(phaseOrder).filter(([phase]) => session === 'formation' ? phase === 'formation' : phase !== 'formation').map(([phase, ids]) => <div key={phase} data-active={display.phase === phase}><b>{phaseNames[phase]}{display.phase === phase && <Badge variant="secondary">현재 장면</Badge>}</b><p>{ids.filter(id => selected.includes(id)).map(id => byId[id].name).join(' · ') || '선택한 항목 없음'}</p></div>)}</div>
               <p className="selection-hint">항목을 여러 개 선택해도 화면을 채우지 않습니다. 상황과 측정 자료에 맞춰 큰 정보 1개와 보조 최대 2개로 바뀝니다.</p>
             </Panel>}

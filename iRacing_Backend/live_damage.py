@@ -75,10 +75,17 @@ class DamageWatch:
         warnings, old_warnings = finite(sample.get('engine_warnings')), finite(old.get('engine_warnings'))
         hit = incidents is not None and before is not None and incidents - before >= 2
         signal = warnings is not None and old_warnings is not None and int(warnings) & 0x180 and not int(old_warnings) & 0x180
-        if hit or signal:
+        detached = sample.get('lmu_parts_detached') is True and old.get('lmu_parts_detached') is False
+        impact, old_at = finite(sample.get('lmu_last_impact_et')), finite(old.get('session_time'))
+        native_hit = (impact is not None and old_at is not None and at is not None
+                      and 0 < at - old_at <= .5
+                      and old_at < impact <= at and impact != old.get('lmu_last_impact_et'))
+        if hit or signal or detached or native_hit:
             self.contact_lap, self.result = lap, None
             self.observed = None
-        self.previous = {'incidents': incidents, 'engine_warnings': warnings}
+        self.previous = {'incidents': incidents, 'engine_warnings': warnings, 'session_time': at,
+                         'lmu_last_impact_et': impact,
+                         'lmu_parts_detached': sample.get('lmu_parts_detached')}
 
     def lap_done(self, seconds):
         """The lap that just ended was clean and took `seconds`. Returns the comparison once,
@@ -153,7 +160,8 @@ class DamageWatch:
         """Read-only view. A signal is not proof of contact or a damaged part."""
         if sample.get('on_track') is not True or sample.get('is_replay') is not False or sample.get('on_pit_road') is not False:
             return {'measured': None, 'reason': '주행 중 깨끗한 랩에서 비교합니다.'}
-        known = finite(sample.get('incidents')) is not None or finite(sample.get('engine_warnings')) is not None
+        known = (finite(sample.get('incidents')) is not None or finite(sample.get('engine_warnings')) is not None
+                 or type(sample.get('lmu_parts_detached')) is bool)
         return {'measured': dict(self.observed) if self.observed else None,
                 'reason': ('이 게임의 접촉·손상 신호를 확인할 수 없습니다.' if not known else
                            '접촉·손상 신호 이후 깨끗한 완료 랩을 기다립니다.' if self.contact_lap is not None else

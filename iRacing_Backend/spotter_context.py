@@ -66,17 +66,33 @@ class TrafficApproach:
         self.armed = {}
         self.nearby = []
         self.updated_at = None
+        self.source_at = None
         self.available = False
 
     def ingest(self, race, now):
+        if self.updated_at == now:
+            return
+        wall_at = now
+        source_at = finite(race.get('sample_time'))
+        if source_at is not None:
+            if self.source_at == source_at:
+                return
+            if self.source_at is not None and source_at < self.source_at:
+                self.reset()
+            now = source_at
+        if race.get('position_age_s') is not None and not 0 <= race['position_age_s'] <= 2:
+            self.reset()
+            return
         cars = race.get('cars') or []
         own = next((c for c in cars if c.get('idx') == race.get('player_idx')), {})
         own_progress = progress(own)
         own_pace = finite(own.get('last_lap_s'))
-        if own_progress is None or own_pace is None or not 20 < own_pace < 1800 or own.get('class_id') is None:
+        if own_pace is None or not 20 < own_pace < 1800:
+            own_pace = None
+        if own_progress is None or own.get('class_id') is None:
             self.reset()
             return
-        self.updated_at, self.available = now, True
+        self.updated_at, self.available, self.source_at = wall_at, True, source_at
         # Lap counts only describe race order; practice/qualifying counts are unrelated.
         race_session = str(race.get('session_type') or '').lower() == 'race'
         own_class_pace = finite(own.get('class_est_lap_s'))
@@ -98,7 +114,7 @@ class TrafficApproach:
                 continue
             relative = current - own_progress
             delta = (relative + .5) % 1 - .5
-            if abs(delta) < .0001 or abs(delta) * own_pace > 12:
+            if abs(delta) < .0001 or own_pace and abs(delta) * own_pace > 12:
                 continue
             side = 'ahead' if delta > 0 else 'behind'
             history = self.observations.get(car['idx'], deque(maxlen=8))
@@ -132,14 +148,14 @@ class TrafficApproach:
                 # One spin or out-lap must not relabel a whole class.
                 pace_difference = own_class_pace - other_class_pace
             else:
-                pace_difference = own_pace - other_pace if other_pace is not None and 20 < other_pace < 1800 else None
+                pace_difference = own_pace - other_pace if own_pace and other_pace is not None and 20 < other_pace < 1800 else None
             kind = 'other_class' if different else 'same_class'
             key = None
             if different and pace_difference is not None:
-                if pace_difference >= max(2, own_pace * .02):
+                if pace_difference >= max(2, (own_class_pace or own_pace or 0) * .02):
                     kind = 'faster_class'
                     if side == 'behind': key = 'traffic_faster_behind'
-                elif pace_difference <= -max(2, own_pace * .02):
+                elif pace_difference <= -max(2, (own_class_pace or own_pace or 0) * .02):
                     kind = 'slower_class'
                     if side == 'ahead': key = 'traffic_slower_ahead'
             elif not different and race_session:
@@ -151,6 +167,8 @@ class TrafficApproach:
                     kind = 'lapped_car'
                     if side == 'ahead': key = 'traffic_lapped_ahead'
             gap = seconds if seconds is not None else estimated_gap_s(own, car, delta, own_pace)
+            if gap is None or gap > 12:
+                continue
             # One call when a car arrives on the bumper; it re-arms after dropping back.
             arrived = side == 'behind' and gap <= .5 and len(history) >= 2 and self.armed.get(car['idx'], True)
             armed[car['idx']] = not arrived and (self.armed.get(car['idx'], True) or side != 'behind' or gap >= .8)
@@ -159,6 +177,11 @@ class TrafficApproach:
                            'close': side == 'behind' and gap <= .7, 'close_key': 'close_behind' if arrived else None,
                            'approaching': closing, 'catch_estimate_s': round(eta, 1) if eta is not None else None,
                            'time_gap_s': round(seconds, 2) if seconds is not None else None,
+                           'gap_source': 'PASSAGE_HISTORY' if seconds is not None else 'PACE_ESTIMATE',
+                           'observed_at': now,
+                           'position_samples': min(len(own_track), len(tracks.get(car['idx'], ()))),
+                           'timing_samples': len(timed),
+                           'preparation_reason': None if seconds is not None else 'PASSAGE_HISTORY_WARMUP',
                            'call_key': key if closing and (eta <= self.FAR_ETA_S or seconds <= self.NEAR_S and eta <= self.NEAR_ETA_S) else None})
         self.observations, self.nearby, self.armed = observations, nearby, armed
 
@@ -166,8 +189,43 @@ class TrafficApproach:
         fresh = self.updated_at is not None and 0 <= now - self.updated_at < 2
         nearby = sorted(self.nearby, key=lambda c: c['gap_estimate_s']) if fresh else []
         return {'available': self.available and fresh,
+                'source_time': self.source_at,
+                'preparation_reason': ('STALE_OR_MISSING_POSITIONS' if not self.available or not fresh else
+                                       'PASSAGE_HISTORY_WARMUP' if not nearby else None),
                 'ahead': next((c for c in nearby if c['side'] == 'ahead'), None),
                 'behind': next((c for c in nearby if c['side'] == 'behind'), None), 'nearby': nearby}
+
+
+def traffic_context(race, at):
+    """Observation context for a corner, never an attribution of a time loss.
+
+    Reuse the traffic watch's 2.5 s proximity window. Incomplete coverage is
+    UNKNOWN; it cannot silently become a solo reference.
+    """
+    stamp = finite(race.get('sample_time'))
+    cars = [c for c in race.get('cars') or [] if not c.get('is_pace_car')]
+    own = next((c for c in cars if c.get('idx') == race.get('player_idx')), {})
+    pct = finite(own.get('distance_pct'))
+    if stamp is None or at is None or not 0 <= at - stamp <= 2 or pct is None or progress(own) is None:
+        return 'UNKNOWN'
+    if race.get('position_age_s') is not None and not 0 <= race['position_age_s'] <= 2:
+        return 'UNKNOWN'
+    pace = finite(own.get('last_lap_s'))
+    if pace is None or not 20 < pace < 1800:
+        pace = finite(own.get('class_est_lap_s'))
+    unknown = False
+    for car in cars:
+        if car is own or car.get('on_pit_road') is True:
+            continue
+        if progress(car) is None:
+            unknown = True
+            continue
+        delta = (car['distance_pct'] - pct + .5) % 1 - .5
+        if pace and 20 < pace < 1800 and abs(delta) * pace <= TrafficApproach.NEAR_S:
+            return 'TRAFFIC_PRESENT'
+        if pace is None:
+            unknown = True
+    return 'UNKNOWN' if unknown else 'SOLO'
 
 
 class HazardWatch:

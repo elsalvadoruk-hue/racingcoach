@@ -65,7 +65,7 @@ class FooterTests(unittest.TestCase):
             for step in range(50, 351):
                 pct = step/1000
                 coach.ingest({'distance_pct': pct, 'session_time': lap*100+pct*100,
-                    'speed_mps': 10., 'lap_number': lap, 'on_track': True, 'is_replay': False,
+                    'speed_mps': 10., 'lap_number': lap, 'traffic_context': 'SOLO', 'on_track': True, 'is_replay': False,
                     'on_pit_road': False, 'brake': float(.108 <= pct < .19),
                     'throttle': float(pct >= .25), 'incidents': 0,
                     'car_left_right': 2 if dirty and step == 200 else 0, 'session_flags': 0}, identity, lap*100+pct*100, 1000)

@@ -59,6 +59,8 @@ class CoachingPresentation:
 
     def build(self, view, dashboard, config, session):
         sample = view.get('snapshot') or {}
+        if session == 'formation':
+            return self.formation(view, dashboard.get('formation') or {}, config)
         at, pct = number(sample.get('session_time')), number(sample.get('distance_pct'))
         reference = dashboard.get('reference') or {}
         scope = (view.get('run_id'), session, tuple(reference.get(key) for key in
@@ -139,3 +141,46 @@ class CoachingPresentation:
         if self.active and at-self.active['at'] <= EXPIRE_S:
             return {'state': 'holding', **self.active}
         return {'state': 'waiting', 'layout': {'ids': [], 'waiting': 'straight'}, 'items': {}}
+
+    def formation(self, view, model, config):
+        """Fixed grid and stable pages independent of reference, voice and corner timing."""
+        at = number((view.get('snapshot') or {}).get('session_time'))
+        if not model.get('active') or view.get('connected') is not True or at is None:
+            self.reset()
+            return {'state': 'waiting', 'layout': {'ids': [], 'waiting': 'data'}, 'items': {}, 'formation': True}
+        chosen = config.get('formation_items') or []
+        scope = (view.get('run_id'), tuple(chosen), model.get('game'))
+        if self.scope != scope or self.previous and at < self.previous['at']:
+            self.reset()
+            self.scope = scope
+            self.form_started = at
+            self.form_index = 0
+            self.form_pages = []
+        self.previous = {'at': at}
+        cards = model.get('cards') or {}
+        offered = [(key, index) for key in chosen for index, _ in enumerate((cards.get(key) or {}).get('pages') or [])
+                   if (cards.get(key) or {}).get('available') and (cards.get(key) or {}).get('supported')]
+        if not getattr(self, 'form_pages', None):
+            self.form_pages = offered
+        if at - self.form_started >= REPLACE_S:
+            current = self.form_pages[self.form_index % len(self.form_pages)] if self.form_pages else None
+            # Admit new data between pages, keeping the current topic's successor.
+            self.form_pages = offered
+            self.form_index = ((offered.index(current) + 1) % len(offered) if current in offered else 0) if offered else 0
+            self.form_started = at
+        ids, items = [], {}
+        if self.form_pages:
+            key, page = self.form_pages[self.form_index % len(self.form_pages)]
+            card = deepcopy(cards.get(key) or {})
+            texts = card.get('pages') or []
+            if card.get('available') and page < len(texts):
+                card['text'] = texts[page]
+                card['page'] = f'{page + 1}/{len(texts)}' if len(texts) > 1 else ''
+                ids, items = [key], {key: card}
+            else:
+                # Deleted/invalidated data disappears immediately, without showing
+                # an old note or stale fuel until the next rotation.
+                self.form_pages = []
+        return {'state': 'holding', 'formation': True, 'grid': model.get('grid') or {},
+                'layout': {'ids': ids, 'waiting': None if ids else 'data'}, 'items': items,
+                'rotation_s': REPLACE_S}

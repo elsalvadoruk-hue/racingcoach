@@ -92,6 +92,15 @@ CHANNELS = {
     'track_wetness': 'TrackWetness', 'declared_wet': 'WeatherDeclaredWet', 'tire_compound': 'PlayerTireCompound',
     'pit_sv_fuel': 'PitSvFuel', 'pit_sv_flags': 'PitSvFlags',
     'finish_status': 'PlayerFinishStatus',
+    'virtual_energy_sample_time': 'VirtualEnergySampleTime',
+    'lmu_parts_detached': 'LmuPartsDetached', 'lmu_overheating': 'LmuOverheating',
+    'lmu_warning_sample_time': 'LmuWarningSampleTime',
+    'lmu_last_impact_et': 'LmuLastImpactET', 'lmu_last_impact_magnitude': 'LmuLastImpactMagnitude',
+    'lmu_lap_invalidated': 'LmuLapInvalidated', 'lmu_count_lap_flag': 'LmuCountLapFlag',
+    'lmu_track_limits_steps': 'LmuTrackLimitsSteps', 'lmu_wheels': 'LmuWheels',
+    'lmu_wheel_sample_time': 'LmuWheelSampleTime',
+    'lmu_scoring_sample_time': 'LmuScoringSampleTime', 'lmu_telemetry_sample_time': 'LmuTelemetrySampleTime',
+    'lmu_scoring_held': 'LmuScoringHeld',
 }
 
 
@@ -135,6 +144,8 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.oval_procedures = OvalProcedures()
         self.alongside = AlongsideSpeed()     # how fast the car beside us passes (iRacing lap positions)
         self.radio = RaceRadio()
+        self.pit_wall.traffic = self.radio.traffic
+        self.pit_wall.shared_traffic = True
         self.corners = LiveCornerCoach()
         self.controls = ControlAdvisor()
         self.control_recommendations = ControlRecommendations()
@@ -147,6 +158,12 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.formation = FormationBrief()
         self.race_history = RaceHistory()        # in memory unless the app gives it a file
         self.history_lookup = None               # the last analysed session at a track, when the app provides it
+        self.notes_lookup = None
+        from formation_archive import FormationArchive
+        from formation_text import FormationContext, FormationLapRecords
+        self.formation_archive = FormationArchive(self)
+        self.formation_context = FormationContext()
+        self.formation_records = FormationLapRecords()
         self._history_saved = None
         self._briefed = {}
         self._brief_attempts = {}
@@ -174,6 +191,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         if self.thread and self.thread.is_alive():
             return
         self.stop_event.clear()
+        self.formation_archive.closing = False
         self.thread = threading.Thread(target=self._loop, name='iracing-live-reader', daemon=True)
         self.thread.start()
 
@@ -182,6 +200,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         if self.thread:
             self.thread.join(timeout=3)
         self.traffic_log.close()
+        self.formation_archive.close()
         with self.lock:
             self._flush_timing()
 
@@ -283,6 +302,12 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             else:
                 self.spotter.ingest(sample, self.run_id, now)
             self.radio.ingest(sample, self.run_id, now, race)
+            self.formation_records.ingest(sample, self.run_id, self.game, list(self.radio.laps))
+            formation_context = self.formation_context.ingest(self.radio.metadata, self.run_id)
+            if formation_context.get('official_grid') and not self.radio.metadata.get('official_grid'):
+                self.radio.metadata['official_grid'] = formation_context['official_grid']
+            if race is not None and (self.race_history.path or self.history_lookup or self.notes_lookup):
+                self.formation_archive.submit(self.identity, now)
             self.race_result.ingest(sample, self.radio.metadata, self.run_id, now)
             self._coach_corners(identity, sample, now)
             try:

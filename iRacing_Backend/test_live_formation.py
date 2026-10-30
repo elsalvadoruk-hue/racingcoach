@@ -22,7 +22,7 @@ class FormationBriefTests(unittest.TestCase):
         brief, said = FormationBrief(calls), []
         for t in range(seconds):
             driven = t / seconds * .97
-            found = brief.step(sample(.95 + driven, **more), facts, run, float(t))
+            found = brief.step(sample(.03 + driven, **more), facts, run, float(t))
             if found:
                 said.append((round(driven, 2), *found))
         return said
@@ -35,7 +35,7 @@ class FormationBriefTests(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))                                  # nothing twice
         places = [place for place, *_ in said]
         self.assertLess(places[0], .05)
-        self.assertAlmostEqual(places[-1], .78, delta=.02)                             # the send-off at about four fifths
+        self.assertAlmostEqual(places[-1], .78 * .97, delta=.02)                       # 78% of observed start-to-line segment
         gaps = [later - earlier for earlier, later in zip(places, places[1:])]
         self.assertTrue(all(abs(gap - .19) < .03 for gap in gaps), gaps)               # evenly, with quiet in between
         self.assertEqual(dict(said[0][3]), {'form_hello': {}, 'form_length_min': {'min': 45}, 'form_grid': {'pos': 7}, 'form_field': {'count': 23}})
@@ -197,7 +197,8 @@ class RaceHistoryTests(unittest.TestCase):
 
 
 class FormationRadioTests(unittest.TestCase):
-    META = {'session_type': 'Race', 'session_duration_s': 2700., 'pit_speed_limit_kph': 80., 'incident_limit': 17}
+    META = {'session_type': 'Race', 'session_duration_s': 2700., 'pit_speed_limit_kph': 80., 'incident_limit': 17,
+            'official_grid': {'class_position': 7, 'overall': 7, 'source': 'SDK_PRESTART'}}
 
     def test_a_topic_reaches_the_radio_with_its_sentences_and_is_gone_at_the_green(self):
         now = [0.]
@@ -209,7 +210,7 @@ class FormationRadioTests(unittest.TestCase):
         for tick in range(0, 80):
             now[0] = tick / 3
             live.radio.metadata.update(self.META)
-            live.ingest(identity, {**sample(.95 + tick / 600), **base, 'session_time': now[0]})
+            live.ingest(identity, {**sample(.03 + tick / 600), **base, 'session_time': now[0]})
             live.radio.metadata.update(self.META)
             for event in live.radio.view(now[0])['events']:
                 if event['key'] == 'formation_brief' and event['id'] not in [e['id'] for e in heard]:

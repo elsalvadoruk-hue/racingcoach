@@ -272,6 +272,8 @@ class OverlayController:
                 card = self.cards.select(view)
                 dashboard = self.dashboard.build(view)
                 selected_session = dashboard['session'] if config['auto'] else config['manual_session']
+                if selected_session == 'formation' and (view.get('snapshot') or {}).get('session_state') not in (1, 2, 3):
+                    selected_session = dashboard['session'] if dashboard['session'] != 'formation' else 'race'
                 dashboard['presentation'] = self.presentation.build(view, dashboard, config, selected_session)
                 self._start_child()
                 self.command('display', {'mode': 'live', 'visible': True,

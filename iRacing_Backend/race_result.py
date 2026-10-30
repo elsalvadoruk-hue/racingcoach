@@ -12,6 +12,7 @@ class RaceResultTracker:
 
     def reset(self):
         self.run=None; self.previous=None; self.grid=None; self.result=None
+        self.grid_source = self.overall_grid = None
 
     def ingest(self,sample,race,run_id,now):
         if self.run!=run_id:
@@ -21,8 +22,11 @@ class RaceResultTracker:
             return
         old,self.previous=self.previous,dict(sample)
         position=positive(sample.get('class_position'))
-        if sample.get('session_state') in (1,2,3) and position:
-            self.grid=int(position)
+        grid = race.get('official_grid') or {}
+        if sample.get('session_state') in (1,2,3) and positive(grid.get('class_position')):
+            self.grid=int(grid['class_position'])
+            self.grid_source=grid.get('source')
+            self.overall_grid=grid.get('overall')
         native=sample.get('finish_status')
         crossed=(old is not None and sample.get('on_track') is True and old.get('on_track') is True
                  and sample.get('session_state') in (4,5,6)
@@ -37,7 +41,10 @@ class RaceResultTracker:
         status=('DSQ' if disqualified or prior_status=='DSQ' else
                 'DNF' if native==2 or prior_status=='DNF' else 'FINISHED')
         if self.result is None:
-            self.result={'id':f'{run_id}:finish','at':now,'start_position':self.grid,'status':status}
+            self.result={'id':f'{run_id}:finish','at':now,'start_position':self.grid,'status':status,
+                         'start_source': getattr(self, 'grid_source', None),
+                         'overall_start': getattr(self, 'overall_grid', None),
+                         'overall_finish': positive(sample.get('position')), 'game': race.get('game')}
         # Preserve the recorded finish through cooldown laps and cockpit exit.
         # Only a final classification may replace a provisional position.
         final=native==1 or sample.get('session_state')==6

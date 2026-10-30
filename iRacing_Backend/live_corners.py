@@ -83,12 +83,13 @@ class LiveCornerCoach:
         self.review = None
         self.last_pass = None
         self.last_measurement = None
+        self.last_observation = None
         self.focus = None
         self.pause_since = None
         self.paused_lap = None
 
     def _definitions(self, identity, now):
-        key = (identity.get('car_id') or identity.get('car_path'), identity.get('track_id') or identity.get('track_path'),
+        key = (identity.get('game') or 'iracing', identity.get('car_id') or identity.get('car_path'), identity.get('track_id') or identity.get('track_path'),
                identity.get('track_config') or '')
         if key != self.key:
             self.key, self.definitions, self.checked_at = key, [], -math.inf
@@ -162,10 +163,21 @@ class LiveCornerCoach:
             self.brake_onset = pct
         dirty = (sample.get('incidents') != previous.get('incidents') or int(sample.get('session_flags') or 0) & 0xC108
                  or sample.get('car_left_right') in (2, 3, 4, 5, 6) or brake is None or throttle is None)
+        impact = finite(sample.get('lmu_last_impact_et'))
+        dirty = dirty or (impact is not None and previous['session_time'] < impact <= at)
+        verdict = {'invalidated': sample.get('lmu_lap_invalidated'), 'count_lap_flag': sample.get('lmu_count_lap_flag'),
+                   'track_limits_steps': sample.get('lmu_track_limits_steps')}
+        dirty = dirty or (verdict['invalidated'] is True and previous.get('lmu_lap_invalidated') is False)
+        dirty = dirty or (verdict['count_lap_flag'] in (0, 1) and previous.get('lmu_count_lap_flag') == 2)
+        context = sample.get('traffic_context', 'UNKNOWN')
         active = self.active
         if active:
             active['min_speed_mps'] = min(active['min_speed_mps'], speed)
             active['clean'] = active['clean'] and not dirty
+            if context != 'SOLO':
+                active['traffic_context'] = ('TRAFFIC_PRESENT' if context == 'TRAFFIC_PRESENT'
+                                             or active['traffic_context'] == 'TRAFFIC_PRESENT' else 'UNKNOWN')
+            active['lap_verdict'] = verdict
             if active['brake_pct'] is None and brake is not None and brake > BRAKE_ON and pct <= active['apex_pct']:
                 active['brake_pct'] = pct
                 active['brake_observed'] = self.brake_onset == pct
@@ -178,7 +190,7 @@ class LiveCornerCoach:
                 active['exit_at'] = exit_at
                 self.last_measurement = None
                 self.active = None
-                if active['clean'] and active['duration_s'] > 0:
+                if active['duration_s'] > 0:
                     self._finished(active, track_length_m)
         if rollover:
             self._lap_finished(int(previous['lap_number']), track_length_m)
@@ -196,14 +208,21 @@ class LiveCornerCoach:
                                'entry_pct': definition['entry_pct'], 'entry_at': entry_at, 'lap': int(lap),
                                'min_speed_mps': min(speed, previous['speed_mps']), 'brake_pct': onset,
                                'brake_observed': onset is not None,
-                               'throttle_pct': None, 'clean': not dirty}
+                               'throttle_pct': None, 'clean': not dirty, 'traffic_context': context,
+                               'lap_verdict': verdict}
                 break
 
     def _finished(self, corner_pass, track_length_m):
-        self.last_measurement = dict(corner_pass)
+        self.last_observation = dict(corner_pass)
+        self.last_measurement = dict(corner_pass) if self._eligible(corner_pass) else None
         best = self.best.setdefault(self.key, {})
         reference = best.get(corner_pass['id'])
         self.lap[corner_pass['id']] = corner_pass
+        if not self._eligible(corner_pass):
+            self.last_pass = {'id': corner_pass['id'], 'lap': corner_pass['lap'], 'delta_s': None,
+                              'traffic_context': corner_pass.get('traffic_context', 'UNKNOWN'),
+                              'comparison_eligible': False, 'number': corner_number(corner_pass['id'])}
+            return
         self.last_pass = ({**compare(corner_pass, reference, track_length_m), 'lap': corner_pass['lap']} if reference
                           else {'id': corner_pass['id'], 'number': corner_number(corner_pass['id']), 'call': corner_pass.get('call'),
                                 'lap': corner_pass['lap'], 'delta_s': None})
@@ -212,6 +231,7 @@ class LiveCornerCoach:
         best = self.best.setdefault(self.key, {})
         passes, self.lap = self.lap, {}
         # Every pass is checked on its own, so a lap with a gap still compares its clean segments.
+        passes = {key: p for key, p in passes.items() if self._eligible(p)}
         compared = [compare(p, best[p['id']], track_length_m) for p in passes.values() if p['id'] in best]
         for corner_pass in passes.values():
             if corner_pass['id'] not in best or corner_pass['duration_s'] < best[corner_pass['id']]['duration_s']:
@@ -230,6 +250,10 @@ class LiveCornerCoach:
             until = reference.get('brake_pct') if reference.get('brake_pct') is not None else source['entry_pct']
             self.focus = {'id': worst['id'], 'number': worst['number'], 'call': worst.get('call'), 'cause': worst['cause'], 'until_pct': until, 'loss_s': worst['delta_s'],
                           'text': f'{lap_number}랩 ' + describe(worst), 'announced': False}
+
+    @staticmethod
+    def _eligible(item):
+        return item.get('clean') is True and item.get('traffic_context') == 'SOLO'
 
     def reminder(self, sample, lap_seconds, track_length_m=None, speech_s=(CALL_DEFAULT_S,)):
         """The one corner to mention, once, early enough for the whole sentence to end before its braking point.
@@ -298,6 +322,8 @@ def corner_answer(view):
     last = view.get('last_corner')
     if not last:
         return '아직 깨끗하게 통과한 구간 기록이 없습니다.'
+    if last.get('comparison_eligible') is False:
+        return '방금 구간은 교통 또는 관측 조건이 달라 단독 주행 기준과 비교하지 않았습니다.'
     if last.get('delta_s') is None:
         return f"방금 {last.get('call') or str(last['number']) + '번 구간'}은 처음 기록한 통과라 비교할 구간 최고가 아직 없습니다."
     text = '방금 ' + describe(last)
