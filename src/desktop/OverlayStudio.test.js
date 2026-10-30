@@ -2,9 +2,12 @@ import React from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import OverlayStudio from './OverlayStudio';
 import { initialConfig, selectModules } from './overlayCatalog';
+import { useGame } from '../lib/gameContext';
 
-jest.mock('../lib/gameContext', () => ({ useGame: () => ({ selectedGame: 'iracing' }) }));
-jest.mock('../components/OverlaySettings', () => () => <div>창 설정 내용</div>);
+jest.mock('../lib/gameContext', () => ({ useGame: jest.fn(() => ({ selectedGame: 'iracing' })) }));
+jest.mock('../components/OverlaySettings', () => ({ visible }) => <div data-testid="window-settings" data-active={visible}>창 설정 내용</div>);
+
+beforeEach(() => { useGame.mockReturnValue({ selectedGame: 'iracing' }); });
 
 function fixture() {
   let saved = initialConfig();
@@ -25,9 +28,11 @@ test('window settings clearly expose open and closed states through a keyboard-a
   const {fetcher} = fixture(); render(<OverlayStudio fetcher={fetcher}/>);
   const toggle = screen.getByRole('button', {name: /창·표시 설정.*설정 열기/});
   expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  expect(screen.getByTestId('window-settings')).toHaveAttribute('data-active', 'false');
   expect(screen.getByText('창 설정 내용')).not.toBeVisible();
   fireEvent.click(toggle);
   expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  expect(screen.getByTestId('window-settings')).toHaveAttribute('data-active', 'true');
   expect(toggle).toHaveTextContent('설정 접기');
   expect(screen.getByText('창 설정 내용')).toBeVisible();
   fireEvent.click(toggle);
@@ -127,9 +132,9 @@ test('formation selections persist independently and fixed grid cannot be disabl
   await waitFor(() => expect(screen.getByRole('button',{name:'저장·적용'})).toBeEnabled());
   fireEvent.mouseDown(screen.getByRole('tab',{name:'포메이션'}),{button:0,ctrlKey:false});
   const choices=await screen.findByLabelText('포메이션 표시 항목');
-  expect(within(choices).getByRole('switch',{name:/공식 출발 순위/})).toBeDisabled();
-  expect(within(choices).getByRole('switch',{name:/바퀴별 온도/})).toBeDisabled();
-  const fuel=within(choices).getByRole('switch',{name:/현재 연료/});
+  expect(within(choices).getByRole('checkbox',{name:'공식 출발 순위'})).toBeDisabled();
+  expect(within(choices).getByRole('checkbox',{name:'바퀴별 온도'})).toBeDisabled();
+  const fuel=within(choices).getByRole('checkbox',{name:'현재 연료'});
   expect(fuel).toBeChecked(); fireEvent.click(fuel);
   fireEvent.click(screen.getByRole('button',{name:'저장·적용'}));
   await screen.findByText('구성을 저장했습니다. 주행 오버레이와 창 미리보기에 적용됩니다.');
@@ -139,4 +144,50 @@ test('formation selections persist independently and fixed grid cannot be disabl
   expect(config.graph.window).toBe(10);
   expect(config.selected.formation).toEqual(['reference','live']);
   expect(screen.getByText(/무전 OFF·음소거·브리핑 0개/)).toBeInTheDocument();
+});
+
+test('LMU disables unavailable native grid and qualifying choices without deleting other game preferences', async () => {
+  useGame.mockReturnValue({ selectedGame: 'lmu' });
+  const {fetcher}=fixture(); render(<OverlayStudio fetcher={fetcher}/>);
+  await waitFor(() => expect(screen.getByRole('button',{name:'저장·적용'})).toBeEnabled());
+  fireEvent.mouseDown(screen.getByRole('tab',{name:'포메이션'}),{button:0,ctrlKey:false});
+  const choices=await screen.findByLabelText('포메이션 표시 항목');
+  for (const name of ['공식 정렬 안내','클래스 필드','그리드 앞뒤 차량','해당 경기 퀄리','iRating 상승 기준 추정']) {
+    expect(within(choices).getByRole('checkbox',{name})).toBeDisabled();
+  }
+  expect(within(choices).getByRole('checkbox',{name:'바퀴별 온도'})).toBeEnabled();
+  expect(within(choices).getByRole('checkbox',{name:'가상 에너지'})).toBeEnabled();
+  fireEvent.click(within(choices).getByRole('radio',{name:'지난번 돌아보기'}));
+  expect(within(choices).queryByRole('checkbox',{name:'현재 연료'})).not.toBeInTheDocument();
+  expect(within(choices).getAllByRole('checkbox')).toHaveLength(5);
+});
+
+test('slow polling keeps a single request in flight and aborts it on unmount', async () => {
+  jest.useFakeTimers();
+  try {
+    const fetcher=jest.fn(()=>new Promise(()=>{}));
+    const view=render(<OverlayStudio fetcher={fetcher}/>);
+    const reads=()=>fetcher.mock.calls.filter(([url])=>!url.includes('/render'));
+    expect(reads()).toHaveLength(1);
+    fireEvent.click(screen.getByRole('radio',{name:'네 세션 비교'}));
+    jest.advanceTimersByTime(6000);
+    expect(reads()).toHaveLength(1);
+    const signal=reads()[0][1].signal;
+    view.unmount();
+    expect(signal.aborted).toBe(true);
+  } finally { jest.useRealTimers(); }
+});
+
+test('session editing waits for initial server preferences rather than accepting a tab that will be reset', async () => {
+  const {fetcher}=fixture();
+  let ready;
+  const pending=new Promise(resolve=>{ready=resolve;});
+  const waiting=(url,options)=>url.includes('/render')?fetcher(url,options):pending.then(()=>fetcher(url,options));
+  render(<OverlayStudio fetcher={waiting}/>);
+  const formation=screen.getByRole('tab',{name:'포메이션'});
+  expect(formation).toBeDisabled();
+  ready();
+  await waitFor(()=>expect(formation).toBeEnabled());
+  fireEvent.mouseDown(formation,{button:0,ctrlKey:false});
+  expect(await screen.findByLabelText('포메이션 표시 항목')).toBeInTheDocument();
 });

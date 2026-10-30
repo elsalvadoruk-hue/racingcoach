@@ -26,8 +26,8 @@ export default function OverlaySettings({ apiBase, apiPath = '/api/overlay', vis
   const dirty = useRef(false), mounted = useRef(true), mutating = useRef(false);
   const generation = useRef(0), lastTarget = useRef(null);
   const opacity = useRef({ pending: {}, timer: null, flight: null });
-  const request = useCallback(async (path = '', method = 'GET', body) => {
-    const response = await fetcher(`${apiBase}${apiPath}${path}?game=${selectedGame}`, body === undefined ? { method }
+  const request = useCallback(async (path = '', method = 'GET', body, signal) => {
+    const response = await fetcher(`${apiBase}${apiPath}${path}?game=${selectedGame}`, body === undefined ? { method, ...(signal ? {signal} : {}) }
       : { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await response.json();
     if (response.status === 404 && path === '/visibility') {
@@ -77,23 +77,27 @@ export default function OverlaySettings({ apiBase, apiPath = '/api/overlay', vis
   };
   useEffect(() => {
     if (!visible) return undefined;
-    let cancelled = false;
+    let cancelled = false, inFlight = false, controller;
     const poll = async () => {
-      if (mutating.current || opacity.current.timer || opacity.current.flight) return;
+      if (inFlight || document.visibilityState === 'hidden' || mutating.current || opacity.current.timer || opacity.current.flight) return;
+      inFlight = true;
+      controller = new AbortController();
       const ticket = generation.current;
       try {
-        const data = await request();
+        const data = await request('', 'GET', undefined, controller.signal);
         if (cancelled || ticket !== generation.current || mutating.current) return;
         setView(data);
         const target = JSON.stringify(data.settings_target || { game: selectedGame });
         if (lastTarget.current !== target) { dirty.current = false; lastTarget.current = target; }
         if (!dirty.current) setDraft(data.settings);
         setConnectionError('');
-      } catch (failure) { if (!cancelled) setConnectionError(failure.message); }
+      } catch (failure) { if (!cancelled && !controller.signal.aborted && ticket === generation.current) setConnectionError(failure.message); }
+      finally { inFlight = false; }
     };
     poll();
     const timer = setInterval(poll, 1000);
-    return () => { cancelled = true; clearInterval(timer); };
+    document.addEventListener('visibilitychange', poll);
+    return () => { cancelled = true; clearInterval(timer); controller?.abort(); document.removeEventListener('visibilitychange', poll); };
   }, [visible, request, selectedGame]);
 
   const change = async (path, method, body, message = '') => {

@@ -225,6 +225,8 @@ class FormationTextTests(unittest.TestCase):
         self.assertEqual(model['cards']['22']['text'], '0.0%')
         self.assertFalse(model['cards']['15']['supported'])
         self.assertFalse(model['cards']['23']['supported'])
+        self.assertFalse(model['cards']['16']['supported'])
+        self.assertFalse(model['cards']['17']['supported'])
         self.assertEqual(model['grid']['text'], '출발 순위 확인 중')
 
     def test_grid_and_qualifying_use_distinct_tables_and_survive_green(self):
@@ -254,6 +256,28 @@ class FormationTextTests(unittest.TestCase):
         text = '피트 진입에서 급가속하지 마세요.\n' * 40
         self.assertEqual(''.join(pages(text)), text)
         self.assertEqual(''.join(self.model(archive={'notes': [{'id': 'n', 'text': text}]})['cards']['27']['pages']), text)
+
+    def test_repeated_note_render_is_independent_and_reflects_edits_and_deletion(self):
+        archive = {'notes': [{'id': 'n', 'text': '가속하지 마세요. ' * 100}]}
+        original = archive['notes'][0]['text']
+        model = self.model(archive=archive)
+        model['cards']['27']['pages'].clear()
+        self.assertEqual(''.join(self.model(archive=archive)['cards']['27']['pages']), original)
+        archive['notes'][0]['text'] = '새 메모: 제동하지 마세요.'
+        self.assertEqual(''.join(self.model(archive=archive)['cards']['27']['pages']), archive['notes'][0]['text'])
+        archive['notes'] = []
+        self.assertFalse(self.model(archive=archive)['cards']['27']['available'])
+
+    def test_formation_context_preserves_a_snapshot_when_the_native_table_changes_in_place(self):
+        context = FormationContext()
+        table = {'official_grid': {'overall': 3, 'rows': [{'idx': 0, 'overall': 3}]}}
+        context.ingest(table, 'run')
+        table['official_grid']['rows'][0]['overall'] = 5
+        self.assertEqual(context.data['official_grid']['rows'][0]['overall'], 3)
+        context.ingest(table, 'run')
+        self.assertEqual(context.data['official_grid']['rows'][0]['overall'], 5)
+        context.ingest({}, 'next-run')
+        self.assertFalse(context.data)
 
     def test_native_presentation_rotates_but_never_uses_missing_or_deleted_notes(self):
         p = CoachingPresentation()

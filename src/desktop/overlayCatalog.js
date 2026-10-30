@@ -14,8 +14,8 @@ export const formationItems = [
   ['10', '바퀴별 온도', 'FL/FR/RL/RR 타이어·브레이크 실측 °C', 'lmu'],
   ['14', '지난 경기 기록', '지난번 돌아보기 · 날짜와 경기 베스트'],
   ['15', '클래스 필드', '유효 iRating이 모두 확인된 같은 클래스 SoF', 'iracing'],
-  ['16', '그리드 앞뒤 차량', '공식 출발 슬롯의 차량·퀄리 기록'],
-  ['17', '해당 경기 퀄리', '같은 경기 퀄리 · 레이스 베스트와 별도'],
+  ['16', '그리드 앞뒤 차량', '공식 출발 슬롯의 차량·퀄리 기록', 'iracing'],
+  ['17', '해당 경기 퀄리', '같은 경기 퀄리 · 레이스 베스트와 별도', 'iracing'],
   ['20', '경기 규정', '게임이 제공한 규정만 표시'],
   ['21', '지난 관측 구간', '지난번 돌아보기 · 저장된 분석의 근거 있는 구간'],
   ['22', '가상 에너지', '현재 유효 잔량 %', 'lmu'],
@@ -23,8 +23,13 @@ export const formationItems = [
   ['24', '내 유효 랩 기록', '지난번 돌아보기 · 개인 베스트와 조건이 맞는 최근 중앙값'],
   ['25', '출발부터 결과까지', '지난번 돌아보기 · 같은 경기·순위 기준·결과 상태'],
   ['27', '내 트랙 메모', '지난번 돌아보기 · 직접 쓴 문장과 날짜 · 수정·삭제 반영'],
-].map(([id, name, desc, game]) => ({ id, name, desc, game }));
+].map(([id, name, desc, game]) => ({ id, name, desc, game, review: ['14', '21', '24', '25', '27'].includes(id) }));
 export const formationDefaults = ['8', '9', '10', '14', '15', '16', '17', '20', '21', '22', '23', '24', '25', '27'];
+
+export function formationSelection(config, game) {
+  const chosen = config.formation_items || formationDefaults;
+  return formationItems.filter(item => item.id !== '1' && (!item.game || item.game === game) && chosen.includes(item.id));
+}
 
 export const modules = [
   { id: 'live', number: 'AUTO', name: '자동 주행 코칭', desc: '과제·비교 기록 없이 조작 관측', group: '자동', sessions: ['practice', 'qualify', 'race', 'formation'], title: '직전 제동 해제 → 가속 연결', detail: '해제 5% 이하 → 가속 25% 이상 · 각 150ms 유지한 입력에서 관측', metric: '0.42', unit: 's', tone: 'neutral', stats: [['최근 무입력', '1.20s'], ['동시 입력', '0.18s']] },

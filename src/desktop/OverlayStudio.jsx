@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Layers } from 'lucide-react';
 import { Target } from 'lucide-react';
 import { Timer } from 'lucide-react';
@@ -18,7 +18,7 @@ import { CircleHelp } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '../components/ui/card';
-import { Field, FieldGroup, FieldLabel, FieldSet, FieldLegend } from '../components/ui/field';
+import { Field, FieldGroup, FieldLabel } from '../components/ui/field';
 import { Switch } from '../components/ui/switch';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
@@ -26,7 +26,9 @@ import { NativeSelect, NativeSelectOption } from '../components/ui/native-select
 import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription, DialogHeader } from '../components/ui/dialog';
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from '../components/ui/table';
 import { cn } from '../lib/utils';
-import { sessions, modules, byId, games, initialConfig, selectedModules, selectModules, moduleTiming, phaseNames, phaseOrder, moduleRequirements, formationItems, formationDefaults } from './overlayCatalog';
+import { sessions, modules, byId, games, initialConfig, selectedModules, selectModules, moduleTiming, phaseNames, phaseOrder, moduleRequirements, formationSelection, formationDefaults } from './overlayCatalog';
+import Panel from './OverlayPanel';
+import { CoachingChoices, FormationChoices, FormationSummary } from './OverlayChoices';
 import OverlaySettings from '../components/OverlaySettings';
 import { useGame } from '../lib/gameContext';
 import { API_BASE } from '../analysis/analysisClient';
@@ -62,39 +64,22 @@ function DrivingBackdrop() {
   </svg>;
 }
 
-function PreviewStage({ game, session, config, scene, availability, gallery = false, previewing = true, onPreview, apiBase, fetcher, appearance }) {
+const PreviewStage = memo(function PreviewStage({ game, session, config, scene, availability, gallery = false, previewing = true, onPreview, apiBase, fetcher, appearance }) {
   return <div className={cn('preview-stage', gallery && 'gallery-stage')}>
     <DrivingBackdrop />
     <div className="stage-context"><span>{games[game].track}</span><span>주행 배경 예시</span></div>
     <div className="stage-center">{previewing ? <OverlayNativePreview {...{ apiBase, fetcher, game, session, config, appearance, scene, availability }} /> : <div className="preview-off"><Layers aria-hidden="true"/><h3>미리보기가 꺼져 있습니다</h3><p>주행 대기 상태의 예시입니다.</p><Button variant="outline" size="sm" onClick={()=>onPreview(true)}>미리보기 켜기</Button></div>}</div>
     <div className="stage-caption"><span>{games[game].car}</span><small>실제 오버레이 배치 · 수치는 샘플</small></div>
   </div>;
-}
+});
 
-function Panel({ title, description, children, footer, className, label }) {
-  return <Card className={className} aria-label={label}>
-    <CardHeader><CardTitle asChild><h3>{title}</h3></CardTitle>{description && <CardDescription><p>{description}</p></CardDescription>}</CardHeader>
-    <CardContent>{children}</CardContent>{footer && <CardFooter>{footer}</CardFooter>}
-  </Card>;
-}
-
-function FormationChoices({ config, game, onChange }) {
-  const chosen = config.formation_items || formationDefaults;
-  const toggle = id => onChange({ formation_items: chosen.includes(id) ? chosen.filter(key => key !== id) : [...chosen, id] });
-  return <Panel title="포메이션 표시 항목" description="출발 순위는 고정합니다. 준비된 선택 정보는 8초 간격으로 순환하며 긴 메모는 원문 그대로 나눠 표시합니다." className="library-panel" label="포메이션 표시 항목">
-    <p className="selection-hint">무전 OFF·음소거·브리핑 0개에서도 표시됩니다. 현재 자료에는 분석이나 과제가 필요하지 않습니다.</p>
-    <FieldSet className="library-scroll"><FieldLegend className="sr-only">출발 준비와 지난번 돌아보기</FieldLegend><FieldGroup>{formationItems.map(item => {
-      const unsupported = item.game && item.game !== game;
-      const fixed = item.id === '1';
-      return <Field key={item.id} orientation="horizontal" data-disabled={fixed || unsupported}><FieldLabel htmlFor={`formation-${item.id}`}><span className="module-choice-copy"><b>{item.name}{fixed ? ' · 필수 고정' : ''}</b><small>{unsupported ? `${item.game === 'lmu' ? 'LMU' : 'iRacing'} 전용` : item.desc}</small></span></FieldLabel><Switch id={`formation-${item.id}`} checked={fixed || chosen.includes(item.id)} disabled={fixed || unsupported} onCheckedChange={() => toggle(item.id)} /></Field>;
-    })}</FieldGroup></FieldSet>
-    <p className="selection-hint">공식 출처가 없으면 출발 순위 확인 중으로 표시합니다. 규정 입력이 없으면 규정 없음으로 해석하지 않습니다.</p>
-  </Panel>;
-}
-
-function GalleryFooter({config,session}) {
+function GalleryFooter({config,session,game}) {
   const inputs = config.modes[session] === 'inputs';
   const selected = selectedModules(config, session);
+  if (session === 'formation' && !inputs) {
+    const formation = formationSelection(config, game);
+    return <><span>표시 형태<b>출발 준비 텍스트</b></span><span>항상 표시<b>공식 출발 순위 · 참가 규모</b></span><span>선택 정보<b>{formation.length}개 · 8초 간격 순환</b></span><span>구성<b>{formation.map(item => item.name).join(' · ') || '출발 순위만 표시'}</b></span></>;
+  }
   return <><span>표시 형태<b>{inputs?'입력값 그래프':'코칭 카드'}</b></span>{inputs ? <><span>표시 채널<b>{[['throttle','스로틀'],['brake','브레이크'],['steering','조향']].filter(([key])=>config.graph[key]).map(([,label])=>label).join(' · ') || '표시 안 함'}</b></span><span>표시 범위<b>최근 {config.graph.window}초</b></span></> : <><span>선택 항목<b>{selected.length}개 · 상황별 자동 표시</b></span><span>함께 표시<b>큰 정보 1개 + 보조 최대 2개</b></span><span>구성<b>{selected.map(id => byId[id].name).join(' · ') || '표시 안 함'}</b></span></>}</>;
 }
 
@@ -128,18 +113,21 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
   const [layout, setLayout] = useState('studio'), [commonOpen, setCommonOpen] = useState(false);
   const commonId = useId();
   const [scene, setScene] = useState('start'), [availability, setAvailability] = useState('personal');
-  const [filter, setFilter] = useState('recommended'), [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState('');
   const [error, setError] = useState(''), [busy, setBusy] = useState(false), [expanded, setExpanded] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const dirty = useRef(false), generation = useRef(0), saving = useRef(false), currentTarget = useRef(null);
   const [previewing, setPreviewing] = useState(true);
   const target = `${game}:${scope}`;
-  const config = { ...initialConfig(), ...(configs[target] || {}), source: game === 'lmu' ? 'personal' : (configs[target]?.source || 'auto') };
+  const config = useMemo(() => ({ ...initialConfig(), ...(configs[target] || {}), source: game === 'lmu' ? 'personal' : (configs[target]?.source || 'auto') }), [configs, target, game]);
+  const appearance = useMemo(() => ({width:view?.settings?.width,height:view?.settings?.height,
+    content_opacity:view?.settings?.content_opacity,background_opacity:view?.settings?.background_opacity}),
+  [view?.settings?.width,view?.settings?.height,view?.settings?.content_opacity,view?.settings?.background_opacity]);
   const selected = selectedModules(config, session), info = sessions[session];
   const display = selectModules(config, session, scene, availability);
   const ref = referenceFor(game, config, availability), Icon = sessionIcons[session], inputs = config.modes[session] === 'inputs';
-  const request = useCallback(async (path = '', method = 'GET', body) => {
-    const response = await fetcher(`${apiBase}/api/overlay/studio${path}?game=${game}`, { method,
+  const request = useCallback(async (path = '', method = 'GET', body, signal) => {
+    const response = await fetcher(`${apiBase}/api/overlay/studio${path}?game=${game}`, { method, signal,
       ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
     const data = await response.json();
     if (!response.ok) throw new Error(response.status === 404 ? '새 오버레이 화면을 사용하려면 앱과 검은 실행창을 완전히 종료한 뒤 다시 실행하세요.' : typeof data.detail === 'string' ? data.detail : '오버레이 구성을 저장하지 못했습니다.');
@@ -150,14 +138,16 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
     return data;
   }, [apiBase, fetcher, game]);
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false, inFlight = false, controller;
     dirty.current = false; currentTarget.current = null; generation.current += 1;
     setView(null); setError(''); setConfigs({}); setNotice('');
     const poll = async () => {
-      if (saving.current) return;
+      if (saving.current || inFlight || document.visibilityState === 'hidden') return;
+      inFlight = true;
+      controller = new AbortController();
       const ticket = generation.current;
       try {
-        const data = await request();
+        const data = await request('', 'GET', undefined, controller.signal);
         if (cancelled || saving.current || ticket !== generation.current) return;
         const nextTarget = JSON.stringify(data.settings_target);
         if (currentTarget.current !== nextTarget) {
@@ -166,15 +156,20 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
           setSession(data.studio?.manual_session || 'practice');
         }
         setView(data);
-        if (!dirty.current) setConfigs({[`${game}:car`]: data.studio, [`${game}:game`]: data.game_default});
+        if (!dirty.current) setConfigs(current => {
+          const next = {[`${game}:car`]: data.studio, [`${game}:game`]: data.game_default};
+          return JSON.stringify(current) === JSON.stringify(next) ? current : next;
+        });
         setError('');
-      } catch (failure) { if (!cancelled) setError(failure.message); }
+      } catch (failure) { if (!cancelled && !controller.signal.aborted && ticket === generation.current) setError(failure.message); }
+      finally { inFlight = false; }
     };
     poll(); const timer = setInterval(poll, 1500);
-    return () => { cancelled = true; clearInterval(timer); };
+    document.addEventListener('visibilitychange', poll);
+    return () => { cancelled = true; clearInterval(timer); controller?.abort(); document.removeEventListener('visibilitychange', poll); };
   }, [game, request]);
   const chooseScene = next => setScene(next);
-  const previewProps = {game,session,config,scene,availability,previewing,onPreview:setPreviewing,apiBase,fetcher,appearance:view?.settings};
+  const previewProps = {game,session,config,scene,availability,previewing,onPreview:setPreviewing,apiBase,fetcher,appearance};
   const patch = values => { dirty.current = true; generation.current += 1; setConfigs(current => ({...current, [target]: {...config,...values}})); setNotice(''); };
   const changeSession = next => { setSession(next); chooseScene(next === 'formation' ? 'before' : 'start'); setNotice(''); };
   const toggleModule = id => {
@@ -198,7 +193,6 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
   };
   const preset = () => { patch(session === 'formation' ? {formation_items: [...formationDefaults]} : { slots: { ...config.slots, [session]: [...info.slots] }, selected: {...config.selected, [session]: info.slots.filter(Boolean)} }); setScene(session === 'formation' ? 'before' : 'start'); };
   const green = () => { changeSession('race'); setNotice('그린 전환 예시: 포메이션 텍스트를 종료하고 레이스 구성으로 바뀌었습니다.'); };
-  const visibleModules = filter === 'recommended' ? modules.filter(item => item.sessions.includes(session)) : modules;
   return <Dialog open={helpOpen} onOpenChange={setHelpOpen}><div className="overlay-studio">
     <main className="studio-main">
       <div className="page-heading"><div><p className="eyebrow">DRIVING COACH / OVERLAY</p><h1>오버레이</h1><p>세션별로 필요한 코칭을 고르고, 주행 화면에서 확인하세요.</p></div>
@@ -206,19 +200,16 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
       <div className="context-bar"><div className="game-picker"><Badge variant="outline">{game === 'lmu' ? 'LMU' : 'iRacing'}</Badge><span className="context-car">{view?.settings_target?.car_name || '차량 연결 대기 · 게임 기본값 편집'}</span></div>
         <Field orientation="horizontal" className="scope-field"><FieldLabel htmlFor="save-scope">저장 대상</FieldLabel><NativeSelect id="save-scope" value={scope} disabled={busy} onChange={e => {setScope(e.target.value); setNotice('');}}><NativeSelectOption value="car" disabled={!view?.settings_target?.car_key}>현재 차량</NativeSelectOption><NativeSelectOption value="game">게임 기본값</NativeSelectOption></NativeSelect></Field>
         <div className="context-actions"><Button variant="outline" size="sm" disabled={busy || !view} onClick={preset}><RotateCcw data-icon="inline-start"/>현재 세션 추천 구성</Button><Button size="sm" disabled={busy || !view} onClick={save}><Save data-icon="inline-start"/>{busy ? '저장 중…' : '저장·적용'}</Button></div></div>
-      <div className="common-settings" data-open={commonOpen}><Button variant="ghost" className="common-toolbar" aria-expanded={commonOpen} aria-controls={commonId} onClick={() => setCommonOpen(open => !open)}><Settings2 data-icon="inline-start"/><span className="common-heading"><b>창·표시 설정</b><small>자동 표시 · 위치 · 크기 · 불투명도 · 고정</small></span><span className="common-disclosure">{commonOpen ? '설정 접기' : '설정 열기'}<ChevronDown aria-hidden="true"/></span></Button><div id={commonId} className="common-body" hidden={!commonOpen}><OverlaySettings apiBase={apiBase} fetcher={fetcher} compact /></div></div>
+      <div className="common-settings" data-open={commonOpen}><Button variant="ghost" className="common-toolbar" aria-expanded={commonOpen} aria-controls={commonId} onClick={() => setCommonOpen(open => !open)}><Settings2 data-icon="inline-start"/><span className="common-heading"><b>창·표시 설정</b><small>자동 표시 · 위치 · 크기 · 불투명도 · 고정</small></span><span className="common-disclosure">{commonOpen ? '설정 접기' : '설정 열기'}<ChevronDown aria-hidden="true"/></span></Button><div id={commonId} className="common-body" hidden={!commonOpen}><OverlaySettings apiBase={apiBase} fetcher={fetcher} visible={commonOpen} compact /></div></div>
       {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
       {notice && <p role="status" className="save-notice"><Check aria-hidden="true"/>{notice}</p>}
       <ContentReadiness view={error ? null : view}/>
       {layout === 'studio' ? <>
-        <div className="session-bar"><Tabs value={session} onValueChange={changeSession}><TabsList aria-label="세션별 구성">{SESSION_IDS.map(id => { const SIcon = sessionIcons[id]; return <TabsTrigger key={id} value={id}><SIcon aria-hidden="true"/>{sessions[id].name}</TabsTrigger>; })}</TabsList></Tabs><Field orientation="horizontal" className="auto-field"><FieldLabel htmlFor="auto-session">세션 자동 전환</FieldLabel><Switch disabled={busy || !view} id="auto-session" checked={config.auto} onCheckedChange={value => patch({ auto: value })}/></Field></div>
+        <div className="session-bar"><Tabs value={session} onValueChange={changeSession}><TabsList aria-label="세션별 구성">{SESSION_IDS.map(id => { const SIcon = sessionIcons[id]; return <TabsTrigger key={id} value={id} disabled={busy || !view}><SIcon aria-hidden="true"/>{sessions[id].name}</TabsTrigger>; })}</TabsList></Tabs><Field orientation="horizontal" className="auto-field"><FieldLabel htmlFor="auto-session">세션 자동 전환</FieldLabel><Switch disabled={busy || !view} id="auto-session" checked={config.auto} onCheckedChange={value => patch({ auto: value })}/></Field></div>
         <div className="session-intro"><Icon aria-hidden="true"/><div><h2>{info.title}</h2><p>{info.description}</p></div><Badge variant="secondary">추천 · {info.preset}</Badge></div>
         <div className="mode-picker"><div><h3>{info.name}에 표시할 화면</h3><p>세션마다 선택하고, 두 방식의 세부 설정을 그대로 유지하세요.</p></div><ToggleGroup disabled={busy || !view} type="single" value={config.modes[session]} onValueChange={value=>value&&patch({modes:{...config.modes,[session]:value}})} aria-label="오버레이 표시 형태"><ToggleGroupItem value="coach"><Layers aria-hidden="true"/><span><b>코칭 카드</b><small>목표·통과 결과·반복 패턴</small></span>{!inputs&&<Check className="mode-check" aria-hidden="true"/>}</ToggleGroupItem><ToggleGroupItem value="inputs"><Activity aria-hidden="true"/><span><b>입력값 그래프</b><small>스로틀·브레이크·조향 비교</small></span>{inputs&&<Check className="mode-check" aria-hidden="true"/>}</ToggleGroupItem></ToggleGroup></div>
         <fieldset className="studio-grid" disabled={busy || !view}>
-          {session === 'formation' && !inputs ? <FormationChoices config={config} game={game} onChange={patch}/> : inputs ? <Panel title="입력값 선택" description="보고 싶은 입력만 켜두세요." className="library-panel graph-controls-panel" label="입력값 그래프 설정" footer={<span>코칭 카드 구성은 그대로 보관됩니다.</span>}><GraphControls config={config} onChange={patch}/></Panel> : <Panel title="표시 항목 · 복수 선택" description="필요한 항목을 모두 체크하세요. 상황에 맞춰 자동으로 표시합니다." className="library-panel" label="표시 항목 목록" footer={<span><span className="legend-dot"/>{selected.length}개 선택 · 한 번에 최대 3개 표시</span>}>
-            <ToggleGroup type="single" value={filter} onValueChange={v => v && setFilter(v)} aria-label="항목 필터" className="library-filter"><ToggleGroupItem value="recommended">이 세션 추천</ToggleGroupItem><ToggleGroupItem value="all">전체 {modules.length}개</ToggleGroupItem></ToggleGroup>
-            <FieldSet className="library-scroll"><FieldLegend className="sr-only">상황별로 표시할 코칭 항목</FieldLegend><FieldGroup>{visibleModules.map(item => { const checked = selected.includes(item.id), unavailable = item.pending || (session === 'formation' && !phaseOrder.formation.includes(item.id)); return <Field key={item.id}><FieldLabel className="module-choice" data-checked={checked} data-pending={item.pending || undefined}><input type="checkbox" checked={checked} disabled={unavailable && !checked} onChange={() => toggleModule(item.id)} aria-label={item.name}/><span className="module-choice-copy"><b>{item.name}</b><small>{item.desc}</small><em>{moduleTiming(item.id, session)}</em></span>{item.pending && <Badge variant="outline">준비 중</Badge>}</FieldLabel></Field>; })}</FieldGroup></FieldSet>
-          </Panel>}
+          {session === 'formation' && !inputs ? <FormationChoices config={config} game={game} onChange={patch}/> : inputs ? <Panel title="입력값 선택" description="보고 싶은 입력만 켜두세요." className="library-panel graph-controls-panel" label="입력값 그래프 설정" footer={<span>코칭 카드 구성은 그대로 보관됩니다.</span>}><GraphControls config={config} onChange={patch}/></Panel> : <CoachingChoices selected={selected} session={session} onToggle={toggleModule}/>}
           <section className="center-column" aria-label="오버레이 미리보기">
             <div className="preview-heading"><span><i/>오버레이 미리보기 <small>샘플 장면</small></span><Button variant="ghost" size="sm" onClick={() => setExpanded(true)}><Expand data-icon="inline-start"/>크게 보기</Button></div>
             <PreviewStage {...previewProps} />
@@ -231,16 +222,16 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
             </Panel>}
           </section>
           <div className="settings-column">
-            {session === 'formation' && !inputs ? <Panel title="출발 전 텍스트" description="출발 순위와 참가 규모는 고정하고, 지원되는 선택 항목만 읽을 시간에 맞춰 순환합니다."><p>14·21·24·25·27번은 지난번 돌아보기입니다. 그린에 포메이션 텍스트를 종료합니다. 기존 입력값 그래프 설정은 보존합니다.</p></Panel> : inputs ? <Panel title="그래프 보조 정보" description="그래프에 함께 표시할 항목입니다." className="slots-panel" label="그래프 보조 정보 설정"><GraphExtras config={config} onChange={patch}/></Panel> : <Panel title="상황별 자동 표시" description={`${selected.length}개 선택 · 측정된 정보 중 최대 3개를 표시합니다.`} className="slots-panel" label="상황별 표시 안내">
+            {session === 'formation' && !inputs ? <FormationSummary config={config} game={game}/> : inputs ? <Panel title="그래프 보조 정보" description="그래프에 함께 표시할 항목입니다." className="slots-panel" label="그래프 보조 정보 설정"><GraphExtras config={config} onChange={patch}/></Panel> : <Panel title="상황별 자동 표시" description={`${selected.length}개 선택 · 측정된 정보 중 최대 3개를 표시합니다.`} className="slots-panel" label="상황별 표시 안내">
               <div className="phase-plan">{Object.entries(phaseOrder).filter(([phase]) => session === 'formation' ? phase === 'formation' : phase !== 'formation').map(([phase, ids]) => <div key={phase} data-active={display.phase === phase}><b>{phaseNames[phase]}{display.phase === phase && <Badge variant="secondary">현재 장면</Badge>}</b><p>{ids.filter(id => selected.includes(id)).map(id => byId[id].name).join(' · ') || '선택한 항목 없음'}</p></div>)}</div>
               <p className="selection-hint">항목을 여러 개 선택해도 화면을 채우지 않습니다. 상황과 측정 자료에 맞춰 큰 정보 1개와 보조 최대 2개로 바뀝니다.</p>
             </Panel>}
             <Panel title="표시 방식" className="appearance-panel" label="표시 방식 설정">
               <FieldGroup>
                 {!inputs && <><Field><FieldLabel htmlFor="detail-level">정보 상세도</FieldLabel><NativeSelect id="detail-level" value={config.detail} onChange={e => patch({ detail: e.target.value })}><NativeSelectOption value="simple">간단히 · 제목과 숫자</NativeSelectOption><NativeSelectOption value="standard">기본 · 설명과 측정값</NativeSelectOption><NativeSelectOption value="detailed">자세히 · 관측 범위 포함</NativeSelectOption></NativeSelect></Field>
-                <Field><FieldLabel htmlFor="result-timing">결과로 자동 전환</FieldLabel><NativeSelect id="result-timing" value={config.timing} onChange={e => patch({ timing: e.target.value })}><NativeSelectOption value="pass">코너 묶음 후 · 직선에서 표시</NativeSelectOption><NativeSelectOption value="lap">랩 종료 후 · 직선에서 표시</NativeSelectOption></NativeSelect><p className="coaching-schedule">연속 코너의 결과를 모아 다음 직선에서 핵심 내용을 6초간 고정합니다. 새 내용은 최소 8초 간격으로 표시합니다. 다음 제동이 가까우면 기다리고, 제동·회전·근접 상황에서는 상세 내용을 접습니다. 예측 자료가 없는 첫 주행은 실제 입력이 2초간 안정된 뒤 표시합니다.</p></Field></>}
+                {session !== 'formation' && <Field><FieldLabel htmlFor="result-timing">결과로 자동 전환</FieldLabel><NativeSelect id="result-timing" value={config.timing} onChange={e => patch({ timing: e.target.value })}><NativeSelectOption value="pass">코너 묶음 후 · 직선에서 표시</NativeSelectOption><NativeSelectOption value="lap">랩 종료 후 · 직선에서 표시</NativeSelectOption></NativeSelect><p className="coaching-schedule">연속 코너의 결과를 모아 다음 직선에서 핵심 내용을 6초간 고정합니다. 새 내용은 최소 8초 간격으로 표시합니다. 다음 제동이 가까우면 기다리고, 제동·회전·근접 상황에서는 상세 내용을 접습니다. 예측 자료가 없는 첫 주행은 실제 입력이 2초간 안정된 뒤 표시합니다.</p></Field>}</>}
                 <Field><FieldLabel htmlFor="font-size">오버레이 글자 크기</FieldLabel><NativeSelect id="font-size" value={config.size} onChange={e => patch({ size: e.target.value })}><NativeSelectOption value="small">작게</NativeSelectOption><NativeSelectOption value="normal">기본</NativeSelectOption><NativeSelectOption value="large">크게</NativeSelectOption></NativeSelect></Field>
-                <Field orientation="horizontal"><FieldLabel htmlFor="quiet-traffic">레이스 근접 시 간단히</FieldLabel><Switch id="quiet-traffic" checked={config.quiet} onCheckedChange={value => patch({ quiet: value })}/></Field>
+                {session !== 'formation' && <Field orientation="horizontal"><FieldLabel htmlFor="quiet-traffic">레이스 근접 시 간단히</FieldLabel><Switch id="quiet-traffic" checked={config.quiet} onCheckedChange={value => patch({ quiet: value })}/></Field>}
               </FieldGroup>
             </Panel>
             <div className="module-footnote"><b>{inputs ? '실선은 내 입력 · 옅은 면은 기준' : '기본은 과제 없이 자동 관측'}</b><p>{inputs ? '맞는 비교 기록이 없으면 내 입력만 표시합니다. 크기·위치·불투명도는 위의 창·표시 설정에서 조절하세요.' : '자동 주행 코칭은 과제·비교 기록 없이 표시됩니다. 코너 비교는 파일 분석으로 구간을 준비하고, 연습 목표·성공률은 원하는 경우에만 과제를 연결하세요.'}</p></div>
@@ -248,7 +239,7 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
         </fieldset>
       </> : <section className="compare-view" aria-label="네 세션 비교">
         <div className="compare-intro"><div><h2>한 가지 도구, 네 가지 목적.</h2><p>현재 선택한 게임·저장 대상의 구성을 한눈에 비교하세요.</p></div><Badge variant="outline">세션을 누르면 편집 화면으로 이동</Badge></div>
-        <div className="compare-grid">{SESSION_IDS.map(id => { const SIcon = sessionIcons[id]; return <Card key={id} className="compare-card"><CardHeader><CardTitle asChild><h3><span><SIcon aria-hidden="true"/>{sessions[id].name}<small>{sessions[id].en}</small></span><Button size="sm" variant="ghost" onClick={() => { changeSession(id); setLayout('studio'); }}>{sessions[id].name} 편집<ArrowUpRight data-icon="inline-end"/></Button></h3></CardTitle><CardDescription><p>{sessions[id].description}</p></CardDescription></CardHeader><CardContent><PreviewStage game={game} session={id} config={config} appearance={view?.settings} apiBase={apiBase} fetcher={fetcher} availability={availability} gallery /></CardContent><CardFooter><GalleryFooter config={config} session={id}/></CardFooter></Card>; })}</div>
+        <div className="compare-grid">{SESSION_IDS.map(id => { const SIcon = sessionIcons[id]; return <Card key={id} className="compare-card"><CardHeader><CardTitle asChild><h3><span><SIcon aria-hidden="true"/>{sessions[id].name}<small>{sessions[id].en}</small></span><Button size="sm" variant="ghost" onClick={() => { changeSession(id); setLayout('studio'); }}>{sessions[id].name} 편집<ArrowUpRight data-icon="inline-end"/></Button></h3></CardTitle><CardDescription><p>{sessions[id].description}</p></CardDescription></CardHeader><CardContent><PreviewStage game={game} session={id} config={config} appearance={appearance} apiBase={apiBase} fetcher={fetcher} availability={availability} gallery /></CardContent><CardFooter><GalleryFooter config={config} session={id} game={game}/></CardFooter></Card>; })}</div>
       </section>}
       <footer className="studio-footer"><span><CircleDot aria-hidden="true"/>미리보기는 실제 오버레이와 같은 코드로 그립니다. 수치는 샘플입니다.</span><span>저장·적용하면 실제 주행 오버레이 구성이 바뀝니다.</span></footer>
     </main>

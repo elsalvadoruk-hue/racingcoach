@@ -1,5 +1,6 @@
 """Independent, read-only formation cards. Simulator facts never depend on voice or analysis."""
 from copy import deepcopy
+from functools import lru_cache
 import math
 import statistics
 import unicodedata
@@ -87,7 +88,7 @@ class FormationContext:
             self.run, self.data = run, {}
         for key in ('official_grid', 'qualifying', 'formation_assignment'):
             value = race.get(key)
-            if value is not None:
+            if value is not None and value != self.data.get(key):
                 self.data[key] = deepcopy(value)
         return self.data
 
@@ -165,6 +166,17 @@ def pages(text, cells=72):
     return result + ([part] if part else [])
 
 
+@lru_cache(maxsize=8)
+def _note_pages(text):
+    return tuple(pages(text))
+
+
+def note_pages(text):
+    # Retain at most eight short notes; very long notes are never cached.
+    # Return a fresh list so callers cannot alter later renderings.
+    return list(_note_pages(text)) if len(text) <= 8192 else pages(text)
+
+
 def lap_text(v):
     v = number(v)
     return f'{int(v // 60)}:{v % 60:06.3f}' if v is not None and 0 < v < 1800 else '확인 중'
@@ -233,9 +245,9 @@ def build_formation(sample, race, identity, context=None, archive=None, energy=N
             if number(q.get('lap_s')) and number(quali.get('lap_s')):
                 text += f" · 퀄리 차이 {q['lap_s'] - quali['lap_s']:+.3f}초"
             neighbors.append(text)
-    card('16', '\n'.join(neighbors) or None, '공식 그리드의 바로 앞뒤 출발 슬롯', grid.get('source'))
+    card('16', '\n'.join(neighbors) or None, '공식 그리드의 바로 앞뒤 출발 슬롯', grid.get('source'), game == 'iracing')
     card('17', f"퀄리 클래스 {quali['class_position']}위 · {lap_text(quali.get('lap_s'))}" if quali.get('class_position') else None,
-         '해당 경기의 퀄리 · 레이스 베스트와 별도', quali.get('source'))
+         '해당 경기의 퀄리 · 레이스 베스트와 별도', quali.get('source'), game == 'iracing')
     rules = []
     for key, label in (('incident_limit', '인시던트 제한'), ('fast_repairs_limit', '빠른 수리 제한'), ('mandatory_pit_stops', '의무 피트')):
         if number(race.get(key)) is not None:
@@ -275,6 +287,6 @@ def build_formation(sample, race, identity, context=None, archive=None, energy=N
     for item in cards.values():
         if not item['supported']:
             item.update(available=False, text='이 게임의 연결 입력에서 지원하지 않습니다.', metric='미지원')
-        item['pages'] = [part for text in item.get('pages') or [item['text']] for part in pages(text)]
+        item['pages'] = note_pages(item['text']) if item is cards['27'] else [part for text in item.get('pages') or [item['text']] for part in pages(text)]
     return {'active': active, 'grid': cards['1'], 'cards': cards, 'game': game,
             'source_time': sample.get('session_time')}

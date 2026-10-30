@@ -61,6 +61,19 @@ class PreviewRouteTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):renderer.render(body())
         self.assertTrue(renderer.lock.acquire(blocking=False));renderer.lock.release()
 
+    def test_large_previews_are_evicted_before_retained_strings_exceed_eight_mib(self):
+        renderer = OverlayPreview()
+        svg = '<svg><!--' + 'x' * 1_000_000 + '--></svg>'
+        completed = subprocess.CompletedProcess([], 0, json.dumps({'svg': svg, 'renderer': 'native-tk-v1'}).encode(), b'')
+        with patch('overlay_preview.subprocess.run', return_value=completed) as run:
+            for slot in range(16):
+                renderer.render({'slot': slot})
+            self.assertLessEqual(sum(sys.getsizeof(row['svg']) for row in renderer.cache.values()), 8 * 1024 * 1024)
+            renderer.render({'slot': 15})
+            self.assertEqual(run.call_count, 16)
+            renderer.render({'slot': 0})
+            self.assertEqual(run.call_count, 17)
+
 
 @unittest.skipUnless(sys.platform=='win32','Actual Windows native fonts')
 class NativeRenderTests(unittest.TestCase):

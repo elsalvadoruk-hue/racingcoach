@@ -26,7 +26,6 @@ import { HandlingBadges } from './HandlingViews';
 import Measurements from './Measurements';
 import DrivingSummary from './DrivingSummary';
 import SetupWorkbench from './SetupWorkbench';
-import OverlayStudio from './OverlayStudio';
 import UtilityWorkspace, { workspaceLabels } from './UtilityWorkspace';
 import { RuntimeControls, useLabControls } from './RuntimePreview';
 import { workspaceFromHash } from './labControlState';
@@ -44,8 +43,10 @@ import { useAnalysisProgress } from './AnalysisProgress';
 import StartupLoading from './StartupLoading';
 
 const EMPTY_TRACE = [];
+const UTILITY_WORKSPACES = ['driver', 'setup', 'live', 'overlay', 'history', 'settings', 'guide'];
 const RacePositionChart = lazy(() => import('./RacePositionChart'));
 const DriverReport = lazy(() => import('./DriverReport'));
+const OverlayStudio = lazy(() => import('./OverlayStudio'));
 
 function IconButton({ label, icon: Icon, onClick }) {
   return <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" aria-label={label} onClick={onClick}><Icon /></Button></TooltipTrigger><TooltipContent>{label}</TooltipContent></Tooltip>;
@@ -77,6 +78,17 @@ export default function CornerLab({ analysisWorkspace, game = 'iracing', onGameC
   const { view: sessionProgress, begin: beginProgress, end: endProgress } = useAnalysisProgress();
   const adopted = useRef(null);
   const analysis = analysisWorkspace.analysis;
+  const [workspace, setWorkspace] = useState(() => workspaceFromHash(window.location.hash));
+  const generation = `${version}-${analysisWorkspace.revision || 0}`;
+  const [displayGeneration, setDisplayGeneration] = useState(generation);
+  useEffect(() => {
+    const change = () => setWorkspace(workspaceFromHash(window.location.hash));
+    window.addEventListener('hashchange', change);
+    return () => window.removeEventListener('hashchange', change);
+  }, []);
+  // Background analysis must not discard an open overlay form. Adopt its new
+  // generation before rendering analysis again, when its derived state resets.
+  if (workspace !== 'overlay' && displayGeneration !== generation) setDisplayGeneration(generation);
   useEffect(() => {
     if (!analysis || analysis === adopted.current) return undefined;
     const controller = new AbortController();
@@ -113,7 +125,7 @@ export default function CornerLab({ analysisWorkspace, game = 'iracing', onGameC
     analysisWorkspace.adoptDesktopAnalysis(current, result || {});
     activateSession(current); setVersion(v => v + 1);
   };
-  return <Workspace key={`${game}-${version}-${analysisWorkspace.revision || 0}`} game={game} onGameChange={onGameChange} runtime={runtime} analysisWorkspace={analysisWorkspace}
+  return <Workspace key={`${game}-${displayGeneration}`} game={game} onGameChange={onGameChange} runtime={runtime} analysisWorkspace={analysisWorkspace}
     busy={loading || analysisWorkspace.loading || analysisWorkspace.initialLoading}
     progress={loading ? sessionProgress : analysisWorkspace.analysisProgress} onRetry={retryStartup}
     failure={error || analysisWorkspace.error} onSession={accept} />;
@@ -128,7 +140,7 @@ function Workspace({ onSession, runtime, analysisWorkspace, busy, progress, fail
   const [workspace, setWorkspace] = useState(() => workspaceFromHash(window.location.hash));
   const [raceChart, setRaceChart] = useState(false);
   const raceEligible = ['race', 'endurance', 'endurance race'].includes(String(data.session.session_type || '').trim().toLowerCase());
-  const utility = ['driver', 'setup', 'live', 'overlay', 'history', 'settings', 'guide'].includes(workspace);
+  const utility = UTILITY_WORKSPACES.includes(workspace);
   const [channelMode, setChannelMode] = useState('basic');
   const [focus, setFocus] = useState(false);
   const [dialog, setDialog] = useState(null);
@@ -362,7 +374,7 @@ function Workspace({ onSession, runtime, analysisWorkspace, busy, progress, fail
       <RailButton label="주행 분석" icon={Target} active={!utility} onClick={() => changeWorkspace(utility ? 'summary' : workspace)} />
       {[[FlaskConical, 'setup'], [AudioLines, 'live'], [Layers, 'overlay']].map(([Icon, key]) => <RailButton key={key} label={workspaceLabels[key]} icon={Icon} badge={lmu && key === 'setup' ? '준비 중' : undefined} active={workspace === key} onClick={() => changeWorkspace(key)} />)}</div><div className="rail-lower">{[[History, 'history'], [Settings2, 'settings'], [BookOpen, 'guide']].map(([Icon, key]) => <RailButton key={key} label={workspaceLabels[key]} icon={Icon} active={workspace === key} onClick={() => changeWorkspace(key)} />)}<span className="rail-version">LOCAL</span></div></aside>
     <main className={cn('lab-main', (raceChart || workspace !== 'corners') && 'wide-main', raceChart && !utility && 'race-main', utility && 'utility-main', !utility && !data.filename && 'empty-main', workspace === 'live' && 'voice-main', workspace === 'setup' && 'setup-main', workspace === 'driver' && 'driver-main')} key={utility ? workspace : 'analysis'}>
-      {workspace === 'driver' ? <Suspense fallback={<div role="status">드라이버 리포트를 준비하는 중…</div>}><DriverReport game={game} apiBase={runtime.apiBase} onNavigate={navigateDesktop} onChooseSource={() => setDialog('laps')} /></Suspense> : workspace === 'overlay' ? <OverlayStudio key={game} apiBase={runtime.apiBase} /> : lmu && utility && workspace !== 'live' ? <LmuWorkspacePanel runtime={runtime} analysisWorkspace={analysisWorkspace} onOpenSession={onSession} workspace={workspace} onNavigate={navigateDesktop} onChooseSource={() => setDialog('laps')} /> : workspace === 'setup' ? <SetupWorkbench analysisWorkspace={analysisWorkspace} onChooseSource={() => setDialog('laps')} onCorner={id => { choose(id); changeWorkspace('corners'); }} /> : utility ? <UtilityWorkspace analysisWorkspace={analysisWorkspace} workspace={workspace} runtime={runtime} onNavigate={navigateDesktop} onOpenCorner={showVoiceCorner} /> : !data.filename ? (busy || failure ? <StartupLoading game={game} busy={busy} progress={progress} error={failure} onRetry={onRetry} onChoose={() => setDialog('laps')} onSettings={() => changeWorkspace('settings')} /> : <Empty className="desktop-empty"><EmptyHeader><EmptyTitle role="heading" aria-level={2}>분석할 주행을 선택하세요.</EmptyTitle><EmptyDescription>{lmu ? 'LMU DuckDB 주행 파일을 선택하세요.' : '설정에서 IBT 폴더를 확인하고 주행 파일을 선택하세요.'}</EmptyDescription></EmptyHeader><EmptyContent className="max-w-none flex-row flex-wrap justify-center"><Button onClick={() => setDialog('laps')}>주행 선택</Button><Button variant="outline" onClick={() => changeWorkspace('guide')}>처음 사용 가이드 열기</Button><Button variant="outline" onClick={() => changeWorkspace('settings')}>연결 상태 확인</Button></EmptyContent></Empty>) : <>
+      {workspace === 'driver' ? <Suspense fallback={<div role="status">드라이버 리포트를 준비하는 중…</div>}><DriverReport game={game} apiBase={runtime.apiBase} onNavigate={navigateDesktop} onChooseSource={() => setDialog('laps')} /></Suspense> : workspace === 'overlay' ? <Suspense fallback={<p role="status">오버레이 설정을 준비하는 중…</p>}><OverlayStudio key={game} apiBase={runtime.apiBase} /></Suspense> : lmu && utility && workspace !== 'live' ? <LmuWorkspacePanel runtime={runtime} analysisWorkspace={analysisWorkspace} onOpenSession={onSession} workspace={workspace} onNavigate={navigateDesktop} onChooseSource={() => setDialog('laps')} /> : workspace === 'setup' ? <SetupWorkbench analysisWorkspace={analysisWorkspace} onChooseSource={() => setDialog('laps')} onCorner={id => { choose(id); changeWorkspace('corners'); }} /> : utility ? <UtilityWorkspace analysisWorkspace={analysisWorkspace} workspace={workspace} runtime={runtime} onNavigate={navigateDesktop} onOpenCorner={showVoiceCorner} /> : !data.filename ? (busy || failure ? <StartupLoading game={game} busy={busy} progress={progress} error={failure} onRetry={onRetry} onChoose={() => setDialog('laps')} onSettings={() => changeWorkspace('settings')} /> : <Empty className="desktop-empty"><EmptyHeader><EmptyTitle role="heading" aria-level={2}>분석할 주행을 선택하세요.</EmptyTitle><EmptyDescription>{lmu ? 'LMU DuckDB 주행 파일을 선택하세요.' : '설정에서 IBT 폴더를 확인하고 주행 파일을 선택하세요.'}</EmptyDescription></EmptyHeader><EmptyContent className="max-w-none flex-row flex-wrap justify-center"><Button onClick={() => setDialog('laps')}>주행 선택</Button><Button variant="outline" onClick={() => changeWorkspace('guide')}>처음 사용 가이드 열기</Button><Button variant="outline" onClick={() => changeWorkspace('settings')}>연결 상태 확인</Button></EmptyContent></Empty>) : <>
       <section className="session-bar" aria-label="비교 세션"><div className="session-title"><div className="eyebrow">LOCAL TELEMETRY / {lmu ? 'LMU DUCKDB' : 'IBT'}</div><h1>{data.session.track_name}</h1><div className="session-subtitle">{data.session.car_name} <span>·</span> {data.session.track_config} <Badge variant="outline" className={`session-badge session-${sessionTypeTone(data.session)}`}>{sessionTypeLabel(data.session)}</Badge></div></div><div className="session-file-time"><div className="session-duration" aria-label="파일 총 주행시간" title="선택한 파일에 기록된 전체 시간입니다. 피트·대기 구간이 포함될 수 있습니다."><span>파일 총 주행시간</span><strong>{durationTime(data.analysisResult?.file?.duration_s)}</strong></div><Separator orientation="vertical" className="session-time-divider" /></div><div className="lap-pair"><button className={cn("lap-choice", isOwnBest && "best-lap-choice")} onClick={() => setDialog('laps')} aria-label="비교할 내 랩 변경"><span className="lap-label"><i className="target-swatch" />내 주행 <b>{lap}랩{isOwnBest && " ★ 베스트"}</b><ChevronDown size={14} /></span><strong>{lapTime(comparison.targetTime)}</strong></button><span className="versus">vs</span><button className={cn("lap-choice", isReferenceBest && "best-lap-choice")} onClick={() => setDialog('laps')} aria-label="기준 랩 변경"><span className="lap-label"><i className="reference-swatch" />{external.length ? `G61 선택 ${external.length}랩` : (reference ? `기준 ${reference}랩${isReferenceBest ? ' ★ 베스트' : ''}` : '기준 없음')}<ChevronDown size={14} /></span><strong>{lapTime(comparison.referenceTime)}</strong></button><div className="lap-total"><span>전체 랩 차이</span><strong className={cn(comparison.delta < 0 && 'gain')}>{signed(comparison.delta)}<small> s</small></strong></div></div><Button variant="outline" size="sm" onClick={() => setDialog('laps')}><Settings2 data-icon="inline-start" />비교 변경</Button></section>
       <SetupInfluenceNotice comparison={comparison} external={external} game={game} />
       <div className="workspace-navigation"><Tabs value={workspace} onValueChange={changeWorkspace}><TabsList aria-label="작업 화면">{['summary', 'corners', 'laps', 'expert'].map(value => <TabsTrigger key={value} value={value} onClick={() => setRaceChart(false)}>{workspaceLabels[value]}</TabsTrigger>)}</TabsList></Tabs><span>{fileLapLabel(lapCounts(data.laps))} · 자동 구간 {corners.length}개</span><div className="race-navigation-actions">{analysisWorkspace.analysis && <AnalysisDetails workspace={analysisWorkspace} onNavigate={changeWorkspace} />}{raceEligible && <Button variant={raceChart ? "secondary" : "outline"} size="sm" aria-pressed={raceChart} onClick={() => { setRaceChart(value => !value); setGraphPlaying(false); }}><Activity data-icon="inline-start" />순위 변화</Button>}<Button disabled={!corners.length} variant="outline" size="sm" onClick={openNames}>코너 번호 확인<ArrowRight data-icon="inline-end" /></Button></div></div>
