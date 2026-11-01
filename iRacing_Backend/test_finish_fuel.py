@@ -1,4 +1,5 @@
 import copy
+import math
 import unittest
 from collections import deque
 
@@ -55,6 +56,60 @@ class TimedFinishTests(unittest.TestCase):
         view, _ = self.view(950., .25, .20)
         self.assertEqual((view['finish_own_margin_s'], view['finish_may_shorten'], view['finish_may_extend']), (5., True, False))
         self.assertEqual(view['finish_laps_to_go'], 11)
+
+    def test_overall_leader_uses_his_own_crossing_without_an_extra_lap(self):
+        self.race['player_idx'] = 0
+        for pace, time_left, pct in [(99., 323., .51), (99., 529., .11),
+                                     (107., 529., .11), (100., 950., .2)]:
+            with self.subTest(pace=pace, time_left=time_left, pct=pct):
+                self.wall.paces[0] = deque([pace] * 3)
+                crossings = math.floor(time_left / pace + pct) + 1
+                view, _ = self.view(time_left, pct, pct, fuel=5.)
+                self.assertEqual(view['finish_total_laps'], 10 + crossings)
+                self.assertEqual(view['remaining_laps'], round(crossings - pct, 2))
+                self.assertEqual(view['fuel_finish_shortfall_l'], round((crossings - pct) * USE - 5., 2))
+
+    def test_overall_leader_has_no_independent_player_crossing_uncertainty(self):
+        self.race['player_idx'] = 0
+        view, _ = self.view(950., .2, .2, fuel=5.)
+        self.assertFalse(view['finish_may_extend'] or view['finish_may_shorten'])
+        self.assertIsNone(view['fuel_next_stop_longer_l'])
+        # The leader/clock boundary can still add a lap.
+        view, _ = self.view(946., .5, .5, fuel=5.)
+        self.assertTrue(view['finish_may_extend'])
+
+    def test_overall_leader_does_not_assume_a_stop_for_a_rounding_only_shortfall(self):
+        self.race['player_idx'] = 0
+        self.wall.paces[0] = deque([99.] * 3)
+        self.wall.auto_pit_loss_s = 40.
+        self.wall.stints[0] = {'since': 0, 'stops': 0}
+        view, _ = self.view(323., .51, .51, fuel=9.)
+        self.assertIsNone(view['finish_leader_stop_s'])  # 3.49 laps * 2.5 L < 9 L
+        self.assertEqual(view['finish_total_laps'], 14)
+
+    def test_overall_leaders_assumed_stop_is_not_added_to_his_progress_twice(self):
+        self.race['player_idx'] = 0
+        self.wall.auto_pit_loss_s = 40.
+        self.wall.stints[0] = {'since': 0, 'stops': 0}
+        view, _ = self.view(950., .2, .2, fuel=5.)
+        self.assertEqual(view['finish_leader_stop_s'], 40.)
+        self.assertEqual(view['finish_total_laps'], 20)
+        self.assertEqual(view['remaining_laps'], 9.8)
+
+    def test_a_different_cars_real_crossing_offset_is_preserved(self):
+        for delta, crossings in [(-1e-10, 10), (0., 10), (1e-10, 11)]:
+            with self.subTest(delta=delta):
+                view, _ = self.view(950., .2 + delta, .2)
+                self.assertEqual(view['finish_total_laps'], 10 + crossings)
+
+    def test_lap_limited_and_lapped_multiclass_finishes_keep_their_rules(self):
+        self.race.update(total_laps=20, session_duration_s=None)
+        self.race['cars'][0]['class_id'] = 99
+        self.wall.paces[1] = deque([120.] * 3)
+        sample = self.at(950., .5, .2)
+        self.wall.race['cars'][1]['lap_completed'] = 8
+        view = self.wall.view(sample, USE, 3)
+        self.assertEqual((view['finish_method'], view['remaining_laps']), ('LEADER_FINISH_ESTIMATE', 8.5))
 
     def test_a_leader_still_to_pit_finishes_later_by_our_pit_loss(self):
         # 2026-10-21 (the driver's decision): the leader's stop after the fuel call moved the finish by

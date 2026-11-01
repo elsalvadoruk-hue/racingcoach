@@ -1,6 +1,7 @@
 """Report authority and deduplication checks using synthetic temporary stores."""
 from copy import deepcopy
 from datetime import datetime, timezone
+from functools import partial
 import json
 from pathlib import Path
 import tempfile
@@ -424,7 +425,7 @@ class DriverReportTests(unittest.TestCase):
         self.assertEqual(report30['scopes']['career'], 'SELECTED_PERIOD_OBSERVATIONS')
 
     def test_official_totals_follow_selected_period_without_writing_or_reopening_sources(self):
-        from driver_results import DriverResultsStore, extract_recording_results
+        from driver_results import DriverResultsStore, extract_recording_results, read_driver_results
         from test_driver_results import telemetry, native_info
         official_store = DriverResultsStore(history_path=self.path)
         for index, (date, position) in enumerate([('2026-06-22', 0), ('2026-08-01', 1), ('2026-10-20', 3)]):
@@ -433,7 +434,10 @@ class DriverReportTests(unittest.TestCase):
             official_store.record_batch(extract_recording_results(telemetry(info), str(index)*64,
                 recorded_at=f'{date}T10:00:00Z'))
         before = (official_store.path.read_bytes(), official_store.path.stat().st_mtime_ns)
-        reports = [read_driver_report('iracing', days, store=self.store) for days in (0, 30, 90)]
+        # These fixed recordings must use the same fixed clock as the report fixtures.
+        with patch('driver_report.build_driver_report', wraps=partial(build_driver_report, now=NOW)), \
+                patch('driver_results.read_driver_results', wraps=partial(read_driver_results, now=NOW)):
+            reports = [read_driver_report('iracing', days, store=self.store) for days in (0, 30, 90)]
         self.assertEqual([report['career']['wins']['value'] for report in reports], [1, 0, 0])
         self.assertEqual([report['career']['podiums']['value'] for report in reports], [2, 0, 1])
         self.assertEqual([report['career']['average_position']['value'] for report in reports], [2.333, 4., 3.])

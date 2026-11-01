@@ -652,6 +652,12 @@ class RaceRadio:
                     self.emit('incident_coaching', now, '최근 완주랩 사이에 인시던트가 늘었습니다. 원인은 아직 확인되지 않았습니다. 다음 랩은 평소보다 여유를 두고 달리고, 주행 후 문제 구간을 함께 확인하겠습니다.', role='coach', delay=6, cooldown=180, condition=('racing', None))
 
     def _position(self, s, now):
+        if str(self.metadata.get('session_type') or '').strip().lower() != 'race':
+            self.position_candidate = self.position_since = None
+            self.position_changed = False
+            if any(e['key'] == 'position' for e in self.pending):
+                self.pending = deque((e for e in self.pending if e['key'] != 'position'), maxlen=48)
+            return
         position = num(s.get('class_position'))
         if s.get('session_state') != 4 or position is None or position <= 0:
             self.position_candidate = self.position_since = None
@@ -820,7 +826,8 @@ class RaceRadio:
         if kind == 'formation': return s.get('session_state') == 3 and s.get('on_pit_road') is False
         if kind == 'racing': return s.get('session_state') == 4
         if kind == 'lap': return s.get('lap_completed') == value
-        if kind == 'position': return s.get('class_position') == value and s.get('session_state') == 4
+        if kind == 'position': return (str(self.metadata.get('session_type') or '').strip().lower() == 'race'
+                                       and s.get('class_position') == value and s.get('session_state') == 4)
         if kind == 'laps_left': return num(s.get('session_laps_remaining')) is not None and value - 1 < s['session_laps_remaining'] <= value and s.get('session_state') == 4
         if kind == 'incidents': return s.get('incidents') == value
         if kind == 'tow': return (num(s.get('tow_time_s')) or 0) > 0

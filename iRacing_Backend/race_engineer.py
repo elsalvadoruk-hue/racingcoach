@@ -301,8 +301,12 @@ class RaceEngineer:
         if leader_stops != 0:
             return 0.
         # Our race needs a stop: we made one, or our fuel does not reach the finish.
-        end_s = (math.floor(time_left / leader_pace + leader_pct) + 1 - leader_pct) * leader_pace
-        own_laps = math.ceil(end_s / own_pace + own_pct) - own_pct
+        crossings = math.floor(time_left / leader_pace + leader_pct) + 1
+        end_s = (crossings - leader_pct) * leader_pace
+        # The leader and player can be the same car. Re-dividing its crossing
+        # time can round just above an integer and invent a lap (and a stop).
+        own_at_end = crossings if leader['idx'] == own['idx'] else end_s / own_pace + own_pct
+        own_laps = math.ceil(own_at_end) - own_pct
         needs_stop = bool(own_stops) or (fuel is not None and use is not None and fuel < own_laps * use)
         return float(loss) if needs_stop else 0.
 
@@ -407,8 +411,12 @@ class RaceEngineer:
                 leader_stop = self._leader_stop(leader, own, time_left, leader_pace, leader_pct, own_pace, own_pct,
                                                 numeric(snapshot.get('fuel_l')), positive(fuel_use), pit_loss_s)
                 leader_at_zero = (time_left - leader_stop) / leader_pace + leader_pct
-                end_s = (math.floor(leader_at_zero) + 1 - leader_pct) * leader_pace + leader_stop
-                own_at_end = end_s / own_pace + own_pct
+                crossings = math.floor(leader_at_zero) + 1
+                end_s = (crossings - leader_pct) * leader_pace + leader_stop
+                leader_is_own = leader['idx'] == own['idx']
+                # Reuse this car's crossing directly, including its assumed stop.
+                # Other cars keep their actual offset from the leader's finish.
+                own_at_end = crossings if leader_is_own else end_s / own_pace + own_pct
                 timed = max(0, math.ceil(own_at_end) - own_pct)
                 if remaining is None or timed < remaining:
                     remaining, method = timed, 'TIMED_ESTIMATE'
@@ -423,8 +431,8 @@ class RaceEngineer:
                               'leader_stop_s': round(leader_stop, 1) if leader_stop else None,
                               'own_margin_s': round(min(own_before, own_after), 1),
                               # A leader who crosses just after zero, or a player who just misses the flag, means a lap more.
-                              'may_extend': leader_after < leader_tolerance or own_after < own_tolerance,
-                              'may_shorten': leader_before < leader_tolerance or own_before < own_tolerance}
+                              'may_extend': leader_after < leader_tolerance or (not leader_is_own and own_after < own_tolerance),
+                              'may_shorten': leader_before < leader_tolerance or (not leader_is_own and own_before < own_tolerance)}
             if race.get('state') == 5 and self.final_progress is not None:
                 remaining, method = max(0, self.final_progress - own_progress), 'PLAYER_FINAL_LAP'
         fuel = numeric(snapshot.get('fuel_l'))

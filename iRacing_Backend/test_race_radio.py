@@ -160,6 +160,50 @@ class RaceRadioTests(unittest.TestCase):
         self.tick(class_position=4)
         self.assertNotIn('position', self.keys())
 
+    def test_position_change_calls_require_an_explicit_race(self):
+        for kind in ('Practice', 'Offline Testing', 'Open Qualify', 'Lone Qualify', '', None):
+            with self.subTest(session_type=kind):
+                self.radio.reset()
+                self.meta['session_type'] = kind
+                self.tick(class_position=5)
+                self.tick(class_position=4)
+                self.wait(5.1)
+                self.assertNotIn('position', self.keys())
+                self.assertFalse(self.radio.position_changed)
+
+    def test_practice_candidates_do_not_become_race_position_changes(self):
+        self.meta['session_type'] = 'Practice'
+        self.tick(class_position=4)
+        self.wait(1)
+        self.meta['session_type'] = 'Race'
+        self.tick()
+        self.wait(5.1)
+        self.assertNotIn('position', self.keys())
+        self.tick(class_position=3)
+        self.wait(5.1)
+        self.assertIn('position', self.keys())
+
+    def test_queued_position_expires_when_the_session_is_not_a_race(self):
+        self.tick(class_position=4)
+        self.wait(5.1)
+        event = next(e for e in self.radio.pending if e['key'] == 'position')
+        self.meta['session_type'] = 'Practice'
+        # Playback validation must also reject a queued race call immediately.
+        self.radio.metadata = dict(self.meta)
+        self.assertFalse(self.radio.valid(event, self.now))
+        self.tick()
+        self.meta['session_type'] = 'Race'
+        self.tick()
+        self.assertNotIn('position', self.keys())
+
+    def test_practice_keeps_lap_times_and_pit_safety_calls(self):
+        self.meta['session_type'] = 'Practice'
+        self.tick()
+        self.tick(lap_completed=3, lap_last_s=103.)
+        self.assertIn('lap_time', self.keys())
+        self.tick(on_pit_road=True, speed_mps=24., pit_service_status=1)
+        self.assertIn('pit_speed', self.keys())
+
     def test_pit_service_and_speed_are_available_even_when_overlap_is_paused(self):
         self.tick(on_pit_road=True, speed_mps=24., pit_service_status=1)
         self.assertEqual(set(self.keys()), {'pit_enter', 'pit_speed', 'service_start'})
@@ -272,7 +316,7 @@ class RadioRouteTests(unittest.TestCase):
         self.sample = {'session_time': 1., 'session_num': 0, 'on_track': True, 'is_replay': False,
                        'session_state': 4,
                        'on_pit_road': False, 'car_left_right': 1, 'class_position': 3, 'lap_last_s': 101.2}
-        self.live.ingest({}, self.sample)
+        self.live.ingest({}, self.sample, {'session_type': 'Race'})
         self.speech = MagicMock()
         self.speech.synthesize.return_value = base64.b64encode(b'ID3' + b'x' * 500).decode()
         audio_env = patch.dict('os.environ', {'IRACING_RADIO_AUDIO_DIR': ''})
@@ -319,6 +363,18 @@ class RadioRouteTests(unittest.TestCase):
             response = client.post(f'/api/live-coach/spotter/radio/{identifier}/render')
             self.assertEqual(200, response.status_code)
             self.assertEqual({'event': None}, response.json())
+
+    def test_position_render_is_discarded_if_session_changes_to_practice(self):
+        identifier = self.emit()
+        def change(*_, **__):
+            self.now[0] += .1
+            self.live.ingest({}, {**self.sample, 'session_time': 1.1}, {'session_type': 'Practice'})
+            return base64.b64encode(b'ID3' + b'x' * 500).decode()
+        self.speech.synthesize.side_effect = change
+        with TestClient(self.app) as client:
+            response = client.post(f'/api/live-coach/spotter/radio/{identifier}/render')
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {'event': None})
 
 
 if __name__ == '__main__':
