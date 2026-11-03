@@ -32,7 +32,7 @@ export default function useVoiceLibrary(apiBase) {
     if (!r.ok) throw Error('설치한 음성팩을 읽지 못했습니다. 다시 불러오세요.');
     const value = await r.json(); if (!signal?.aborted && currentApi.current === apiBase) { setView(value); setError(''); } return value;
   }, [apiBase]);
-  useEffect(() => { const c = new AbortController(); setView(null); reload(c.signal).catch(e => { if (e.name !== 'AbortError') setError(e.message); }); return () => c.abort(); }, [reload]);
+  useEffect(() => { const c = new AbortController(); setView(null); reload(c.signal).catch(e => { if (e.name !== 'AbortError') setError(e.message); }); return () => c.abort(); }, [reload, revision]);
   useEffect(() => { const update = () => refresh(n => n + 1); window.addEventListener('voice-library-changed', update); return () => window.removeEventListener('voice-library-changed', update); }, []);
   const post = async (path, body, upload) => {
     const r = await fetch(`${apiBase}/api/live-coach/custom-voice-packs/${path}`, { method: 'POST', headers: { 'Content-Type': upload ? 'application/zip' : 'application/json' }, body: upload || JSON.stringify(body) });

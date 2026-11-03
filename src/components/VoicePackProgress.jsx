@@ -31,7 +31,7 @@ export default function VoicePackProgress({ operation }) {
         {operation.connectionLost && <p>진행 상태 연결이 지연돼 다시 확인 중입니다. 마지막으로 확인된 수치를 표시합니다.</p>}
         {operation.legacy && <p>현재 서버는 세부 진행 상태를 지원하지 않습니다. 이 작업이 끝난 뒤 앱과 실행창을 다시 시작하면 표시됩니다.</p>}
       </>}
-      {!running && !failed && <p>{selection ? '선택한 역할에 목소리를 적용했습니다.' : `${operation.imported?.name || '음성팩'} 설치 완료. 스포터 또는 피트월의 목소리 목록에서 선택하세요.`}</p>}
+      {!running && !failed && <p>{selection ? '선택한 역할에 목소리를 적용했습니다.' : `${operation.imported?.name || '음성팩'} 설치 완료. ${operation.imported?.radioStyle?.length === 'short' ? '해당 영역의 음성 길이에서 짧은 무전을 선택하세요.' : '스포터 또는 피트월의 목소리 목록에서 선택하세요.'}`}</p>}
       {failed && <p>{operation.error || '연결 상태와 팩 파일을 확인하고 다시 시도하세요.'}</p>}
       <p className="text-xs">{running ? '경과' : '소요'} {duration(elapsed)}</p>
     </AlertDescription>

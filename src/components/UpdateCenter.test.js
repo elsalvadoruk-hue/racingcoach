@@ -1,6 +1,6 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import UpdateCenter, { UpdateSettings } from './UpdateCenter';
+import UpdateCenter, { UpdateSettings, useUpdateStatus } from './UpdateCenter';
 
 const idleJob = { state: 'IDLE', done_bytes: 0, total_bytes: 0, files_done: 0, files_total: 0, message: '' };
 const voice = (extra = {}) => ({ version: '1.4.0', total: 51982, missing: 0, obsolete_files: 0, obsolete_bytes: 0, error: '',
@@ -17,6 +17,48 @@ const fetcherFor = (...answers) => {
 };
 const settle = () => act(async () => {});
 beforeEach(() => window.localStorage.clear());
+
+test.each(['COMPLETE', 'STOPPED', 'FAILED'])('refreshes voices once after download becomes %s', async state => {
+  const changed = jest.fn(); window.addEventListener('voice-library-changed', changed);
+  try {
+    const fetcher = fetcherFor({ app: app(), voice: voice({ job: { state: 'RUNNING' } }) },
+      { app: app(), voice: voice({ job: { state } }) });
+    const { result } = renderHook(() => useUpdateStatus('/app', fetcher));
+    await waitFor(() => expect(result.current.status).toBeTruthy());
+    expect(changed).not.toHaveBeenCalled();
+    await act(() => result.current.call());
+    expect(changed).toHaveBeenCalledTimes(1);
+    await act(() => result.current.call());
+    expect(changed).toHaveBeenCalledTimes(1);
+  } finally { window.removeEventListener('voice-library-changed', changed); }
+});
+
+test('refreshes voices when a download finishes before its first response', async () => {
+  const changed = jest.fn(); window.addEventListener('voice-library-changed', changed);
+  try {
+    const fetcher = fetcherFor({ app: app(), voice: voice() },
+      { app: app(), voice: voice({ job: { state: 'COMPLETE' } }) });
+    const { result } = renderHook(() => useUpdateStatus('/app', fetcher));
+    await waitFor(() => expect(result.current.status).toBeTruthy());
+    await act(() => result.current.call('/voice/download', 'POST'));
+    expect(changed).toHaveBeenCalledTimes(1);
+  } finally { window.removeEventListener('voice-library-changed', changed); }
+});
+
+test('background update monitor follows a settings download after settings closes', async () => {
+  const background = fetcherFor({ app: app(), voice: voice() },
+    { app: app(), voice: voice({ job: { state: 'RUNNING' } }) });
+  const settings = fetcherFor({ app: app(), voice: voice() },
+    { app: app(), voice: voice({ job: { state: 'RUNNING' } }) });
+  const { result: rootResult } = renderHook(() => useUpdateStatus('/app', background));
+  const { result: panelResult, unmount } = renderHook(() => useUpdateStatus('/app', settings));
+  await waitFor(() => expect(rootResult.current.status).toBeTruthy());
+  await waitFor(() => expect(panelResult.current.status).toBeTruthy());
+  await act(() => panelResult.current.call('/voice/download', 'POST'));
+  unmount();
+  expect(rootResult.current.status.voice.job.state).toBe('RUNNING');
+  expect(background).toHaveBeenCalledTimes(2);
+});
 
 test('stays closed when the program and the voice are current', async () => {
   const fetcher = fetcherFor({ app: app(), voice: voice() });

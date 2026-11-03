@@ -14,6 +14,7 @@ import { useGame } from '../lib/gameContext';
 import { readAlerts } from '../lib/voiceAlerts';
 import VoiceAlertSettings from './VoiceAlertSettings';
 import RoleVoiceSelect from './RoleVoiceSelect';
+import VoiceLengthSelect from './VoiceLengthSelect';
 import FuelStrategy from './FuelStrategy';
 
 export const ENGINEERS = {
@@ -73,6 +74,7 @@ export default function PitWall({ enabled, onToggle, preferences, onChange, view
     <FuelStrategy view={view} />
     <Separator className="my-6" />
     <h3 className="text-sm font-medium">엔지니어 목소리</h3>
+    {spotter?.library && <FieldGroup className="mt-3 mb-4"><VoiceLengthSelect scope="pitwall" library={spotter.library} settings={spotter.settings} onChange={spotter.changeSettings} disabled={busy || enabled || spotter.enabled || spotter.preparing || spotter.settingsBusy} /></FieldGroup>}
     <div className="coach-role-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' }}>{Object.entries(ENGINEERS).map(([key, role]) => <Card key={key} className="min-w-0 bg-muted/40 shadow-none"><CardHeader className="p-4 pb-3"><CardTitle className="text-sm">{role.label}</CardTitle><CardDescription>{roleDescription(key)}</CardDescription></CardHeader><CardContent className="p-4 pt-0">
       {lmu && <Field orientation="horizontal"><FieldLabel htmlFor={`wall-role-${key}`}>{role.label} 보고</FieldLabel><Switch id={`wall-role-${key}`} checked={preferences.engineers?.includes(key) === true} onCheckedChange={enabled => onChange({ engineers: enabled ? [...(preferences.engineers || []), key] : preferences.engineers.filter(item => item !== key) })} /></Field>}
       {spotter?.library ? <RoleVoiceSelect role={key} library={spotter.library} settings={spotter.settings} onChange={spotter.changeSettings} disabled={busy || enabled || spotter.enabled || spotter.preparing || spotter.settingsBusy} defaults={[["", `기본 · ${role.voice}`]]} /> : <p className="text-xs text-muted-foreground">{(engineers?.[key]?.voice || role.voice).replace('ko-KR-Chirp3-HD-', '')} · 공통 재생 속도</p>}<Button variant="outline" size="sm" onClick={() => onTestVoice(key)} disabled={busy || capabilities.voice_test?.[key] === false || (lmu && !preferences.engineers?.includes(key))} className="mt-3"><Volume2 data-icon="inline-start" />목소리 들어보기</Button></CardContent></Card>)}</div>

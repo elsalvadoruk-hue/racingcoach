@@ -21,3 +21,17 @@ test('unapply clears both games while preserving unrelated role and driving pref
   expect(voiceSelections(JSON.parse(localStorage.getItem('iracing.spotter.settings.lmu')))).toEqual({});
   expect(fetch.mock.calls.find(([url])=>url.endsWith('/remove'))[1].body).toBe(JSON.stringify({key:'remove@1',delete:false}));
 });
+test('voice download completion reloads the library without changing selections or polling',async()=>{
+  const {result,unmount}=renderHook(()=>useVoiceLibrary('/app'));
+  await waitFor(()=>expect(result.current.view).toEqual({packs:[]}));
+  fetch.mockResolvedValue({ok:true,json:async()=>({packs:[{key:'standard-short-coach-algenib@2.5.0'}]})});
+  act(()=>window.dispatchEvent(new Event('voice-library-changed')));
+  await waitFor(()=>expect(result.current.view.packs).toHaveLength(1));
+  const libraryCalls=()=>fetch.mock.calls.filter(([url])=>url.endsWith('/custom-voice-packs'));
+  expect(libraryCalls()).toHaveLength(2);
+  expect(fetch.mock.calls.every(([,options])=>!options?.method)).toBe(true);
+  expect(localStorage.length).toBe(0);
+  unmount();
+  act(()=>window.dispatchEvent(new Event('voice-library-changed')));
+  expect(libraryCalls()).toHaveLength(2);
+});

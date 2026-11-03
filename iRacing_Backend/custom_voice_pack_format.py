@@ -112,6 +112,24 @@ def audio_mime(row):return 'audio/ogg;codecs=opus' if row['audio'].endswith('.og
 def limits(manifest):
     return (512*1024*1024,50000,50000,16*1024*1024) if manifest['schemaVersion']==1 else (MAX_BYTES,MAX_ENTRIES,MAX_FILES,MAX_MANIFEST)
 
+STYLE_VOICES = {'spotter': ('Fenrir', 'Algieba', 'Schedar', 'Aoede'),
+                'coach': ('Algenib',), 'race': ('Charon',), 'strategy': ('Orus',)}
+
+def radio_style(m):
+    """Recognize a voice's short wording variant, including the original full packs."""
+    targets = m.get('targets', [])
+    style = m.get('radioStyle')
+    if style is None:
+        match = re.fullmatch(r'brief-(spotter|coach|race|strategy)-([a-z]+)-[0-9]{8}', m.get('packId', ''))
+        if not match or targets != [match[1]]:return None
+        voice = next((v for v in STYLE_VOICES[match[1]] if v.lower() == match[2]), None)
+        return {'length': 'short', 'voice': voice} if voice else None
+    if (not isinstance(style, dict) or set(style) != {'length', 'voice'}
+            or style.get('length') != 'short' or len(targets) != 1
+            or style.get('voice') not in STYLE_VOICES.get(targets[0], ())):
+        raise ValueError('짧은 무전의 역할과 기본 목소리를 확인하세요.')
+    return dict(style)
+
 def validate_manifest(m):
     if not isinstance(m, dict) or m.get('format') != FORMAT or type(m.get('schemaVersion')) is not int or m['schemaVersion'] not in (1,2,3):
         raise ValueError('지원하지 않는 커스텀팩 규격이야.')
@@ -142,6 +160,9 @@ def validate_manifest(m):
         targets=m.get('targets')
         if not isinstance(targets,list) or any(not isinstance(r,str) for r in targets) or len(targets)!=len(set(targets)) or set(targets)!={r['role'] for r in entries}:raise ValueError('팩 적용 역할과 담긴 음성의 역할이 다릅니다.')
         if 'catalogBaseline' in m:validate_baseline(m['catalogBaseline'],targets)
+    if 'radioStyle' in m:
+        if m['schemaVersion'] != 3:raise ValueError('짧은 무전 정보는 역할별 음성팩에서 지원합니다.')
+        radio_style(m)
     return m
 
 def inspect_pack(source,audio_validator=None):

@@ -1,8 +1,9 @@
 """Managed, verified custom radio packs. Import never executes model or pack code."""
 import base64,hashlib,io,json,shutil,threading,uuid,zipfile
 from pathlib import Path
-from custom_voice_pack_format import inspect_pack,check_audio,audio_mime,validate_manifest,MAX_MANIFEST,ID,ROLES,binding_signature
+from custom_voice_pack_format import inspect_pack,check_audio,audio_mime,validate_manifest,MAX_MANIFEST,ID,ROLES,binding_signature,radio_style
 from voice_pack_installation import InstallProgress
+from builtin_radio import PACKS as BUILTIN_PACKS
 
 def decode_audio(row,data):
     if not row['audio'].endswith('.ogg'):return
@@ -21,24 +22,31 @@ def decode_audio(row,data):
 
 class MissingCustomAudio(ValueError):pass
 class CustomVoicePacks:
-    def __init__(self,root):
-        self.root=Path(root);self.lock=threading.RLock();self.selections={};self.loaded={};self.installation=InstallProgress()
+    def __init__(self,root,builtin_root=None):
+        self.root=Path(root);self.builtin_root=Path(builtin_root) if builtin_root is not None else None
+        self.lock=threading.RLock();self.selections={};self.loaded={};self.installation=InstallProgress()
     @property
     def selected(self):return next(iter(self.selections.values()),None)
     @property
     def manifest(self):return self.loaded[self.selected][0] if self.selected else None
     def has_selection(self,role):return role in self.selections
     def _key(self,m):return m['packId']+'@'+m['version']
+    def is_builtin(self,key):return self.builtin_root is not None and key in BUILTIN_PACKS
     def _folder(self,key):
         a,sep,b=key.partition('@')
         if not sep or not ID.fullmatch(a) or not ID.fullmatch(b):raise ValueError('커스텀팩 ID가 올바르지 않습니다.')
-        folder=self.root/key
-        if self.root.is_symlink() or self.root.is_junction() or folder.is_symlink() or folder.is_junction() or folder.resolve().parent!=self.root.resolve():raise ValueError('설치 폴더 밖의 팩은 사용할 수 없습니다.')
+        root=self.builtin_root if self.is_builtin(key) else self.root
+        folder=root/key
+        if root.is_symlink() or root.is_junction() or folder.is_symlink() or folder.is_junction() or folder.resolve().parent!=root.resolve():raise ValueError('설치 폴더 밖의 팩은 사용할 수 없습니다.')
         return folder
     def _manifest(self,key):
         file=self._folder(key)/'manifest.json'
         if file.is_symlink() or file.stat().st_size>MAX_MANIFEST:raise ValueError('팩 설명 파일을 확인하세요.')
-        return validate_manifest(json.loads(file.read_text(encoding='utf-8')))
+        m=validate_manifest(json.loads(file.read_text(encoding='utf-8')))
+        if self.is_builtin(key):
+            role,voice=BUILTIN_PACKS[key]
+            if self._key(m)!=key or m.get('targets')!=[role] or radio_style(m)!={'length':'short','voice':voice}:raise ValueError('기본 짧은 무전 정보를 확인하세요.')
+        return m
     def install(self,source,progress=None):
         source=Path(source)
         report=progress or (lambda *args,**kwargs:None)
@@ -53,6 +61,7 @@ class CustomVoicePacks:
         with self.lock:
             report('checking',done=0)
             m=inspect_pack(source,counter('checking',decode=True));key=self._key(m);dest=self._folder(key)
+            if self.is_builtin(key):raise ValueError('기본 짧은 무전은 설정 → 업데이트의 빠진 음성 받기로 받으세요.')
             total=len({row['audio'] for row in m['entries']})
             report('checking',name=m['name'],done=total,total=total)
             if dest.exists():
@@ -78,12 +87,20 @@ class CustomVoicePacks:
         from spotter import VARIANTS
         bindings={(r['role'],r['sourceText']) for r in m['entries']}
         missing=[key for key,options in VARIANTS.items() if not any(('spotter',t) in bindings for t in options)]
-        return {'key':self._key(m),'name':m['name'],'version':m['version'],'entries':len(m['entries']),'schemaVersion':m['schemaVersion'],
+        style=radio_style(m)
+        key=self._key(m);builtin=self.is_builtin(key)
+        ready=not builtin or all(not p.is_symlink() and p.is_file() and p.stat().st_size>=100
+            for p in (self._folder(key)/name for name in {r['audio'] for r in m['entries']}))
+        return {**({'radioStyle':style} if style else {}),**({'builtin':True} if builtin else {}),'key':key,'name':m['name'],'version':m['version'],'entries':len(m['entries']),'schemaVersion':m['schemaVersion'],
                 'audioFormat':'Ogg Opus' if any(r['audio'].endswith('.ogg') for r in m['entries']) else 'WAV',
-                'missingSpotterKeys':missing,'canSelect':True,'targets':sorted({r['role'] for r in m['entries']}),'baselineKnown':'catalogBaseline' in m,'mode':'exact-whole-sentence',
+                'missingSpotterKeys':missing,'canSelect':ready,'targets':sorted({r['role'] for r in m['entries']}),'baselineKnown':'catalogBaseline' in m,'mode':'exact-whole-sentence',
                 'roles':{role:sum(r['role']==role for r in m['entries']) for role in ('spotter','race','strategy','coach')}}
     def list(self):
         rows=[]
+        if self.builtin_root is not None:
+            for key in BUILTIN_PACKS:
+                try:rows.append(self.describe(self._manifest(key)))
+                except (OSError,ValueError,KeyError,TypeError):continue
         if self.root.exists():
             for folder in sorted(self.root.iterdir()):
                 if folder.is_dir() and not folder.name.startswith('.'):
@@ -105,6 +122,7 @@ class CustomVoicePacks:
                 if progress:progress('checking',done=done)
             for key in set(selections.values()):
                 if key in self.loaded:loaded[key]=self.loaded[key];continue
+                if self.is_builtin(key):self._manifest(key)
                 m=inspect_pack(self._folder(key),checked if progress else None);loaded[key]=(m,{(r['role'],r['sourceText']):r for r in m['entries']})
             for role,key in selections.items():
                 if not any(r['role']==role for r in loaded[key][0]['entries']):raise ValueError('이 팩에는 선택한 역할의 음성이 없습니다.')
@@ -135,24 +153,30 @@ class CustomVoicePacks:
         from oval_spotter import OPTIONAL_CLIPS
         with self.lock:
             clips={}
+            def prepared_default(text):
+                if default is None:return None
+                digest=hashlib.sha256(json.dumps([default.voice(),__import__('radio_audio').spoken_form(text)],ensure_ascii=False).encode()).hexdigest()
+                try:data=(default.directory/(digest+'.mp3')).read_bytes()
+                except OSError:return None
+                if len(data)>=100:return {'text':text,'audio_base64':base64.b64encode(data).decode('ascii')}
             for key,texts in VARIANTS.items():
                 choices=[{'text':t,'audio_base64':self.audio('spotter',t)} for t in texts if self.has('spotter',t)]
                 if not choices and default:
                     for text in texts:
-                        digest=hashlib.sha256(json.dumps([default.voice(),__import__('radio_audio').spoken_form(text)],ensure_ascii=False).encode()).hexdigest()
-                        try:data=(default.directory/(digest+'.mp3')).read_bytes()
-                        except OSError:continue
-                        if len(data)>=100:choices.append({'text':text,'audio_base64':base64.b64encode(data).decode('ascii')})
+                        choice=prepared_default(text)
+                        if choice:choices.append(choice)
                 if not choices:raise MissingCustomAudio('스포터 기본 음성을 먼저 준비하세요. 준비되지 않은 상황: '+key)
                 clips[key]={**choices[0],'variants':choices}
             for key,text in OPTIONAL_CLIPS.items():
-                if self.has('spotter',text):
-                    choice={'text':text,'audio_base64':self.audio('spotter',text)}
+                choice=({'text':text,'audio_base64':self.audio('spotter',text)} if self.has('spotter',text)
+                        else prepared_default(text))
+                if choice:
                     clips[key]={**choice,'variants':[choice]}
             selected=self.selections['spotter']
             return {'voice':self.loaded[selected][0]['name'],'clips':clips,'cached':True,'custom_pack':selected,'clip_count':sum(len(v['variants']) for v in clips.values())}
     def remove(self,key,delete=False):
         with self.lock:
+            if self.is_builtin(key):raise ValueError('기본 짧은 무전은 음성 길이에서 기본으로 전환하세요. 파일은 업데이트에서 관리합니다.')
             folder=self._folder(key)
             self._manifest(key)
             if delete:

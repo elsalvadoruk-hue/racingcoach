@@ -401,7 +401,7 @@ class VoiceCoach:
         self.radio_audio = OrderedDict()
         self.fixed_audio = RadioAudioCache(self.speech, self.store.path.parent / 'radio_audio')
         from custom_voice_packs import CustomVoicePacks
-        self.custom_packs = CustomVoicePacks(self.store.path.parent / 'custom_voice_packs')
+        self.custom_packs = CustomVoicePacks(self.store.path.parent / 'custom_voice_packs',self.store.path.parent / 'short_radio')
         self.fixed_audio.custom_packs = self.custom_packs
         self.live.setup_audio_ready=lambda text:self.fixed_audio.cached('coach',text)
         self._report_notes = (None, [])
@@ -839,6 +839,7 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
         from voice_catalog_diff import current_bindings
         view=coach.custom_packs.list()
         for row in view['packs']:
+            if row.get('builtin'):continue
             update=coach.custom_packs.updates(row['key'],current_bindings(),coach.app_version)
             row['updates']={k:v for k,v in update.items() if k in ('baselineKnown','newCount','roles','appVersion')}
         return view

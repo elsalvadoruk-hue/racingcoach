@@ -83,6 +83,8 @@
 !/scripts/assets/podium-trophies.png
 !/scripts/test_make_patch.py
 !/scripts/make_release_assets.py
+!/scripts/make_short_radio.py
+!/scripts/test_make_short_radio.py
 !/scripts/python_runtime.json
 !/scripts/prepare_lmu_bridge.py
 !/scripts/test_prepare_lmu_bridge.py

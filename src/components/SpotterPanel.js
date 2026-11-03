@@ -12,6 +12,8 @@ import { spotterAlertPatch } from '../lib/voiceAlerts';
 import VoiceAlertSettings from './VoiceAlertSettings';
 import CustomVoicePacks from './CustomVoicePacks';
 import RoleVoiceSelect from './RoleVoiceSelect';
+import VoiceLengthSelect from './VoiceLengthSelect';
+import { baseVoice, voiceLength } from '../lib/voiceLength';
 
 export function SpotterSettings({ settings, onChange: changeSettings, disabled = false, capabilities = {}, idPrefix = 'spotter', library, voiceDisabled = false }) {
   const supported = key => capabilities[key] !== false;
@@ -19,6 +21,7 @@ export function SpotterSettings({ settings, onChange: changeSettings, disabled =
   return <FieldSet disabled={disabled} className="spotter-settings mt-6 border-t pt-5"><FieldLegend>스포터 안내 설정</FieldLegend>
     <FieldGroup className="grid gap-4 sm:grid-cols-2">
       {supported('voice') && <RoleVoiceSelect role="spotter" library={library} settings={settings} onChange={changeSettings} disabled={disabled || voiceDisabled} defaults={SPOTTER_VOICES.map(([name, label]) => [name, `${name} · ${label}`])} />}
+      {supported('voice') && library && <VoiceLengthSelect scope="spotter" library={library} settings={settings} onChange={changeSettings} disabled={disabled || voiceDisabled} />}
       {supported('formation') && <Field><FieldLabel htmlFor={id('formation')}>포메이션 랩 안내 개수</FieldLabel><NativeSelect id={id('formation')} aria-label="포메이션 랩 안내 개수" value={settings.formation_calls || 5} onChange={e => changeSettings({ formation_calls: Number(e.target.value) })}>{[1, 2, 3, 4, 5, 6, 7, 8].map(n => <option key={n} value={n}>{`${n}개`}</option>)}</NativeSelect></Field>}
       <Field data-disabled={disabled || (capabilities.repeat_toggle && settings.repeat_enabled === false) || undefined}><FieldLabel htmlFor={id('repeat')}>옆 차량 반복 간격</FieldLabel><NativeSelect id={id('repeat')} aria-label="옆 차량 반복 간격" disabled={disabled || (capabilities.repeat_toggle && settings.repeat_enabled === false)} value={settings.repeat_seconds} onChange={e => changeSettings({ repeat_seconds: Number(e.target.value) })}>{(capabilities.repeat_toggle ? [2, 3, 5, 8, 10] : [2, 3, 5]).map(n => <option key={n} value={n}>{n}초</option>)}</NativeSelect></Field>
       <Field><FieldLabel htmlFor={id('clear')}>클리어 확인 시간</FieldLabel><NativeSelect id={id('clear')} aria-label="클리어 확인 시간" disabled={disabled} value={settings.clear_delay} onChange={e => changeSettings({ clear_delay: Number(e.target.value) })}>{[.15, .3, .5].map(n => <option key={n} value={n}>{n * 1000}ms</option>)}</NativeSelect></Field>
@@ -36,10 +39,12 @@ export default function SpotterPanel({ spotter, muted, volume, audioError, apiBa
   const traffic = view?.radio?.traffic;
   const box = view?.radio?.pit_box;
   const hazard = view?.radio?.hazards?.[0];
+  const voiceLabel = voiceLength('spotter', settings, spotter.library) === 'short'
+    ? `${baseVoice('spotter', settings, spotter.library)} · 짧은 무전` : voice;
   const trafficLabels = { same_class: '같은 클래스', other_class: '다른 클래스', faster_class: '최근 랩 기준 빠른 클래스',
     slower_class: '최근 랩 기준 느린 클래스', lapping_car: '한 랩 이상 앞선 차량', lapped_car: '한 랩 이상 뒤처진 차량' };
   return <Card asChild><section aria-label="한국어 스포터" className="coach-panel">
-    <LiveHeader title="한국어 스포터" topic="spotter" icon={Headphones} description={`좌우 차량과 주요 경기 신호 · ${voice}`}
+    <LiveHeader title="한국어 스포터" topic="spotter" icon={Headphones} description={`좌우 차량과 주요 경기 신호 · ${voiceLabel}`}
       action={<Button variant={enabled || preparing ? 'outline' : 'default'} aria-pressed={enabled} onClick={toggle}>{preparing ? '음성 준비 중 · 취소' : enabled ? '스포터 끄기' : '스포터 켜기'}</Button>} />
     <div className="mt-4 grid grid-cols-3 items-stretch gap-2 text-center">
       <div className={`rounded-xl border p-3 ${[2, 4, 5].includes(side) ? 'border-warning bg-warning/10 text-warning' : 'border-border text-muted-foreground'}`}><ArrowLeft className="mx-auto mb-2" size={18} aria-hidden="true" /><p className="font-medium">왼쪽</p><p className="mt-1 text-sm">{side === 5 ? '두 대' : [2, 4].includes(side) ? '차량 있음' : '—'}</p></div>

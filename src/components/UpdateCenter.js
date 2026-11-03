@@ -53,16 +53,31 @@ export function useUpdateStatus(apiBase, fetcher = fetch) {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState('');
   const [restart, setRestart] = useState(null);   // { from, sawDown, since } while the launcher restarts the app
+  const voiceJob = useRef(null);
+  useEffect(() => {
+    const job = status?.voice?.job, previous = voiceJob.current;
+    voiceJob.current = job?.state;
+    if (previous === 'RUNNING' && job?.state !== 'RUNNING') window.dispatchEvent(new Event('voice-library-changed'));
+  }, [status]);
   const call = useCallback(async (path = '', method = 'GET') => {
     try {
       const response = await fetcher(`${apiBase}/api/update${path}`, { method });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '업데이트 상태를 확인하지 못했습니다.');
       if (data.app) setStatus(data);
+      if (path === '/voice/download' && data.voice?.job?.state !== 'RUNNING') window.dispatchEvent(new Event('voice-library-changed'));
+      if (path === '/voice/download' && data.voice?.job?.state === 'RUNNING') {
+        window.dispatchEvent(new CustomEvent('voice-download-started', { detail: { apiBase, source: voiceJob } }));
+      }
       setError('');
       return data;
     } catch (failure) { setError(failure.message); return null; }
   }, [apiBase, fetcher]);
+  useEffect(() => {
+    const started = event => { if (event.detail?.apiBase === apiBase && event.detail.source !== voiceJob) call(); };
+    window.addEventListener('voice-download-started', started);
+    return () => window.removeEventListener('voice-download-started', started);
+  }, [apiBase, call]);
   useEffect(() => { call(); }, [call]);
   useEffect(() => {
     if (restart) return undefined;

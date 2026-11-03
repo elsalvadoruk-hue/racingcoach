@@ -300,7 +300,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "2.4.5"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "2.5.0"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -4396,7 +4396,8 @@ restart_requested = threading.Event()
 def voice_folders() -> dict[str, Path]:
     """Where the packed voice paths live in this installation, as the coach and spotter look them up."""
     return {"data/radio_audio/": Path(os.getenv("IRACING_RADIO_AUDIO_DIR") or MEMORY_DB_PATH.parent / "radio_audio"),
-            "data/spotter_audio/": Path(os.getenv("IRACING_SPOTTER_AUDIO_DIR") or app_settings.spotter_audio_dir())}
+            "data/spotter_audio/": Path(os.getenv("IRACING_SPOTTER_AUDIO_DIR") or app_settings.spotter_audio_dir()),
+            "data/short_radio/": voice_coach.custom_packs.builtin_root}
 
 
 def request_restart() -> bool:

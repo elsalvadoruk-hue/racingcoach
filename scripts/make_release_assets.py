@@ -278,7 +278,8 @@ def main() -> int:
         else:
             import app_settings
             app_settings.apply_environment()
-            folders = {"data/radio_audio/": app_settings.data_dir() / "radio_audio", "data/spotter_audio/": app_settings.spotter_audio_dir()}
+            folders = {"data/radio_audio/": app_settings.data_dir() / "radio_audio", "data/spotter_audio/": app_settings.spotter_audio_dir(),
+                       "data/short_radio/": app_settings.data_dir() / "short_radio"}
             read = lambda path: next(Path(folder) / path[len(prefix):] for prefix, folder in folders.items()
                                      if path.startswith(prefix)).read_bytes()
             summary = make_voice(args.version, files, read, out, previous)

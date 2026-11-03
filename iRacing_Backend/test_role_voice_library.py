@@ -78,3 +78,31 @@ class RoleVoiceLibrary(unittest.TestCase):
             self.assertEqual(client.post('/api/live-coach/custom-voice-packs/updates',json={'key':info['key']}).json()['newEntries'],[{'role':'spotter','sourceText':'new'}])
             self.assertEqual(client.post('/api/live-coach/custom-voice-packs/remove',json={'key':info['key'],'delete':False}).status_code,200)
             self.assertFalse(self.manager.selected);self.assertTrue((self.manager.root/info['key']).exists())
+
+    def test_partial_short_pack_reuses_oval_and_both_clear_calls_without_synthesis(self):
+        from spotter import SpotterAudio,VARIANTS
+        from oval_spotter import OPTIONAL_CLIPS
+        from radio_audio import spoken_form
+        info=self.install('brief-spotter-fenrir-20261103','spotter',VARIANTS['test'][0])
+        self.assertEqual(info['radioStyle'],{'length':'short','voice':'Fenrir'})
+        self.manager.configure({'spotter':info['key']})
+        default=SpotterAudio(MagicMock(),lambda:'test');default.directory=self.root/'base';default.directory.mkdir()
+        texts=[v[0] for v in VARIANTS.values()]+list(OPTIONAL_CLIPS.values())
+        for text in texts:
+            digest=hashlib.sha256(json.dumps(['test',spoken_form(text)],ensure_ascii=False).encode()).hexdigest()
+            (default.directory/(digest+'.mp3')).write_bytes(b'original'*50)
+        result=self.manager.spotter(default)
+        self.assertEqual(set(result['clips']),set(VARIANTS)|set(OPTIONAL_CLIPS))
+        for key in OPTIONAL_CLIPS:self.assertEqual(base64.b64decode(result['clips'][key]['audio_base64']),b'original'*50)
+        for key,options in VARIANTS.items():
+            if any(t in ('왼쪽 클리어.','오른쪽 클리어.') for t in options):
+                self.assertEqual(base64.b64decode(result['clips'][key]['audio_base64']),b'original'*50)
+        default.speech.synthesize.assert_not_called()
+
+    def test_short_metadata_rejects_a_mismatched_speaker(self):
+        from custom_voice_pack_format import radio_style,validate_manifest
+        info=self.install('meta','coach','line')
+        m=self.manager._manifest(info['key']);m['radioStyle']={'length':'short','voice':'Algenib'}
+        self.assertEqual(radio_style(validate_manifest(m)),m['radioStyle'])
+        m['radioStyle']['voice']='Fenrir'
+        with self.assertRaises(ValueError):validate_manifest(m)
