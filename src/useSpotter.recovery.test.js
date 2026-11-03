@@ -78,6 +78,10 @@ test('pre-start media failures back off and retire after three attempts', async 
   for (let i = 0; i < 20; i += 1) await refresh(100);
   const failed = delivery.mock.calls.filter(([e, s, r]) => e.key === 'race_result' && s === 'failed' && r === 'media_error');
   expect(failed).toHaveLength(3);
+  expect(new Set(failed.map(([e]) => e.playback.attempt_id)).size).toBe(3);
+  expect(new Set(failed.map(([e]) => e.playback.owner_generation)).size).toBe(1);
+  expect(failed.every(([e]) => e.playback.game === 'lmu' && e.playback.started === false
+    && e.playback.stage === 'play')).toBe(true);
   expect(players).toHaveLength(3);
   expect(delivery.mock.calls.filter(([, s]) => s === 'started')).toHaveLength(0);
   expect(fetch.mock.calls.filter(([url]) => url.endsWith('/ack'))).toHaveLength(1);

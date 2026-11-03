@@ -8,6 +8,18 @@ beforeEach(() => {
 });
 afterEach(() => { jest.useRealTimers(); jest.restoreAllMocks(); });
 
+test('bounded queue loss is visible in subsequent diagnostics while completed truth survives', async () => {
+  const { result, unmount } = renderHook(() => useRadioDiagnostics('http://synthetic'));
+  act(() => {
+    for (let i = 0; i < 520; i += 1) result.current({ event_id: `e${i}`, key: 'yellow' }, 'completed');
+  });
+  await act(async () => jest.advanceTimersByTime(1000));
+  const events = JSON.parse(fetch.mock.calls[0][1].body).events;
+  expect(events).toHaveLength(64);
+  expect(events[0]).toMatchObject({ event_id: 'e8', status: 'completed', diagnostics_dropped: 8 });
+  unmount();
+});
+
 test('queued feedback retains the loaded frontend and originating backend versions', async () => {
   const { result } = renderHook(() => useRadioDiagnostics('http://synthetic'));
   act(() => result.current({ event_id: 'old-frame', backend_version: '2.1.2' }, 'completed'));

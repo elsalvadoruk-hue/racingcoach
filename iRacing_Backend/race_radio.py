@@ -9,6 +9,7 @@ from radio_audio import speech_fields
 import radio_phrases
 import radio_variations
 from qualifying_traffic import QualifyingTraffic, is_open_qualifying
+from race_result import result_position
 from voice_alerts import category, clean, allowed, event_allowed
 
 
@@ -508,6 +509,15 @@ class RaceRadio:
             elif now - self.lap_done_at >= 3.2:
                 self.quali_called = lap
         position, old_lap = num(sample.get('class_position')), num(previous.get('lap_completed'))
+        if self.result:
+            rank = result_position(sample, metadata or {})
+            if not rank['provisional'] or self.result.get('provisional', True):
+                if rank['class_position']:
+                    self.result.update(class_position=rank['class_position'], provisional=rank['provisional'],
+                                       position_source=rank['source'])
+            for event in self.pending:
+                if event['key'] == 'race_result':
+                    event['text'] = self._result_text()
         native = sample.get('finish_status')
         crossed = (int(sample.get('session_flags') or 0) & 0x1 and int(previous.get('session_flags') or 0) & 0x1
                    and previous.get('on_track') is True and lap is not None and old_lap is not None and lap == old_lap + 1)
@@ -517,8 +527,20 @@ class RaceRadio:
                 and position is not None and position > 0):
             # LMU confirms our own finish explicitly; other sims use a verified crossing.
             self.result_called = True
-            self.result = {'class_position': position, 'at': now}      # kept for the history of this track (live_formation)
-            self.say('race_result', now, {'pos': position}, ttl=40, delay=3, cooldown=3600, priority=2)
+            rank = result_position(sample, metadata or {})
+            self.result = {'class_position': rank['class_position'], 'at': now,
+                           'provisional': rank['provisional'], 'position_source': rank['source']}
+            # Reuse an existing neutral chequered clip. Its audio stays valid as
+            # live ranks change, including while rendering or already speaking.
+            self.emit('race_result', now, self._result_text(), role='spotter',
+                      speech_text=STATIC_CALLS['finish'][0], prepared_only=True,
+                      ttl=40, delay=3, cooldown=3600, priority=2)
+
+    def _result_text(self):
+        rank = self.result
+        label = '현재 클래스' if rank['provisional'] else '공식 클래스'
+        suffix = ' (잠정)' if rank['provisional'] else ''
+        return f'완주했습니다. {label} {int(rank["class_position"])}위{suffix}.'
 
     def briefing(self):
         m, s = self.metadata, self.latest
@@ -761,6 +783,11 @@ class RaceRadio:
                  condition=('quali_traffic', (sample.get('lap_number'), dict(result))))
 
     def valid(self, event, now):
+        if event.get('key') == 'race_result' and (not self.result
+                or str(self.metadata.get('session_type') or '').lower() != 'race'
+                or self.latest.get('finish_status') in (2, 3)
+                or int(self.latest.get('session_flags') or 0) & 0x20000):
+            return False
         if event.get('key') in RACE_START_CALLS and str(self.metadata.get('session_type') or '').strip().lower() != 'race':
             return False
         if not event_allowed(event, self.alerts, self.wall_alerts):

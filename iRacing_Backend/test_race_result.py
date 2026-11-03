@@ -22,11 +22,11 @@ class RaceResultTests(unittest.TestCase):
         self.finish();r=self.a.view()
         self.assertEqual((r['start_position'],r['finish_position'],r['best_lap_rank']),(11,7,2))
         self.assertEqual((r['fastest_lap_s'],r['best_gap_s'],r['recorded_drivers']),(106.842,.394,2))
-        self.assertFalse(r['provisional'])
+        self.assertTrue(r['provisional'])
     def test_lmu_explicit_finish_does_not_require_another_crossing(self):
         self.tick();self.tick(session_state=5,finish_status=1,class_position=2)
         self.assertEqual(self.a.view()['finish_position'],2)
-        self.assertFalse(self.a.view()['provisional'])
+        self.assertTrue(self.a.view()['provisional'])
     def test_retirement_and_disqualification_do_not_become_podium_finishes(self):
         for status,label in ((2,'DNF'),(3,'DSQ')):
             self.a.reset();self.tick(finish_status=status,class_position=1)

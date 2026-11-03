@@ -4,13 +4,14 @@ import packageInfo from '../package.json';
 // Batched independently from the audio path; no recordings or credentials.
 export default function useRadioDiagnostics(apiBase) {
   const queue = useRef([]);
+  const dropped = useRef(0);
   const shadowQueue = useRef([]);
   const ovalQueue = useRef([]);
   const notifyShadow = useRef(null);
   const notifyStarted = useRef(null);
   const record = useCallback((event, status, reason = '') => {
     queue.current.push({ ...event, frontend_version: packageInfo.version, status, reason, at: Date.now() / 1000 });
-    if (queue.current.length > 512) queue.current.shift();
+    if (queue.current.length > 512) { queue.current.shift(); dropped.current += 1; }
     if (status === 'started' && event.key?.startsWith('control_')) notifyStarted.current?.();
   }, []);
   const observeBanter = useCallback((observation) => {
@@ -31,6 +32,7 @@ export default function useRadioDiagnostics(apiBase) {
       if (running || (!queue.current.length && !shadowQueue.current.length && !ovalQueue.current.length)) return;
       running = true;
       const events = queue.current.splice(0, 64);
+      if (events.length) events[0] = { ...events[0], diagnostics_dropped: dropped.current };
       const banter = shadowQueue.current.splice(0, 16);
       const oval = ovalQueue.current.splice(0, 16);
       if (events.some(event => event.status === 'started' && event.key?.startsWith('control_'))) urgent = false;
@@ -42,7 +44,9 @@ export default function useRadioDiagnostics(apiBase) {
         if (!response.ok) throw new Error('log unavailable');
         succeeded = true;
       } catch {
-        queue.current.unshift(...events); queue.current = queue.current.slice(-512);
+        queue.current.unshift(...events);
+        dropped.current += Math.max(0, queue.current.length - 512);
+        queue.current = queue.current.slice(-512);
         shadowQueue.current.unshift(...banter); shadowQueue.current = shadowQueue.current.slice(-64);
         ovalQueue.current.unshift(...oval); ovalQueue.current = ovalQueue.current.slice(-64);
       }

@@ -7,6 +7,52 @@ def positive(value):
     return value if value is not None and value>0 else None
 
 
+def _integer(value, minimum=0, maximum=1024):
+    number = finite(value)
+    return int(number) if number is not None and minimum <= number <= maximum and number == int(number) else None
+
+
+def official_classification(session, game, player, cars):
+    """Only the current iRacing session's explicitly official own classification."""
+    if game != 'iracing' or session.get('ResultsOfficial') not in (True, 1, '1', 'true', 'True'):
+        return None
+    number = _integer(session.get('SessionNum'))
+    player = _integer(player)
+    rows = session.get('ResultsPositions') or []
+    if number is None or player is None or not isinstance(rows, list):
+        return None
+    own = [r for r in rows if isinstance(r, dict) and _integer(r.get('CarIdx')) == player]
+    if len(own) != 1:
+        return None
+    rank = _integer(own[0].get('ClassPosition'), maximum=1023)
+    overall = _integer(own[0].get('Position'), 1)
+    owner = next((c for c in cars if c.get('idx') == player), {})
+    mates = {c.get('idx') for c in cars if owner.get('class_id') is not None
+             and c.get('class_id') == owner['class_id']}
+    conflict = any(isinstance(r, dict) and _integer(r.get('CarIdx')) != player and
+        ((overall is not None and _integer(r.get('Position'), 1) == overall)
+         or (_integer(r.get('CarIdx')) in mates and _integer(r.get('ClassPosition')) == rank)) for r in rows)
+    if rank is None or conflict or overall is not None and rank + 1 > overall:
+        return None
+    return {'class_position': rank + 1, 'overall_position': overall, 'session_num': number,
+            'player_idx': player, 'source': 'IRACING_FINAL_CLASSIFICATION'}
+
+
+def result_position(sample, race):
+    """Shared by speech and history: native finish/cooldown does not finalize a rank."""
+    official = race.get('result_classification')
+    if (race.get('game') == 'iracing' and isinstance(official, dict)
+            and official.get('source') == 'IRACING_FINAL_CLASSIFICATION'
+            and _integer(official.get('session_num')) is not None
+            and official['session_num'] == _integer(sample.get('session_num'))
+            and official.get('player_idx') == race.get('player_idx')
+            and _integer(official.get('class_position'), 1) is not None):
+        return {**official, 'provisional': False}
+    return {'class_position': positive(sample.get('class_position')),
+            'overall_position': positive(sample.get('position')),
+            'source': 'LIVE_CLASS_POSITION', 'provisional': True}
+
+
 class RaceResultTracker:
     def __init__(self): self.reset()
 
@@ -45,12 +91,16 @@ class RaceResultTracker:
                          'start_source': getattr(self, 'grid_source', None),
                          'overall_start': getattr(self, 'overall_grid', None),
                          'overall_finish': positive(sample.get('position')), 'game': race.get('game')}
-        # Preserve the recorded finish through cooldown laps and cockpit exit.
-        # Only a final classification may replace a provisional position.
-        final=native==1 or sample.get('session_state')==6
-        if self.result.get('finish_position') is None or self.result.get('provisional',True):
-            if position:self.result['finish_position']=int(position)
-        self.result.update(status=status,provisional=not final)
+        # Live ranks can settle after cooldown starts. Cockpit exit preserves the
+        # last observed rank; an official table may still replace it afterwards.
+        rank = result_position(sample, race)
+        if not rank['provisional'] or (self.result.get('provisional', True) and sample.get('on_track') is True):
+            if rank['class_position']:
+                self.result.update(finish_position=int(rank['class_position']),
+                    overall_finish=rank['overall_position'], provisional=rank['provisional'],
+                    position_source=rank['source'])
+        self.result.update(status=status)
+        self.result.setdefault('provisional', True)
         self.result.setdefault('finish_position',None)
         cars=[c for c in race.get('cars') or [] if not c.get('is_pace_car')]
         own=next((c for c in cars if c.get('idx')==race.get('player_idx')), {})

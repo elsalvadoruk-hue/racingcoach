@@ -22,6 +22,8 @@ import RadioDiagnostics from './RadioDiagnostics';
 import RadioAudioPrepare from './RadioAudioPrepare';
 import { useGame, useGameSettings } from '../lib/gameContext';
 import { readGameItem, writeGameItem } from '../lib/gameStorage';
+import { createRadioAttempt } from '../lib/radioDiagnostics';
+import FuelStrategy from './FuelStrategy';
 
 const readInput = game => readGameItem('iracing.voice.inputDevice', game) || '';
 const storeInput = (game, value) => writeGameItem('iracing.voice.inputDevice', game, value);
@@ -48,10 +50,34 @@ export function NoteText({ note }) {
 
 const cornerLine = (corner) => `${corner.number ?? '--'}번 구간 ${corner.delta_s > 0 ? '+' : ''}${corner.delta_s.toFixed(2)}초${corner.findings?.length ? ' · ' + corner.findings.join(' · ') : ''}`;
 
+const cornerMetric = (corner) => {
+  const note = '옆에 차량이 있었거나 옐로였던 통과는 제외합니다.';
+  if (!corner) return { value: '--', note };
+  const label = `${corner.number ?? '--'}번 구간`;
+  if (corner.comparison_eligible === false || (corner.traffic_context && corner.traffic_context !== 'SOLO')) {
+    if (corner.traffic_context === 'UNKNOWN') return { value: `${label} · 비교 보류`, note: '주변 차량 관측이 확인되지 않아 비교를 보류했습니다.' };
+    return { value: `${label} · 비교 제외`, note: corner.traffic_context === 'TRAFFIC_PRESENT'
+      ? '주변 차량이 있어 단독 주행 기준과 비교하지 않았습니다.' : '이번 통과는 단독 주행 기준과 비교하지 않았습니다.' };
+  }
+  return { value: corner.delta_s == null ? `${label} · 첫 기록` : cornerLine(corner).split(' · ')[0],
+    note: corner.findings?.length ? corner.findings.join(' · ') : note };
+};
+
+const lapComparisonNote = (lap) => {
+  if (!lap) return '비교할 완료 랩을 기다립니다.';
+  if (lap.losses?.length) return `0.1초 이상 손실 합계 ${lap.total_loss_s.toFixed(2)}초`;
+  if (lap.compared === 0) return '비교한 구간이 없어 이번 랩의 손실을 판단하지 않습니다.';
+  if (!Number.isFinite(lap.compared) || lap.compared < 0) return '비교 구간 수가 확인되지 않아 전체 랩의 손실을 판단하지 않습니다.';
+  return `비교한 ${lap.compared}개 구간에서 0.1초 이상 손실 없음`;
+};
+
 const CONTROL_LABELS = { brake_bias: '브레이크 바이어스', tc: 'TC', abs: 'ABS' };
 
 export function CornerCoach({ coach, connected, controls }) {
   const lap = coach?.last_lap, last = coach?.last_corner;
+  const lastMetric = cornerMetric(last);
+  const lapValue = !lap ? '비교 대기' : Number.isFinite(lap.compared) && lap.compared >= 0
+    ? `${lap.lap}랩 · ${lap.compared}개 구간 비교` : `${lap.lap}랩 · 비교 범위 미확인`;
   return <Card asChild><section aria-label="실시간 코너 비교" className="coach-panel">
     <LiveHeader title="실시간 코너 비교" icon={Route} description="각 구간을 이번 실행에서 깨끗하게 통과한 내 최고 기록과 비교합니다. AI를 사용하지 않습니다." />
     <CardContent className="p-0">
@@ -60,10 +86,10 @@ export function CornerCoach({ coach, connected, controls }) {
         : <>
           <div className="grid gap-3 sm:grid-cols-3">
             <LiveMetric label="비교 기준이 있는 구간" value={`${coach.reference_corners} / ${coach.corner_count}`} note="깨끗한 통과가 한 번 있어야 비교합니다." />
-            <LiveMetric label="최근 완료 랩" value={lap ? `${lap.lap}랩 · ${lap.compared}개 구간 비교` : '비교 대기'} note={lap ? lap.losses.length ? `0.1초 이상 손실 합계 ${lap.total_loss_s.toFixed(2)}초` : '모든 구간이 최고와 0.1초 이내' : '다음 랩부터 비교합니다.'} />
-            <LiveMetric label="방금 지난 구간" value={last ? last.delta_s == null ? `${last.number}번 구간 · 첫 기록` : cornerLine(last).split(' · ')[0] : '--'} note={last?.findings?.length ? last.findings.join(' · ') : '옆에 차량이 있었거나 옐로였던 통과는 제외합니다.'} />
+            <LiveMetric label="최근 비교 랩" value={lapValue} note={lapComparisonNote(lap)} />
+            <LiveMetric label="방금 지난 구간" value={lastMetric.value} note={lastMetric.note} />
           </div>
-          {!!lap?.losses.length && <ul className="mt-4 flex flex-col gap-2 text-sm text-foreground">{lap.losses.map((corner) => <li key={corner.id} className="rounded-lg border border-border p-3">{cornerLine(corner)}</li>)}</ul>}
+          {!!lap?.losses?.length && <ul className="mt-4 flex flex-col gap-2 text-sm text-foreground">{lap.losses.map((corner) => <li key={corner.id} className="rounded-lg border border-border p-3">{cornerLine(corner)}</li>)}</ul>}
           {lap?.best_gain && <p className="mt-3 text-sm text-success">가장 줄인 구간: {cornerLine(lap.best_gain)}</p>}
           {coach.focus && <p role="status" className="mt-3 rounded-lg border border-primary/30 bg-primary/10 p-3 text-sm text-primary">다음 통과 전 안내 예정: {coach.focus.text}</p>}
           <p className="mt-3 text-xs leading-relaxed text-muted-foreground">구간 번호는 코너 비교 화면의 자동 구간 번호입니다. 음성은 스포터와 “일반 보고 포함”이 켜져 있을 때, 손실이 가장 컸던 구간 하나를 제동 지점 몇 초 전에 한 번만 알립니다. “방금 랩 어때?”, “이전 코너 뭐 잘못했어?”로 물어볼 수도 있습니다.</p>
@@ -151,9 +177,9 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const answerTurn = useRef(0);
   const speakAnswer = useCallback((audio, note, attempt = 0) => {
     const ticket = ++answerTurn.current;
-    return play(audio, 'audio/mpeg', { priority: ANSWER,
-      channel: note.context?.engineer === 'spotter' ? 'spotter' : 'pitwall', onStatus: (status, reason) => {
-      recordDelivery(deliveryEvent(note), status, reason);
+    return play(audio, 'audio/mpeg', { priority: ANSWER, diagnostics: createRadioAttempt(activeGame, ticket),
+      channel: note.context?.engineer === 'spotter' ? 'spotter' : 'pitwall', onStatus: (status, reason, playback) => {
+      recordDelivery({ ...deliveryEvent(note), ...(playback ? { playback } : {}) }, status, reason);
       // A side-by-side call cut the answer off: say it again from the start once the radio is free.
       if (status !== 'interrupted' || !['preempted', 'nearby_car'].includes(reason) || attempt >= MAX_RESUMES) return;
       const since = Date.now();
@@ -163,7 +189,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
         clearInterval(timer); speakAnswer(audio, note, attempt + 1);
       }, 300);
     } });
-  }, [play, recordDelivery, deliveryEvent]);
+  }, [play, recordDelivery, deliveryEvent, activeGame]);
   const submit = useCallback(async (body) => {
     changePhase('sending');
     try {
@@ -275,12 +301,13 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
           let finish;
           const finished = new Promise((resolve) => { finish = resolve; });
           const started = await play(audio, mime, {
+            diagnostics: createRadioAttempt(activeGame, epoch),
             priority: urgent ? 3 : 0, routineReport: !urgent,
             valid: () => !stopped && mounted.current && epoch === reportEpoch.current && reportAllowed()
               && (urgent ? reportCurrent() : workloadValid()),
             workloadValid: urgent ? undefined : workloadValid,
-            onStatus: (status, reason) => {
-              recordDelivery(deliveryEvent(note, response.report.spoken_text), status, reason);
+            onStatus: (status, reason, playback) => {
+              recordDelivery({ ...deliveryEvent(note, response.report.spoken_text), ...(playback ? { playback } : {}) }, status, reason);
               if (status !== 'started') finish({ status, reason });
             },
           });
@@ -511,6 +538,7 @@ export function VoiceReview({ review, filename, laps = [], corners = [], apiBase
       <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-bold text-foreground">랩 {note.lap_number} · {note.corner_label}</span><Button variant="outline" type="button" onClick={() => open(note)} className="text-xs ">문장·위치 수정</Button></div>
       <p className="mt-1 text-xs text-muted-foreground">{note.anchor_source === 'RECENT_CORNER' ? '발언 직전 코너에 연결' : note.link_method === 'MANUAL' ? '직접 확인한 위치' : '세션·주행 위치로 연결'} · {note.comparison_note}</p>
       <div className="mt-3"><NoteText note={note} /></div>
+      {note.is_engineer_report && <FuelStrategy view={note.report_context} />}
       {note.is_engineer_report ? <div className="mt-3 rounded-lg border border-accent/25 bg-accent/10 p-3 text-sm text-foreground">당시 계산 근거: 클래스 {note.report_context?.class_position ?? '--'}위 · 연료 {note.report_context?.fuel_l?.toFixed(1) ?? '--'}L · 예상 남은 거리 {note.report_context?.remaining_laps?.toFixed(1) ?? '--'}랩 · 추가 급유 {note.report_context?.fuel_to_add_l?.toFixed(1) ?? '--'}L<p className="mt-2 text-xs text-muted-foreground">경기 중 보고와 당시 추정값입니다. 상대의 피트 계획이나 셋업 효과를 증명하지 않습니다.</p></div> : <div className="mt-4 grid gap-3 md:grid-cols-2"><div className="rounded-lg border border-primary/25 bg-primary/10 p-3"><h3 className="text-sm font-bold text-primary">해당 랩에서 관측한 내용</h3><div className="mt-2 flex flex-col gap-1 text-sm leading-relaxed text-foreground">{note.evidence?.length ? note.evidence.map((item, i) => <p key={i}>{item}</p>) : <p>코너 위치 또는 측정 데이터가 부족합니다.</p>}</div><p className="mt-3 text-sm text-primary">다음 주행: {note.driving_action}</p>{note.corner_id && <Button variant="outline" type="button" onClick={() => onOpenCorner ? onOpenCorner(note) : onNavigate('corner-inputs', { distance_pct: note.distance_pct })} className="mt-3  border  px-3 py-2 text-xs ">메모를 남긴 랩·위치 비교</Button>}</div>
       <div className="rounded-lg border border-warning/25 bg-warning/10 p-3"><h3 className="text-sm font-bold text-warning">시험할 셋업 가설 · 효과 미확정</h3>{note.setup_candidates?.map((candidate, index) => <div key={index} className="mt-3 text-sm"><p className="font-semibold text-foreground">{candidate.label || candidate.setting}</p><p className="mt-1 font-mono text-warning">{candidate.original_value ?? '--'} → {candidate.value ?? candidate.step_text ?? '차고에서 작은 변경 확인'} {candidate.unit || ''}</p>{candidate.reason && <p className="mt-1 text-foreground">{candidate.reason}</p>}</div>)}<p className="mt-3 text-sm leading-relaxed text-foreground">{note.setup_note}</p><Button variant="outline" type="button" onClick={() => onNavigate('briefing')} className="mt-3  border  px-3 py-2 text-xs ">셋업 실험에서 증상 구체화</Button></div></div>}
       {editor(note)}

@@ -104,6 +104,8 @@ def read_race(sdk, names, session_num):
             car[key] = bool(value) if key == 'on_pit_road' and value is not None else numeric(value)
         cars.append(car)
     data['cars'] = cars
+    from race_result import official_classification
+    data['result_classification'] = official_classification(session, data['game'], data['player_idx'], cars)
     from formation_text import official_context
     data.update(official_context(sdk, names, session, data['game'], cars, data['player_idx'], data['state']))
     repairs = numeric(options.get('FastRepairsLimit')) if isinstance(options, dict) else None
@@ -435,6 +437,12 @@ class RaceEngineer:
                               'may_shorten': leader_before < leader_tolerance or (not leader_is_own and own_before < own_tolerance)}
             if race.get('state') == 5 and self.final_progress is not None:
                 remaining, method = max(0, self.final_progress - own_progress), 'PLAYER_FINAL_LAP'
+        # Keep the player's finish crossing before remaining distance is rounded for display.
+        # A cached 1 Hz view can then be checked against a newer completed-lap sample.
+        finish_crossing = own_progress + remaining if remaining is not None and remaining > 0 else None
+        if finish_crossing is not None:
+            crossing = round(finish_crossing)
+            finish_crossing = crossing if abs(finish_crossing - crossing) < 1e-9 else None
         fuel = numeric(snapshot.get('fuel_l'))
         use = positive(fuel_use)
         available = fuel / use if fuel is not None and fuel >= 0 and use else None
@@ -444,6 +452,9 @@ class RaceEngineer:
         shortage = max(0, finish_need - fuel) if finish_need is not None and fuel is not None else None
         target_use = fuel / remaining if fuel is not None and remaining and remaining > 0 else None
         saving_distance = remaining + (reserve_laps if fuel_save_mode == 'reserve' else 0) if remaining is not None else None
+        goal_need = saving_distance * use if saving_distance is not None and use else None
+        goal_saving = (max(0, (1 - fuel / goal_need) * 100)
+                       if goal_need is not None and goal_need > 0 and fuel is not None and fuel >= 0 else None)
         save_target = fuel / saving_distance if fuel is not None and fuel >= 0 and saving_distance and saving_distance > 0 and fuel_save_mode != 'off' else None
         saving = max(0, (1 - target_use / use) * 100) if target_use is not None and use else None
         # Saving is only a plan when it is within reach; a 4-hour race is not a no-stop race.
@@ -514,11 +525,14 @@ class RaceEngineer:
                 'fuel_reserve_l': round(reserve_laps * use, 2) if use else None,
                 'fuel_target_l_per_lap': round(target_use, 3) if target_use is not None else None,
                 'fuel_save_mode': fuel_save_mode, 'fuel_save_target_l_per_lap': round(save_target, 3) if save_target is not None else None,
+                'fuel_goal_distance_laps': round(saving_distance, 2) if saving_distance is not None else None,
+                'fuel_goal_save_pct': round(goal_saving, 1) if goal_saving is not None else None,
                 'fuel_save_pct': round(saving, 1) if saving is not None else None, 'fuel_save_feasible': savable,
                 'tank_capacity_l': capacity, 'multiple_stops_needed': add is not None and capacity is not None and add > capacity,
                 'stops_needed': stops, 'fuel_run_dry': run_dry, 'fuel_next_stop_l': round(fill, 2) if fill is not None else None,
                 'fuel_next_stop_longer_l': round(fill_longer, 2) if fill_longer is not None else None,
                 'finish_laps_to_go': math.ceil(remaining - 1e-9) if remaining is not None else None,
+                'finish_crossing_lap': finish_crossing,
                 'finish_total_laps': finish['total_laps'] if finish else None,
                 'finish_may_extend': bool(finish and finish['may_extend']), 'finish_may_shorten': bool(finish and finish['may_shorten']),
                 'finish_leader_margin_s': finish['leader_margin_s'] if finish else None,
@@ -654,7 +668,7 @@ class RaceEngineer:
         fraction, flags = view.get('race_fraction'), int(numeric(snapshot.get('session_flags')) or 0)
         if fraction is not None and .5 <= fraction < .58 and view.get('class_position'):
             add('halfway', 'race', cooldown=36000, phrase=('halfway', {'pos': view['class_position']}))
-        if flags & 0x2:
+        if flags & 0x2 and not flags & 0x1 and self._own_final_lap(view, snapshot):
             close = lambda side: (view.get(side) or {}).get('gap_estimate_s') is not None and view[side]['gap_estimate_s'] < 1.5
             add('last_lap', 'race', priority=2, cooldown=36000,
                 phrase=('last_lap_defend' if close('behind') else 'last_lap_attack' if close('ahead') else 'last_lap', {}))
@@ -696,6 +710,27 @@ class RaceEngineer:
                     speech_key=call if call in CALLS else 'coach_' + feeling.lower())
                 break
         return sorted(reports, key=lambda r: -r['priority'])
+
+    def _own_final_lap(self, view, snapshot):
+        """A global iRacing white is the leader's final lap, not every driver's."""
+        if snapshot.get('session_state') not in (4, 5):
+            return False
+        game = view.get('game') or self.race.get('game')
+        # LMU maps white only from its native player max-laps/completed/finish state.
+        if game == 'lmu':
+            return True
+        if game != 'iracing':
+            return False
+        completed = numeric(snapshot.get('lap_completed'))
+        if completed is None or completed < 0 or not completed.is_integer():
+            return False
+        # Older exported views only carried the timed-race endpoint.
+        crossing = numeric(view.get('finish_crossing_lap', view.get('finish_total_laps')))
+        if crossing is not None and crossing <= completed:
+            return False
+        if numeric(snapshot.get('position')) == 1:
+            return True
+        return crossing == completed + 1 and not view.get('finish_may_extend')
 
     @staticmethod
     def _energy_calls(view, add):

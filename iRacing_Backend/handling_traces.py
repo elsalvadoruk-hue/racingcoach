@@ -86,6 +86,11 @@ def groups(analyzer, summary, seed):
                 'time_origin': 'lap_start', 'distance_unit': 'lap_fraction',
                 'selection': 'seeded_corners_evenly_spaced_valid_laps_without_event_filter',
                 'valid_laps_in_recording': len(laps), 'padding_s': PADDING_S,
+                'selected_laps': [p['lap'] for p in passes],
+                'selection_coverage': [{'lap': p['lap'], 'time_s': [p['time_s'][0], p['time_s'][-1]],
+                                        'sample_range': [p['sample_start'], p['sample_start'] + p['samples']],
+                                        'connected_edges': sum(p['connected']), 'total_edges': len(p['connected'])}
+                                       for p in passes],
                 'full_recording_replay': False,
                 'recording': summary.get('recording'), 'environment': summary.get('environment'),
                 'data_quality': summary.get('data_quality'), 'handling_context': summary.get('handling'),

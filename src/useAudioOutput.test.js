@@ -5,6 +5,7 @@ import useAudioOutput, { OUTPUT_GRACE_MS, AUDIO_START_TIMEOUT_MS, AUDIO_STALL_TI
 import { RESUMABLE } from './voiceAudio';
 import LiveCoach from './components/LiveCoach';
 import * as radioEffect from './radioEffect';
+import { createRadioAttempt } from './lib/radioDiagnostics';
 
 const storageKey = 'iracing.voice.outputDevice';
 const headset = { kind: 'audiooutput', deviceId: 'headset', label: 'USB Headset' };
@@ -14,6 +15,63 @@ const originalFetch = global.fetch;
 const originalMedia = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
 const originalSink = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'setSinkId');
 let media, players;
+
+test('routing cancellation is a distinct unstarted attempt and never interrupts the next owner', async () => {
+  const { result, unmount } = renderHook(useAudioOutput);
+  let release;
+  global.Audio.mockImplementationOnce(src => {
+    const player = { src, pause: jest.fn(), play: jest.fn(async () => {}),
+      setSinkId: jest.fn(() => new Promise(resolve => { release = resolve; })) };
+    players.push(player); return player;
+  });
+  const status = jest.fn(), diagnostics = createRadioAttempt('iracing', 7);
+  let pending;
+  act(() => { pending = result.current.play('old', 'audio/mpeg', { diagnostics, onStatus: status }); });
+  await act(async () => result.current.play('priority', 'audio/mpeg', { priority: 3 }));
+  expect(status).toHaveBeenCalledTimes(1);
+  expect(status).toHaveBeenCalledWith('cancelled', 'preempted', expect.objectContaining({
+    ...diagnostics, stage: 'routing', started: false, part_index: 0, output_route: 'default',
+  }));
+  await act(async () => { release(); await pending; });
+  expect(players[0].play).not.toHaveBeenCalled();
+  expect(players[1].pause).not.toHaveBeenCalled();
+  expect(result.current.audioBusy()).toBe(true);
+  unmount();
+});
+
+test('a routing timeout records its failed stage and elapsed time without any device identity', async () => {
+  jest.useFakeTimers();
+  const { result, unmount } = renderHook(useAudioOutput);
+  global.Audio.mockImplementationOnce(src => {
+    const player = { src, pause: jest.fn(), play: jest.fn(), setSinkId: jest.fn(() => new Promise(() => {})) };
+    players.push(player); return player;
+  });
+  const status = jest.fn(), diagnostics = createRadioAttempt('lmu', 1);
+  let pending;
+  act(() => { pending = result.current.play('hung', 'audio/mpeg', { diagnostics, onStatus: status }); });
+  await act(async () => { jest.advanceTimersByTime(5500); await pending; });
+  const [value, reason, playback] = status.mock.calls[0];
+  expect([value, reason]).toEqual(['failed', 'playback_start_timeout']);
+  expect(playback).toMatchObject({ stage: 'routing', started: false, elapsed_ms: 5000, stage_elapsed_ms: 5000 });
+  expect(Object.keys(playback).some(key => /device|sink|label/i.test(key))).toBe(false);
+  expect(players[0].play).not.toHaveBeenCalled();
+  unmount();
+});
+
+test('multipart completion keeps one attempt and the actual final part media clock', async () => {
+  const { result, unmount } = renderHook(useAudioOutput);
+  const status = jest.fn(), diagnostics = createRadioAttempt('lmu', 2);
+  await act(async () => result.current.play(['first', 'second'], 'audio/mpeg', { diagnostics, onStatus: status }));
+  await act(async () => players[0].onended());
+  players[1].currentTime = 1.25; players[1].duration = 1.5;
+  act(() => players[1].onended());
+  expect(status.mock.calls.map(([value]) => value)).toEqual(['started', 'completed']);
+  const started = status.mock.calls[0][2], completed = status.mock.calls[1][2];
+  expect(completed).toMatchObject({ attempt_id: started.attempt_id, owner_generation: started.owner_generation,
+    part_index: 1, started: true, started_at: started.started_at, media_time_s: 1.25, duration_s: 1.5 });
+  expect(completed.ended_at).toBeGreaterThanOrEqual(started.started_at);
+  unmount();
+});
 
 test('stalled priority audio releases the radio and records a failed terminal status', async () => {
   jest.useFakeTimers();

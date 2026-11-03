@@ -246,9 +246,10 @@ class EngineerReportTests(unittest.TestCase):
         self.assertNotIn('halfway', build({**view, 'race_fraction': .45}))
         self.assertEqual(build({**view, 'race_fraction': .52})['halfway']['spoken_text'], '절반 지났습니다. 클래스 2위.')
         self.assertNotIn('last_lap', build(view))
-        last = build({**view, 'behind': {**view['behind'], 'gap_estimate_s': 6.}}, session_flags=0x2)['last_lap']
+        final = {**view, 'game': 'iracing', 'finish_crossing_lap': 5, 'finish_may_extend': False}
+        last = build({**final, 'behind': {**view['behind'], 'gap_estimate_s': 6.}}, session_flags=0x2, session_state=4, lap_completed=4)['last_lap']
         self.assertEqual((last['priority'], last['spoken_text']), (2, '마지막 랩입니다. 끝까지 깔끔하게.'))
-        defend = build({**view, 'behind': {**view['behind'], 'gap_estimate_s': .8}}, session_flags=0x2)['last_lap']
+        defend = build({**final, 'behind': {**view['behind'], 'gap_estimate_s': .8}}, session_flags=0x2, session_state=4, lap_completed=4)['last_lap']
         self.assertIn('뒤차가 바로 뒤', defend['spoken_text'])
 
     def test_read_race_carries_limits_tyres_and_best_laps(self):
@@ -480,7 +481,7 @@ class RadioCallTests(unittest.TestCase):
         self.tick(session_flags=0x1)
         self.tick(lap_completed=4, lap_number=5, class_position=3)
         self.wait(3.2)
-        self.assertEqual(self.events()['race_result']['text'], '체커 받았습니다. 클래스 3위. 수고하셨습니다.')
+        self.assertEqual(self.events()['race_result']['text'], '완주했습니다. 현재 클래스 3위 (잠정).')
         self.assertEqual(len([e for e in self.radio.pending if e['key'] == 'race_result']), 1)
 
 

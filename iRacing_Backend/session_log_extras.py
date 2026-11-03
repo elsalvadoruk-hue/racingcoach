@@ -8,6 +8,7 @@ recorded for them, and they follow session_log's size rule (session_log.EXTRA_OR
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from pathlib import Path
 import struct
@@ -168,29 +169,76 @@ def _session_kind(value):
     return 'qualifying' if kind in ('qualify', 'qualifying', 'open qualify', 'lone qualify') else kind
 
 
-def recordings_for(run, candidates, metadata_of):
+def recordings_for(run, candidates, metadata_of, diagnostics=None):
     """Same car/track/session kind and recorded time overlapping this run's calls.
 
     A recording may begin before the first call, finish after the last, or be one
     of several files from the run. Its save time cannot attach an adjacent run.
     """
+    counts = diagnostics if diagnostics is not None else {}
+    def count(key):
+        counts[key] = counts.get(key, 0) + 1
     found = []
     for path in candidates:
+        count('candidates')
         window = recording_window(path)
-        if window is None or window[0] > run['ended_at'] or window[1] < run['started_at']:
+        if window is None:
+            count('unreadable_window')
+            continue
+        if window[0] > run['ended_at'] or window[1] < run['started_at']:
+            count('outside_run')
             continue
         try:
             metadata = metadata_of(path) or {}
         except (OSError, ValueError):
+            count('metadata_unavailable')
             continue
         if not matches(run.get('identity'), metadata):
+            count('identity_mismatch')
             continue
         want, have = _session_kind(run.get('session_type')), _session_kind(metadata.get('session_type'))
         if want and have and want != have:
+            count('session_kind_mismatch')
             continue
         found.append((window[0], Path(path)))
     found.sort(key=lambda item: item[0])
+    counts.update(matched=len(found), selected=min(MAX_RECORDINGS, len(found)),
+                  omitted_by_limit=max(0, len(found) - MAX_RECORDINGS))
     return [path for _, path in found[-MAX_RECORDINGS:]]
+
+
+def _stamp(path):
+    stat = path.stat()
+    return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_dev, stat.st_ino
+
+
+def recording_ref(path, stamp, driving=lambda: False):
+    """Content identity, only in the deferred export worker, with bounded memory.
+
+    Paths, file names and filesystem identifiers never leave this function. A
+    changed/replaced file cannot label an analysis made from its earlier bytes.
+    """
+    if _stamp(path) != stamp:
+        return None
+    digest = hashlib.sha256(b'racingcoach-recording-v1\0')
+    with path.open('rb') as handle:
+        while True:
+            if driving():
+                raise Deferred('driver on track')
+            block = handle.read(1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+    return 'sha256:' + digest.hexdigest() if _stamp(path) == stamp else None
+
+
+def _coverage(run, window):
+    origin, end = run['started_at'], run['ended_at']
+    return {'time_origin': 'run_start', 'unit': 'seconds',
+            'run_window': [0., end - origin],
+            'recording_window': [window[0] - origin, window[1] - origin],
+            'overlap_window': [max(0., window[0] - origin), min(end, window[1]) - origin],
+            'analysis_scope': 'whole_selected_recording', 'full_recording_replay': False}
 
 
 def own_drive(candidates, metadata_of, analyze, driving=lambda: False, defer=True, app_version='', traces=None):
@@ -200,23 +248,33 @@ def own_drive(candidates, metadata_of, analyze, driving=lambda: False, defer=Tru
     heavy, so with ``defer`` it waits (Deferred) while the driver is on track.
     """
     def provider(run):
-        paths = recordings_for(run, candidates(), metadata_of)
+        selection = {}
+        paths = recordings_for(run, candidates(), metadata_of, selection)
         if not paths:
-            return Extra('drive_summary', info={'reason': 'no_recording'})
+            detail = ('no_candidates' if not selection.get('candidates') else
+                      'unreadable_window' if selection.get('unreadable_window') == selection['candidates'] else
+                      'outside_run' if selection.get('outside_run') == selection['candidates'] else 'no_matching_recording')
+            return Extra('drive_summary', info={'reason': 'no_recording', 'reason_detail': detail, 'selection': selection})
         if defer and driving():
             raise Deferred('driver on track')
         recordings, sources, laps, started = [], [], 0, time.time()
         for path in paths:
             if defer and driving():
                 raise Deferred('driver on track')
-            stamp = (path.stat().st_size, path.stat().st_mtime_ns)
+            stamp = _stamp(path)
+            window = recording_window(path)
             result, metadata, handling = analyze(path)
+            ref = recording_ref(path, stamp, driving if defer else lambda: False)
+            if ref is None or window is None:
+                selection['changed_during_export'] = selection.get('changed_during_export', 0) + 1
+                continue
             summary = drive_summary.compact(result, metadata, handling)
+            summary.update(source_ref=ref, source_coverage=_coverage(run, window))
             recordings.append(scrub(summary))
             sources.append((path, recordings[-1], stamp))
             laps += len(summary['laps'])
         if not recordings:
-            return Extra('drive_summary', info={'reason': 'no_recording'})
+            return Extra('drive_summary', info={'reason': 'recording_changed', 'selection': selection})
         data = drive_summary.pack(recordings, app_version)
         def supplement():
             import handling_traces
@@ -224,12 +282,15 @@ def own_drive(candidates, metadata_of, analyze, driving=lambda: False, defer=Tru
             for recording_index, (path, summary, stamp) in enumerate(sources):
                 if defer and driving():
                     raise Deferred('driver on track')
-                if (path.stat().st_size, path.stat().st_mtime_ns) != stamp:
+                if _stamp(path) != stamp:
                     continue
                 for document in traces(path, summary, run['run_id']):
                     if defer and driving():
                         raise Deferred('driver on track')
-                    document = scrub({**document, 'recording_index': recording_index})
+                    if _stamp(path) != stamp:
+                        break
+                    document = scrub({**document, 'recording_index': recording_index,
+                                      'source_ref': summary['source_ref'], 'source_coverage': summary['source_coverage']})
                     yield Extra('handling_traces',
                                 {f'handling-traces/{ordinal:03}.json.xz': handling_traces.pack(document)},
                                 {'passes': len(document['passes']),
@@ -237,6 +298,7 @@ def own_drive(candidates, metadata_of, analyze, driving=lambda: False, defer=Tru
                     ordinal += 1
 
         return Extra('drive_summary', {'drive_summary.json.xz': data},
-                     {'recordings': len(recordings), 'laps': laps, 'seconds_to_make': round(time.time() - started, 1)},
+                     {'recordings': len(recordings), 'laps': laps, 'seconds_to_make': round(time.time() - started, 1),
+                      'selection': selection},
                      supplement=supplement if traces is not None else None)
     return provider

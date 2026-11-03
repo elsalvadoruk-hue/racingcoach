@@ -100,8 +100,17 @@
 
 <p>Windows x64에서 사용합니다. 처음 설치용 ZIP에는 Python과 화면 빌드가 포함돼 있어 Python·Node.js·PATH를 따로 설정할 필요가 없습니다.</p>
 
+<p><a href="https://github.com/elsalvadoruk-hue/racingcoach/releases/download/v2.4.5/racingcoach-setup-2.4.5.zip"><strong>처음 설치용 ZIP 바로 받기 (2.4.5)</strong></a></p>
+
+<table>
+<tr><th>다운로드 파일</th><th>용도</th></tr>
+<tr><td><strong>racingcoach-setup-*.zip</strong></td><td><strong>처음 설치할 때 선택합니다.</strong> Python과 완성된 화면이 들어 있습니다.</td></tr>
+<tr><td>racingcoach-app-*.zip</td><td>기존 설치본의 앱 업데이트용입니다. 완성된 화면은 있지만 Python은 없습니다. 기존 사용자는 앱 안의 업데이트 기능을 사용하세요.</td></tr>
+<tr><td>Source code (zip / tar.gz)</td><td>개발용 소스입니다. Python과 완성된 화면이 없어 Python·Node.js가 필요합니다.</td></tr>
+</table>
+
 <ol>
-<li><a href="https://github.com/elsalvadoruk-hue/racingcoach/releases/latest"><strong>최신 Releases</strong></a>에서 <code>racingcoach-setup-*.zip</code>을 받아 압축을 풉니다.</li>
+<li>위의 <strong>처음 설치용 ZIP 바로 받기</strong>로 받아 <strong>새 폴더에 압축을 모두 풉니다.</strong> 다른 버전은 <a href="https://github.com/elsalvadoruk-hue/racingcoach/releases/latest">최신 Releases</a>의 <code>racingcoach-setup-*.zip</code>을 선택합니다.</li>
 <li><code>설치.bat</code>을 한 번 실행한 뒤 <code>실행.bat</code>으로 앱을 켭니다. 최초 설치에는 인터넷이 필요합니다.</li>
 <li>업데이트 창의 <strong>빠진 음성 받기</strong>로 고정 안내 음성을 받습니다. 첫 다운로드는 약 0.66GB입니다.</li>
 <li><strong>설정 → 설치 설정</strong>에서 게임의 주행 기록 폴더를 지정합니다. Google Cloud·Garage61은 사용할 기능에 맞춰 연결합니다.</li>

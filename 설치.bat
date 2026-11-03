@@ -18,6 +18,10 @@ if defined COACH_PY_NEW (
   echo This Python is newer than the tested 3.12 and 3.13. Trying it anyway.
 )
 
+echo Checking installation files...
+call %COACH_PYTHON% "scripts\install_ui.py" --check
+if errorlevel 1 goto ui_install_failed
+
 rem PyYAML works without its optional C part; this skips compiling it when no ready-made wheel exists
 rem for this Python, so no C++ compiler is needed. A ready-made wheel, when there is one, is still used.
 set "PYYAML_FORCE_LIBYAML=0"
@@ -27,7 +31,7 @@ rem "call" lets this file continue when python is itself a .bat or .cmd (pyenv-w
 call %COACH_PYTHON% -m pip install --prefer-binary -r "iRacing_Backend\requirements_core.txt" -r "iRacing_Backend\requirements_voice.txt"
 if errorlevel 1 goto install_failed
 echo.
-echo Preparing the screen from the GitHub source...
+echo Preparing the screen...
 call %COACH_PYTHON% "scripts\install_ui.py"
 if errorlevel 1 goto ui_install_failed
 echo.
@@ -61,7 +65,8 @@ exit /b 1
 :no_python
 echo.
 echo Python 3.10 or later was not found.
-echo Download racingcoach-setup-2.0.3.zip from the latest GitHub Releases page.
+echo For a first installation, download racingcoach-setup-*.zip from:
+echo https://github.com/elsalvadoruk-hue/racingcoach/releases/latest
 echo It includes Python and the screen. Extract it and run its installer.
 echo For a source installation instead:
 echo Install Python 3.12 and run this again.

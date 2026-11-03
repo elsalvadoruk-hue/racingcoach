@@ -6,6 +6,7 @@ import { eventSound, playBeep } from './drillBeeps';
 import useVoiceLibrary, { cleanVoiceSettings, voiceSelections } from './lib/voiceLibrary';
 import { readAlerts, voiceEventAllowed } from './lib/voiceAlerts';
 import { banterObservation } from './banterObservation';
+import { createRadioAttempt, radioDiagnostic } from './lib/radioDiagnostics';
 
 const SETTINGS_KEY = 'iracing.spotter.settings';
 export const RADIO_RENDER_TIMEOUT_MS = 8000;
@@ -77,16 +78,17 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const state = useRef({ active: false }), lastFrame = useRef(0), release = useRef(null);
   const standby = Boolean(audioOutput.standby);
   const output = useRef(null);
-  output.current = { play, muted, volume, busy, specialists, audioBusy, canStartLap: audioOutput.canStartLap, level, wallAlerts, recordDelivery, standby };
+  output.current = { play, muted, volume, busy, specialists, audioBusy, canStartLap: audioOutput.canStartLap, level, wallAlerts, recordDelivery, standby, activeGame };
   const alertRevision = useRef(0);
   const rendered = useRef(new Map()), lastView = useRef(0);
-  const logEvent = useCallback((event, status, reason = '', droppedParts) => {
+  const logEvent = useCallback((event, status, reason = '', droppedParts, playback) => {
     const radio = state.current.radio || {};
     const omitted = droppedParts ?? rendered.current.get(event.id)?.droppedParts;
     output.current.recordDelivery?.({ event_id: event.id, run_id: event.run_id || '', key: event.key,
       backend_version: event.backend_version || null,
       engineer: event.engineer || 'spotter', text: event.spoken_text || event.text || '', session_time: radio.session_time,
       lap_number: radio.lap_number, distance_pct: radio.distance_pct,
+      ...(playback ? { playback } : {}),
       ...(Number.isInteger(omitted) && omitted >= 0 ? { dropped_parts: omitted } : {}) }, status, reason);
   }, []);
   const radioQueue = useRef(new Map()), heard = useRef(new Set()), rendering = useRef(null), processing = useRef(new Set()), lastCall = useRef(0), resumed = useRef(new Map());
@@ -96,10 +98,14 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const cancelRender = useCallback(reason => {
     rendering.current?.cancel(reason);
     if (!['condition_or_session_changed', 'session_changed'].includes(reason)) {
-      for (const pending of pendingPlayback.current.values()) { pending.cancelled = true; pending.controller.abort(); }
-      pendingPlayback.current.clear();
+      for (const pending of pendingPlayback.current.values()) {
+        if (pending.cancelled) continue;
+        pending.cancelled = true; pending.controller.abort();
+        logEvent(pending.event, 'cancelled', reason, undefined, pending.playback);
+        pending.logged = true;
+      }
     }
-  }, []);
+  }, [logEvent]);
   const previousWallAlerts = useRef(wallAlerts);
   useEffect(() => {
     const wallChanged = previousWallAlerts.current !== wallAlerts;
@@ -129,7 +135,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     cancelRender('spotter_disabled');
     state.current = { active: false };
     overlapPending.current = null;
-    for (const event of radioQueue.current.values()) if (!output.current.standby && !heard.current.has(event.id)) logEvent(event, 'cancelled', 'spotter_disabled');
+    for (const event of radioQueue.current.values()) if (!output.current.standby && !heard.current.has(event.id)
+      && !pendingPlayback.current.get(event.id)?.logged) logEvent(event, 'cancelled', 'spotter_disabled');
     radioQueue.current.clear(); heard.current.clear(); rendered.current.clear(); playbackFailures.current.clear();
     clearTimeout(release.current);
     cancelPriority?.();
@@ -241,13 +248,17 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const settings = output.current;
     const event = { id: `${state.current.run_id || 'local'}:overlap:${Date.now()}:${key}`, run_id: state.current.run_id,
       backend_version: state.current.backend_version, key, text: selected?.text };
-    const status = (value, reason) => { logEvent(event, value, reason); onStatus?.(value, reason); };
+    const diagnostics = createRadioAttempt(output.current.activeGame, epoch.current);
+    const status = (value, reason, playback) => {
+      logEvent(event, value, reason, undefined, playback || radioDiagnostic(diagnostics, 'preparation'));
+      onStatus?.(value, reason);
+    };
     if (audio && !settings.muted && settings.volume > 0) {
       // Connection status is informational: skip it if any sentence is playing.
       // No delayed notice survives a reconnect; overlap warnings retain priority 3.
       try { return await settings.play(audio, 'audio/mpeg', { priority: key === 'unavailable' ? 1 : 3,
         interrupt: key !== 'unavailable', whilePlaying: key === 'unavailable' ? valid : undefined,
-        channel: 'spotter', valid, onStatus: status }); }
+        channel: 'spotter', valid, onStatus: status, diagnostics }); }
       catch { status('failed', 'playback_error'); return false; }
     }
     status(audio ? 'muted' : 'failed', audio ? 'volume_or_mute' : 'missing_clip');
@@ -317,6 +328,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       && (event.priority >= 2 || !output.current.busy)
       && radioQueue.current.has(event.id) && Date.now() < event.local_expires && Date.now() - lastFrame.current < 600;
     processing.current.add(event.id);
+    const diagnostics = createRadioAttempt(settings.activeGame, ticket);
+    const preparation = () => radioDiagnostic(diagnostics, 'preparation', false, { ended_at: Date.now() / 1000 });
     let flight, pending;
     try {
       let audio, droppedParts, mime = 'audio/mpeg', text = event.text;
@@ -345,7 +358,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         finally { clearTimeout(timer); }
         if (renderedResponse.cancelled) {
           if (renderedResponse.cancelled === 'timeout' && valid()) {
-            logEvent(event, 'failed', 'audio_preparation_timeout'); heard.current.add(event.id);
+            logEvent(event, 'failed', 'audio_preparation_timeout', undefined, preparation()); heard.current.add(event.id);
             setError('음성 준비 응답이 지연되어 이번 안내를 건너뛰었습니다. 다음 안내는 다시 시도합니다.');
           }
           return;
@@ -354,7 +367,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         const { response, result } = renderedResponse;
         if (!response.ok) throw new Error(result.detail || '경기 안내 음성 준비 실패');
         if (result.missing_prepared_audio) {
-          logEvent(event, 'cancelled', 'missing_prepared_audio'); heard.current.add(event.id); return;
+          logEvent(event, 'cancelled', 'missing_prepared_audio', undefined, preparation()); heard.current.add(event.id); return;
         }
         if (result.busy || !result.event) return;
         // Only retained whole sentences count toward the multipart playback rate.
@@ -368,9 +381,10 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       if (!silent && !audio) return;
       const acknowledge = () => fetch(`${apiBase}/api/live-coach/spotter/radio/${encodeURIComponent(event.id)}/ack`, { method: 'POST' }).catch(() => {});
       let began = false;
-      pending = { controller: new AbortController(), cancelled: false };
+      pending = { controller: new AbortController(), cancelled: false, event };
       pendingPlayback.current.set(event.id, pending);
       const started = silent || await output.current.play(audio, mime, {
+        diagnostics,
         signal: pending.controller.signal,
         pitBoxDistance: /^pit_box_\d+$/.test(event.key) ? Number(event.key.slice(8)) : undefined,
         channel: event.engineer === 'spotter' ? 'spotter' : 'pitwall',
@@ -383,9 +397,10 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
           && Date.now() - lastFrame.current < 600 : undefined,
         // Expiry alone never cuts a started sentence. A newer pit distance can
         // replace the older distance; other calls retain their existing priorities.
-        onStatus: (status, reason) => {
-          if (pending.cancelled) return; // The queue owner records this cancellation once.
-          logEvent(event, status, reason, droppedParts);
+        onStatus: (status, reason, playback) => {
+          // The queue owner emits one terminal row, carrying the actual attempt evidence.
+          if (pending.cancelled) { pending.playback = playback; return; }
+          logEvent(event, status, reason, droppedParts, playback);
           if (status === 'started') {
             began = true; pendingPlayback.current.delete(event.id); playbackFailures.current.delete(event.id);
             heard.current.add(event.id);
@@ -428,7 +443,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       if (silent) acknowledge();
     } catch (failure) {
       if (valid()) {
-        logEvent(event, 'failed', 'audio_preparation');
+        logEvent(event, 'failed', 'audio_preparation', undefined, preparation());
         setError(failure.message); heard.current.add(event.id);
         setView((v) => ({ ...v, last_text: event.text, last_spoken_text: null, last_engineer: event.engineer }));
       }
@@ -449,7 +464,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       const wasActive = state.current.active || state.current.radio?.connected;
       state.current = { active: false };
       overlapPending.current = null;
-      for (const event of radioQueue.current.values()) if (!output.current.standby && !heard.current.has(event.id)) logEvent(event, 'cancelled', 'connection_lost');
+      for (const event of radioQueue.current.values()) if (!output.current.standby && !heard.current.has(event.id)
+        && !pendingPlayback.current.get(event.id)?.logged) logEvent(event, 'cancelled', 'connection_lost');
       radioQueue.current.clear(); rendered.current.clear();
       // Side-by-side calls stop with the data; a sentence already being spoken (the race result
       // as the driver leaves the car) is allowed to finish.
@@ -526,7 +542,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
             const pending = pendingPlayback.current.get(event.id);
             if (pending) { pending.cancelled = true; pending.controller.abort(); pendingPlayback.current.delete(event.id); }
             const expired = now >= event.local_expires;
-            logEvent(event, expired ? 'expired' : 'cancelled', expired ? 'no_playback_window' : 'condition_or_session_changed');
+            if (!pending?.logged) logEvent(event, expired ? 'expired' : 'cancelled',
+              expired ? 'no_playback_window' : 'condition_or_session_changed', undefined, pending?.playback);
           }
         }
         radioQueue.current = nextQueue;

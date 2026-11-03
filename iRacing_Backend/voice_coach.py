@@ -47,6 +47,30 @@ DEFAULT_TTS_VOICE = 'ko-KR-Chirp3-HD-Algenib'
 NO_THINKING_MODELS = ('gemini-2.5-flash', 'gemini-3.5-flash')
 
 
+class RadioPlaybackDiagnostics(BaseModel):
+    """Ephemeral browser attempts only; never device identifiers or account data."""
+    model_config = {'extra': 'forbid'}
+    attempt_id: str = Field(min_length=1, max_length=100, pattern=r'^[A-Za-z0-9:._-]+$')
+    owner_generation: str = Field(min_length=1, max_length=100, pattern=r'^[A-Za-z0-9:._-]+$')
+    game: Literal['iracing', 'lmu']
+    created_at: float = Field(ge=0, le=4102444800, allow_inf_nan=False)
+    stage: Literal['preparation', 'routing', 'metadata', 'effect', 'play', 'playing']
+    started: bool = Field(default=False, strict=True)
+    elapsed_ms: float = Field(ge=0, le=604800000, allow_inf_nan=False)
+    stage_elapsed_ms: float | None = Field(default=None, ge=0, le=604800000, allow_inf_nan=False)
+    part_index: int = Field(default=0, ge=0, le=1024, strict=True)
+    output_route: Literal['unsupported', 'selected', 'fallback', 'default'] | None = None
+    media_time_s: float | None = Field(default=None, ge=0, le=604800, allow_inf_nan=False)
+    duration_s: float | None = Field(default=None, ge=0, le=604800, allow_inf_nan=False)
+    routing_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
+    metadata_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
+    effect_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
+    play_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
+    playing_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
+    started_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
+    ended_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
+
+
 class RadioDeliveryEvent(BaseModel):
     event_id: str = Field(min_length=1, max_length=160)
     run_id: str = Field(default='', max_length=80)
@@ -60,6 +84,8 @@ class RadioDeliveryEvent(BaseModel):
     distance_pct: float | None = Field(default=None, ge=0, le=1, allow_inf_nan=False)
     at: float | None = Field(default=None, allow_inf_nan=False)
     dropped_parts: int = Field(default=0, ge=0, strict=True)
+    diagnostics_dropped: int = Field(default=0, ge=0, strict=True)
+    playback: RadioPlaybackDiagnostics | None = None
     frontend_version: str | None = Field(default=None, max_length=64, pattern=r'^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')
     backend_version: str | None = Field(default=None, max_length=64, pattern=r'^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')
 

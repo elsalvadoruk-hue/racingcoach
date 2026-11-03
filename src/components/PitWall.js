@@ -14,6 +14,7 @@ import { useGame } from '../lib/gameContext';
 import { readAlerts } from '../lib/voiceAlerts';
 import VoiceAlertSettings from './VoiceAlertSettings';
 import RoleVoiceSelect from './RoleVoiceSelect';
+import FuelStrategy from './FuelStrategy';
 
 export const ENGINEERS = {
   coach: { label: '주행 코치', voice: 'Algenib', style: 'border-primary/30 bg-primary/10 text-primary', description: '코너 느낌과 다음 주행 행동' },
@@ -69,6 +70,7 @@ export default function PitWall({ enabled, onToggle, preferences, onChange, view
     <details className="voice-basic-settings"><summary>연료·발화 설정</summary>
     <PitWallSettings preferences={preferences} onChange={onChange} view={view} provider={provider} capabilities={capabilities} />
     </details>
+    <FuelStrategy view={view} />
     <Separator className="my-6" />
     <h3 className="text-sm font-medium">엔지니어 목소리</h3>
     <div className="coach-role-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))' }}>{Object.entries(ENGINEERS).map(([key, role]) => <Card key={key} className="min-w-0 bg-muted/40 shadow-none"><CardHeader className="p-4 pb-3"><CardTitle className="text-sm">{role.label}</CardTitle><CardDescription>{roleDescription(key)}</CardDescription></CardHeader><CardContent className="p-4 pt-0">

@@ -152,7 +152,7 @@ class RaceHistory:
             return False
         entry = {name: finite(result.get(name)) for name in ('class_position', 'class_cars', 'best_lap_s', 'track_temp_c')}
         entry.update({key: result.get(key) for key in ('id', 'game', 'start_position', 'start_source', 'status', 'provisional',
-                                                      'overall_start', 'overall_finish', 'qualifying', 'valid_laps') if key in result})
+                                                      'overall_start', 'overall_finish', 'qualifying', 'valid_laps', 'position_source') if key in result})
         entry['at'] = finite(result.get('at')) or time.time()
         with self.lock:
             races = self._load()['races'].setdefault(key, [])
@@ -217,7 +217,8 @@ def history_facts(race, analysed, track_temp_c, races=0, known=True):
         'hist_first': known and visits == 0,
         'hist_nth': visits + 1 if 1 <= visits < FAMILIAR_FROM - 1 else None, 'hist_familiar': visits >= FAMILIAR_FROM - 1,
         'hist_known': bool(lap and 20 < lap < 1800), 'hist_lap': lap if lap and 20 < lap < 1800 else None,
-        'hist_pos': place if place and place > 0 and newer is race else None,
+        'hist_pos': place if place and place > 0 and newer is race and race.get('provisional') is not True
+                           and race.get('status') not in ('DNF', 'DSQ') else None,
         'hist_temp_lower': -difference if difference is not None and difference <= -2 else None,
         'hist_temp_higher': difference if difference is not None and difference >= 2 else None,
         'hist_temp_same': difference is not None and abs(difference) < 2,

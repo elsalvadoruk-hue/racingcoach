@@ -74,6 +74,7 @@ test('GLOG-003 queue removal stops pending playback with one terminal delivery',
   await act(async () => { jest.advanceTimersByTime(5500); });
   const terminal = delivery.mock.calls.filter(([event, s]) => event.key === item.key && ['cancelled', 'failed'].includes(s));
   expect(terminal.map(([, s]) => s)).toEqual(['cancelled']);
+  expect(terminal[0][0].playback).toMatchObject({ started: false, stage: 'play' });
   expect(view.result.current.audio.audioBusy()).toBe(false);
   view.unmount();
 });

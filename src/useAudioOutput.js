@@ -4,6 +4,7 @@ import { useGame, useGameSettings } from './lib/gameContext';
 import { readGameItem, writeGameItem } from './lib/gameStorage';
 import * as radioEffect from './radioEffect';
 import { DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX } from './voiceAudio';
+import { radioDiagnostic } from './lib/radioDiagnostics';
 
 const STORAGE_KEY = 'iracing.voice.outputDevice';
 // Chrome on Windows also lists "communications", the output Windows keeps for calls. Playing there counts as a
@@ -100,7 +101,7 @@ export default function useAudioOutput() {
     if (typeof reason !== 'string') reason = 'driver_or_radio_pause';
     const current = player.current;
     player.current = null;
-    if (current) { current.pause(); current._finish?.('interrupted', reason); disposePlayer(current); }
+    if (current) { current.pause(); current._stop?.(reason); disposePlayer(current); }
     if (mounted.current && !player.current) setIsPlaying(false);
   }, []);
   // The driver's own stop (a new question, the stop button) ends routine speech and his answer,
@@ -258,7 +259,7 @@ export default function useAudioOutput() {
     saveOutput(id); setMessage('');
     if (selectedGame === activeGame) { stop('output_changed'); radioEffect.warm(effectSettings.current, id); }
   }, [stop, saveOutput, selectedGame, activeGame]);
-  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall', startDeadline, signal, pitBoxDistance, routineReport = false } = {}) => {
+  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, diagnostics, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall', startDeadline, signal, pitBoxDistance, routineReport = false } = {}) => {
     // Multipart calls use their own absolute rate, never a multiplier of the role's rate.
     // Capture it once so every sentence keeps the same speed until this call ends.
     const multipart = Array.isArray(encoded) && encoded.length > 1;
@@ -277,21 +278,43 @@ export default function useAudioOutput() {
     current._pitBoxDistance = pitBoxDistance;
     current._routineReport = priority === 0 && routineReport;
     let terminal = false, monitor, metadataReady, deadlineTimer, settle;
+    let stage = 'routing', stageAt = Date.now(), began = false, startedLogged = false, partIndex = 0;
+    let partStarted = false, lastProgress = Date.now(), lastPosition = 0;
+    const times = { routing_at: stageAt / 1000 };
+    let activePart = current;
+    const setStage = value => {
+      if (stage !== value) { stage = value; stageAt = Date.now(); }
+      times[`${value}_at`] ??= stageAt / 1000;
+    };
+    const reportStatus = (value, reason = '') => {
+      if (!diagnostics) { onStatus?.(value, reason); return; }
+      const part = activePart;
+      onStatus?.(value, reason, radioDiagnostic(diagnostics, stage, began, {
+        stage_elapsed_ms: Math.max(0, Date.now() - stageAt), part_index: partIndex,
+        output_route: !supported ? 'unsupported' : sinkId ? 'selected' : unavailableOutput.current ? 'fallback' : 'default',
+        media_time_s: Number.isFinite(part.currentTime) ? part.currentTime : null,
+        duration_s: Number.isFinite(part.duration) ? part.duration : null,
+        ...times,
+        ...(['completed', 'cancelled', 'failed', 'interrupted'].includes(value) ? { ended_at: Date.now() / 1000 } : {}),
+      }));
+    };
     const finished = new Promise(resolve => { settle = resolve; });
     const wait = operation => Promise.race([operation, finished]);
-    const finish = (status, reason = '') => {
+    const finish = (value, reason = '') => {
       if (terminal) return;
       terminal = true;
       clearInterval(monitor); clearTimeout(deadlineTimer); signal?.removeEventListener('abort', abortPending); metadataReady?.(); settle();
-      onStatus?.(status, reason);
+      // Diagnostics are captured before stop releases the current media element.
+      reportStatus(value, reason);
     };
     current._finish = finish;
+    current._stop = reason => finish(began ? 'interrupted' : 'cancelled', reason);
     player.current = current;
     setIsPlaying(true);
     // Keep every sentence and its Web Audio effect on the same actual output for this call.
     // Try the saved device again on each new call, even if devicechange was missed.
     let sinkId = selected.current;
-    let stage = 'routing', began = false, startedLogged = false, partStarted = false, lastProgress = Date.now(), lastPosition = 0;
+    setStage('routing');
     const active = (part) => mounted.current && !terminal && player.current === part;
     const cancelPending = (reason = 'condition_changed') => {
       if (began || !active(current)) return;
@@ -312,7 +335,7 @@ export default function useAudioOutput() {
       lastProgress = Date.now(); lastPosition = Number(part.currentTime) || 0;
     };
     const reportStarted = () => {
-      if (!startedLogged && active(current)) { startedLogged = true; onStatus?.('started', ''); }
+      if (!startedLogged && active(current)) { startedLogged = true; times.started_at = Date.now() / 1000; reportStatus('started'); }
     };
     // Every awaited browser operation is also settled by stop/expiry. No single media
     // element, output route or missing ended event may occupy the radio indefinitely.
@@ -346,7 +369,7 @@ export default function useAudioOutput() {
     const route = async (part) => {
       if (!supported) return active(part);
       try {
-        stage = 'routing';
+        setStage('routing');
         await wait(part.setSinkId(sinkId));
         if (active(part) && sinkId && unavailableOutput.current === sinkId) unavailableOutput.current = '';
       } catch (failure) {
@@ -370,23 +393,23 @@ export default function useAudioOutput() {
         if (!rest.length) { finish('completed'); stop(); return; }
         part.pause(); disposePlayer(part);
         const next = new Audio(clipSource(rest.shift(), mime));
-        next._priority = priority; next._finish = finish;
+        next._priority = priority; next._finish = finish; next._stop = current._stop;
         next._pitBoxDistance = pitBoxDistance; next._routineReport = current._routineReport;
-        partStarted = false; lastProgress = Date.now(); lastPosition = 0;
+        partIndex += 1; partStarted = false; lastProgress = Date.now(); lastPosition = 0;
         next.playbackRate = speed; next.preservesPitch = true;
         next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;
         chain(next);
-        player.current = next;
+        activePart = next; player.current = next;
         const start = async () => {
           try {
             if (!await route(next)) return;
-            stage = 'effect'; await wait(radioEffect.warm(effectSettings.current, sinkId));
+            setStage('effect'); await wait(radioEffect.warm(effectSettings.current, sinkId));
             if (!active(next)) return;
             next._effect = radioEffect.attach(next, effectSettings.current, { sinkId, ...playbackSettings.current });
             next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;
             next._effect?.start(false);
-            stage = 'play'; await wait(next.play());
-            if (active(next)) { stage = 'playing'; progress(next); }
+            setStage('play'); await wait(next.play());
+            if (active(next)) { setStage('playing'); progress(next); }
           } catch {
             if (active(next)) { finish('failed', 'playback_error'); stop(); }
           }
@@ -408,6 +431,7 @@ export default function useAudioOutput() {
       part.onplaying = () => {
         if (!active(part) || (part === current && !mayStart())) return;
         part._heard = true;
+        setStage('playing');
         progress(part);
         if (part === current) reportStarted();
         if (PART_OVERLAP_S > 0 && rest.length && Number.isFinite(part.duration)) setTimeout(() => follow(part),
@@ -424,6 +448,7 @@ export default function useAudioOutput() {
       if (!valid() || (priority < 3 && priorityGate.current)) { stop(); return false; }
       if (windowSeconds?.() != null) {
         if (!Number.isFinite(current.duration)) {
+          setStage('metadata');
           await new Promise((resolve) => {
             const timer = setTimeout(resolve, 1500);
             metadataReady = () => { clearTimeout(timer); resolve(); };
@@ -439,7 +464,7 @@ export default function useAudioOutput() {
       }
       if (workloadValid && !workloadValid()) { current._finish('cancelled', 'driving_workload'); stop(); return false; }
       // Routed through the radio effect only when that is certain to be heard on the chosen device.
-      stage = 'effect'; await wait(radioEffect.warm(effectSettings.current, sinkId));
+      setStage('effect'); await wait(radioEffect.warm(effectSettings.current, sinkId));
       if (!mounted.current || player.current !== current || terminal) return false;
       if (!valid() || (priority < 3 && priorityGate.current) || (workloadValid && !workloadValid())) { stop(); return false; }
       current._effect = radioEffect.attach(current, effectSettings.current, { sinkId, ...playbackSettings.current });
@@ -447,9 +472,9 @@ export default function useAudioOutput() {
       if (playbackSettings.current.volume > 1 && !current._effect?.boosted) setMessage('이 브라우저 또는 출력장치에서는 증폭을 사용할 수 없어 100%로 재생합니다. 최신 Chrome 또는 Edge와 출력장치 설정을 확인하세요.');
       current._effect?.start(true);
       if (Number.isFinite(startDeadline) && Date.now() >= startDeadline) { finish('cancelled', 'start_deadline'); stop(); return false; }
-      stage = 'play'; await wait(current.play());
+      setStage('play'); await wait(current.play());
       if (!mayStart()) return false;
-      stage = 'playing'; progress(current);
+      setStage('playing'); progress(current);
       reportStarted();
       // Braking or steering never cuts a call that has started: a half sentence distracts more
       // than a whole one. Only a call whose situation is over (whilePlaying) is stopped.
