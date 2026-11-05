@@ -33,6 +33,14 @@ class GitAuditTests(unittest.TestCase):
         self.assertIn('Google API key', result)
         self.assertNotIn(value.decode(), json.dumps(result))
 
+    def test_public_manual_url_allows_only_the_known_address(self):
+        public = b'https://' + audit_git.PUBLIC_REPOSITORY.split(b'/')[0] + b'.github.io/racingcoach/'
+        self.assertEqual(audit_git.findings('README.md', public, [b'Salvador']), [])
+        self.assertEqual(audit_git.findings('README.md', public + b'Salvador/private', [b'Salvador']), ['local private identifier'])
+        self.assertEqual(audit_git.findings('README.md', public.replace(b'/racingcoach/', b'/other/'), [b'Salvador']), ['local private identifier'])
+        self.assertEqual(audit_git.findings('README.md', public + b' C:/Temp/Salvador/notes', [b'Salvador']), ['local private identifier'])
+        self.assertIn('Google API key', audit_git.findings('README.md', public + b'?key=' + ('AIza' + 'A' * 35).encode()))
+
     def test_inline_raster_data_is_not_mistaken_for_a_token_but_metadata_is_checked(self):
         raster = base64.b64encode(b'ExamplePrivateUser')
         content = b'<image href="data:image/png;base64,'+raster+b'"/>'

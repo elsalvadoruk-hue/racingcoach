@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>HTML 매뉴얼 다운로드 · iRacing 주행 코치</title>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f3f6f6;color:#142632;font:16px/1.8 "Segoe UI","Malgun Gothic",sans-serif;word-break:keep-all}main{max-width:620px;margin:10vh auto;padding:36px;background:#fff;border:1px solid #dce5e8;border-radius:16px}h1{font-size:26px;margin:0 0 18px}p{color:#506571}button{font:inherit;background:#08776a;color:white;padding:10px 18px;border:0;border-radius:8px;cursor:pointer}button:disabled{opacity:.6;cursor:wait}a{color:#08776a;text-underline-offset:4px}button:focus-visible,a:focus-visible{outline:3px solid #08776a;outline-offset:4px}@media(max-width:660px){main{margin:24px 14px;padding:26px 22px}}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>HTML 매뉴얼 다운로드</h1>
+    <p id="status" role="status" aria-live="polite">그림이 포함된 매뉴얼 파일을 준비하고 있습니다.</p>
+    <p>저장한 HTML 파일을 브라우저로 열면 인터넷 없이 읽을 수 있습니다. 다운로드가 시작되지 않으면 아래 버튼을 눌러 주세요.</p>
+    <button id="download" type="button">HTML 다운로드</button>
+    <p><a href="./">웹에서 매뉴얼 읽기 →</a></p>
+    <noscript><p>자동 다운로드에는 JavaScript가 필요합니다. 웹 매뉴얼을 연 뒤 브라우저의 ‘페이지 저장’을 사용해 주세요.</p></noscript>
+  </main>
+  <script>
+    (()=>{
+      'use strict';
+      const button=document.querySelector('#download'),status=document.querySelector('#status');
+      let busy=false;
+      async function download(){
+        if(busy)return;
+        busy=true;button.disabled=true;
+        status.textContent='그림이 포함된 매뉴얼 파일을 준비하고 있습니다.';
+        try{
+          const response=await fetch(new URL('index.html',location.href),{cache:'no-store'});
+          if(!response.ok)throw Error('download');
+          const source=await response.text();
+          if(!source.includes('<title>iRacing 주행 코치 '))throw Error('document');
+          const version=source.match(/<title>iRacing 주행 코치 (\d+\.\d+\.\d+)/)?.[1];
+          const url=URL.createObjectURL(new Blob([source],{type:'text/html;charset=utf-8'}));
+          const link=document.createElement('a');
+          link.href=url;link.download='iRacing-주행코치'+(version?'-'+version:'')+'-매뉴얼.html';
+          document.body.append(link);link.click();link.remove();
+          setTimeout(()=>URL.revokeObjectURL(url),30000);
+          status.textContent='다운로드를 시작했습니다. 브라우저의 다운로드 목록에서 파일을 확인해 주세요.';
+        }catch{
+          status.textContent='파일을 받지 못했습니다. 연결을 확인하고 다시 누르거나 웹 매뉴얼을 열어 주세요.';
+        }finally{busy=false;button.disabled=false;}
+      }
+      button.addEventListener('click',download);
+      download();
+    })();
+  </script>
+</body>
+</html>

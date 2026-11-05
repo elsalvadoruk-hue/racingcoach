@@ -27,6 +27,11 @@
 !/scripts/
 !/releases/
 !/.githooks/
+!/.github/
+/.github/*
+!/.github/workflows/
+/.github/workflows/*
+!/.github/workflows/manual-pages.yml
 /iRacing_Backend/*
 !/iRacing_Backend/*.py
 !/iRacing_Backend/test_lmu_replay_ui.js

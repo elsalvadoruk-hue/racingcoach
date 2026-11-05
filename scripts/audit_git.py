@@ -34,6 +34,7 @@ TEXT_SUFFIXES = {'.py', '.js', '.jsx', '.ts', '.tsx', '.json', '.md', '.txt', '.
 
 
 PUBLIC_REPOSITORY = b'elsalvadoruk-hue/racingcoach'
+PUBLIC_MANUAL_URL = b'https://' + PUBLIC_REPOSITORY.split(b'/')[0] + b'.github.io/' + PUBLIC_REPOSITORY.split(b'/')[1] + b'/'
 
 
 def forbidden_path(name: str) -> bool:
@@ -49,8 +50,8 @@ def forbidden_path(name: str) -> bool:
 def findings(name: str, content: bytes, markers: list[bytes] = ()) -> list[str]:
     problems = ['forbidden path'] if forbidden_path(name) else []
     # Compare exact local identifiers in every format, including uncompressed binary metadata.
-    # The public repository slug is not private even when a Windows user name is part of it.
-    lower = content.lower().replace(PUBLIC_REPOSITORY, b'')
+    # Known public project addresses are not private even when the owner contains a Windows user name.
+    lower = content.lower().replace(PUBLIC_REPOSITORY, b'').replace(PUBLIC_MANUAL_URL, b'')
     if any(marker.lower() in lower for marker in markers if len(marker) >= 4):
         problems.append('local private identifier')
     if Path(name).suffix.lower() in TEXT_SUFFIXES or Path(name).name.startswith('.'):

@@ -1,0 +1,47 @@
+name: Publish user manual
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'manual/매뉴얼.html'
+      - 'manual/download.html'
+      - '.github/workflows/manual-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: Prepare standalone manual
+        shell: bash
+        run: |
+          mkdir -p _site
+          cp 'manual/매뉴얼.html' _site/index.html
+          cp manual/download.html _site/download.html
+          touch _site/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy manual
+        id: deployment
+        uses: actions/deploy-pages@v4
