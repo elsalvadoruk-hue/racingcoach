@@ -22,36 +22,8 @@ class VehicleDashLocator(BmwDashLocator):
         self.temperature_boxes={w:relative(b) for w,b in self.spec['temperature'].items()}
         self.anchor=relative(self.spec['anchor'])
         self.temperature_anchor=relative(self.spec['temperature_anchor']) if self.spec.get('temperature_anchor') else None
+        self.page_anchor=relative(self.spec['page_anchor']) if self.spec.get('page_anchor') else None
         self.previous_bounds=None
-
-    def locate(self,image):
-        started=time.perf_counter()
-        found=super().locate(image)
-        if self.car_path!='ferrari296gt3' or found['location']:
-            return found
-        # Low sunlight contrast removes SIFT features before OCR even runs.
-        # Recheck the original geometry and heading at the same thresholds.
-        gray=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
-        if int(gray.max())-int(gray.min())<8:
-            return found
-        for mode in ('exposure','local_contrast'):
-            prepared=(cv2.normalize(gray,None,0,255,cv2.NORM_MINMAX) if mode=='exposure'
-                else cv2.createCLAHE(clipLimit=3,tileGridSize=(8,8)).apply(gray))
-            # A frame already spanning 0..255 can normalize to the exact same
-            # pixels. Do not spend another full search on an identical scene.
-            if np.array_equal(prepared,gray):
-                continue
-            candidate=super().locate(cv2.cvtColor(prepared,cv2.COLOR_GRAY2BGR))
-            if candidate['location']:
-                location,reason=self._validate(image,np.asarray(candidate['location']['homography']))
-                if location:
-                    candidate.update(location=location,status=reason)
-                    candidate['metrics']['exposure_retry']=mode
-                    found=candidate
-                    break
-        if not found['location']:self.previous_bounds=None
-        found['elapsed_ms']=round((time.perf_counter()-started)*1000,3)
-        return found
 
     def _validate(self,image,H):
         height,width=image.shape[:2];rh,rw=self.gray.shape
@@ -70,6 +42,9 @@ class VehicleDashLocator(BmwDashLocator):
             return math.isfinite(score) and score>=threshold,score
         valid,score=match(self.anchor)
         if not valid:return None,'pressure_page_unverified'
+        # Mercedes pages share gear/ABS headings and dashboard geometry.
+        # Prove the tire page independently before using any numeric regions.
+        if self.page_anchor and not match(self.page_anchor,.70)[0]:return None,'pressure_page_unverified'
         def project(source):
             boxes={};quads={}
             for wheel,box in source.items():

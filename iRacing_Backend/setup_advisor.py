@@ -3,6 +3,7 @@
 Mechanical ARB trials use repeated mid-corner signs, never just top speed.
 Wing/pressure targets must have been driven with three matched clean laps;
 no universal hot pressure, opponent setup or unobserved optimal value is made up.
+Pressure trials can only suggest increases; legal lower limits are not observed.
 """
 from collections import deque
 from statistics import median
@@ -167,6 +168,9 @@ class SetupAdvisor:
                     candidates={dict(r['settings']).get(control) for r in self.trials}
                     for target in candidates:
                         if finite(target) is None or target==value:continue
+                        # Minimum cold pressures are common; no verified garage lower
+                        # limit is available. Never generate a pressure reduction.
+                        if control.startswith('pressure_') and target<value:continue
                         refs=[r for r in self.trials if r.get('installed') and dict(r['settings']).get(control)==target
                               and all(dict(r['settings']).get(k)==v for k,v in now_settings.items() if k!=control)
                               and all(matches(r['conditions'],c['conditions']) for c in current)]

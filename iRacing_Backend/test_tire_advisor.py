@@ -25,7 +25,7 @@ class AdvisorTests(unittest.TestCase):
         self.observe(replace(s,wheels={**s.wheels,'FL':replace(s.wheels['FL'],pressure_state='ok')}))
         event=self.advisor.current(2.)
         self.assertEqual(event['key'],'pressure_high_FR')
-        self.assertEqual(event['text'],'오른쪽 앞 타이어 압력 높음.')
+        self.assertEqual(event['text'],'오른쪽 앞 타이어 압력이 높습니다.')
         self.assertTrue(event['quiet'])
 
     def test_old_missing_disagreeing_or_recovered_samples_cancel_warning(self):

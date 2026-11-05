@@ -1,4 +1,5 @@
 """Portable v3 role packs; v1 WAV/v2 Opus compatible. Shared standard-library contract."""
+import binascii
 import hashlib
 import io
 import json
@@ -59,12 +60,17 @@ def wav_info(content):
     except (wave.Error, EOFError) as e: raise ValueError('WAV 파일을 읽을 수 없어.') from e
 
 
-def _crc_entry(value):
-    value <<= 24
-    for _ in range(8):value=((value<<1)^0x04c11db7 if value&0x80000000 else value<<1)&0xffffffff
-    return value
+_REVERSE_BITS = bytes(int(f'{value:08b}'[::-1], 2) for value in range(256))
 
-_CRC=tuple(_crc_entry(i) for i in range(256))
+def ogg_crc(content):
+    """Ogg's non-reflected CRC-32, computed with the native IEEE CRC routine.
+
+    Reverse each input byte's bits and the result's bits to use the reflected
+    polynomial. Undo binascii's initial/final XORs for Ogg's zero initial state.
+    Every page byte still participates in the checksum.
+    """
+    value = binascii.crc32(content.translate(_REVERSE_BITS), 0xffffffff) ^ 0xffffffff
+    return int.from_bytes(value.to_bytes(4, 'big').translate(_REVERSE_BITS), 'little')
 
 def opus_info(content):
     """Validate the Ogg pages, single mono Opus stream and exact granule duration.
@@ -82,9 +88,8 @@ def opus_info(content):
         if stream!=serial or header>len(content):raise ValueError('한 개의 Ogg Opus 음성 스트림만 사용할 수 있어.')
         sizes=content[offset+27:header];end=header+sum(sizes)
         if end>len(content):raise ValueError('Ogg 음성 데이터가 잘렸어.')
-        raw=bytearray(content[offset:end]);raw[22:26]=b'\0'*4;value=0
-        for byte in raw:value=((value<<8)&0xffffffff)^_CRC[((value>>24)^byte)&255]
-        if value!=checksum:raise ValueError('Ogg 페이지 검사가 실패했어.')
+        raw=bytearray(content[offset:end]);raw[22:26]=b'\0'*4
+        if ogg_crc(raw)!=checksum:raise ValueError('Ogg 페이지 검사가 실패했어.')
         cursor=header
         for size in sizes:
             pending.extend(content[cursor:cursor+size]);cursor+=size

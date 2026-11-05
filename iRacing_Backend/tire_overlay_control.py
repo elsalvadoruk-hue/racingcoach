@@ -22,11 +22,12 @@ ERRORS = {
 
 
 class TireOverlayController:
-    def __init__(self, path=None, *, popen=subprocess.Popen, game='iracing', audio=None, run_link=lambda snapshot:''):
+    def __init__(self, path=None, *, popen=subprocess.Popen, game='iracing', audio=None, run_link=lambda snapshot:'', driving_context=lambda snapshot:None):
         if game not in ('iracing', 'lmu'):
             raise ValueError('Unsupported tire game')
         self.game, self.audio = game, audio
         self.run_link = run_link
+        self.driving_context = driving_context
         self.path = Path(path) if path is not None else None
         self.popen = popen
         self.operation_lock = threading.RLock()
@@ -94,6 +95,7 @@ class TireOverlayController:
                     'targets': self._targets().get(self.current.get('car_path')),
                     'target_temperature_kind': next((v.temp_kind for v in self.snapshot.wheels.values() if v.temp_kind), None) if self.snapshot else None,
                     'history_error': bool(self.history and self.history.error),
+                    'coaching': dict(self.advisor.coaching.view),
                     'voice_event': self.advisor.current(time.monotonic()) if self.voice_enabled and running else None,
                     'fixed': self.fixed, **self.appearance, 'running': running, 'ready': self.ready and running,
                     **self.current, 'visible': self.enabled and running and self.current.get('visible') is True,
@@ -128,16 +130,19 @@ class TireOverlayController:
                                 self.snapshot = self._targets().apply(raw)
                             except (ValueError, KeyError, TypeError):
                                 pass
-                        self.advisor.observe(self.snapshot.to_dict() if self.snapshot else None, enabled=self.voice_enabled)
+                        context = self.driving_context(self.snapshot) if self.snapshot else None
+                        self.advisor.observe(self.snapshot.to_dict() if self.snapshot else None,
+                                             enabled=self.voice_enabled, context=context, analyze=self.enabled)
                         if self.snapshot is not None or previous is not None:
                             from tire_reader.history import TireHistoryWriter
                             from tire_reader.log_export import diagnostics
                             if self.history is None:
                                 self.history = TireHistoryWriter(self._path().with_name('tires-history.sqlite3'))
                             selected = self.snapshot or previous
-                            self.history.submit(self.snapshot,run_id=self.run_link(selected),
-                                diagnostics=diagnostics(message,self.snapshot,raw,self._targets().get(selected.car),
-                                    enabled=self.enabled,voice_enabled=self.voice_enabled))
+                            detail=diagnostics(message,self.snapshot,raw,self._targets().get(selected.car),
+                                    enabled=self.enabled,voice_enabled=self.voice_enabled)
+                            detail['coaching']=dict(self.advisor.coaching.view)
+                            self.history.submit(self.snapshot,run_id=self.run_link(selected),diagnostics=detail)
                         self.current = {key: message.get(key) for key in
                             ('visible', 'status', 'warmup_remaining_s', 'car_name', 'pressure',
                              'temperature', 'display_status', 'temperature_kind', 'car_path', 'measurement')}
@@ -345,8 +350,9 @@ class TireOverlayController:
 
 class TireOverlays:
     """Separate settings, windows and position maps for the two simulators."""
-    def __init__(self, *, audio=None, run_link=lambda snapshot:''):
-        self.controllers = {game: TireOverlayController(game=game, audio=audio,run_link=run_link) for game in ('iracing', 'lmu')}
+    def __init__(self, *, audio=None, run_link=lambda snapshot:'', driving_context=lambda snapshot:None):
+        self.controllers = {game: TireOverlayController(game=game, audio=audio,run_link=run_link,
+            driving_context=driving_context) for game in ('iracing', 'lmu')}
 
     def log_extra(self, run):
         from session_log import Extra

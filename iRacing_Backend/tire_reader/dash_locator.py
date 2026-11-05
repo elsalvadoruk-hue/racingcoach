@@ -169,7 +169,7 @@ class BmwDashLocator:
         return dict(boxes=boxes,quadrilaterals=projected,panel=quad.tolist(),
                     homography=H.tolist(),heading_score=score), 'located'
 
-    def locate(self, image):
+    def _locate(self, image):
         started = time.perf_counter()
         result = None
         reason = 'not_found'
@@ -207,3 +207,32 @@ class BmwDashLocator:
         return dict(status=reason, location=result, metrics=metrics,
                     elapsed_ms=round((time.perf_counter()-started)*1000,3),
                     reference_sha256=self.reference_sha256)
+
+    def locate(self, image):
+        started = time.perf_counter()
+        found = self._locate(image)
+        if found['location']:
+            return found
+        # Dim sunlight removes feature contrast on every supported LCD, not
+        # just Ferrari. Retry fresh pixels, then validate the original scene
+        # with the same geometry, heading and page gates.
+        gray = cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
+        if int(gray.max())-int(gray.min())<8:
+            return found
+        for mode in ('exposure','local_contrast'):
+            prepared = (cv2.normalize(gray,None,0,255,cv2.NORM_MINMAX) if mode=='exposure'
+                else cv2.createCLAHE(clipLimit=3,tileGridSize=(8,8)).apply(gray))
+            if np.array_equal(prepared,gray):
+                continue
+            candidate = self._locate(cv2.cvtColor(prepared,cv2.COLOR_GRAY2BGR))
+            if candidate['location']:
+                location,reason = self._validate(image,np.asarray(candidate['location']['homography']))
+                if location:
+                    candidate.update(location=location,status=reason)
+                    candidate['metrics']['exposure_retry']=mode
+                    found=candidate
+                    break
+        if not found['location']:
+            self.previous_bounds=None
+        found['elapsed_ms']=round((time.perf_counter()-started)*1000,3)
+        return found

@@ -10,13 +10,16 @@ const files = [
   { name: 'unknown.ibt', metadata_pending: true, valid_laps: null, car_name: 'Car', track_name: 'Track' },
 ];
 
-test('legacy file selection disables a known empty run but leaves unknown metadata selectable', () => {
+test('an empty run explains why it cannot be selected and preserves the previous choice', () => {
   const change = jest.fn();
   render(<FileSelect label="주행" value="good.ibt" files={files} onChange={change} />);
   fireEvent.click(screen.getByRole('button', { name: /good.ibt/ }));
-  expect(screen.getByRole('option', { name: /empty.ibt/ })).toBeDisabled();
   fireEvent.click(screen.getByRole('option', { name: /empty.ibt/ }));
   expect(change).not.toHaveBeenCalled();
+  expect(screen.getByRole('dialog', { name: '이 주행 결과는 선택할 수 없습니다' })).toHaveTextContent('유효 랩');
+  fireEvent.click(screen.getByRole('button', { name: '확인' }));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /good.ibt/ }));
   fireEvent.click(screen.getByRole('option', { name: /unknown.ibt/ }));
   expect(change).toHaveBeenCalledWith('unknown.ibt');
 });

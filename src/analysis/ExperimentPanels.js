@@ -10,6 +10,7 @@ import { ErrorMessage, MetricMini } from './WorkspaceUi';
 import { assignedModeForFile, comparisonContextLabel, cx, formatNumber, formatSigned, lapBadgeClass, sameVehicleAndTrack, sessionModeLabel } from './analysisShared';
 import { requestJson } from './analysisClient';
 import { isSelectableRecording } from '../lib/recordingFiles';
+import RecordingUnavailableDialog from '../components/RecordingUnavailableDialog';
 
 export function LearningEffectSummary({ result, memoryRecord }) {
   const effects = result?.effect_profile?.overall_corner_deltas || {};
@@ -326,6 +327,8 @@ export function ExperimentManager({ files = [], sessionMode, preferredBaseline =
 export function FileSelect({ label, value, onChange, files, disabled = false, hideLabel = false }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [unavailable, setUnavailable] = useState(null);
+  const triggerRef = useRef(null);
   const containerRef = useRef(null);
   const selectedOptionRef = useRef(null);
   const selectedFile = files.find((file) => file.name === value);
@@ -356,6 +359,8 @@ export function FileSelect({ label, value, onChange, files, disabled = false, hi
 
   const chooseFile = (filename) => {
     setOpen(false);
+    const file = files.find(row => row.name === filename);
+    if (!isSelectableRecording(file)) { setUnavailable(file); return; }
     onChange(filename);
   };
 
@@ -365,6 +370,7 @@ export function FileSelect({ label, value, onChange, files, disabled = false, hi
         {label} <HelpHint topic={label} />
       </span>
       <Button variant="outline"
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}
@@ -417,11 +423,11 @@ export function FileSelect({ label, value, onChange, files, disabled = false, hi
                   type="button"
                   role="option"
                   aria-selected={isSelected}
-                  disabled={!isSelectableRecording(file)}
-                  aria-disabled={!isSelectableRecording(file)}
+                  aria-label={!isSelectableRecording(file) ? `${file.name} · 선택 불가 · 사유 확인` : undefined}
                   onClick={() => chooseFile(file.name)}
                   className={cx(
                     'flex w-full items-center gap-3 px-4 py-3 text-left text-sm transition disabled:cursor-not-allowed disabled:opacity-55 sm:text-base',
+                    !isSelectableRecording(file) && 'opacity-60',
                     isSelected
                       ? '  ring-1 ring-inset ring-cyan-500/55'
                       : ' '
@@ -448,6 +454,7 @@ export function FileSelect({ label, value, onChange, files, disabled = false, hi
           </div>
         </div>
       )}
+      <RecordingUnavailableDialog recording={unavailable} onClose={() => setUnavailable(null)} returnFocusRef={triggerRef} />
     </div>
   );
 }

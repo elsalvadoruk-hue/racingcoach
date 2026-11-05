@@ -3914,8 +3914,10 @@ def overlay_personal_paths(game):
 
 from tire_reader.voice_audio import TireVoiceAudio
 from tire_reader.log_export import linked_run as linked_tire_run
+from tire_reader.coaching import live_context as tire_driving_context
 tire_overlay_controller = TireOverlays(audio=TireVoiceAudio(voice_coach.fixed_audio),
-                                      run_link=lambda snapshot: linked_tire_run(live_telemetry,snapshot))
+                                      run_link=lambda snapshot: linked_tire_run(live_telemetry,snapshot),
+                                      driving_context=lambda snapshot: tire_driving_context(live_telemetry,snapshot))
 overlay_controller = OverlayController(reference=OverlayReference(
     EXTERNAL_REFERENCE_DIR, lambda path: Garage61ReferenceReader(path).parse(), pinned_loader=load_task_overlay_reference,
     personal_loader=PersonalOverlayLoader(overlay_personal_paths, lambda path: repository.load(path),

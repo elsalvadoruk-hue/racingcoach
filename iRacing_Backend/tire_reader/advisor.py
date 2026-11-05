@@ -5,10 +5,22 @@ import uuid
 from .snapshot import TireSnapshot, WHEELS
 
 LABELS = dict(zip(WHEELS, ('왼쪽 앞', '오른쪽 앞', '왼쪽 뒤', '오른쪽 뒤')))
-PHRASES = {f'pressure_{state}_{wheel}': f'{label} 타이어 압력 {word}.'
+SHORT_PHRASES = {f'pressure_{state}_{wheel}': f'{label} 타이어 압력 {word}.'
            for wheel, label in LABELS.items() for state, word in (('high', '높음'), ('low', '낮음'))}
-PHRASES.update({f'temperature_hot_{wheel}': f'{label} 타이어 과열.' for wheel, label in LABELS.items()})
-PHRASES.update(temperature_cold='타이어 식었음.', tires_ok='타이어 적정 범위 들어옴.')
+SHORT_PHRASES.update({f'temperature_hot_{wheel}': f'{label} 타이어 과열.' for wheel, label in LABELS.items()})
+SHORT_PHRASES.update(temperature_cold='타이어 식었음.', tires_ok='타이어 적정 범위 들어옴.',
+    trend_front='앞 타이어 온도 계속 상승.', trend_rear='뒤 타이어 온도 계속 상승.',
+    input_front='앞 타이어 온도 상승. 진입 속도 조금 낮춤.',
+    input_rear='뒤 타이어 온도 상승. 탈출 가속 조금 부드럽게.',
+    temperature_recovered='타이어 온도 앞선 랩 수준으로 내려옴.')
+PHRASES = {f'pressure_{state}_{wheel}': f'{label} 타이어 압력이 {word}.'
+           for wheel, label in LABELS.items() for state, word in (('high', '높습니다'), ('low', '낮습니다'))}
+PHRASES.update({f'temperature_hot_{wheel}': f'{label} 타이어가 과열됐습니다.' for wheel, label in LABELS.items()})
+PHRASES.update(temperature_cold='타이어가 식었습니다.', tires_ok='타이어가 적정 범위에 들어왔습니다.',
+    trend_front='앞 타이어 온도가 계속 오르고 있습니다.', trend_rear='뒤 타이어 온도가 계속 오르고 있습니다.',
+    input_front='앞 타이어 온도가 오르고 있습니다. 코너 진입 속도를 조금 낮춰 보세요.',
+    input_rear='뒤 타이어 온도가 오르고 있습니다. 코너 탈출에서 가속을 조금 부드럽게 해 주세요.',
+    temperature_recovered='타이어 온도가 앞선 랩 수준으로 내려왔습니다.')
 
 
 class TireAdvisor:
@@ -26,11 +38,14 @@ class TireAdvisor:
         self.pending = None
         self.was_warm = False
         self.ok_sent = False
+        from .coaching import TireCoaching
+        self.coaching = TireCoaching()
 
-    def observe(self, data, *, enabled):
+    def observe(self, data, *, enabled, context=None, analyze=False):
         now = self.clock()
-        if not enabled or not isinstance(data, dict):
+        if not (enabled or analyze) or not isinstance(data, dict):
             self.pending = None
+            self.coaching.reset()
             return
         try:
             snapshot = TireSnapshot.from_dict(data)
@@ -42,6 +57,10 @@ class TireAdvisor:
             self.reset()
         self.identity, self.last_t, self.latest = snapshot.identity, snapshot.t, snapshot
         if not snapshot.active:
+            return
+        self.coaching.observe(snapshot, context)
+        if not enabled:
+            self.pending=None
             return
         for wheel in WHEELS:
             value = snapshot.wheels[wheel]
@@ -69,13 +88,16 @@ class TireAdvisor:
         if not self.ok_sent and all(self.state(field, w, now) == 'ok'
                                    for field in ('pressure', 'temperature') for w in WHEELS):
             candidates.append('tires_ok')
+        if self.coaching.candidate:
+            candidates.append(self.coaching.candidate)
         for key in candidates:
-            previous = self.sent.get(key)
+            family = 'thermal_coaching' if key in ('trend_front','trend_rear','input_front','input_rear') else key
+            previous = self.sent.get(family)
             if previous and (now - previous[0] < 180 or snapshot.lap is None or
                              previous[1] is None or snapshot.lap - previous[1] < 3):
                 continue
             self.pending = dict(id=uuid.uuid4().hex, key=key, text=PHRASES[key],
-                created_at=now, expires_at=now + 12, game=snapshot.game, engineer='coach', priority=0)
+                family=family, created_at=now, expires_at=now + 12, game=snapshot.game, engineer='coach', priority=0)
             break
 
     def state(self, field, wheel, now):
@@ -98,6 +120,8 @@ class TireAdvisor:
 
     def applicable(self, event, now):
         key = event['key']
+        if key in ('trend_front','trend_rear','input_front','input_rear','temperature_recovered'):
+            return bool(self.latest and 0 <= now-self.latest.observed_at < 2.5 and self.coaching.candidate == key)
         if key == 'temperature_cold':
             return all(self.state('temperature', w, now) == 'cold' for w in WHEELS)
         if key == 'tires_ok':
@@ -115,7 +139,8 @@ class TireAdvisor:
         event = self.current(now)
         if not event or event['id'] != identifier or not event['quiet']:
             return False
-        self.sent[event['key']] = now, self.latest.lap
+        self.sent[event.get('family',event['key'])] = now, self.latest.lap
+        self.coaching.ack(event['key'])
         self.ok_sent |= event['key'] == 'tires_ok'
         self.pending = None
         return True

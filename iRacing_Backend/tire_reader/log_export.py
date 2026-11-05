@@ -42,6 +42,18 @@ def token(value):
     return value if isinstance(value,str) and TOKEN.fullmatch(value) else None
 
 
+def coaching_summary(data):
+    if not isinstance(data,dict):return {}
+    result={k:finite(data.get(k)) for k in ('front_change_c','rear_change_c','pace_change_s')}
+    result.update({k:token(data.get(k)) for k in ('reason','candidate')})
+    result['ready']=data.get('ready') is True
+    result['wear_or_grip_confirmed']=False
+    for key in ('baseline_laps','recent_laps'):
+        rows=data.get(key)
+        result[key]=[v for v in (rows[:2] if isinstance(rows,list) else []) if type(v) is int and v>=0]
+    return result
+
+
 def diagnostics(message, snapshot, raw, targets, *, enabled, voice_enabled):
     """Only codes, numbers and semantics; never screenshot/OCR text or coordinates."""
     measurement=message.get('measurement') or {}
@@ -142,6 +154,7 @@ def tire_data(path, *, prepare=lambda:True):
                                 None,None,{**raw.get('configured_targets',{}),'temperature_kind':raw.get('temperature_kind')},
                                 enabled=raw.get('display_enabled') is True,voice_enabled=raw.get('voice_enabled') is True)
                             clean.update(game=run['game'],t=finite(raw.get('t')),writer_dropped_total=finite(raw.get('writer_dropped_total')))
+                            clean['coaching']=coaching_summary(raw.get('coaching'))
                             clean['source_ok']={w:{f:(raw.get('source_ok',{}).get(w,{}) or {}).get(f) is True
                                 for f in ('pressure','temperature','wear')} for w in WHEELS}
                             clean['color_states']={w:{f:token((raw.get('color_states',{}).get(w,{}) or {}).get(f))

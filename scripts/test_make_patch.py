@@ -222,6 +222,7 @@ class ShareManifestTests(unittest.TestCase):
         root=make_share_copy.ROOT
         files=make_share_copy.tire_reader_files(root)
         self.assertIn('iRacing_Backend/tire_reader/positions.py',files)
+        self.assertIn('iRacing_Backend/tire_reader/coaching.py',files)
         self.assertEqual(len([name for name in files if name.endswith(('.png','.jpg'))]),12)
         self.assertIn('tire_overlay.py',make_share_copy.SCRIPTS)
         with tempfile.TemporaryDirectory() as directory:

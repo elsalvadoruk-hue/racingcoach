@@ -44,7 +44,12 @@ test('a pending recording found to have zero valid laps cannot be compared or re
   render(<SourcePicker target="2" reference="2" external={[]} onApply={onApply} />);
   await waitFor(() => expect(screen.getByLabelText('주행 파일 · IBT').options).toHaveLength(2));
   fireEvent.change(screen.getByLabelText('주행 파일 · IBT'), { target: { value: 'pending.ibt' } });
-  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('유효 랩'));
+  const dialog = await screen.findByRole('dialog', { name: '이 주행 결과는 선택할 수 없습니다' });
+  expect(dialog).toHaveTextContent('기록된 랩이 없어');
+  expect(dialog).toHaveTextContent('pending.ibt');
+  fireEvent.click(within(dialog).getByRole('button', { name: '확인' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect(screen.getByRole('alert')).toHaveTextContent('유효 랩');
   expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeDisabled();
   expect(labRequest).not.toHaveBeenCalledWith('references', expect.objectContaining({ filename: 'pending.ibt' }), expect.anything());
   expect([...screen.getByLabelText('주행 파일 · IBT').options].map(option => option.value)).not.toContain('pending.ibt');
@@ -67,7 +72,12 @@ test('a pending reference found to have zero valid laps is removed without apply
   render(<SourcePicker target="2" reference="2" external={[]} onApply={onApply} />);
   await waitFor(() => expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeEnabled());
   fireEvent.change(screen.getByLabelText('기준 주행 파일 · IBT'), { target: { value: 'pending.ibt' } });
-  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('유효 랩'));
+  const dialog = await screen.findByRole('dialog', { name: '이 주행 결과는 선택할 수 없습니다' });
+  expect(dialog).toHaveTextContent('유효 랩 또는 측정 가능한 완주 랩이 없어');
+  expect(dialog).toHaveTextContent('pending.ibt');
+  fireEvent.click(within(dialog).getByRole('button', { name: '확인' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect(screen.getByRole('alert')).toHaveTextContent('유효 랩');
   expect(screen.getByRole('button', { name: '선택한 랩 비교하기' })).toBeDisabled();
   expect([...screen.getByLabelText('기준 주행 파일 · IBT').options].map(option => option.value)).not.toContain('pending.ibt');
   expect(onApply).not.toHaveBeenCalled();

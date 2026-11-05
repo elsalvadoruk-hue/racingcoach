@@ -20,7 +20,7 @@ class FerrariLowLightTests(unittest.TestCase):
             def failed(frame):
                 frames.append(cv2.cvtColor(frame,cv2.COLOR_BGR2GRAY))
                 return dict(location=None,status='weak_geometry',metrics={})
-            with self.subTest(maximum=int(gray.max())), patch.object(BmwDashLocator,'locate',side_effect=failed):
+            with self.subTest(maximum=int(gray.max())), patch.object(BmwDashLocator,'_locate',side_effect=failed):
                 self.assertIsNone(locator.locate(cv2.cvtColor(gray,cv2.COLOR_GRAY2BGR))['location'])
                 self.assertEqual(len(frames),expected)
                 self.assertFalse(any(np.array_equal(a,b) for i,a in enumerate(frames) for b in frames[i+1:]))

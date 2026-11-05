@@ -12,6 +12,7 @@ import { AnalysisProgressBar, useAnalysisProgress } from './AnalysisProgress';
 import { retainPrimary, selectPrimary } from '../analysis/externalReferenceSelection';
 import { useGarage61Collection } from './useGarage61Collection';
 import { isSelectableRecording } from '../lib/recordingFiles';
+import RecordingUnavailableDialog from '../components/RecordingUnavailableDialog';
 
 // The server returns codes; the driver reads a sentence.
 const REFERENCE_REASONS = {
@@ -71,6 +72,10 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   const [loadingStage, setLoadingStage] = useState('references');
   const { view: analysisProgress, begin: beginProgress, end: endProgress } = useAnalysisProgress();
   const [error, setError] = useState('');
+  const [unavailable, setUnavailable] = useState(null);
+  const unavailableFocus = useRef(null);
+  const sourceSelect = useRef(null);
+  const referenceSelect = useRef(null);
   const [importBusy, setImportBusy] = useState(false);
   const [importNotice, setImportNotice] = useState('');
   const [importError, setImportError] = useState('');
@@ -125,6 +130,8 @@ export default function SourcePicker({ target, reference, external, onApply, ana
         return previous ? current.map(item => item.name === file ? row : item) : [...current, row];
       });
       if (!isSelectableRecording(counts)) {
+        unavailableFocus.current = sourceSelect.current;
+        setUnavailable({ ...counts, name: file });
         setSession(null); setOwn(''); setBase(''); setFile(''); setReferenceFile('');
         setError(unavailableMessage); return;
       }
@@ -179,6 +186,8 @@ export default function SourcePicker({ target, reference, external, onApply, ana
         if (!live || !catalog) return;
         setFiles(catalog.files || []);
         if (!isSelectableRecording(catalog.files?.find(row => row.name === file))) {
+          unavailableFocus.current = sourceSelect.current;
+          setUnavailable(catalog.files.find(row => row.name === file));
           setFile(''); setReferenceFile(''); setOwn(''); setBase('');
         }
       }
@@ -221,6 +230,8 @@ export default function SourcePicker({ target, reference, external, onApply, ana
       const counts = lapCounts(available);
       setFiles(current => current.map(row => row.name === referenceFile ? { ...row, ...counts } : row));
       if (!isSelectableRecording(counts)) {
+        unavailableFocus.current = referenceSelect.current;
+        setUnavailable({ ...counts, name: referenceFile });
         setReferenceLaps([]); setBase(''); setReferenceFile(''); setError(unavailableMessage); return;
       }
       setReferenceLaps(available);
@@ -279,7 +290,10 @@ export default function SourcePicker({ target, reference, external, onApply, ana
       if (!mounted.current || controller.signal.aborted) return;
       const imported = result.file;
       setFiles(current => [...current.filter(row => row.name !== imported.name), imported]);
-      if (!isSelectableRecording(imported)) { setImportError(unavailableMessage); return; }
+      if (!isSelectableRecording(imported)) {
+        unavailableFocus.current = destination === 'source' ? sourceSelect.current : referenceSelect.current;
+        setUnavailable(imported); setImportError(unavailableMessage); return;
+      }
       if (destination === 'source') {
         setFile(imported.name); setReferenceFile(imported.name); setReferenceLaps([]);
       } else {
@@ -345,7 +359,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     <div className="source-picker-columns">
     <div className="source-picker-own">
     <FieldGroup>
-    <Field><FieldLabel htmlFor="source-file">주행 파일 · {lmu ? 'LMU DuckDB' : 'IBT'}</FieldLabel><NativeSelect id="source-file" disabled={importBusy} value={file} onChange={e => { setImportError(''); setFile(e.target.value); setReferenceFile(e.target.value); setReferenceLaps([]); }}>
+    <Field><FieldLabel htmlFor="source-file">주행 파일 · {lmu ? 'LMU DuckDB' : 'IBT'}</FieldLabel><NativeSelect ref={sourceSelect} id="source-file" disabled={importBusy} value={file} onChange={e => { setImportError(''); setFile(e.target.value); setReferenceFile(e.target.value); setReferenceLaps([]); }}>
       {!file && <NativeSelectOption value="">{lmu ? 'LMU 파일을 선택하세요' : 'IBT 파일을 선택하세요'}</NativeSelectOption>}
       {data.filename && selectableSession(data) && !files.some(f => f.name === data.filename) && <NativeSelectOption value={data.filename} title={data.file_name || data.filename}>{fileChoiceLabel({ ...data.session, ...lapCounts(data.laps), name: data.filename, file_name: data.file_name, best_lap_s: fileBestLap(data.laps) })}</NativeSelectOption>}
       {selectableFiles.map(f => <NativeSelectOption key={f.name} value={f.name} title={f.display_name || f.file_name || f.name} className={`${sessionTypeTone(f)}-file-option`}>{fileChoiceLabel(f)}</NativeSelectOption>)}
@@ -362,7 +376,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     <FieldGroup className="source-picker-reference">
     <Field><FieldLabel htmlFor="reference-mode">기준 종류</FieldLabel><NativeSelect id="reference-mode" value={mode} onChange={e => { setMode(e.target.value); if (e.target.value === 'LOCAL') chooseAutomatic(); }} disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)}><NativeSelectOption value="LOCAL">내 기준 랩</NativeSelectOption>{collection.phase !== 'SKIPPED_NO_TOKEN' && <NativeSelectOption disabled={lmu || !refs.length} value="GARAGE61">Garage61 · 내려받은 기준</NativeSelectOption>}</NativeSelect></Field>
     {mode === 'LOCAL' && <Field><FieldLabel htmlFor="reference-selection">기준 선택 방식</FieldLabel><NativeSelect id="reference-selection" value={referenceSelection} disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)} onChange={e => { if (e.target.value === 'AUTO') chooseAutomatic(); else setReferenceSelection('MANUAL'); }}><NativeSelectOption value="AUTO">{lmu ? '비슷한 조건의 가장 빠른 랩 · 자동 (가져온 기록 포함)' : '비슷한 조건의 내 베스트 랩 · 자동'}</NativeSelectOption><NativeSelectOption value="MANUAL">파일·랩 직접 선택</NativeSelectOption></NativeSelect>{referenceSelection === 'AUTO' && personalReference && <p role="status">{personalReference.filename ? `자동 기준: ${personalReference.file_name || files.find(f => f.name === personalReference.filename)?.file_name || personalReference.filename} · ${personalReference.lap ?? personalReference.lap_number}랩 · ${lapTime(personalReference.lap_time_s)}${importedLabel(personalReference)}` : referenceReason(personalReference.reason)}{personalReference.filename === file && String(personalReference.lap ?? personalReference.lap_number) === own ? ' · 선택한 내 주행이 베스트 랩입니다.' : ''}</p>}</Field>}
-    {mode === 'LOCAL' && <Field><FieldLabel htmlFor="lmu-reference-file">기준 주행 파일 · {lmu ? 'LMU' : 'IBT'}</FieldLabel><NativeSelect id="lmu-reference-file" value={referenceFile || file} onChange={e => { setImportError(''); setReferenceSelection('MANUAL'); setReferenceFile(e.target.value); }} disabled={importBusy || busy || referenceSelection === 'AUTO' || Boolean(analysisWorkspace?.activeTrial)}>{referenceFile && !files.some(f => f.name === referenceFile) && (referenceFile === file ? selectableSession(session) : !referenceLaps.length || isSelectableRecording(lapCounts(referenceLaps))) && <NativeSelectOption value={referenceFile} title={referenceFile}>{fileChoiceLabel({ name: referenceFile })}</NativeSelectOption>}{selectableFiles.map(f => <NativeSelectOption key={f.name} value={f.name}>{fileChoiceLabel(f)}{f.name === file ? ' · 같은 파일' : ''}{importedLabel(f)}</NativeSelectOption>)}</NativeSelect>{lmu && <Button variant="outline" disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)} onClick={() => openDuckdb('reference')}>기준 DuckDB 파일 열기…</Button>}<p>같은 차량·트랙·레이아웃의 다른 기록도 기준으로 선택할 수 있습니다.</p></Field>}
+    {mode === 'LOCAL' && <Field><FieldLabel htmlFor="lmu-reference-file">기준 주행 파일 · {lmu ? 'LMU' : 'IBT'}</FieldLabel><NativeSelect ref={referenceSelect} id="lmu-reference-file" value={referenceFile || file} onChange={e => { setImportError(''); setReferenceSelection('MANUAL'); setReferenceFile(e.target.value); }} disabled={importBusy || busy || referenceSelection === 'AUTO' || Boolean(analysisWorkspace?.activeTrial)}>{referenceFile && !files.some(f => f.name === referenceFile) && (referenceFile === file ? selectableSession(session) : !referenceLaps.length || isSelectableRecording(lapCounts(referenceLaps))) && <NativeSelectOption value={referenceFile} title={referenceFile}>{fileChoiceLabel({ name: referenceFile })}</NativeSelectOption>}{selectableFiles.map(f => <NativeSelectOption key={f.name} value={f.name}>{fileChoiceLabel(f)}{f.name === file ? ' · 같은 파일' : ''}{importedLabel(f)}</NativeSelectOption>)}</NativeSelect>{lmu && <Button variant="outline" disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)} onClick={() => openDuckdb('reference')}>기준 DuckDB 파일 열기…</Button>}<p>같은 차량·트랙·레이아웃의 다른 기록도 기준으로 선택할 수 있습니다.</p></Field>}
     {mode === 'LOCAL' ? <Field><FieldLabel htmlFor="reference-lap">비교 기준</FieldLabel><NativeSelect id="reference-lap" className={isBestLap(baseOptions.find(l => String(l.lap_number) === base), baseOptions) ? 'best-lap-select' : ''} value={base} onChange={e => { setReferenceSelection('MANUAL'); setBase(e.target.value); }} disabled={importBusy || busy || referenceBusy || referenceSelection === 'AUTO' || Boolean(analysisWorkspace?.activeTrial)}>{baseOptions.map((l, index) => <NativeSelectOption key={`${l.lap_number}-${l.status}-${index}`} value={String(l.lap_number)} disabled={!measurableLap(l)} className={!measurableLap(l) ? 'lap-option-faint' : undefined}>{label(l)}</NativeSelectOption>)}</NativeSelect>{referenceBusy && <p role="status">기준 파일의 랩 확인 중…</p>}</Field> : <>
       <Field><FieldLabel htmlFor="reference-files">Garage61 기준 · Ctrl 키로 여러 랩 선택</FieldLabel><select id="reference-files" multiple size={5} value={selected} onChange={e => { const next = [...e.target.selectedOptions].map(o => o.value); setSelected(current => retainPrimary(current, next)); }} disabled={importBusy || busy || Boolean(analysisWorkspace?.activeTrial)}>{refs.map(r => <option key={r.name} value={r.name}>{r.driver_name || '드라이버'} · {lapTime(r.lap_time_s)} · {r.car_name}</option>)}</select><p>선택 {selected.length}개 · 대표 한 랩과 비교하고, 나머지는 구간별 손실을 확인하는 보조 기록으로 사용합니다.</p>{!busy && !error && !referenceNotice && !refs.length && <p>이 차량·트랙과 맞는 내려받은 기준이 없습니다.</p>}</Field>
       <Field><FieldLabel htmlFor="primary-reference">Garage61 대표 기준</FieldLabel><NativeSelect id="primary-reference" value={selected[0] || ''} onChange={e => setSelected(current => selectPrimary(current, e.target.value))} disabled={importBusy || busy || !selected.length || Boolean(analysisWorkspace?.activeTrial)}>
@@ -380,5 +394,6 @@ export default function SourcePicker({ target, reference, external, onApply, ana
     {referenceError && <p role="alert">{referenceError}</p>}
     {referenceNotice && <p role="status">{referenceNotice}</p>}
     <Button disabled={importBusy || Boolean(importError) || busy || referenceBusy || personalBusy || Boolean(referenceError) || !selectableSession(session) || !own || (mode === 'LOCAL' && !baseOptions.some(l => String(l.lap_number) === base && measurableLap(l))) || (mode === 'GARAGE61' && !selected.length)} onClick={apply}>{busy ? `${loadingLabel}…` : '선택한 랩 비교하기'}</Button>
+    <RecordingUnavailableDialog recording={unavailable} onClose={() => setUnavailable(null)} returnFocusRef={unavailableFocus} />
   </div>;
 }

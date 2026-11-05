@@ -43,6 +43,17 @@ class TireLogTests(unittest.TestCase):
         self.assertNotIn('observed_at', json.dumps(doc))
         self.assertIn('pit_forecast', doc['not_collected'])
 
+    def test_coaching_export_keeps_only_numeric_evidence_and_fixed_semantics(self):
+        with closing(TireHistoryStore(self.path)) as store:
+            store.append(snapshot(),run_id=self.run['run_id'],diagnostics={'coaching':dict(ready=True,
+                reason='own_matched_laps',candidate='input_front',front_change_c=8.,baseline_laps=[2,3],
+                recent_laps=[4,5],wear_or_grip_confirmed=True,private='EXCLUDED')})
+        data=self.unpack(self.provider()(self.run))['diagnostics'][0]['data']['coaching']
+        self.assertEqual(data['front_change_c'],8.)
+        self.assertEqual(data['baseline_laps'],[2,3])
+        self.assertFalse(data['wear_or_grip_confirmed'])
+        self.assertNotIn('EXCLUDED',json.dumps(data))
+
     def test_missing_or_legacy_database_is_not_created_or_assigned_by_timestamp(self):
         extra = self.provider()(self.run)
         self.assertFalse(extra.files)

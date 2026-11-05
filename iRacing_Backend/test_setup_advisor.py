@@ -181,6 +181,104 @@ class AdviceTests(unittest.TestCase):
         self.assertFalse(a.view(s)['advice'])
 
 
+class PressurePolicyTests(unittest.TestCase):
+    """Synthetic cold settings, not legal limits or OCR hot-pressure targets."""
+
+    def comparison(self, wheel='lf', target=155., current=150.):
+        from setup_advisor import SetupAdvisor
+        from setup_capabilities import profile_for
+        control='pressure_'+wheel
+        a=SetupAdvisor();a.profile=profile_for({'game':'iracing','car_path':'bmwm4gt3'})
+        def row(i,pressure,t):
+            settings={key:150. for key in ('pressure_lf','pressure_rf','pressure_lr','pressure_rr')}
+            settings.update(rear_wing=7.);settings[control]=pressure
+            return dict(lap=i,sites=[],cells={},settings=tuple(settings.items()),time=t,
+                        conditions=(30.,30.,0,0),installed=True)
+        a.trials.extend(row(i,target,90.+i*.02) for i in range(1,4))
+        a.laps.extend(row(i,current,92.+i*.02) for i in range(4,7))
+        a.trials.extend(a.laps)
+        sample=dict(a.laps[-1]['settings']);sample.update(setup_fixed=False,setup_values_verified=True)
+        return a,sample
+
+    def test_pressure_reduction_is_withheld_even_when_lower_trial_was_faster(self):
+        for wheel in ('lf','rf','lr','rr'):
+            with self.subTest(wheel=wheel):
+                a,s=self.comparison(wheel,target=145.)
+                self.assertEqual(a.view(s)['advice'],[])
+
+    def test_pressure_increase_requires_a_previously_driven_repeatable_gain(self):
+        for wheel in ('lf','rf','lr','rr'):
+            with self.subTest(wheel=wheel):
+                a,s=self.comparison(wheel)
+                item,=a.view(s)['advice']
+                self.assertEqual((item['control'],item['current'],item['target']),('pressure_'+wheel,150.,155.))
+                self.assertEqual(item['call'],'setup_pressure_'+wheel+'_more')
+                self.assertEqual(item['evidence'],'OWN_MATCHED_LAPS')
+
+    def test_fixed_or_unknown_setup_blocks_pressure_generation(self):
+        a,s=self.comparison()
+        for fixed in (True,None):
+            with self.subTest(fixed=fixed):
+                self.assertFalse(a.view({**s,'setup_fixed':fixed})['advice'])
+        s.pop('setup_fixed')
+        self.assertFalse(a.view(s)['advice'])
+
+    def test_unverified_installation_or_insufficient_laps_blocks_pressure_increase(self):
+        for reason in ('sample_unverified','trial_unverified','current_unverified','few_trial_laps','few_current_laps'):
+            with self.subTest(reason=reason):
+                a,s=self.comparison()
+                if reason=='sample_unverified':s['setup_values_verified']=False
+                elif reason=='trial_unverified':a.trials[0]['installed']=False
+                elif reason=='current_unverified':a.laps[-1]['installed']=False
+                elif reason=='few_trial_laps':a.trials.popleft()
+                else:a.laps.popleft()
+                self.assertFalse(a.view(s)['advice'])
+
+    def test_mismatched_conditions_or_second_setting_change_blocks_pressure_increase(self):
+        for reason in ('fuel','track_temperature','compound','wetness','second_setting'):
+            with self.subTest(reason=reason):
+                a,s=self.comparison()
+                for row in list(a.trials)[:3]:
+                    if reason=='second_setting':
+                        row['settings']=tuple((k,5. if k=='rear_wing' else v) for k,v in row['settings'])
+                    else:
+                        row['conditions']={'fuel':(20.,30.,0,0),'track_temperature':(30.,20.,0,0),
+                                           'compound':(30.,30.,1,0),'wetness':(30.,30.,0,1)}[reason]
+                self.assertFalse(a.view(s)['advice'])
+
+    def test_fastest_lap_or_small_gain_does_not_justify_pressure_increase(self):
+        for times in ((90.,94.,94.),(92.,92.,92.),(91.8,91.9,92.)):
+            with self.subTest(times=times):
+                a,s=self.comparison()
+                for row,t in zip(a.trials,times):row['time']=t
+                self.assertFalse(a.view(s)['advice'])
+
+    def test_untried_pressure_and_temperature_alone_never_create_a_target(self):
+        a,s=self.comparison(target=150.)
+        for temperature in (40.,140.):
+            with self.subTest(temperature=temperature):
+                self.assertFalse(a.view({**s,'lf_pressure':100.,'lf_temp':temperature})['advice'])
+
+    def test_fixed_or_unknown_setup_cancels_queued_pressure_audio_and_display(self):
+        from race_radio import RaceRadio
+        for fixed in (True,None):
+            with self.subTest(fixed=fixed):
+                radio=RaceRadio();radio.run_id='r';radio.last_sample=0.;radio.setup_advice_allowed=True
+                s=dict(on_track=True,is_replay=False,on_pit_road=False,session_state=4,
+                       pressure_lf=150.,setup_fixed=False)
+                radio.latest=s
+                item=dict(setup=True,control='pressure_lf',field='pressure_lf',initial=150.,current=150.,
+                          target=155.,timing='pit',pending_field='pressure_lf_pending')
+                event=dict(run_id='r',not_before=0.,expires_at=30.,
+                           condition=('control_setting',('pressure_lf',150.,'pressure_lf')),control_recommendation=item)
+                self.assertTrue(radio.valid(event,.1))
+                d=ControlRecommendations();d.present(item,0.)
+                radio.latest={**s,'setup_fixed':fixed}
+                self.assertFalse(radio.valid(event,.1))
+                d.observe(radio.latest,.1,set())
+                self.assertIsNone(d.view())
+
+
 class DeliveryTests(unittest.TestCase):
     def test_prepared_voice_waits_for_started_and_raw_slot_change_cancels_card(self):
         from setup_advisor import SetupAdvisor

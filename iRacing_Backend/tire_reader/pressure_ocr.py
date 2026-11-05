@@ -201,6 +201,17 @@ class WindowsPressureOcr:
                     # the gap in 50's 5, making it look like 60.
                     variants=[(gray,2.0,1,0),(gray,3.0,1,0),
                               (mask,3.0,1,0),(mask,4.0,1,0)]
+            elif car in ('audir8lmsevo2gt3','chevyvettez06rgt3'):
+                # Cell outlines are mistaken for 1s, while low-resolution
+                # antialiased text can lose a leading digit. Remove the real
+                # border before OCR; never repair the returned numeric string.
+                mask=digit_mask(gray)
+                variants=[(mask,scale,1,0) for scale in (2.0,3.0,4.0)]
+            elif car=='fordmustanggt3' and kind=='pressure':
+                # Its wide, short glyphs and blue decimal need padding and
+                # more than one aspect/scale to form an actual consensus.
+                mask=digit_mask(gray)
+                variants=[(mask,scale,stretch,0) for stretch in (1.,1.3) for scale in (2.,4.)]
             elif car=='lamborghinievogt3' or (car=='fordmustanggt3' and kind=='temperature'):
                 mask=digit_mask(gray)
                 stretch=(1.3 if kind=='pressure' else 1.0) if car=='lamborghinievogt3' else .7
