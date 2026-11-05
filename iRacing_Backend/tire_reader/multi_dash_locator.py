@@ -37,6 +37,10 @@ class VehicleDashLocator(BmwDashLocator):
         for mode in ('exposure','local_contrast'):
             prepared=(cv2.normalize(gray,None,0,255,cv2.NORM_MINMAX) if mode=='exposure'
                 else cv2.createCLAHE(clipLimit=3,tileGridSize=(8,8)).apply(gray))
+            # A frame already spanning 0..255 can normalize to the exact same
+            # pixels. Do not spend another full search on an identical scene.
+            if np.array_equal(prepared,gray):
+                continue
             candidate=super().locate(cv2.cvtColor(prepared,cv2.COLOR_GRAY2BGR))
             if candidate['location']:
                 location,reason=self._validate(image,np.asarray(candidate['location']['homography']))

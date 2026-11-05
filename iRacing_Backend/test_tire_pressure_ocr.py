@@ -92,5 +92,23 @@ class PressureTests(unittest.TestCase):
                     self.assertEqual(result['wheels'][wheel]['kpa'],expected)
                     self.assertEqual(result['wheels'][wheel]['status'],status)
 
+    def test_ferrari_temperature_keeps_valid_conflicts_and_rejects_single_readings(self):
+        import numpy as np
+        profile=fixture();profile.update(car_path='ferrari296gt3',automatic_partial=True,
+            boxes={},temperature_boxes=profile['boxes'],temperature_unit='C')
+        engine=object.__new__(WindowsPressureOcr)
+        engine.language='synthetic';engine.languages=[];engine.max_dimension=2048
+        values=iter(['50','50','60','50', '48','48','4B','',
+                     '48','','4B','', '49','49','49','49'])
+        async def text(_):return next(values)
+        with patch.object(engine,'_text',side_effect=text):
+            result=asyncio.run(engine.recognize(np.zeros((100,160,3),dtype=np.uint8),profile))
+        self.assertEqual(result['temperatures']['FL']['status'],'ambiguous')
+        self.assertIsNone(result['temperatures']['FL']['celsius'])
+        self.assertEqual(result['temperatures']['FR']['celsius'],48)
+        self.assertEqual(result['temperatures']['RL']['status'],'single_variant')
+        self.assertIsNone(result['temperatures']['RL']['celsius'])
+        self.assertEqual(result['temperatures']['RR']['celsius'],49)
+
 
 if __name__=='__main__': unittest.main()

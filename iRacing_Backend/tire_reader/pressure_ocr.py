@@ -196,7 +196,11 @@ class WindowsPressureOcr:
                     # independent segmentations and retain any valid conflict.
                     variants=[(base,scale,1,0) for base in (mask,gray,high,flat) for scale in (2.0,3.0)]
                 else:
-                    variants=[(mask,scale,1,0) for scale in (2.0,2.5,3.0,4.0)]
+                    # Keep the original LCD strokes: thresholding a small 48
+                    # can turn its 8 into B. Small binary resizes also close
+                    # the gap in 50's 5, making it look like 60.
+                    variants=[(gray,2.0,1,0),(gray,3.0,1,0),
+                              (mask,3.0,1,0),(mask,4.0,1,0)]
             elif car=='lamborghinievogt3' or (car=='fordmustanggt3' and kind=='temperature'):
                 mask=digit_mask(gray)
                 stretch=(1.3 if kind=='pressure' else 1.0) if car=='lamborghinievogt3' else .7

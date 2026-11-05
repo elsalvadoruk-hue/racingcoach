@@ -59,5 +59,43 @@ class LocatorTests(unittest.TestCase):
         image,_=self.scene()
         self.assertIsNone(self.locator.locate(image[:,::-1].copy())['location'])
 
+    def test_weak_hypothesis_only_guides_fresh_verified_matching(self):
+        image,H=self.scene()
+        approximate=H.copy();approximate[0,2]+=4;approximate[1,2]-=3
+        hint=dict(inliers=10,inlier_ratio=.2)
+        refined,reason,metrics=self.locator._refine_candidate(image,approximate,hint)
+        self.assertEqual(reason,'located')
+        self.assertGreaterEqual(metrics['inliers'],16)
+        self.assertGreaterEqual(metrics['inlier_ratio'],.3)
+        location,status=self.locator._validate(image,refined)
+        self.assertEqual(status,'located')
+        for wheel,box in self.locator.boxes.items():
+            expected=cv2.perspectiveTransform(corners(box).reshape(-1,1,2),H).reshape(-1,2)
+            observed=np.asarray(location['quadrilaterals'][wheel])
+            self.assertLess(np.max(np.linalg.norm(expected-observed,axis=1)),4)
+        # The same good-looking hypothesis cannot produce a location when the
+        # new pixels contain no dashboard, nor recurse into another hypothesis.
+        for frame,proposal in [(np.zeros_like(image),approximate),
+                (image,np.array([[1,0,5000],[0,1,5000],[0,0,1]],float)),
+                (image,np.array([[-1,0,800],[0,1,150],[0,0,1]],float))]:
+            with self.subTest(proposal=proposal.tolist()):
+                result,_,_=self.locator._refine_candidate(frame,proposal,hint)
+                self.assertIsNone(result)
+
+    def test_half_reference_keeps_original_wheel_coordinates_and_validation(self):
+        image,H=self.scene(scale=.5)
+        # A cover over the lower right of the panel leaves pressure cells visible.
+        image[245:340,355:520]=10
+        refined,reason,metrics=self.locator._find(image,downscale=False,half_reference=True)
+        self.assertEqual(reason,'located')
+        self.assertGreaterEqual(metrics['inliers'],16)
+        self.assertGreaterEqual(metrics['inlier_ratio'],.3)
+        location,status=self.locator._validate(image,refined)
+        self.assertEqual(status,'located')
+        for wheel,box in self.locator.boxes.items():
+            expected=cv2.perspectiveTransform(corners(box).reshape(-1,1,2),H).reshape(-1,2)
+            observed=np.asarray(location['quadrilaterals'][wheel])
+            self.assertLess(np.max(np.linalg.norm(expected-observed,axis=1)),4)
+
 
 if __name__=='__main__': unittest.main()

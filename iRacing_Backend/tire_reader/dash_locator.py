@@ -48,15 +48,52 @@ class BmwDashLocator:
             min(width,int(panel[:,0].max())+margin), min(height,int(panel[:,1].max())+margin))
         self.previous_bounds = bounds if bounds[2]-bounds[0]>=64 and bounds[3]-bounds[1]>=64 else None
 
-    def _find(self, image, *, downscale=True):
+    def _refine_candidate(self, image, H, metrics):
+        """A rejected hypothesis may guide a new search, never supply a reading."""
+        rh,rw = self.gray.shape
+        quad = cv2.perspectiveTransform(corners([0,0,rw,rh]).reshape(-1,1,2),H).reshape(-1,2)
+        if (not np.isfinite(quad).all() or not cv2.isContourConvex(quad)
+                or cv2.contourArea(quad,oriented=True)<=0):
+            return None, 'weak_geometry', metrics
+        height,width = image.shape[:2]
+        a,b = np.maximum(0,np.floor(quad.min(axis=0)).astype(int))
+        c,d = np.minimum([width,height],np.ceil(quad.max(axis=0)).astype(int))
+        if c-a<64 or d-b<64 or (a==b==0 and c==width and d==height):
+            return None, 'weak_geometry', metrics
+        # Focus the feature budget on the current candidate instead of the
+        # road, wheel and hands. Recompute all matches at native resolution;
+        # the original inlier, coverage and anchor gates still apply.
+        refined,reason,local = self._find(image[b:d,a:c],downscale=False)
+        if refined is None:
+            # Small LCD labels lose different strokes at different scales.
+            # A half-size official reference supplies fresh descriptors while
+            # keeping source coordinates and every acceptance gate unchanged.
+            refined,reason,local = self._find(image[b:d,a:c],downscale=False,half_reference=True)
+        if refined is None:
+            return None, reason, local
+        local.update(refined_search=True,initial_inliers=metrics['inliers'],
+                     initial_inlier_ratio=metrics['inlier_ratio'])
+        return np.array([[1,0,a],[0,1,b],[0,0,1]],dtype=float) @ refined, 'located', local
+
+    def _find(self, image, *, downscale=True, refine=False, half_reference=False):
         metrics = {}
+        reference_keypoints,reference_descriptors = self.keypoints,self.descriptors
+        if half_reference:
+            if not hasattr(self,'_half_features'):
+                half = cv2.resize(self.gray,None,fx=.5,fy=.5,interpolation=cv2.INTER_AREA)
+                keys,descriptors = self.sift.detectAndCompute(half,None)
+                for key in keys:
+                    key.pt = (key.pt[0]*2,key.pt[1]*2)
+                self._half_features = keys,descriptors
+            reference_keypoints,reference_descriptors = self._half_features
+            metrics['half_reference'] = True
         ratio = min(1.0, 1600/max(image.shape[:2])) if downscale else 1.0
         search = cv2.resize(image,None,fx=ratio,fy=ratio,interpolation=cv2.INTER_AREA) if ratio<1 else image
         keypoints, descriptors = self.sift.detectAndCompute(cv2.cvtColor(search,cv2.COLOR_BGR2GRAY),None)
         metrics['scene_keypoints'] = len(keypoints)
-        if descriptors is None or len(keypoints)<16:
+        if descriptors is None or reference_descriptors is None or len(keypoints)<16:
             return None, 'no_features', metrics
-        pairs = cv2.BFMatcher().knnMatch(self.descriptors,descriptors,k=2)
+        pairs = cv2.BFMatcher().knnMatch(reference_descriptors,descriptors,k=2)
         good = [a for pair in pairs if len(pair)==2 for a,b in [pair] if a.distance<0.72*b.distance]
         # One destination feature must not support several reference features.
         unique = {}
@@ -66,7 +103,7 @@ class BmwDashLocator:
         metrics['matches'] = len(good)
         if len(good)<16:
             return None, 'too_few_matches', metrics
-        source = np.float32([self.keypoints[m.queryIdx].pt for m in good]).reshape(-1,1,2)
+        source = np.float32([reference_keypoints[m.queryIdx].pt for m in good]).reshape(-1,1,2)
         target = np.float32([keypoints[m.trainIdx].pt for m in good]).reshape(-1,1,2)
         H, mask = cv2.findHomography(source,target,cv2.RANSAC,3.0)
         if H is None or mask is None or not np.isfinite(H).all():
@@ -76,6 +113,8 @@ class BmwDashLocator:
         inliers = len(src)
         metrics.update(inliers=inliers,inlier_ratio=inliers/len(good))
         if inliers<16 or inliers/len(good)<0.30:
+            if refine:
+                return self._refine_candidate(image,np.diag([1/ratio,1/ratio,1.0]) @ H,metrics)
             return None, 'weak_geometry', metrics
         coverage = cv2.contourArea(cv2.convexHull(src))/(self.gray.shape[0]*self.gray.shape[1])
         if hasattr(self,'anchor'):
@@ -148,7 +187,7 @@ class BmwDashLocator:
         if max(image.shape[:2])>1600:
             searches.append((image,0,0,'full_resolution',False))
         for search,x0,y0,mode,downscale in searches:
-            H,reason,metrics = self._find(search,downscale=downscale)
+            H,reason,metrics = self._find(search,downscale=downscale,refine=True)
             if H is None:
                 continue
             H = np.array([[1,0,x0],[0,1,y0],[0,0,1]],dtype=float) @ H
