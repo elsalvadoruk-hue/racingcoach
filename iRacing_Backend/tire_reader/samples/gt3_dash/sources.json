@@ -1,0 +1,197 @@
+{
+  "checked": "2026-11-04",
+  "source_index": "https://www.iracing.com/resources/user-manuals/",
+  "vehicles": [
+    {
+      "car_path": "bmwm4gt3",
+      "name": "BMW M4 GT3",
+      "reference": "bmw_m4_p7.png",
+      "image_sha256": "c6fee59920bf117682aab0e6c1f7752c04573082ada230e2f956edfabea5dce6",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2024/07/BMW-M4-GT3-Manual_V3.pdf",
+      "provenance": "Pre-existing official manual image supplied in TP Reader archive",
+      "temperature_kind": null,
+      "temperature_wheels": [],
+      "page_note": null,
+      "coordinate_space": "Reference image pixels, not monitor coordinates"
+    },
+    {
+      "car_path": "acuransxevo22gt3",
+      "name": "Acura NSX GT3 EVO 22",
+      "reference": "acura_nsx_p7.png",
+      "image_sha256": "bd1fa1302474be5dc9f083b0fb236017e071f091be7f89b1459d1c6207bbe44f",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2024/12/Acura-GT3_Manual_V2.pdf",
+      "provenance": "Pre-existing official manual image supplied in TP Reader archive",
+      "temperature_kind": null,
+      "temperature_wheels": [],
+      "page_note": null,
+      "coordinate_space": "Reference image pixels, not monitor coordinates"
+    },
+    {
+      "car_path": "amvantageevogt3",
+      "name": "Aston Martin Vantage GT3 EVO",
+      "reference": "aston_vantage_evo_p7.png",
+      "image_sha256": "f6aeec9dee63660f50a7799a75245ba08495ed5587e2d504b5eaca44bfd4e910",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2026/01/Aston-Martin-GT3-Evo-V1.pdf",
+      "provenance": "Pre-existing official manual image supplied in TP Reader archive",
+      "temperature_kind": null,
+      "temperature_wheels": [],
+      "page_note": null,
+      "coordinate_space": "Reference image pixels, not monitor coordinates"
+    },
+    {
+      "car_path": "audir8lmsevo2gt3",
+      "name": "Audi R8 LMS EVO II GT3",
+      "reference": "audi_r8_evo2_p7.png",
+      "image_sha256": "710dd4cecd9a8e73495eac8d11952b6cf9987c5055e9f11dd84491f1e9af835a",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2024/07/Audi-R8-LMS-EVO-II-GT3_Manual.pdf",
+      "provenance": "Pre-existing official manual image supplied in TP Reader archive",
+      "temperature_kind": "average",
+      "temperature_wheels": [
+        "FL",
+        "FR",
+        "RL",
+        "RR"
+      ],
+      "page_note": null,
+      "coordinate_space": "Reference image pixels, not monitor coordinates"
+    },
+    {
+      "car_path": "chevyvettez06rgt3",
+      "name": "Chevrolet Corvette Z06 GT3.R",
+      "reference": "corvette_z06_p7.png",
+      "image_sha256": "f4c8b643a6388fc2b6eade644bdb5d188d68325f05659f5750e5e41e415c46ee",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2024/06/Chevrolet-Corvette-Z06-GT3_manual_V2.pdf",
+      "provenance": "Pre-existing official manual image supplied in TP Reader archive",
+      "temperature_kind": "carcass",
+      "temperature_wheels": [
+        "FL",
+        "FR",
+        "RL",
+        "RR"
+      ],
+      "page_note": null,
+      "coordinate_space": "Reference image pixels, not monitor coordinates"
+    },
+    {
+      "car_path": "ferrari296gt3",
+      "name": "Ferrari 296 GT3",
+      "reference": "ferrari_296_p7.png",
+      "image_sha256": "0f8a58b2eb2035fe80d2fde541a10d84d4e0a65ec029e413f42c68f2c75ad70e",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2024/06/Ferrari-296-GT3-V4.pdf",
+      "provenance": "Pre-existing official manual image supplied in TP Reader archive",
+      "temperature_kind": "surface",
+      "temperature_wheels": [
+        "FL",
+        "FR",
+        "RL",
+        "RR"
+      ],
+      "page_note": null,
+      "coordinate_space": "Reference image pixels, not monitor coordinates"
+    },
+    {
+      "car_path": "fordmustanggt3",
+      "name": "Ford Mustang GT3",
+      "reference": "mustang_p7.png",
+      "image_sha256": "b4708eddd1ecffe7ec815ca4aeffc5b2b6b79f006053ce857ab541ce501605b7",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2024/06/Mustang-GT3_Manual_V2.pdf",
+      "provenance": "Pre-existing official manual image supplied in TP Reader archive",
+      "temperature_kind": "carcass",
+      "temperature_wheels": [
+        "FL",
+        "FR",
+        "RL",
+        "RR"
+      ],
+      "page_note": null,
+      "coordinate_space": "Reference image pixels, not monitor coordinates"
+    },
+    {
+      "car_path": "lamborghinievogt3",
+      "name": "Lamborghini Huracan GT3 EVO",
+      "reference": "lamborghini_huracan_evo_p8.png",
+      "image_sha256": "29f8f2eef31709c97254fb076ec728246c247d173761f19c69e07d1e1161d1b2",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2024/07/UM-Lamborghini-Huracan-GT3-Evo-V3.pdf",
+      "provenance": "Pre-existing official manual image supplied in TP Reader archive",
+      "temperature_kind": "unspecified",
+      "temperature_wheels": [
+        "FL",
+        "FR",
+        "RL",
+        "RR"
+      ],
+      "page_note": "Magnus Quali",
+      "coordinate_space": "Reference image pixels, not monitor coordinates"
+    },
+    {
+      "car_path": "mclaren720sgt3",
+      "name": "McLaren 720S GT3 EVO",
+      "reference": "mclaren_720s_p7.png",
+      "image_sha256": "6a8e1074f453ceb9577f7305078de065e1974f135ffe7be1cd044a9d17a57e5d",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2024/09/Mclaren-720S-GT3_V2.pdf",
+      "provenance": "Pre-existing official manual image supplied in TP Reader archive",
+      "temperature_kind": "carcass",
+      "temperature_wheels": [
+        "FL",
+        "FR",
+        "RL",
+        "RR"
+      ],
+      "page_note": null,
+      "coordinate_space": "Reference image pixels, not monitor coordinates"
+    },
+    {
+      "car_path": "mercedesamgevogt3",
+      "name": "Mercedes-AMG GT3 2020",
+      "reference": "mercedes_amg_2020_p8.png",
+      "image_sha256": "cda2428c693e908788aa75b3d12346c4514a091c5e988e3b83cb80ef9ba7aeed",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2026/09/Mercedes-AMG-GT3-2020-Manual_V10.pdf",
+      "provenance": "Pre-existing official manual image supplied in TP Reader archive",
+      "temperature_kind": "unspecified",
+      "temperature_wheels": [
+        "FL",
+        "FR",
+        "RL",
+        "RR"
+      ],
+      "page_note": "2",
+      "coordinate_space": "Reference image pixels, not monitor coordinates"
+    },
+    {
+      "car_path": "porsche992rgt3",
+      "name": "Porsche 911 GT3 R (992)",
+      "reference": "porsche_992_gt3r_p7.png",
+      "image_sha256": "1308cf79619db9f5d50ad4aae308ddae89aa583e7aa831ec8da64b4f8a1efa51",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2024/09/Porsche-911-GT3-R-992_V2.pdf",
+      "provenance": "Pre-existing official manual image supplied in TP Reader archive",
+      "temperature_kind": "surface",
+      "temperature_wheels": [
+        "FL",
+        "FR",
+        "RL",
+        "RR"
+      ],
+      "page_note": null,
+      "coordinate_space": "Reference image pixels, not monitor coordinates"
+    },
+    {
+      "car_path": "porsche9922cup",
+      "name": "Porsche 911 Cup (992.2)",
+      "reference": "porsche_9922_cup_p7.jpg",
+      "image_sha256": "97117ebf762f07efe52a1be313e23e4f1d4ee0b66b9cfbeac4c625e6786765a6",
+      "source_url": "https://s100.iracing.com/wp-content/uploads/2026/01/Porsche-Cup-992.2-V1.pdf",
+      "provenance": "JPEG stream 19 extracted without modification from official PDF",
+      "temperature_kind": "surface",
+      "temperature_wheels": [
+        "FL",
+        "FR",
+        "RL",
+        "RR"
+      ],
+      "page_note": null,
+      "coordinate_space": "Reference image pixels, not monitor coordinates",
+      "pdf_sha256": "4f8d861812b624834ed23d22baf129228cedb2d0a8e06ae5b2991b2e869fecfc",
+      "pdf_bytes": 7249003
+    }
+  ]
+}

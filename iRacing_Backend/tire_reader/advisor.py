@@ -1,0 +1,121 @@
+"""Conservative tire warnings from fresh, repeated, explicitly known states."""
+from collections import deque
+import time
+import uuid
+from .snapshot import TireSnapshot, WHEELS
+
+LABELS = dict(zip(WHEELS, ('왼쪽 앞', '오른쪽 앞', '왼쪽 뒤', '오른쪽 뒤')))
+PHRASES = {f'pressure_{state}_{wheel}': f'{label} 타이어 압력 {word}.'
+           for wheel, label in LABELS.items() for state, word in (('high', '높음'), ('low', '낮음'))}
+PHRASES.update({f'temperature_hot_{wheel}': f'{label} 타이어 과열.' for wheel, label in LABELS.items()})
+PHRASES.update(temperature_cold='타이어 식었음.', tires_ok='타이어 적정 범위 들어옴.')
+
+
+class TireAdvisor:
+    """No universal targets, inferred pressure, or wear-to-grip predictions."""
+    def __init__(self, *, clock=time.monotonic):
+        self.clock = clock
+        self.reset()
+
+    def reset(self):
+        self.identity = None
+        self.last_t = None
+        self.latest = None
+        self.history = {}
+        self.sent = {}
+        self.pending = None
+        self.was_warm = False
+        self.ok_sent = False
+
+    def observe(self, data, *, enabled):
+        now = self.clock()
+        if not enabled or not isinstance(data, dict):
+            self.pending = None
+            return
+        try:
+            snapshot = TireSnapshot.from_dict(data)
+        except (ValueError, TypeError, KeyError):
+            self.pending = None
+            return
+        if (snapshot.identity != self.identity or not snapshot.active or
+                self.last_t is not None and snapshot.t is not None and snapshot.t < self.last_t):
+            self.reset()
+        self.identity, self.last_t, self.latest = snapshot.identity, snapshot.t, snapshot
+        if not snapshot.active:
+            return
+        for wheel in WHEELS:
+            value = snapshot.wheels[wheel]
+            for field, state, numeric in (('pressure', value.pressure_state, value.pressure_kpa),
+                                          ('temperature', value.temp_state, value.temp_c)):
+                key = field, wheel
+                history = self.history.setdefault(key, deque(maxlen=5))
+                if numeric is not None:
+                    # A newly read number with unknown color/range is evidence
+                    # that the old classification is no longer confirmed.
+                    history.append((state, now))
+        self.current(now)  # Drop expired or no longer applicable calls first.
+        if self.pending:
+            return
+        candidates = []
+        for wheel in WHEELS:
+            for field, state in (('temperature', 'hot'), ('pressure', 'high'), ('pressure', 'low')):
+                if self.state(field, wheel, now) == state:
+                    candidates.append(f'{field}_{state}_{wheel}')
+        temps = [self.state('temperature', w, now) for w in WHEELS]
+        if any(s == 'ok' for s in temps):
+            self.was_warm = True
+        if self.was_warm and all(s == 'cold' for s in temps):
+            candidates.append('temperature_cold')
+        if not self.ok_sent and all(self.state(field, w, now) == 'ok'
+                                   for field in ('pressure', 'temperature') for w in WHEELS):
+            candidates.append('tires_ok')
+        for key in candidates:
+            previous = self.sent.get(key)
+            if previous and (now - previous[0] < 180 or snapshot.lap is None or
+                             previous[1] is None or snapshot.lap - previous[1] < 3):
+                continue
+            self.pending = dict(id=uuid.uuid4().hex, key=key, text=PHRASES[key],
+                created_at=now, expires_at=now + 12, game=snapshot.game, engineer='coach', priority=0)
+            break
+
+    def state(self, field, wheel, now):
+        history = self.history.get((field, wheel), ())
+        fresh = [(state, t) for state, t in history if 0 <= now - t <= 5]
+        if len(fresh) < 3:
+            return None
+        # Require the latest three observations to agree; intermittent missing
+        # measurements cannot turn an old consensus into a new transition.
+        last = fresh[-3:]
+        return last[-1][0] if len({s for s, _ in last}) == 1 else None
+
+    def quiet(self, now):
+        s = self.latest
+        return bool(s and s.active and 0 <= now - s.observed_at < 2.5 and s.on_pit_road is False
+            and s.steering is not None and abs(s.steering) < .06
+            and s.throttle is not None and s.throttle >= .75
+            and s.brake is not None and s.brake <= .03
+            and s.speed_mps is not None and s.speed_mps >= 8)
+
+    def applicable(self, event, now):
+        key = event['key']
+        if key == 'temperature_cold':
+            return all(self.state('temperature', w, now) == 'cold' for w in WHEELS)
+        if key == 'tires_ok':
+            return all(self.state(f, w, now) == 'ok' for f in ('pressure', 'temperature') for w in WHEELS)
+        field, state, wheel = key.split('_')
+        return self.state(field, wheel, now) == state
+
+    def current(self, now):
+        event = self.pending
+        if event and (now >= event['expires_at'] or not self.applicable(event, now)):
+            self.pending = event = None
+        return {**event, 'quiet': self.quiet(now), 'remaining_s': event['expires_at'] - now} if event else None
+
+    def ack(self, identifier, now):
+        event = self.current(now)
+        if not event or event['id'] != identifier or not event['quiet']:
+            return False
+        self.sent[event['key']] = now, self.latest.lap
+        self.ok_sent |= event['key'] == 'tires_ok'
+        self.pending = None
+        return True

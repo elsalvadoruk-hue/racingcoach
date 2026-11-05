@@ -178,6 +178,8 @@ def fixed_catalog():
     found.update({(role, text): None for role in ('coach', 'race', 'strategy') for text in ACKS})
     from setup_advisor import PHRASES
     found.update({('coach', text): None for text in PHRASES.values()})
+    from tire_reader.advisor import PHRASES as TIRE_PHRASES
+    found.update({('coach', text): None for text in TIRE_PHRASES.values()})
     return list(found)
 
 

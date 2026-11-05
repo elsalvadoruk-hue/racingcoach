@@ -91,12 +91,14 @@ class ApiCompatibilityTests(unittest.TestCase):
                  '/api/driver-journal/feelings/{drive_id}': {'put': {}, 'delete': {}},
                  '/api/driver-journal/challenges': {'post': {}},
                  '/api/driver-journal/reconcile': {'post': {}},
-                 '/api/driver-results': {'get': {}}}
+                 '/api/driver-results': {'get': {}}, '/api/tire-overlay': {'get': {}},
+                 '/api/tire-overlay/settings': {'put': {}}}
         with patch.object(launch_app, 'read_http', return_value=json.dumps({'paths': paths}).encode()):
             launch_app.require_current_api()
         for missing in ('/api/driver-history/library', '/api/driver-history/library/pause',
                         '/api/driver-journal', '/api/driver-journal/feelings/{drive_id}',
-                        '/api/driver-journal/challenges', '/api/driver-journal/reconcile', '/api/driver-results'):
+                        '/api/driver-journal/challenges', '/api/driver-journal/reconcile', '/api/driver-results',
+                        '/api/tire-overlay', '/api/tire-overlay/settings'):
             with self.subTest(missing=missing), patch.object(launch_app, 'read_http', return_value=json.dumps({'paths': {key: value for key, value in paths.items() if key != missing}}).encode()):
                 with self.assertRaises(RuntimeError):
                     launch_app.require_current_api()

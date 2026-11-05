@@ -40,7 +40,7 @@ SCRIPTS = ("launch_app.py", "install_ui.py", "serve_ui.py", "prepare_radio_audio
            # 설치.bat and 실행.bat pick a supported Python through this.
            "find_python.bat",
            # The web settings tab and the driving overlay run this window process.
-           "overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
+           "tire_overlay.py", "overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
            "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py", "overlay_race_result.py", "overlay_studio_view.py", "overlay_preview.py")
 REQUIRED_OVERLAY_SCRIPTS = ("overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
                             "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py", "overlay_race_result.py", "overlay_studio_view.py", "overlay_preview.py")
@@ -87,10 +87,38 @@ def copy_backend(root: Path, out: Path) -> None:
         if path.is_file() and path.name not in BACKEND_SKIP and (
                 path.suffix == ".py" or path.name.startswith("requirements") or path.name == "lmu_native_bridge.cpp"):
             shutil.copy2(path, out / "iRacing_Backend" / path.name)
-    for name in bridges:
+    for name in bridges + tire_reader_files(root):
         destination = out / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root / name, destination)
+
+
+def tire_reader_files(root: Path) -> list[str]:
+    """Only reviewed Python modules and the twelve official manual images."""
+    if not (root / 'iRacing_Backend/tire_overlay_control.py').is_file():
+        return []
+    package = root / 'iRacing_Backend/tire_reader'
+    names = [f'{name}.py' for name in ('__init__', 'sdk', 'screen_reader', 'managed_overlay',
+        'pressure_ocr', 'pressure_overlay', 'pressure_display', 'cockpit_gate', 'positions',
+        'dash_locator', 'multi_dash_locator', 'vehicle_dash', 'window_visibility',
+        'snapshot', 'lmu_source', 'advisor', 'color_state', 'voice_audio', 'targets', 'history', 'log_export')]
+    manifest = package / 'samples/gt3_dash/sources.json'
+    listing = json.loads(manifest.read_text(encoding='utf-8'))
+    if len(listing.get('vehicles', [])) != 12:
+        raise ValueError('타이어 대시 기준 이미지 12개가 필요합니다.')
+    names.append('samples/gt3_dash/sources.json')
+    for row in listing['vehicles']:
+        name = row['reference']
+        if not re.fullmatch(r'[a-z0-9_]+\.(png|jpg)', name):
+            raise ValueError('타이어 대시 기준 이미지 경로가 올바르지 않습니다.')
+        path = package / 'samples/gt3_dash' / name
+        if hashlib.sha256(path.read_bytes()).hexdigest() != row['image_sha256']:
+            raise ValueError('타이어 대시 기준 이미지 해시가 다릅니다: ' + name)
+        names.append('samples/gt3_dash/' + name)
+    for name in names:
+        if not (package / name).is_file():
+            raise ValueError('타이어 오버레이 파일이 없습니다: ' + name)
+    return [(package / name).relative_to(root).as_posix() for name in names]
 
 FIRST_RUN = """iRacing 주행 코치 {version} - 처음 실행
 

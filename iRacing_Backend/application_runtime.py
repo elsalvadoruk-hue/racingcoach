@@ -25,14 +25,18 @@ def analysis_state_summary(state):
 
 
 @asynccontextmanager
-async def managed_lifespan(live, overlay, warm_references):
+async def managed_lifespan(live, overlay, warm_references, tire_overlay=None):
     live.start()
     overlay.start_monitor(live.overlay_state)
     # Reference checks remain in the background; first analysis never waits.
     threading.Thread(target=warm_references, name="garage61-check", daemon=True).start()
     try:
+        if tire_overlay is not None:
+            await asyncio.to_thread(tire_overlay.start)
         yield
     finally:
+        if tire_overlay is not None:
+            await asyncio.to_thread(tire_overlay.close)
         await asyncio.to_thread(overlay.close)
         live.stop()
         live.drill.stop()
@@ -46,9 +50,12 @@ async def telemetry_file_busy_response(_request, exc):
                                  'retryable': True, 'filename': exc.path.name})
 
 
-def create_application(version, lifespan, overlay):
+def create_application(version, lifespan, overlay, tire_overlay=None):
     app = FastAPI(title="iRacing Telemetry Setup Tuner", version=version, lifespan=lifespan)
     app.include_router(overlay_routes(overlay))
+    if tire_overlay is not None:
+        from tire_overlay_control import routes as tire_routes
+        app.include_router(tire_routes(tire_overlay))
     app.add_exception_handler(TelemetryFileBusy, telemetry_file_busy_response)
     # Preserve the existing localhost origin, ports and explicit CORS override.
     app.add_middleware(CORSMiddleware,

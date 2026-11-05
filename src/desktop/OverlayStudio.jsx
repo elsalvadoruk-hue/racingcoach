@@ -30,6 +30,7 @@ import { sessions, modules, byId, games, initialConfig, selectedModules, selectM
 import Panel from './OverlayPanel';
 import { CoachingChoices, FormationChoices, FormationSummary } from './OverlayChoices';
 import OverlaySettings from '../components/OverlaySettings';
+import TireOverlaySettings from '../components/TireOverlaySettings';
 import { useGame } from '../lib/gameContext';
 import { API_BASE } from '../analysis/analysisClient';
 import { Alert, AlertDescription } from '../components/ui/alert';
@@ -201,6 +202,7 @@ export default function OverlayStudio({ apiBase = API_BASE, fetcher = fetch }) {
         <Field orientation="horizontal" className="scope-field"><FieldLabel htmlFor="save-scope">저장 대상</FieldLabel><NativeSelect id="save-scope" value={scope} disabled={busy} onChange={e => {setScope(e.target.value); setNotice('');}}><NativeSelectOption value="car" disabled={!view?.settings_target?.car_key}>현재 차량</NativeSelectOption><NativeSelectOption value="game">게임 기본값</NativeSelectOption></NativeSelect></Field>
         <div className="context-actions"><Button variant="outline" size="sm" disabled={busy || !view} onClick={preset}><RotateCcw data-icon="inline-start"/>현재 세션 추천 구성</Button><Button size="sm" disabled={busy || !view} onClick={save}><Save data-icon="inline-start"/>{busy ? '저장 중…' : '저장·적용'}</Button></div></div>
       <div className="common-settings" data-open={commonOpen}><Button variant="ghost" className="common-toolbar" aria-expanded={commonOpen} aria-controls={commonId} onClick={() => setCommonOpen(open => !open)}><Settings2 data-icon="inline-start"/><span className="common-heading"><b>창·표시 설정</b><small>자동 표시 · 위치 · 크기 · 불투명도 · 고정</small></span><span className="common-disclosure">{commonOpen ? '설정 접기' : '설정 열기'}<ChevronDown aria-hidden="true"/></span></Button><div id={commonId} className="common-body" hidden={!commonOpen}><OverlaySettings apiBase={apiBase} fetcher={fetcher} visible={commonOpen} compact /></div></div>
+      <TireOverlaySettings key={game} game={game} apiBase={apiBase} fetcher={fetcher}/>
       {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
       {notice && <p role="status" className="save-notice"><Check aria-hidden="true"/>{notice}</p>}
       <ContentReadiness view={error ? null : view}/>

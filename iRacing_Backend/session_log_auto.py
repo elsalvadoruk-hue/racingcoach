@@ -29,9 +29,13 @@ logger = logging.getLogger(__name__)
 # Raise when what the consent text says changes: the driver is then asked again.
 # 4 (2026-10-28): confirmed asphalt-oval practice, silent oval drives and pacing
 # signals; bounded traffic windows when the complete oval log does not fit.
-CONSENT_VERSION = 4
+# 5 (2026-11-05): linked tire readings/diagnostics and unverified cold settings.
+CONSENT_VERSION = 5
 # Update with CONSENT_VERSION when the notice's scope changes, independently of app releases.
 CONSENT_CHANGES = (
+    '해당 주행의 타이어 압력·온도·색 판정·기온/노면 온도와 인식 실패 진단을 추가합니다.',
+    '제공되는 냉간 설정값의 출처·장착 미확인과 판단 범위·랩/스틴트 요약을 포함합니다. 화면과 인식 문자열은 보내지 않습니다.',
+    '타이어 자료가 크면 실제 앞/뒤 구간으로 줄이거나 제외하며 누락량을 표시합니다.',
     '확인된 포장 오벌 연습에서도 주변 차량·피트 허용·출발 대열 신호를 보냅니다.',
     '실제 주행이 확인된 포장 오벌은 2분 이상이면 안내가 없었던 기록도 보냅니다.',
     '오벌 절차·위트 무전의 무음 평가 근거와 음성 점유 상태·가상 문구를 추가합니다.',

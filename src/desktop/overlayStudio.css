@@ -188,3 +188,11 @@
 .overlay-studio .native-preview [data-slot="alert"] { max-width:520px; }
 .overlay-studio .native-preview [data-slot="alert-description"] { display:flex; flex-direction:column; gap:12px; font-size:12px; line-height:1.8; }
 @media(max-width:1430px) { .overlay-studio .hud:not(.hud-inputs) .module-body { flex-wrap:wrap; }.overlay-studio .hud:not(.hud-inputs) .module-copy { flex-basis:100%; }.overlay-studio .hud:not(.hud-inputs) .module-number { align-items:flex-start; }.overlay-studio .comparison-basis { flex-wrap:wrap; } }
+.overlay-studio .tire-overlay-settings { margin: 14px 0; }
+.tire-settings-layout { display: grid; grid-template-columns: minmax(300px, 0.9fr) minmax(0, 1.4fr); gap: 28px; align-items: start; }
+.tire-settings-controls, .tire-settings-info { display: flex; flex-direction: column; gap: 10px; }
+.tire-settings-info p { margin: 0; }
+.tire-settings-toggles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 900px) { .tire-settings-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; } }
+.tire-appearance-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 900px) { .tire-appearance-grid { grid-template-columns: minmax(0, 1fr); } }

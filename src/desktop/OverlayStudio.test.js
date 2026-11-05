@@ -12,6 +12,7 @@ beforeEach(() => { useGame.mockReturnValue({ selectedGame: 'iracing' }); });
 function fixture() {
   let saved = initialConfig();
   const fetcher = jest.fn(async (url, options = {}) => {
+    if (url.includes('/api/tire-overlay')) return {ok:true,json:async()=>({version:1,supported:true,enabled:false,fixed:false,running:false})};
     if(url.includes('/studio/render')) {
       const body=JSON.parse(options.body), ids=selectModules(body.config,body.session,body.scene,body.availability).ids;
       return {ok:true,json:async()=>({renderer:'native-tk-v1',svg:'<svg xmlns="http://www.w3.org/2000/svg"/>',width:390,height:150,ids,
@@ -167,7 +168,7 @@ test('slow polling keeps a single request in flight and aborts it on unmount', a
   try {
     const fetcher=jest.fn(()=>new Promise(()=>{}));
     const view=render(<OverlayStudio fetcher={fetcher}/>);
-    const reads=()=>fetcher.mock.calls.filter(([url])=>!url.includes('/render'));
+    const reads=()=>fetcher.mock.calls.filter(([url])=>url.includes('/api/overlay/studio')&&!url.includes('/render'));
     expect(reads()).toHaveLength(1);
     fireEvent.click(screen.getByRole('radio',{name:'네 세션 비교'}));
     jest.advanceTimersByTime(6000);

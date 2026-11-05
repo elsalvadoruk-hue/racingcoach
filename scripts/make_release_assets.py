@@ -54,12 +54,12 @@ def make_app(root: Path, out: Path, allow_dirty: bool = False) -> Path:
                            capture_output=True, text=True, encoding="utf-8", check=True).stdout.strip()
     if dirty and not allow_dirty:
         raise ValueError("커밋하지 않은 변경이 있습니다. 릴리스 태그와 같은 내용이 되도록 커밋한 뒤 만드세요.")
-    from make_share_copy import bundled_bridge_files
-    bridges = bundled_bridge_files(root)
+    from make_share_copy import bundled_bridge_files, tire_reader_files
+    bridges = bundled_bridge_files(root) + tire_reader_files(root)
     committed = git_files(root)
     missing = sorted(set(bridges) - set(committed))
     if missing:
-        raise ValueError("LMU 사전 빌드 파일을 먼저 Git에 추가하세요: " + ", ".join(missing))
+        raise ValueError("LMU 사전 빌드·타이어 오버레이 파일을 먼저 Git에 추가하세요: " + ", ".join(missing))
     names = [name for name in committed if not name.replace('\\', '/').lower().startswith('runtime/')] + sorted(path.relative_to(root).as_posix() for path in (root / "build").rglob("*") if path.is_file())
     target = out / app_update.APP_ASSET.format(version=version)
     names = sorted(set(names))

@@ -9,3 +9,4 @@ google-cloud-speech>=2.30,<3
 google-cloud-texttospeech>=2.25,<3
 pytest>=8.0,<9.0
 httpx>=0.27,<1.0
+-r requirements_tire_ocr.txt

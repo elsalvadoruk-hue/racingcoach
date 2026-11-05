@@ -1,0 +1,150 @@
+import React from 'react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import TireOverlaySettings from './TireOverlaySettings';
+
+const initial = {version:1,supported:true,enabled:false,fixed:false,running:false};
+const response = data => ({ok:true,json:async()=>data});
+
+function fixture() {
+  let state={...initial};
+  const fetcher=jest.fn(async (url,options={})=>{
+    if (options.method==='PUT') state={...state,...JSON.parse(options.body)};
+    state.running=state.enabled;
+    return response({...state});
+  });
+  return fetcher;
+}
+
+test('additional window has independent enable, lock and position controls',async()=>{
+  const fetcher=fixture();render(<TireOverlaySettings apiBase="http://local" fetcher={fetcher}/>);
+  const enabled=screen.getByRole('switch',{name:'타이어 오버레이 표시'});
+  await waitFor(()=>expect(enabled).toBeEnabled());
+  fireEvent.click(enabled);
+  await waitFor(()=>expect(enabled).toBeChecked());
+  fireEvent.click(screen.getByRole('switch',{name:'타이어 창 위치 잠금'}));
+  await waitFor(()=>expect(screen.getByRole('switch',{name:'타이어 창 위치 잠금'})).toBeChecked());
+  fireEvent.click(screen.getByRole('button',{name:'타이어 창 위치 초기화'}));
+  await waitFor(()=>expect(fetcher).toHaveBeenCalledWith('http://local/api/tire-overlay/reset-position',expect.objectContaining({method:'POST'})));
+  await waitFor(()=>expect(enabled).toBeEnabled());fireEvent.click(enabled);
+  await waitFor(()=>expect(enabled).not.toBeChecked());
+  expect(fetcher.mock.calls.every(([url])=>url.includes('/api/tire-overlay'))).toBe(true);
+  expect(screen.getByText(/탑승·그리드 진입 10초/)).toHaveTextContent('1초마다');
+});
+
+test('LMU has independent game settings and voice-only controls',async()=>{
+  const fetcher=fixture();render(<TireOverlaySettings game="lmu" fetcher={fetcher}/>);
+  const voice=screen.getByRole('switch',{name:'타이어 음성 안내'});
+  await waitFor(()=>expect(voice).toBeEnabled());fireEvent.click(voice);
+  await waitFor(()=>expect(voice).toBeChecked());
+  expect(screen.getByRole('switch',{name:'타이어 오버레이 표시'})).not.toBeChecked();
+  expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('?game=lmu'),expect.objectContaining({method:'PUT',body:JSON.stringify({voice_enabled:true})}));
+  expect(screen.getByText(/공유 메모리에서/)).toBeVisible();
+});
+
+test('failed enable leaves saved toggle unchanged and a retry recovers',async()=>{
+  const fetcher=fixture();fetcher.mockImplementationOnce(async()=>response({...initial}));
+  fetcher.mockImplementationOnce(async()=>({ok:false,status:503,json:async()=>({detail:'OCR을 시작하지 못했습니다.'})}));
+  render(<TireOverlaySettings fetcher={fetcher}/>);
+  const toggle=screen.getByRole('switch',{name:'타이어 오버레이 표시'});
+  await waitFor(()=>expect(toggle).toBeEnabled());fireEvent.click(toggle);
+  expect(await screen.findByRole('alert')).toHaveTextContent('OCR을 시작하지 못했습니다.');
+  expect(toggle).not.toBeChecked();fireEvent.click(toggle);
+  await waitFor(()=>expect(toggle).toBeChecked());
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+test('an old server gives restart instructions and no usable toggle',async()=>{
+  const fetcher=jest.fn(async()=>({ok:false,status:404,json:async()=>({detail:'Not found'})}));
+  render(<TireOverlaySettings fetcher={fetcher}/>);
+  expect(await screen.findByRole('alert')).toHaveTextContent('앱과 실행창을 완전히 종료');
+  expect(screen.getByRole('switch',{name:'타이어 오버레이 표시'})).toBeDisabled();
+});
+
+test('delayed polling cannot overwrite a completed mutation',async()=>{
+  jest.useFakeTimers();
+  try {
+    const fetcher=fixture();let resolvePoll;
+    render(<TireOverlaySettings fetcher={fetcher}/>);
+    await waitFor(()=>expect(screen.getByRole('switch',{name:'타이어 오버레이 표시'})).toBeEnabled());
+    fetcher.mockImplementationOnce(()=>new Promise(resolve=>{resolvePoll=resolve;}));
+    await act(async()=>{jest.advanceTimersByTime(1000);});
+    fireEvent.click(screen.getByRole('switch',{name:'타이어 오버레이 표시'}));
+    await waitFor(()=>expect(screen.getByRole('switch',{name:'타이어 오버레이 표시'})).toBeChecked());
+    await act(async()=>{resolvePoll(response({...initial}));});
+    expect(screen.getByRole('switch',{name:'타이어 오버레이 표시'})).toBeChecked();
+  } finally {jest.useRealTimers();}
+});
+
+test('a crashed child can restart',async()=>{
+  const fetcher=fixture();fetcher.mockImplementationOnce(async()=>response({...initial,enabled:true}));
+  const view=render(<TireOverlaySettings fetcher={fetcher}/>);
+  const restart=await screen.findByRole('button',{name:'타이어 창 다시 켜기'});
+  fireEvent.click(restart);await waitFor(()=>expect(screen.queryByRole('button',{name:'타이어 창 다시 켜기'})).not.toBeInTheDocument());
+  view.unmount();
+});
+
+test('unmount aborts an outstanding status request',()=>{
+  const fetcher=jest.fn(()=>new Promise(()=>{}));
+  const view=render(<TireOverlaySettings fetcher={fetcher}/>);
+  const signal=fetcher.mock.calls[0][1].signal;
+  view.unmount();expect(signal.aborted).toBe(true);
+});
+
+test('appearance sliders merge rapid changes and save the latest values',async()=>{
+  const fetcher=fixture();render(<TireOverlaySettings fetcher={fetcher}/>);
+  const background=screen.getByRole('slider',{name:'배경 불투명도'});
+  await waitFor(()=>expect(background).toBeEnabled());
+  fireEvent.change(background,{target:{value:'20'}});
+  fireEvent.change(background,{target:{value:'35'}});
+  fireEvent.change(screen.getByRole('slider',{name:'표시 불투명도'}),{target:{value:'60'}});
+  fireEvent.change(screen.getByRole('slider',{name:'모서리 둥글기 (R)'}),{target:{value:'16'}});
+  await waitFor(()=>expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/settings'),expect.objectContaining({
+    method:'PUT',body:JSON.stringify({background_opacity:35,content_opacity:60,radius:16}),
+  })));
+  expect(background).toHaveValue('35');
+  expect(screen.getByRole('slider',{name:'모서리 둥글기 (R)'})).toHaveValue('16');
+});
+
+test('appearance can recover after a failed save without leaving controls busy',async()=>{
+  const fetcher=fixture();render(<TireOverlaySettings fetcher={fetcher}/>);
+  const background=screen.getByRole('slider',{name:'배경 불투명도'});
+  await waitFor(()=>expect(background).toBeEnabled());
+  fetcher.mockImplementationOnce(async()=>({ok:false,status:503,json:async()=>({detail:'설정 적용 실패'})}));
+  fireEvent.change(background,{target:{value:'25'}});
+  expect(await screen.findByRole('alert')).toHaveTextContent('설정 적용 실패');
+  expect(background).toHaveValue('85');
+  fireEvent.change(background,{target:{value:'40'}});
+  await waitFor(()=>expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  expect(background).toHaveValue('40');
+  expect(screen.getByRole('switch',{name:'타이어 오버레이 표시'})).toBeEnabled();
+});
+
+test('dragging while a save is delayed sends the final value sequentially',async()=>{
+  const fetcher=fixture();render(<TireOverlaySettings fetcher={fetcher}/>);
+  const background=screen.getByRole('slider',{name:'배경 불투명도'});
+  await waitFor(()=>expect(background).toBeEnabled());
+  let finish;
+  fetcher.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve;}));
+  fireEvent.change(background,{target:{value:'20'}});
+  await waitFor(()=>expect(finish).toBeDefined());
+  fireEvent.change(background,{target:{value:'35'}});
+  await act(async()=>finish(response({...initial,background_opacity:20})));
+  await waitFor(()=>expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/settings'),expect.objectContaining({body:JSON.stringify({background_opacity:35})})));
+  await waitFor(()=>expect(screen.getByRole('switch',{name:'타이어 오버레이 표시'})).toBeEnabled());
+  expect(background).toHaveValue('35');
+});
+
+test('missing tire clips are stated and ranges can be set only for the measured car',async()=>{
+  const fetcher=fixture();fetcher.mockImplementationOnce(async()=>response({...initial,voice_enabled:true,
+    voice_audio_ready:false,car_path:'bmwm4gt3',car_name:'BMW M4 GT3',targets:{}}));
+  render(<TireOverlaySettings fetcher={fetcher}/>);
+  expect(await screen.findByText('타이어 안내 음원이 아직 준비되지 않았습니다.')).toBeVisible();
+  fireEvent.click(screen.getByText(/차량별 음성 판단 범위/));
+  expect(screen.getByLabelText('온도 하한 (°C)')).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('압력 하한 (bar)'),{target:{value:'1.6'}});
+  fireEvent.change(screen.getByLabelText('압력 상한 (bar)'),{target:{value:'1.8'}});
+  fireEvent.click(screen.getByRole('button',{name:'현재 차량 범위 저장'}));
+  await waitFor(()=>expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/targets'),expect.objectContaining({
+    body:JSON.stringify({car:'bmwm4gt3',pressure_low_bar:1.6,pressure_high_bar:1.8,temp_low_c:null,temp_high_c:null}),
+  })));
+});

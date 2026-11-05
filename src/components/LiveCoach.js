@@ -16,6 +16,7 @@ import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import PitWall, { ENGINEERS, PIT_WALL_KEY, readPitPreferences } from './PitWall';
 import { voiceEventAllowed } from '../lib/voiceAlerts';
 import useSpotter from '../useSpotter';
+import useTireVoice from '../useTireVoice';
 import SpotterPanel from './SpotterPanel';
 import useRadioDiagnostics from '../useRadioDiagnostics';
 import RadioDiagnostics from './RadioDiagnostics';
@@ -125,6 +126,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const audioOutput = useAudioOutput();
   const standbyRef = useRef(false); standbyRef.current = Boolean(audioOutput.standby);
   const recordDelivery = useRadioDiagnostics(apiBase);
+  useTireVoice(apiBase, activeGame, audioOutput, { busy: phase !== 'idle', recordDelivery });
   const deliveryEvent = useCallback((note, spokenText) => ({ event_id: String(note.id), run_id: note.context?.snapshot?.run_id || '',
     backend_version: note.context?.backend_version || null,
     key: note.context?.report_key || 'answer', engineer: note.context?.engineer || 'coach', text: spokenText || note.reply || '',

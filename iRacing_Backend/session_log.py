@@ -159,6 +159,7 @@ EXTRA_ORDER = ('session_health', 'nearby_cars', 'drive_summary')
 # corner analysis. Other games/profiles keep their existing order.
 OVAL_EXTRA_ORDER = ('drive_summary', 'nearby_cars', 'session_health')
 EXTRA_DESCRIPTIONS = {
+    'tires.json.xz': 'xz JSON: explicitly linked tire measurements, cold setting evidence, reader diagnostics and lap/stint summaries; no screenshots/OCR text',
     'banter-shadow.json': 'shadow-only banter evaluations and virtual phrase choices; no actual playback',
     'oval-procedures.json': 'shadow-only oval procedure signals, candidates, cancellations and client observations; no actual playback',
     'session-health.json': 'bounded backend connection samples; not proof of playback or exact disconnect timing',
@@ -314,7 +315,7 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
         return _zip({**manifest, 'files': files, 'extras': status}, radio, reports, included)
 
     data = build()
-    order = ('banter_shadow', 'oval_procedures') + (OVAL_EXTRA_ORDER if (manifest.get('spotter') or {}).get('profile') == 'ASPHALT_OVAL' else EXTRA_ORDER)
+    order = ('banter_shadow', 'oval_procedures', 'tire_data') + (OVAL_EXTRA_ORDER if (manifest.get('spotter') or {}).get('profile') == 'ASPHALT_OVAL' else EXTRA_ORDER)
     for group in order:
         if limit is None or len(data) <= limit:
             break
@@ -434,6 +435,13 @@ def read_extras(data):
             parts['oval_procedures'] = json.loads(archive.read('oval-procedures.json'))
         if 'drive_summary.json.xz' in names:
             parts['drive_summary'] = drive_summary.unpack(archive.read('drive_summary.json.xz'))
+        if 'tires.json.xz' in names:
+            import lzma
+            decoder=lzma.LZMADecompressor()
+            raw=decoder.decompress(archive.read('tires.json.xz'),max_length=128*1024*1024)
+            if not decoder.eof:
+                raise ValueError('타이어 로그의 크기나 형식을 확인하세요.')
+            parts['tires']=json.loads(raw)
         trace_names = sorted(n for n in names if re.fullmatch(r'handling-traces/[0-9]+\.json\.xz', n))
         if trace_names:
             import handling_traces

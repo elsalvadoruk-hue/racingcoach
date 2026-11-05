@@ -73,7 +73,9 @@ def require_current_api() -> None:
                      and {'put', 'delete'}.issubset(paths.get('/api/driver-journal/feelings/{drive_id}', {}))
                      and 'post' in paths.get('/api/driver-journal/challenges', {})
                      and 'post' in paths.get('/api/driver-journal/reconcile', {})
-                     and 'get' in paths.get('/api/driver-results', {}))
+                     and 'get' in paths.get('/api/driver-results', {})
+                     and 'get' in paths.get('/api/tire-overlay', {})
+                     and 'put' in paths.get('/api/tire-overlay/settings', {}))
     except (ValueError, AttributeError, TypeError):
         supported = False
     if not supported:

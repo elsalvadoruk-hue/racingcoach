@@ -194,6 +194,7 @@ from pydantic import BaseModel, Field
 import app_settings
 import session_log
 from overlay_control import OverlayController, routes as overlay_routes
+from tire_overlay_control import TireOverlays
 
 # The data folder and the settings entered on the screen, before anything reads its configuration.
 # A database path given from outside means a test or a tool, not the driver's install (lmu_car_models scan).
@@ -3911,6 +3912,10 @@ def overlay_personal_paths(game):
     return _list_raw_ibt_files(None)
 
 
+from tire_reader.voice_audio import TireVoiceAudio
+from tire_reader.log_export import linked_run as linked_tire_run
+tire_overlay_controller = TireOverlays(audio=TireVoiceAudio(voice_coach.fixed_audio),
+                                      run_link=lambda snapshot: linked_tire_run(live_telemetry,snapshot))
 overlay_controller = OverlayController(reference=OverlayReference(
     EXTERNAL_REFERENCE_DIR, lambda path: Garage61ReferenceReader(path).parse(), pinned_loader=load_task_overlay_reference,
     personal_loader=PersonalOverlayLoader(overlay_personal_paths, lambda path: repository.load(path),
@@ -3960,7 +3965,8 @@ def session_log_extras(defer: bool = False):
         analyzer = TelemetryAnalyzer(repository.load(Path(path)))
         yield from handling_traces.groups(analyzer, summary, seed)
 
-    return (extras.nearby_cars(live_telemetry.traffic_log.folder, live_telemetry.timing_log.folder,
+    return (tire_overlay_controller.log_extra,
+            extras.nearby_cars(live_telemetry.traffic_log.folder, live_telemetry.timing_log.folder,
                               prepare=live_telemetry.flush_session_logs),
             extras.own_drive(candidates, metadata_of, analyze, driving=lambda: getattr(live_telemetry, "_link", None) == "DRIVING",
                              defer=defer, app_version=APP_VERSION, traces=trace_groups))
@@ -3994,7 +4000,7 @@ async def app_lifespan(_app):
             logger.info('LMU saved data moved from livery to model keys: %s', moved)
     except Exception:
         logger.exception('LMU car models were not prepared; liveries stay separate this run')
-    async with _managed_result_capture(), managed_lifespan(live_telemetry, overlay_controller, lambda: warm_background()):
+    async with _managed_result_capture(), managed_lifespan(live_telemetry, overlay_controller, lambda: warm_background(), tire_overlay_controller):
         session_health.start()
         try:
             uploader.start()
@@ -4007,7 +4013,7 @@ async def app_lifespan(_app):
             await asyncio.to_thread(session_health.stop)
 
 
-app = create_application(APP_VERSION, app_lifespan, overlay_controller)
+app = create_application(APP_VERSION, app_lifespan, overlay_controller, tire_overlay_controller)
 register_voice_routes(app, voice_coach, resolve_telemetry_file, repository, TelemetryAnalyzer, AnalyzeRequest)
 
 

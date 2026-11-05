@@ -218,6 +218,33 @@ class ShareManifestTests(unittest.TestCase):
         requirements = (make_share_copy.ROOT / "iRacing_Backend" / "requirements_core.txt").read_text(encoding="utf-8").splitlines()
         self.assertTrue(any(line.strip().lower().startswith("pillow") for line in requirements))
 
+    def test_additional_tire_overlay_modules_and_verified_references_survive_sharing(self):
+        root=make_share_copy.ROOT
+        files=make_share_copy.tire_reader_files(root)
+        self.assertIn('iRacing_Backend/tire_reader/positions.py',files)
+        self.assertEqual(len([name for name in files if name.endswith(('.png','.jpg'))]),12)
+        self.assertIn('tire_overlay.py',make_share_copy.SCRIPTS)
+        with tempfile.TemporaryDirectory() as directory:
+            out=Path(directory)
+            make_share_copy.copy_backend(root,out)
+            for name in files:
+                self.assertEqual((out/name).read_bytes(),(root/name).read_bytes())
+            self.assertFalse(list(out.rglob('__pycache__')))
+        requirements=(root/'iRacing_Backend/requirements_core.txt').read_text(encoding='utf-8')
+        self.assertIn('-r requirements_tire_ocr.txt',requirements)
+
+    def test_tire_reference_image_corruption_prevents_packaging(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            package=root/'iRacing_Backend/tire_reader/samples/gt3_dash'
+            package.mkdir(parents=True)
+            (root/'iRacing_Backend/tire_overlay_control.py').write_text('')
+            (package/'sources.json').write_text(json.dumps({'vehicles':[
+                {'reference':'sample.png','image_sha256':'0'*64} for _ in range(12)]}))
+            (package/'sample.png').write_bytes(b'synthetic-damaged')
+            with self.assertRaisesRegex(ValueError,'해시'):
+                make_share_copy.tire_reader_files(root)
+
 
     def test_the_python_picker_the_bat_files_call_is_in_the_share(self):
         self.assertIn("find_python.bat", make_share_copy.root_bat_scripts())
