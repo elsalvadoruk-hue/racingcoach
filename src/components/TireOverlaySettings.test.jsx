@@ -199,6 +199,26 @@ test('pressure advice shows numbers with their basis, or why it is withheld',asy
   expect(screen.getByText('다음 피트 냉간 압력 추천')).toBeVisible();
 });
 
+test('LMU advice needs the open-setup switch and shows the double-stint projection',async()=>{
+  let state={...initial,lmu_open_setup:false,advice:{kind:'next_pit',status:'ready',track_temp_c:30,target_kpa:180,
+    target_source:'driver_range',wheels:{FL:{cold_kpa:150,model:'fitted',stints:3}},double_stint:{status:'ready',worst:'FL',
+      wheels:{FL:{wear_now:.85,wear_now_basis:'live',wear_at_stop:.8,wear_after_next:.6,stint_laps:20}}}}};
+  const fetcher=jest.fn(async(url,options={})=>{
+    if (options.method==='PUT') state={...state,...JSON.parse(options.body)};
+    return response({...state});
+  });
+  render(<TireOverlaySettings game="lmu" fetcher={fetcher}/>);
+  const open=await screen.findByRole('switch',{name:'오픈 셋업 경기에서 압력 추천 사용'});
+  await waitFor(()=>expect(open).toBeEnabled());
+  expect(screen.queryByText('다음 피트 냉간 압력 추천')).not.toBeInTheDocument();
+  fireEvent.click(open);
+  await waitFor(()=>expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('?game=lmu'),expect.objectContaining({body:JSON.stringify({lmu_open_setup:true})})));
+  expect(await screen.findByText('다음 피트 냉간 압력 추천')).toBeVisible();
+  expect(screen.getByText(/같은 길이\(약 20랩\)를 한 번 더 가면/)).toBeVisible();
+  expect(screen.getByText(/지금 85% → 피트 80% → 다음 스틴트 끝 60%/)).toBeVisible();
+  expect(screen.getByText(/더블 스틴트 여부는 직접 결정/)).toBeVisible();
+});
+
 test('missing tire clips are stated and ranges can be set only for the measured car',async()=>{
   const fetcher=fixture();fetcher.mockImplementationOnce(async()=>response({...initial,voice_enabled:true,
     voice_audio_ready:false,car_path:'bmwm4gt3',car_name:'BMW M4 GT3',targets:{}}));

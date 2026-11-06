@@ -16,6 +16,8 @@ class LmuTireReader:
         self.source_factory,self.clock=source_factory,clock
         self.source=None;self.generation=0;self.last_et=None;self.last_received=None
         self.scoring=None;self.identity=None;self.gate=CockpitGate(10,context=lmu_context)
+        from .installed import LmuInstalledPressure
+        self.installed=LmuInstalledPressure()
 
     def close(self):
         source,self.source=self.source,None
@@ -65,6 +67,11 @@ class LmuTireReader:
             gate=self.gate.update(context,now)
             row.update(status=gate['status'],overlay_ready=gate['ready'],cockpit_epoch=gate['epoch'],
                 warmup_remaining_s=gate['remaining_s'],car_path=car,car_name=str(raw.get('vehicle_model') or '')[:160])
+            laps=scoring.get('total_laps');lap=int(laps)+1 if finite(laps) is not None and laps>=0 else None
+            # Cold pressures are measured live (garage, new tires on pit road), also outside the gate.
+            installed=self.installed.update(identity,{w:(item.get('pressure_kpa'),item.get('wear_fraction'))
+                for w,item in zip(WHEELS,clean['wheels'])},in_garage=scoring.get('in_garage_stall'),
+                in_pits=scoring.get('in_pits'),on_track=context['IsOnTrack'],lap=lap)
             wheels={w:WheelState() for w in WHEELS}
             if gate['ready']:
                 row.update(status='reading',temperature_kind='surface_center')
@@ -75,7 +82,6 @@ class LmuTireReader:
                         wear_fraction=bounded(item['wear_fraction'],0,1))
                     wheels[w]=wheel
                     row['raw_kpa_'+w]=wheel.pressure_kpa;row['raw_temp_c_'+w]=wheel.temp_c
-            laps=scoring.get('total_laps');lap=int(laps)+1 if finite(laps) is not None and laps>=0 else None
             snapshot=TireSnapshot(game='lmu',car=car,track=track,session_key=clean['session_key'] or '',
                 t=et,observed_at=now,lap=lap,active=gate['ready'],wheels=wheels,
                 air_temp_c=bounded(scoring.get('ambient_temp_c'),-80,100),
@@ -86,6 +92,8 @@ class LmuTireReader:
                 speed_mps=bounded(clean.get('speed_mps'),0,150),
                 native_session_ref=native_session_ref('lmu',(clean['session_key'] or '')[:16],(clean['session_key'] or '')[16:32],None),
                 fuel_l=bounded(clean.get('fuel_l'),0,1000),lap_last_s=bounded(clean.get('last_lap_time'),.001,86400),
+                installed_cold_kpa=installed['installed_cold_kpa'],installed_cold_source=installed['installed_cold_source'],
+                installed_lap=installed['installed_lap'],
                 track_wetness_fraction_lmu=bounded(clean.get('track_wetness_ratio'),0,1),
                 session_type=next((name for a,b,name in ((0,0,'Offline Testing'),(1,4,'Practice'),
                     (5,8,'Open Qualify'),(9,9,'Warmup'),(10,13,'Race'))

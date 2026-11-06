@@ -45,6 +45,7 @@ class InstalledPressure:
         self.identity = None
         self.installed = {w: None for w in WHEELS}
         self.source = {w: None for w in WHEELS}
+        self.installed_lap = {w: None for w in WHEELS}  # lap when the tire now fitted went on
         self.was_garage = False
         self.garage_cold = {w: None for w in WHEELS}
         self.last_pit_values = None
@@ -65,14 +66,16 @@ class InstalledPressure:
             # The setup can still change in the garage; the last value before leaving counts.
             self.garage_cold, self.was_garage = _garage_cold(row), True
         elif on_track and self.was_garage:
+            lap = row.get('Lap')
             for w in WHEELS:
                 self.installed[w] = self.garage_cold[w]
                 self.source[w] = 'garage_start' if self.garage_cold[w] is not None else None
+                self.installed_lap[w] = lap if type(lap) is int else None
             self.was_garage = False
         # Joining a session already on track gives no evidence: values stay unknown.
         self._pit(row)
         return {'installed_cold_kpa': dict(self.installed), 'installed_cold_source': dict(self.source),
-                'pit_snapshot': self.pit_snapshot}
+                'installed_lap': dict(self.installed_lap), 'pit_snapshot': self.pit_snapshot}
 
     def _pit(self, row):
         stall = row.get('PlayerCarInPitStall') in (True, 1)
@@ -110,9 +113,58 @@ class InstalledPressure:
                 self.source[w] = 'pit_tire_change' if stop['pending'][w] is not None else 'pit_unconfirmed'
             elif stop['requested'][w]:
                 changed[w] = None
-                self.installed[w], self.source[w] = None, 'pit_unconfirmed'
+                self.installed[w], self.source[w], self.installed_lap[w] = None, 'pit_unconfirmed', None
             else:
                 changed[w] = False
         self.stops += 1
         self.pit_snapshot = {'stop': self.stops, 't': finite(row.get('SessionTime')), 'wheels': after,
                              'tire_changed': changed}
+        lap = row.get('Lap')
+        for w, done in changed.items():
+            if done:
+                self.installed_lap[w] = lap if type(lap) is int else None
+
+
+class LmuInstalledPressure:
+    """LMU reports live tire pressure, so a cold tire's pressure is measured, not taken from a setup.
+
+    - In the garage the tires are cold: the last pressure read before leaving is installed
+      ('garage_measured').
+    - On pit road, a wheel whose live wear returns to new (from below NEW_WEAR) got a new tire;
+      its first pressure after the change is installed ('pit_new_tire_measured').
+    Joining on track gives no evidence; values stay unknown.
+    """
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.identity = None
+        self.installed = {w: None for w in WHEELS}
+        self.source = {w: None for w in WHEELS}
+        self.installed_lap = {w: None for w in WHEELS}
+        self.garage = {w: None for w in WHEELS}
+        self.was_garage = False
+        self.wear = {w: None for w in WHEELS}
+
+    def update(self, identity, wheels, *, in_garage, in_pits, on_track, lap):
+        """wheels: {wheel: (pressure_kpa, wear_fraction)} straight from shared memory."""
+        if identity != self.identity:
+            self.reset()
+            self.identity = identity
+        if in_garage is True:
+            self.garage = {w: bounded(wheels[w][0], 40, 400) for w in WHEELS}
+            self.was_garage = True
+        elif on_track and self.was_garage:
+            for w in WHEELS:
+                self.installed[w], self.installed_lap[w] = self.garage[w], lap
+                self.source[w] = 'garage_measured' if self.garage[w] is not None else None
+            self.was_garage = False
+        for w in WHEELS:
+            pressure, wear = bounded(wheels[w][0], 40, 400), bounded(wheels[w][1], 0, 1)
+            before = self.wear[w]
+            if in_pits is True and wear is not None and before is not None and before < NEW_WEAR <= wear and pressure is not None:
+                self.installed[w], self.source[w], self.installed_lap[w] = pressure, 'pit_new_tire_measured', lap
+            if wear is not None:
+                self.wear[w] = wear
+        return {'installed_cold_kpa': dict(self.installed), 'installed_cold_source': dict(self.source),
+                'installed_lap': dict(self.installed_lap)}

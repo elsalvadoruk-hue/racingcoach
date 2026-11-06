@@ -97,6 +97,7 @@ def _observation(data):
     out['cold_pressure_installed_verified']=False
     out['installed_cold_kpa']={w:finite((data.get('installed_cold_kpa') or {}).get(w)) for w in WHEELS}
     out['installed_cold_source']={w:token((data.get('installed_cold_source') or {}).get(w)) for w in WHEELS}
+    out['installed_lap']={w:finite((data.get('installed_lap') or {}).get(w)) for w in WHEELS}
     out['session_time_of_day_s']=finite(data.get('session_time_of_day_s'))
     out['fixed_setup']=data.get('fixed_setup') if type(data.get('fixed_setup')) is bool else None
     return out
@@ -123,6 +124,7 @@ def _conditions(data):
     out['session_types']=[v for v in data.get('session_types',[])[:4] if v in ('Race','Practice','Offline Testing','Open Qualify','Lone Qualify','Qualify','Warmup')]
     out['installed_cold_kpa']={w:finite((data.get('installed_cold_kpa') or {}).get(w)) for w in WHEELS}
     out['installed_cold_source']={w:token((data.get('installed_cold_source') or {}).get(w)) for w in WHEELS}
+    out['installed_lap']={w:finite((data.get('installed_lap') or {}).get(w)) for w in WHEELS}
     out['fixed_setup']=data.get('fixed_setup') if type(data.get('fixed_setup')) is bool else None
     out['states']={w:{field:{token(k):finite(v) for k,v in (((data.get('states') or {}).get(w) or {}).get(field) or {}).items() if token(k)}
                       for field in ('pressure','temperature')} for w in WHEELS}

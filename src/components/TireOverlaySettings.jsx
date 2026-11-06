@@ -86,6 +86,24 @@ function AdviceView({ advice, voice, audioReady }) {
     {wheels.some(([, v]) => v.warning === 'below_lowest_used') && <p role="note">이전에 쓴 가장 낮은 냉간 압력보다 낮은 바퀴가 있습니다. 셋업 하한을 확인해 주세요.</p>}
     <p className="text-muted-foreground">참고값입니다. 반올림 단위는 차량 셋업 단계를 확인하지 않았습니다. 셋업 변경은 직접 판단해 주세요.</p>
     {voice && audioReady === false && <p className="text-muted-foreground">추천 안내 음성은 아직 준비되지 않았습니다. 화면 숫자는 그대로 표시됩니다.</p>}
+    {advice.double_stint && <DoubleStint data={advice.double_stint}/>}
+  </div>;
+}
+
+const pct = v => `${Math.round(v * 100)}%`;
+function DoubleStint({ data }) {
+  if (data.status !== 'ready') return <p className="text-muted-foreground">더블 스틴트 참고: 이 차량·트랙의 마모 기록이 아직 부족합니다.</p>;
+  const rows = Object.entries(data.wheels).filter(([, v]) => typeof v.wear_after_next === 'number');
+  const laps = Math.round(rows[0]?.[1].stint_laps || 0);
+  return <div aria-label="더블 스틴트 참고">
+    <p className="font-medium">더블 스틴트 참고 · 이 타이어로 같은 길이(약 {laps}랩)를 한 번 더 가면</p>
+    <div className="tire-appearance-grid">
+      {rows.map(([wheel, v]) => <p key={wheel} className={wheel === data.worst ? 'font-medium' : undefined}>
+        <span className="text-muted-foreground">{wheel} </span>
+        지금 {pct(v.wear_now)}{v.wear_now_basis === 'live' ? '' : '(추정)'} → 피트 {pct(v.wear_at_stop)} → 다음 스틴트 끝 {pct(v.wear_after_next)}
+      </p>)}
+    </div>
+    <p className="text-muted-foreground">남은 마모 비율 예상입니다. 마모만으로 그립이나 랩 타임을 판단하지 않으니 더블 스틴트 여부는 직접 결정해 주세요.</p>
   </div>;
 }
 
@@ -250,7 +268,13 @@ export default function TireOverlaySettings({ apiBase, fetcher = fetch, game = '
         </div>
         </div>
         </div>
-        {game !== 'lmu' && view?.advice && <AdviceView advice={view.advice} voice={view.voice_enabled} audioReady={view.advice_audio_ready}/>}
+        {game === 'lmu' && view && <Field orientation="horizontal" data-disabled={disabled}>
+          <FieldLabel htmlFor={`${id}-lmu-open`}>오픈 셋업 경기에서 압력 추천 사용</FieldLabel>
+          <Switch id={`${id}-lmu-open`} checked={view.lmu_open_setup === true} disabled={disabled}
+            onCheckedChange={lmu_open_setup => apply({ lmu_open_setup })}/>
+        </Field>}
+        {game === 'lmu' && view && <p className="text-sm text-muted-foreground">LMU는 셋업 고정 여부를 알려주지 않습니다. 셋업을 바꿀 수 있는 경기에서만 켜 주세요. 냉간 압력은 차고와 새 타이어 직후의 실제 측정값을 씁니다.</p>}
+        {view?.advice && (game !== 'lmu' || view.lmu_open_setup) && <AdviceView advice={view.advice} voice={view.voice_enabled} audioReady={view.advice_audio_ready}/>}
         {game !== 'lmu' && view?.ocr_english === false && <Alert>
           <AlertDescription>
             <p>영어 Windows OCR이 없어 {view.ocr_language ? `현재 언어(${view.ocr_language})로 ` : ''}숫자를 읽고 있습니다. 일부 계기판 숫자를 글자로 잘못 읽어 측정이 보류될 수 있습니다.</p>

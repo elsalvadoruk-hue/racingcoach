@@ -43,6 +43,7 @@ class TireOverlayController:
         self.process = None
         self.enabled, self.fixed, self.loaded = False, False, False
         self.voice_enabled = False
+        self.lmu_open_setup = False  # LMU only: the driver confirms open setups, so pressure advice may run
         from tire_reader.advisor import TireAdvisor
         self.advisor = TireAdvisor()
         self.snapshot = None
@@ -68,6 +69,7 @@ class TireOverlayController:
                 self.enabled = saved.get('enabled') is True
                 self.voice_enabled = saved.get('voice_enabled') is True
                 self.fixed = saved.get('fixed') is True
+                self.lmu_open_setup = self.game == 'lmu' and saved.get('lmu_open_setup') is True
                 for key, maximum in (('background_opacity', 100), ('content_opacity', 100), ('radius', 32)):
                     value = saved.get(key)
                     if type(value) is int and 0 <= value <= maximum:
@@ -82,7 +84,7 @@ class TireOverlayController:
         temporary = path.with_suffix('.tmp')
         try:
             temporary.write_text(json.dumps({'enabled': self.enabled, 'voice_enabled': self.voice_enabled,
-                'fixed': self.fixed, **self.appearance}), encoding='utf-8')
+                'fixed': self.fixed, 'lmu_open_setup': self.lmu_open_setup, **self.appearance}), encoding='utf-8')
             os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
@@ -119,6 +121,7 @@ class TireOverlayController:
                     'ocr_install': self.ocr_install,
                     'digit_reader': self.digit_reader,
                     'advice': self.advice,
+                    'lmu_open_setup': self.lmu_open_setup if self.game == 'lmu' else None,
                     'advice_audio_ready': self.audio.advice_ready() if self.voice_enabled and hasattr(self.audio, 'advice_ready') else None,
                     'targets': targets,
                     'target_temperature_kind': next((v.temp_kind for v in self.snapshot.wheels.values() if v.temp_kind), None) if self.snapshot else None,
@@ -301,9 +304,14 @@ class TireOverlayController:
                 except (OSError, RuntimeError) as error:
                     self.error = str(error)
 
-    def update(self, *, enabled=None, voice_enabled=None, fixed=None, background_opacity=None, content_opacity=None, radius=None):
+    def update(self, *, enabled=None, voice_enabled=None, fixed=None, background_opacity=None, content_opacity=None, radius=None,
+               lmu_open_setup=None):
         with self.operation_lock:
             self._load()
+            if lmu_open_setup is not None:
+                if self.game != 'lmu':
+                    raise ValueError('LMU 설정입니다.')
+                self.lmu_open_setup, self.advice, self.advice_key = lmu_open_setup, None, None
             appearance = {key: value for key, value in dict(background_opacity=background_opacity,
                 content_opacity=content_opacity, radius=radius).items() if value is not None}
             target_enabled = self.enabled if enabled is None else enabled
@@ -352,8 +360,14 @@ class TireOverlayController:
                 self.history.close()
                 self.history = None
 
+    def _fixed_setup(self, s):
+        """iRacing tells; LMU does not, so the driver states that the session uses open setups."""
+        if self.game == 'iracing':
+            return s.fixed_setup
+        return False if self.lmu_open_setup else None
+
     def _advice_kind(self, s):
-        if self.game != 'iracing' or s is None or not s.car or not s.track:
+        if s is None or not s.car or not s.track or self.game == 'lmu' and not self.lmu_open_setup:
             return None
         if s.in_garage is True:
             return 'garage'
@@ -401,10 +415,14 @@ class TireOverlayController:
                 laps = None
         try:
             track_temp, forecast = self._expected_track(s, kind, laps)
-            result = recommendation(self._path().with_name('tires-history.sqlite3'), game=s.game, car=s.car,
-                track=s.track, targets=self._targets().get(s.car), fixed_setup=s.fixed_setup,
+            history = self._path().with_name('tires-history.sqlite3')
+            result = recommendation(history, game=s.game, car=s.car,
+                track=s.track, targets=self._targets().get(s.car), fixed_setup=self._fixed_setup(s),
                 track_temp=track_temp, kind=kind, installed=s.installed_cold_kpa,
                 installed_sources=s.installed_cold_source, forecast=forecast)
+            if kind == 'next_pit':
+                from tire_reader.stint_wear import projection
+                result['double_stint'] = projection(history, s, fuel_laps=laps)
         except Exception as error:  # advice must never stop measurement or voice
             result = {'kind': kind, 'status': 'withheld', 'reason': 'advice_error', 'error_type': type(error).__name__}
             forecast = None
@@ -543,6 +561,7 @@ class TireSettings(BaseModel):
     background_opacity: StrictInt | None = Field(None, ge=0, le=100)
     content_opacity: StrictInt | None = Field(None, ge=0, le=100)
     radius: StrictInt | None = Field(None, ge=0, le=32)
+    lmu_open_setup: StrictBool | None = None
 
 
 class TireTargetSettings(BaseModel):
@@ -583,6 +602,8 @@ def routes(controller):
     def settings(body: TireSettings, game: Literal['iracing', 'lmu'] = 'iracing'):
         try:
             return selected(game).update(**body.model_dump(exclude_none=True))
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         except (OSError, RuntimeError) as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 

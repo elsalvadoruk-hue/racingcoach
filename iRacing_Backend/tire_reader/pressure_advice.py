@@ -30,7 +30,8 @@ FIT_MIN_SPAN_C = 4.0
 # Gas in the tire warms roughly half a degree per degree of track temperature, at about
 # 360 K: about 0.0014 of the absolute pressure ratio per degree. Used only without a fit.
 DEFAULT_SLOPE = .0014
-EVIDENCE_SOURCES = ('garage_start', 'pit_tire_change')
+# iRacing: setup/pit service values with confirmation; LMU: cold pressures measured live (installed.py).
+EVIDENCE_SOURCES = ('garage_start', 'pit_tire_change', 'garage_measured', 'pit_new_tire_measured')
 EVIDENCE_SESSIONS = {'Race', 'Practice', 'Offline Testing'}
 LEARN_MIN_OK = 30
 

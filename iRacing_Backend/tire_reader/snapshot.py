@@ -71,6 +71,7 @@ class TireSnapshot:
     # Evidence-based installed cold pressure (installed.py) and iRacing's last pit measurement.
     installed_cold_kpa: dict=field(default_factory=dict)
     installed_cold_source: dict=field(default_factory=dict)
+    installed_lap: dict=field(default_factory=dict)  # lap when each tire now fitted went on
     pit_snapshot: dict | None=None
     session_time_of_day_s: float | None=None
     fixed_setup: bool | None=None
@@ -134,6 +135,7 @@ def from_iracing(row,context,now):
         tire_compound_index=bounded(context.get('PlayerTireCompound'),0,255),
         installed_cold_kpa={w:bounded((context.get('installed_cold_kpa') or {}).get(w),40,400) for w in WHEELS},
         installed_cold_source={w:(context.get('installed_cold_source') or {}).get(w) for w in WHEELS},
+        installed_lap={w:v if type(v:=(context.get('installed_lap') or {}).get(w)) is int else None for w in WHEELS},
         pit_snapshot=context.get('pit_snapshot'),
         session_time_of_day_s=bounded(context.get('SessionTimeOfDay'),0,86400*2),
         fixed_setup=context.get('fixed_setup') if type(context.get('fixed_setup')) is bool else None,

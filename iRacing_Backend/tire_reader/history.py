@@ -84,6 +84,7 @@ class TireHistoryStore:
             'first_lap':laps[0] if laps else None,'last_lap':laps[-1] if laps else None,'laps':len(laps),
             'time_of_day_s':[tod[0],tod[-1]] if tod else None,
             'installed_cold_kpa':installed,'installed_cold_source':sources,
+            'installed_lap':{w:rows[-1].installed_lap.get(w) for w in WHEELS},
             'fixed_setup':rows[-1].fixed_setup,'compound':rows[-1].tire_compound_index,
             'wet':rows[-1].track_wetness_iracing if rows[-1].game=='iracing' else rows[-1].track_wetness_fraction_lmu,
             'states':states}
