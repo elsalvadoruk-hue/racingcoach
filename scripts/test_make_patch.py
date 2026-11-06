@@ -223,12 +223,11 @@ class ShareManifestTests(unittest.TestCase):
         files=make_share_copy.tire_reader_files(root)
         self.assertIn('iRacing_Backend/tire_reader/positions.py',files)
         self.assertIn('iRacing_Backend/tire_reader/coaching.py',files)
-        for module in ('glyphs','digit_model','ocr_language'):
+        for module in ('glyphs','digit_model','pressure_floor','pressure_jump'):
             self.assertIn(f'iRacing_Backend/tire_reader/{module}.py',files)
         self.assertEqual(len([name for name in files if name.endswith(('.png','.jpg'))]),12)
         self.assertIn('tire_overlay.py',make_share_copy.SCRIPTS)
-        self.assertIn('ensure_ocr_language.py',make_share_copy.SCRIPTS)
-        self.assertIn('ensure_ocr_language.py',make_share_copy.root_bat_scripts())
+        self.assertNotIn('ensure_ocr_language.py',make_share_copy.root_bat_scripts())
         with tempfile.TemporaryDirectory() as directory:
             out=Path(directory)
             make_share_copy.copy_backend(root,out)

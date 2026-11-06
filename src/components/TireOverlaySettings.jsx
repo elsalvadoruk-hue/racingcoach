@@ -311,18 +311,6 @@ export default function TireOverlaySettings({ apiBase, fetcher = fetch, game = '
           {view.pressure_floor_files.scanning ? ' · 새 파일 확인 중' : ''}
         </p>}
         {view?.advice && (game !== 'lmu' || view.lmu_open_setup) && <AdviceView advice={view.advice} voice={view.voice_enabled} audioReady={view.advice_audio_ready} game={game}/>}
-        {game !== 'lmu' && view?.ocr_english === false && <Alert>
-          <AlertDescription>
-            <p>영어 Windows OCR이 없어 {view.ocr_language ? `현재 언어(${view.ocr_language})로 ` : ''}숫자를 읽고 있습니다. 일부 계기판 숫자를 글자로 잘못 읽어 측정이 보류될 수 있습니다.</p>
-            <p>OCR 구성요소만 추가하며 Windows 표시 언어는 바뀌지 않습니다. 설치에는 관리자 승인과 인터넷이 필요합니다.</p>
-            <div className="flex flex-wrap gap-3 pt-2">
-              {view.ocr_install === 'requested'
-                ? <><span>설치 창이 끝나면 다시 확인을 눌러 주세요.</span>
-                  <Button variant="outline" size="sm" disabled={disabled} onClick={() => apply(undefined, true, '/ocr-language/recheck')}>다시 확인</Button></>
-                : <Button variant="outline" size="sm" disabled={disabled} onClick={() => apply(undefined, true, '/ocr-language/install')}>영어 OCR 설치 (관리자 승인)</Button>}
-            </div>
-          </AlertDescription>
-        </Alert>}
         {view?.voice_enabled && view.car_path && view.state_source === null && <Alert>
           <AlertDescription>{view.car_name || '이 차량'}은 대시 색 정보가 없어, 아래 판단 범위를 저장해야 타이어 음성 안내가 나옵니다.</AlertDescription>
         </Alert>}

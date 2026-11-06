@@ -134,26 +134,11 @@ test('dragging while a save is delayed sends the final value sequentially',async
   expect(background).toHaveValue('35');
 });
 
-test('without English Windows OCR the user can request it and recheck after installing',async()=>{
-  let state={...initial,enabled:true,running:true,ocr_language:'ko',ocr_english:false,ocr_install:null};
-  const fetcher=jest.fn(async(url,options={})=>{
-    if (url.includes('/ocr-language/install')) state={...state,ocr_install:'requested'};
-    if (url.includes('/ocr-language/recheck')) state={...state,ocr_english:true,ocr_install:null};
-    return response({...state});
-  });
+test('no screen asks to install English Windows OCR',async()=>{
+  const fetcher=jest.fn(async()=>response({...initial,enabled:true,running:true,ocr_language:'ko'}));
   render(<TireOverlaySettings fetcher={fetcher}/>);
-  expect(await screen.findByText(/영어 Windows OCR이 없어 현재 언어\(ko\)로/)).toBeVisible();
-  fireEvent.click(screen.getByRole('button',{name:'영어 OCR 설치 (관리자 승인)'}));
-  await waitFor(()=>expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/ocr-language/install'),expect.objectContaining({method:'POST'})));
-  fireEvent.click(await screen.findByRole('button',{name:'다시 확인'}));
-  await waitFor(()=>expect(screen.queryByText(/영어 Windows OCR이 없어/)).not.toBeInTheDocument());
-});
-
-test('LMU never offers Windows OCR installation',async()=>{
-  const fetcher=jest.fn(async()=>response({...initial,ocr_english:false}));
-  render(<TireOverlaySettings game="lmu" fetcher={fetcher}/>);
   await waitFor(()=>expect(screen.getByRole('switch',{name:'타이어 음성 안내'})).toBeEnabled());
-  expect(screen.queryByRole('button',{name:'영어 OCR 설치 (관리자 승인)'})).not.toBeInTheDocument();
+  expect(screen.queryByText(/영어 Windows OCR/)).not.toBeInTheDocument();
 });
 
 test('a car without dash colors asks for ranges before voice can judge',async()=>{

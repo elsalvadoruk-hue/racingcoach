@@ -58,7 +58,7 @@ class TireOverlayController:
         self.appearance = {'background_opacity': 85, 'content_opacity': 100, 'radius': 12}
         self.ready, self.error, self.current = False, None, {}
         self.sequence, self.replies = 0, {}
-        self.ocr, self.ocr_install, self.digit_reader = None, None, None
+        self.ocr, self.digit_reader = None, None
 
     def _floors(self):
         if self.floors is None:
@@ -132,14 +132,11 @@ class TireOverlayController:
             running = self.process is not None and self.process.poll() is None
             car = self.current.get('car_path')
             targets = self._targets().get(car)
-            from tire_reader.ocr_language import has_english
             return {'version': 1, 'supported': sys.platform == 'win32', 'enabled': self.enabled,
                     'game': self.game, 'voice_enabled': self.voice_enabled,
                     'voice_audio_ready': self.audio.ready() if self.voice_enabled and hasattr(self.audio, 'ready') else None,
                     'state_source': self._state_source(car, targets) if car else None,
                     'ocr_language': self.ocr['language'] if self.ocr else None,
-                    'ocr_english': has_english(self.ocr['languages']) if self.ocr else None,
-                    'ocr_install': self.ocr_install,
                     'digit_reader': self.digit_reader,
                     'advice': self.advice,
                     'lmu_open_setup': self.lmu_open_setup if self.game == 'lmu' else None,
@@ -503,31 +500,6 @@ class TireOverlayController:
         except (OSError, ValueError):
             pass
 
-    def install_english_ocr(self):
-        """Only on the user's click: UAC prompt, then Windows installs in its own window."""
-        if self.game != 'iracing':
-            raise ValueError('iRacing 화면 측정에서만 사용합니다.')
-        from tire_reader.ocr_language import request_install
-        try:
-            request_install(wait=False)  # No lock held while the UAC prompt is open.
-        except RuntimeError:
-            with self.operation_lock:
-                self.ocr_install = 'not_started'
-            raise
-        with self.operation_lock:
-            self.ocr_install = 'requested'
-            return self.status()
-
-    def recheck_ocr(self):
-        """A new measurement process reads the OCR languages Windows now has."""
-        with self.operation_lock:
-            self._load()
-            if self.enabled or self.voice_enabled:
-                self._stop()
-                self._start()
-            self.ocr_install = None
-            return self.status()
-
     def reset_digit_learning(self):
         with self.operation_lock:
             car = self.current.get('car_path')
@@ -667,22 +639,6 @@ def routes(controller):
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except OSError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
-
-    @router.post('/ocr-language/install')
-    def install_english_ocr(game: Literal['iracing', 'lmu'] = 'iracing'):
-        try:
-            return selected(game).install_english_ocr()
-        except ValueError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        except (OSError, RuntimeError) as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
-
-    @router.post('/ocr-language/recheck')
-    def recheck_ocr(game: Literal['iracing', 'lmu'] = 'iracing'):
-        try:
-            return selected(game).recheck_ocr()
-        except (OSError, RuntimeError) as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
     @router.post('/digits/reset')

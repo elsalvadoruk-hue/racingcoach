@@ -177,8 +177,11 @@ class WindowsPressureOcr:
         from winrt.windows.globalization import Language
         from winrt.windows.media.ocr import OcrEngine
         self.languages = [lang.language_tag for lang in OcrEngine.available_recognizer_languages]
-        self.engine = (OcrEngine.try_create_from_language(Language('en-US'))
-                       or OcrEngine.try_create_from_user_profile_languages())
+        # The Windows display language first. English OCR was not better overall on the
+        # official dashboards (2026-11-06: 75 vs 77 of 88 cells, no wrong values in either),
+        # so it is used only when no display-language OCR exists.
+        self.engine = (OcrEngine.try_create_from_user_profile_languages()
+                       or OcrEngine.try_create_from_language(Language('en-US')))
         if self.engine is None:
             raise RuntimeError('Windows OCR 언어가 없습니다. Windows 언어 설정에서 OCR을 확인해 주세요.')
         self.language = self.engine.recognizer_language.language_tag

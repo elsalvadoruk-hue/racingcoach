@@ -236,7 +236,8 @@ class ControllerStatusTests(unittest.TestCase):
 
     def test_ocr_language_and_state_source_are_reported(self):
         view = self.controller.update(voice_enabled=True)
-        self.assertEqual((view['ocr_language'], view['ocr_english']), ('ko', False))
+        self.assertEqual(view['ocr_language'], 'ko')
+        self.assertNotIn('ocr_english', view)
         self.controller.current['car_path'] = 'bmwm4gt3'
         self.assertIsNone(self.controller.status()['state_source'])
         self.controller.current['car_path'] = 'mclaren720sgt3'
@@ -245,14 +246,6 @@ class ControllerStatusTests(unittest.TestCase):
         self.controller.current['car_path'] = 'bmwm4gt3'
         self.assertEqual(self.controller.status()['state_source'], 'targets')
 
-    def test_install_request_only_marks_requested_and_reports_cancel(self):
-        with patch('tire_reader.ocr_language.request_install') as request:
-            self.assertEqual(self.controller.install_english_ocr()['ocr_install'], 'requested')
-            request.assert_called_once_with(wait=False)
-            request.side_effect = RuntimeError('관리자 승인이 취소되었습니다.')
-            with self.assertRaises(RuntimeError):
-                self.controller.install_english_ocr()
-        self.assertEqual(self.controller.status()['ocr_install'], 'not_started')
 
 
 class DiagnosticsTests(unittest.TestCase):

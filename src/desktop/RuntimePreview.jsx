@@ -11,7 +11,6 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import VoiceVolumeSlider from '../components/VoiceVolumeSlider';
 import { ConsentDialog, useSessionLogAuto } from '../components/SessionLogAutoSend';
-import TireOcrPrompt from '../components/TireOcrPrompt';
 import { useGame, GameSettingsNotice } from '../lib/gameContext';
 export { DesktopRuntimeProvider, useLabControls } from './DesktopRuntime';
 
@@ -82,7 +81,6 @@ export function RuntimeControls({ runtime }) {
       <div className="flex flex-wrap justify-between gap-3"><Button variant="outline" disabled={!audio.supported || audio.refreshing} onClick={() => audio.refresh({ ask: true })}><RefreshCw data-icon="inline-start" />{audio.refreshing ? '목록 확인 중' : '목록 갱신'}</Button><Button variant="outline" disabled={host.phase !== 'idle'} onClick={host.testOutput}>테스트 소리</Button><Button onClick={() => setDeviceDialog(false)}>선택 완료</Button></div>
     </DialogContent></Dialog>
     <LogSendSwitch apiBase={host.apiBase ?? ''} />
-    <TireOcrPrompt apiBase={host.apiBase ?? ''} />
   </div>;
 }
 
