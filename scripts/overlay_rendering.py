@@ -191,7 +191,14 @@ class OverlayRendering:
         elif comparison:
             feedback = self.live_view.get('feedback') or {}
             delta, braking = feedback.get('delta_s'), feedback.get('brake_delta_m')
-            reference = f'직전 코너 {delta:+.2f}초' if type(delta) in (int, float) else '직전 코너 —'
+            gap = status.get('temperature_gap_c')
+            if type(delta) in (int, float):
+                reference = f'직전 코너 {delta:+.2f}초'
+            elif type(gap) in (int, float):
+                # The fallback reference was recorded in a different track temperature.
+                reference = f'G61 참고용 · 노면 {gap:.0f}°C 차'
+            else:
+                reference = '직전 코너 —'
             if type(braking) in (int, float):
                 metres = round(abs(braking))
                 detail = f"제동 시작 {metres}m {'늦음' if braking > 0 else '빠름'}" if metres else '제동 시작 같음'

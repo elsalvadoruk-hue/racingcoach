@@ -529,5 +529,106 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(reference.observe.call_args.args[1])
 
 
+class TemperatureFallbackTests(unittest.TestCase):
+    """No lap within the track temperature limit: the closest recent lap is used, marked as reference only."""
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.path = Path(self.folder.name)
+        self.fetch = Mock(side_effect=AssertionError('No network expected'))
+        self.loader = Mock(side_effect=lambda path: Lap(json.loads(Path(path).with_suffix('.meta.json').read_text(encoding='utf-8'))))
+
+    def tearDown(self):
+        self.folder.cleanup()
+
+    def service(self, personal=None):
+        service = OverlayReference(self.path, self.loader, fetch=self.fetch, personal_loader=personal)
+        self.addCleanup(service.close)
+        return service
+
+    def cache(self, meta):
+        path = self.path/f"Garage 61 - Test - Car - Track - 01.40.000 - {meta['lap_id']}.csv"
+        path.write_text('Speed,LapDistPct,Brake,Throttle,SteeringWheelAngle\n'+
+                        '\n'.join(f'50,{i/1000},0.2,0.8,0' for i in range(1001)))
+        path.with_suffix('.meta.json').write_text(json.dumps(meta))
+
+    def test_selection_relaxes_only_the_track_temperature(self):
+        context = live_request(live(track_temp_c=50.))
+        far, closer = metadata(lap_id='FAR', track_temp_c=20.), metadata(lap_id='CLOSER', track_temp_c=32.)
+        old = metadata(lap_id='OLD', track_temp_c=49., start_time=(datetime.now(timezone.utc)-timedelta(days=200)).isoformat())
+        wet = metadata(lap_id='WET', track_temp_c=48., weather_declared_wet=True)
+        self.assertEqual(ranked_metadata([far, closer, old, wet], context), [])
+        ranked = ranked_metadata([far, closer, old, wet], context, relaxed=True)
+        self.assertEqual([item['lap_id'] for item in ranked], ['CLOSER', 'FAR'])
+        self.assertEqual(ranked[0]['_temperature_gap'], 18.)
+
+    def test_closest_cached_lap_is_used_with_a_visible_caution(self):
+        self.cache(metadata(lap_id='FAR', track_temp_c=10.))
+        self.cache(metadata(lap_id='CLOSER', track_temp_c=14.))
+        service = self.service()
+        service.observe(live(), True)
+        wait_for(lambda: service.status()['state'] == 'READY')
+        status = service.status()
+        self.assertEqual((status['lap_id'], status['temperature_gap_c']), ('CLOSER', 16.))
+        self.assertIn('참고용', status['message'])
+        self.assertIn('노면 온도 차이 큼(16°C)', status['condition_note'])
+        reference = service.reference
+        service.observe(live(lap_number=3, distance_pct=.0001), True)
+        self.assertIs(service.reference, reference)   # kept through the stint like a matching lap
+
+    def test_a_lap_within_the_limit_still_wins_and_carries_no_caution(self):
+        self.cache(metadata(lap_id='FAR', track_temp_c=10.))
+        self.cache(metadata(lap_id='NEAR', track_temp_c=36., lap_time_s=101.))
+        service = self.service()
+        service.observe(live(), True)
+        wait_for(lambda: service.status()['state'] == 'READY')
+        self.assertEqual(service.status()['lap_id'], 'NEAR')
+        self.assertIsNone(service.status()['temperature_gap_c'])
+
+    def test_own_matching_lap_beats_the_fallback_and_nothing_names_both_reasons(self):
+        self.cache(metadata(lap_id='FAR', track_temp_c=10.))
+        own = (AlignedReference(Lap(), 5000), {'state': 'READY', 'source': 'PERSONAL'})
+        with patch('overlay_reference.g61._token_from_sources', return_value=('', '')):
+            service = self.service(Mock(return_value=own))
+            self.assertEqual(service._prepare(None, live_request(live()), 5000)[1]['source'], 'PERSONAL')
+            service = self.service(Mock(return_value=None))
+            self.assertEqual(service._prepare(None, live_request(live()), 5000)[1]['temperature_gap_c'], 20.)
+        (self.path/'Garage 61 - Test - Car - Track - 01.40.000 - FAR.csv').unlink()
+        with patch('overlay_reference.g61._token_from_sources', return_value=('', '')):
+            status = self.service(Mock(return_value=None))._prepare(None, live_request(live()), 5000)[1]
+        self.assertEqual(status['state'], 'NO_MATCH')
+        self.assertIn('Garage61: 설정에서 Garage61 토큰을 등록하세요', status['message'])
+        self.assertIn('내 기록 없음', status['message'])
+
+    def test_download_falls_back_to_a_seen_lap_without_searching_again(self):
+        meta = metadata()
+        api_lap = {'id': 'HOTLAP', 'clean': True, 'canViewTelemetry': True, 'lapTime': 100,
+                   'startTime': meta['start_time'], 'trackWetness': 0, 'fuelLevel': 30,
+                   'trackTemp': 50, 'airTemp': 24, 'tireCompound': 1,
+                   'car': {'platform_id': 10, 'name': 'Car'}, 'track': {'platform_id': 20, 'name': 'Track'},
+                   'driver': {'firstName': 'Test'}}
+        csv = ('Speed,LapDistPct,Brake,Throttle,SteeringWheelAngle\n'+
+               '\n'.join(f'50,{i/1000},0.2,0.8,0' for i in range(1001))).encode()
+        calls = []
+        def fetch(path, token, query=None):
+            calls.append(path)
+            if path == 'cars':
+                return json.dumps({'items': [{'id': 110, 'platform_id': 10}]}).encode()
+            if path == 'tracks':
+                return json.dumps({'items': [{'id': 120, 'platform_id': 20}]}).encode()
+            if path == 'laps':
+                return json.dumps({'items': [api_lap]}).encode()
+            self.assertEqual(path, 'laps/HOTLAP/csv')
+            return csv
+        self.fetch.side_effect = fetch
+        with patch('overlay_reference.g61._token_from_sources', return_value=('test-token', 'test')), \
+             patch.dict('os.environ', {'GARAGE61_AUTO_COLLECT': '1'}):
+            service = self.service()
+            service.observe(live(), True)
+            wait_for(lambda: service.status()['state'] == 'READY')
+        self.assertEqual(service.status()['temperature_gap_c'], 20.)
+        self.assertEqual(calls.count('laps'), 3)
+        self.assertEqual(calls.count('laps/HOTLAP/csv'), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

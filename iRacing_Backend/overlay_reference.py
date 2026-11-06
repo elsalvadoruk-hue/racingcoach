@@ -53,8 +53,14 @@ def live_request(view):
     }
 
 
-def matching(meta, context):
-    """A similar name cannot substitute for a verified car or layout ID."""
+TRACK_TEMP_LIMIT_C = 12
+
+
+def matching(meta, context, temperature_limit=TRACK_TEMP_LIMIT_C):
+    """A similar name cannot substitute for a verified car or layout ID.
+
+    temperature_limit=None is the fallback when no lap is within the limit: the
+    car, layout, clean lap, wet/dry, tyre, fuel and 180-day checks still apply."""
     if any(not context.get(key) or str(meta.get(key) or '') != str(context[key])
            for key in ('car_platform_id', 'track_platform_id')):
         return False
@@ -70,9 +76,9 @@ def matching(meta, context):
     tire, reference_tire = conditions.get('tire_compound'), meta.get('tire_compound')
     if tire is not None and (reference_tire is None or str(tire) != str(reference_tire)):
         return False
-    for key, limit in (('track_temp_c', 12), ('fuel_l', 30)):
+    for key, limit in (('track_temp_c', temperature_limit), ('fuel_l', 30)):
         current, reference = finite(conditions.get(key)), finite(meta.get(key))
-        if current is not None and reference is not None and abs(current-reference) > limit:
+        if limit is not None and current is not None and reference is not None and abs(current-reference) > limit:
             return False
     # Old tyre models/BoP should not silently become a current driving reference.
     try:
@@ -85,10 +91,17 @@ def matching(meta, context):
     return True
 
 
-def ranked_metadata(items, context):
+def temperature_gap(meta, context):
+    current, reference = finite(context['conditions'].get('track_temp_c')), finite(meta.get('track_temp_c'))
+    return None if current is None or reference is None else abs(current-reference)
+
+
+def ranked_metadata(items, context, relaxed=False):
+    """relaxed: the fallback when nothing is within the track temperature limit.
+    The closest track temperature then ranks first and each lap carries its gap."""
     output = []
     best = context.get('current_best_lap_s')
-    eligible = [meta for meta in items if matching(meta, context)]
+    eligible = [meta for meta in items if matching(meta, context, None if relaxed else TRACK_TEMP_LIMIT_C)]
     # Use several comparable laps so a single implausibly fast result cannot
     # reject the entire pool. These are pace gates, not a claim of equal setup.
     peer_pace = float(np.percentile([meta['lap_time_s'] for meta in eligible], 25, method='higher')) if len(eligible) >= 3 else None
@@ -98,11 +111,15 @@ def ranked_metadata(items, context):
             continue
         score, coverage, reasons = g61.condition_score(meta, context['conditions'])
         faster = best is not None and best > 0 and meta['lap_time_s'] < best
+        gap = temperature_gap(meta, context)
+        rank = (round(score/0.10), faster, -meta['lap_time_s'], g61.recency_score(meta.get('start_time')))
+        if relaxed:
+            rank = (-(gap if gap is not None else math.inf), *rank)
         output.append({**meta, 'similarity': score, 'coverage': coverage, 'reasons': reasons,
+                       '_temperature_gap': gap if relaxed else None,
                        '_unknown_conditions': [name for name in ('track_temp_c', 'air_temp_c', 'fuel_l', 'tire_compound')
                                                if meta.get(name) is None or context['conditions'].get(name) is None],
-                       '_rank': (round(score/0.10), faster, -meta['lap_time_s'],
-                                 g61.recency_score(meta.get('start_time')))})
+                       '_rank': rank})
     return sorted(output, key=lambda item: item['_rank'], reverse=True)
 
 
@@ -321,7 +338,9 @@ class OverlayReference:
             # Keep a suitable reference throughout a stint. A small fuel/temperature
             # bucket change must not clear or replace the graph at every lap boundary.
             if (self.reference is not None and hard_key == self.hard_key and driving(view)
-                    and sample.get('on_pit_road') is False and (pinned or self.state.get('source') == 'PERSONAL' and suitable or matching(self.reference.meta, context))):
+                    and sample.get('on_pit_road') is False and (pinned or self.state.get('source') == 'PERSONAL' and suitable
+                                                                 or matching(self.reference.meta, context,
+                                                                             None if self.state.get('temperature_gap_c') is not None else TRACK_TEMP_LIMIT_C))):
                 return
             if not changed and (self.reference is not None or self.clock() < self.retry_at):
                 return
@@ -387,7 +406,7 @@ class OverlayReference:
     def _json(self, path, token, query=None):
         return json.loads(self.fetch(path, token, query))
 
-    def _candidates(self, context):
+    def _candidates(self, context, relaxed=False):
         candidates = []
         for folder in (self.directory, self.directory/'live'):
             for path in folder.glob('Garage 61 - *.meta.json'):
@@ -395,7 +414,7 @@ class OverlayReference:
                 csv = path.with_suffix('').with_suffix('.csv')
                 if csv.is_file():
                     candidates.append({**meta, '_path': csv})
-        return ranked_metadata(candidates, context)
+        return ranked_metadata(candidates, context, relaxed)
 
     def _load(self, candidate, length):
         check_csv(candidate['_path'])
@@ -408,7 +427,12 @@ class OverlayReference:
         if 'tire_compound' in candidate.get('_unknown_conditions', []):
             note = ('타이어 조건 미확인' if candidate['_unknown_conditions'] == ['tire_compound']
                     else '타이어 등 조건 일부 미확인')
-        return aligned, {'state': 'READY', 'message': 'Garage61 기준 연결됨',
+        gap = candidate.get('_temperature_gap')
+        far = gap is not None and gap > TRACK_TEMP_LIMIT_C
+        if far:
+            note = f'노면 온도 차이 큼({gap:.0f}°C) · 가장 가까운 랩을 참고용으로 사용'
+        return aligned, {'state': 'READY', 'message': 'Garage61 기준 연결됨 · 참고용' if far else 'Garage61 기준 연결됨',
+                         'temperature_gap_c': round(gap, 1) if far else None,
                          'lap_time_s': candidate['lap_time_s'], 'lap_id': candidate['lap_id'],
                          'track_temp_c': candidate.get('track_temp_c'), 'fuel_l': candidate.get('fuel_l'),
                          'similarity': candidate['similarity'], 'coverage': candidate['coverage'],
@@ -458,6 +482,7 @@ class OverlayReference:
         if not car or not track:
             return None, {'state': 'UNAVAILABLE', 'message': 'Garage61 차량·레이아웃 매칭 없음'}
         merged = {}
+        self.remote_seen = key, merged
         # Prefer tight matching; broaden conditions only when no usable lap exists.
         for _, query in g61.query_passes(context, track['id'], car['id'])[:3]:
             if not self._active(key):
@@ -469,6 +494,25 @@ class OverlayReference:
             candidates = ranked_metadata(merged.values(), context)
             if candidates:
                 break
+        return self._download(key, candidates, length) or (None, {'state': 'NO_MATCH', 'message': '비슷한 조건의 공개 기준 랩 없음'})
+
+    def _relaxed(self, key, context, length):
+        """The closest-temperature recent lap when none is within the limit; marked as reference only."""
+        for candidate in self._candidates(context, relaxed=True):
+            if not self._active(key):
+                return None
+            try:
+                return self._load(candidate, length)
+            except (OSError, ValueError, KeyError):
+                continue
+        seen_key, seen = getattr(self, 'remote_seen', (None, {}))
+        if seen_key != key or not seen:
+            return None
+        token, _ = g61._token_from_sources(self.directory, None)
+        return self._download(key, ranked_metadata(seen.values(), context, relaxed=True), length, token) if token else None
+
+    def _download(self, key, candidates, length, token=None):
+        token = token or g61._token_from_sources(self.directory, None)[0]
         for candidate in candidates[:4]:
             if not self._active(key):
                 return None, {}
@@ -499,11 +543,15 @@ class OverlayReference:
                     raise
             except (OSError, ValueError, KeyError):
                 continue
-        return None, {'state': 'NO_MATCH', 'message': '비슷한 조건의 공개 기준 랩 없음'}
+        return None
 
     def _prepare(self, key, context, length):
         if not self.personal_loader:
-            return self._prepare_garage(key, context, length)
+            result = self._prepare_garage(key, context, length)
+            # A missing token or search limit still allows an already cached lap as the fallback.
+            if result[0] is None and not context.get('pinned_reference') and (length or 0) > 0:
+                result = self._relaxed(key, context, length) or result
+            return result
         if length is None or length <= 0:
             return None, {'state': 'UNAVAILABLE', 'message': '트랙 길이 확인 필요'}
         if context.get('game') == 'lmu' or context.get('source', 'auto') != 'auto':
@@ -512,17 +560,31 @@ class OverlayReference:
         if pinned:
             return self._prepare_garage(key, context, length)
         personal_only = context.get('game') == 'lmu' or context.get('source') == 'personal'
+        garage = None
         if not personal_only:
             try:
                 result = self._prepare_garage(key, context, length)
-                if result[0] is not None or context.get('source') == 'garage61':
+                garage = result[1].get('message')
+                if result[0] is not None:
                     return result
+                if context.get('source') == 'garage61':
+                    return self._relaxed(key, context, length) or result
             except (error.HTTPError, OSError, ValueError, KeyError):
+                garage = 'Garage61 확인 실패'
                 if context.get('source') == 'garage61':
                     raise
         result = self.personal_loader(context, length, lambda: self._active(key))
-        return result or (None, {'state': 'NO_MATCH', 'source': 'PERSONAL',
-                                 'message': '조건에 맞는 내 기록 없음 · 내 입력만 표시합니다.'})
+        if result:
+            return result
+        # An exact personal lap beats a public lap in a different track temperature.
+        try:
+            fallback = None if personal_only else self._relaxed(key, context, length)
+        except (error.HTTPError, OSError, ValueError, KeyError):
+            fallback = None
+        if fallback:
+            return fallback
+        return None, {'state': 'NO_MATCH', 'source': 'PERSONAL',
+                      'message': (f'Garage61: {garage} · ' if garage else '')+'조건에 맞는 내 기록 없음 · 내 입력만 표시합니다.'}
 
     def _work(self):
         while not self.stopped.is_set():

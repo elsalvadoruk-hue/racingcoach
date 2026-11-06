@@ -47,6 +47,9 @@ class ScreenTireReader:
         # The in-sim Weather panel forecast (weather_panel.py), read once a minute at most.
         from .weather_panel import WeatherPanelReader
         self.weather = WeatherPanelReader(self.ocr, clock) if weather else None
+        # The panel may sit on any monitor the game spans (triple screens): one monitor is
+        # looked at per search, in turn, and the one where it was found is kept.
+        self.weather_rect, self.weather_turn = None, 0
 
     def reset_digits(self, car):
         if self.digits is not None and canonical_car(car):
@@ -79,25 +82,39 @@ class ScreenTireReader:
         if self.weather is None or self.sdk is None or not self.context:
             return
         context = self.context
-        image = None
+        image, rect, search_every = None, None, None
         if self.weather.due():
             try:
                 import numpy as np
+                from .weather_panel import SEARCH_EVERY_S
                 if self.screens is None:
                     self.screens = self.screens_factory()
                 physical = [{key: int(m[key]) for key in GEOMETRY} for m in self.screens.monitors[1:]]
-                for rect in ([self.rect] if self.rect in physical else []) + [m for m in physical if m != self.rect]:
-                    if rect['width'] * rect['height'] <= MAX_PIXELS and self.visibility.window_visible(rect):
-                        image = np.asarray(self.screens.grab(rect))[:, :, :3].copy()
-                        break
+                ordered = ([self.rect] if self.rect in physical else []) + [m for m in physical if m != self.rect]
+                visible = [m for m in ordered if m['width'] * m['height'] <= MAX_PIXELS and self.visibility.window_visible(m)]
+                if self.weather_rect in visible and self.weather.box:
+                    rect = self.weather_rect
+                elif visible:
+                    rect = visible[self.weather_turn % len(visible)]
+                    self.weather.box = None   # a box belongs to the monitor it was found on
+                    # Every monitor is still looked at about once a minute, but not all at once.
+                    search_every = max(15., SEARCH_EVERY_S / len(visible))
+                if rect:
+                    image = np.asarray(self.screens.grab(rect))[:, :, :3].copy()
             except Exception:
                 image = None
         identity = tuple(context.get(k) for k in ('track_id', 'track_config', 'session_id', 'subsession_id'))
         try:
             forecast = self.weather.maybe_read(image, identity, finite(context.get('SessionTimeOfDay')),
-                                               finite(context.get('AirTemp')))
+                                               finite(context.get('AirTemp')),
+                                               **({'search_every_s': search_every} if search_every else {}))
         except Exception:
             return
+        if image is not None:
+            if self.weather.box:
+                self.weather_rect = rect
+            else:
+                self.weather_rect, self.weather_turn = None, self.weather_turn + 1
         context['weather_forecast'] = forecast.view() if forecast.entries else None
 
     def _sample(self):

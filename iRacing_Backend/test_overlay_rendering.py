@@ -150,6 +150,13 @@ class FooterRenderingTests(unittest.TestCase):
         app.canvas.delete.assert_called_with('footer-notice')
         self.assertIsNone(app.notice_ticket)
 
+    def test_fallback_reference_says_it_is_reference_only_until_a_corner_is_measured(self):
+        app = self.app()
+        app.live_view.update(feedback={}, reference_status={'state': 'READY', 'temperature_gap_c': 18.3})
+        OverlaySample.update_live_labels(app)
+        texts = [c.kwargs['text'] for c in app.canvas.itemconfigure.call_args_list if 'text' in c.kwargs]
+        self.assertEqual(texts, ['G61 참고용 · 노면 18°C 차', '제동 시작 —'])
+
     def test_same_notice_refreshes_text_without_rebuilding_unchanged_tint(self):
         app = self.app()
         notice = {'text': '랩 1:21.350', 'kind': 'lap', 'color': 'text'}

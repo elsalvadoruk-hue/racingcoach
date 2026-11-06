@@ -110,9 +110,11 @@ def parse_panel(words):
     spacing = statistics.median(b['cx'] - a['cx'] for a, b in zip(row, row[1:]))
     centers = [t['cx'] + (spacing * .15 if any(s['t'].lower() in ('am', 'pm') for s in tokens) else 0) for t in row]
     below = [t for t in tokens if t['cy'] > row[0]['cy'] + row[0]['h'] * .6 and t not in row]
-    columns = []
+    columns, used = [], list(row)
     for index, center in enumerate(centers):
-        mine = _reading_order([t for t in below if abs(t['cx'] - center) < spacing * .55])
+        mine = _reading_order([t for t in below if abs(t['cx'] - center) < spacing * .55
+                               and t['cy'] < row[0]['cy'] + spacing * 4])   # the panel is about 3 columns tall
+        used += mine
         entry = {'minute_of_day': minutes[index], 'air_c': None, 'rain_pct': None, 'humidity_pct': None,
                  'wind_kph': None, 'wind_dir': None}
         percents = []
@@ -137,9 +139,9 @@ def parse_panel(words):
         columns.append(entry)
     if sum(c['air_c'] is not None for c in columns) < MIN_COLUMNS:
         return None
-    every = row + below
-    box = [min(t['x'] for t in every), min(t['y'] for t in every),
-           max(t['x'] + t['w'] for t in every), max(t['y'] + t['h'] for t in every)]
+    # Only the panel's own words: other text lower on the screen must not widen the box.
+    box = [min(t['x'] for t in used), min(t['y'] for t in used),
+           max(t['x'] + t['w'] for t in used), max(t['y'] + t['h'] for t in used)]
     return {'columns': columns, 'box': box}
 
 
@@ -240,29 +242,54 @@ class WeatherPanelReader:
     def due(self):
         return self.clock() >= self.next_at
 
-    def maybe_read(self, image, identity, time_of_day_s, air_now):
+    def _words(self, gray, box, scale):
         import asyncio
+        import cv2
+        x0, y0 = (box[0], box[1]) if box else (0, 0)
+        if box:
+            gray = gray[box[1]:box[3], box[0]:box[2]]
+        scale = min(scale, (self.ocr.max_dimension - 40) / max(gray.shape))
+        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA)
+        return [(t, x / scale + x0, y / scale + y0, w / scale, h / scale)
+                for t, x, y, w, h in asyncio.run(self.ocr.words(gray))]
+
+    def maybe_read(self, image, identity, time_of_day_s, air_now, search_every_s=SEARCH_EVERY_S):
         import cv2
         now = self.clock()
         self.forecast.observe(time_of_day_s, air_now)
         if now < self.next_at or image is None:
             return self.forecast
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        x0 = y0 = 0
-        if self.box:
-            x0, y0, x1, y1 = self.box
-            gray = gray[y0:y1, x0:x1]
-        scale = 2. if self.box else min(1., (self.ocr.max_dimension - 40) / max(gray.shape))
-        gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC if scale > 1 else cv2.INTER_AREA)
-        words = [(t, x / scale + x0, y / scale + y0, w / scale, h / scale)
-                 for t, x, y, w, h in asyncio.run(self.ocr.words(gray))]
+        # The panel's text is small; a whole screen read at 1x misses or misreads it
+        # ('12:4Spm'). A known box is read at 3x. While searching, the WEATHER heading
+        # found at 1x marks where to read again at 3x.
+        words = self._words(gray, self.box, 3. if self.box else 1.)
         panel = parse_panel(words)
+        if not panel and not self.box:
+            region = heading_region(words, gray.shape)
+            if region:
+                panel = parse_panel(self._words(gray, region, 3.))
         if panel:
+            searched = self.box is None
             a, b, c, d = panel['box']
             pad = max(20, int((d - b) * .3))
             self.box = [max(0, int(a) - pad), max(0, int(b) - pad), int(c) + pad, int(d) + pad]
+            if searched:
+                # Found at 1x: read just the panel at 3x right away for the columns 1x missed.
+                closer = parse_panel(self._words(gray, self.box, 3.))
+                if closer and len([x for x in closer['columns'] if x['air_c'] is not None]) >=                         len([x for x in panel['columns'] if x['air_c'] is not None]):
+                    panel = closer
             self.forecast.update(identity, panel['columns'], time_of_day_s, air_now)
             self.next_at = now + READ_EVERY_S
         else:
-            self.box, self.next_at = None, now + SEARCH_EVERY_S
+            self.box, self.next_at = None, now + search_every_s
         return self.forecast
+
+
+def heading_region(words, shape):
+    """The area below a 'WEATHER' heading, sized from the heading's text height."""
+    for text, x, y, w, h in words:
+        if text.upper() == 'WEATHER' and h > 0:
+            return [max(0, int(x - 3 * h)), max(0, int(y - 2 * h)),
+                    min(shape[1], int(x + 40 * h)), min(shape[0], int(y + 20 * h))]
+    return None

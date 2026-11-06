@@ -120,7 +120,7 @@ class ReaderWiringTests(unittest.TestCase):
         with patch('tire_reader.screen_reader.SdkReader', return_value=adapter):
             row = reader.sample()
             now[0] = 30.; reader.sample()
-        self.assertEqual(ocr.words.call_count, 1)  # not again until the reread time
+        self.assertEqual(ocr.words.call_count, 2)  # found, read once more at 3x, then not again until the reread time
         forecast = row['tire_snapshot']['weather_forecast']
         self.assertEqual([e['air_c'] for e in forecast['entries']], [19., 19., 20., 20., 21., 21.])
         with tempfile.TemporaryDirectory() as temp:
@@ -149,6 +149,78 @@ class ReaderWiringTests(unittest.TestCase):
             # Beyond the forecast (pit far away): the current track temperature is used.
             far = replace(s, lap_last_s=120.)
             self.assertEqual(controller._expected_track(far, 'next_pit', 30)[1]['basis'], 'current')
+
+
+class SearchTests(unittest.TestCase):
+    """Triple screens: the panel is often on a side monitor, and its text is small."""
+    def test_box_is_only_the_panel_not_other_text_lower_on_the_screen(self):
+        words = panel_words() + [('오버레이', 900, 700, 80, 16), ('29', 250, 1200, 14, 16)]
+        a, b, c, d = parse_panel(words)['box']
+        self.assertLess(d, 320)
+        self.assertLess(c, 700)
+
+    def test_a_weather_heading_found_at_1x_is_read_again_at_3x(self):
+        import asyncio
+        from unittest.mock import Mock
+        import numpy as np
+        from tire_reader.weather_panel import WeatherPanelReader
+        calls = []
+        async def words(gray):
+            calls.append(gray.shape)
+            if len(calls) == 1:   # whole screen: only the heading and a misread time row
+                return [('WEATHER', 30, 70, 80, 16), ('12:4Spm', 235, 111, 40, 14)]
+            scale = gray.shape[1] / (min(1200, 30 + 40 * 16) - max(0, 30 - 3 * 16))
+            return [(t, (x - max(0, 30 - 48)) * scale, (y - max(0, 70 - 32)) * scale, w * scale, h * scale)
+                    for t, x, y, w, h in panel_words()]
+        ocr = Mock(max_dimension=10000); ocr.words = Mock(side_effect=words)
+        reader = WeatherPanelReader(ocr, lambda: 0.)
+        forecast = reader.maybe_read(np.zeros((800, 1200, 3), np.uint8), ('t',), 902 * 60., 19.)
+        self.assertEqual(len(forecast.entries), 6)
+        self.assertGreaterEqual(len(calls), 2)
+        self.assertGreater(calls[1][1], 1000)   # the heading area, enlarged
+
+    def test_panel_on_a_side_monitor_is_found_in_turn_and_that_monitor_kept(self):
+        from unittest.mock import Mock, patch
+        import numpy as np
+        from tire_reader.screen_reader import ScreenTireReader
+        from test_tire_cockpit_gate import cockpit
+        now = [0.]
+        sdk = Mock(is_connected=True); sdk.startup.return_value = True
+        left, centre, right = (dict(left=x, top=0, width=800, height=400) for x in (-800, 0, 800))
+        screens = Mock(); screens.monitors = [dict(left=-800, top=0, width=2400, height=400), left, centre, right]
+        shown = {}
+        def grab(rect):
+            shown['rect'] = rect
+            return np.zeros((400, 800, 4), np.uint8)
+        screens.grab.side_effect = grab
+        ocr = Mock(max_dimension=10000)
+        async def words(_): return panel_words() if shown['rect'] == right else []
+        ocr.words = Mock(side_effect=words)
+        visibility = Mock(); visibility.window_visible.return_value = True
+        reader = ScreenTireReader(sdk_factory=lambda: sdk, screens_factory=lambda: screens, locator=Mock(), ocr=ocr,
+                                  visibility=visibility, clock=lambda: now[0], weather=True)
+        self.addCleanup(reader.close)
+        context = cockpit(IsInGarage=True, IsOnTrack=False, SessionTimeOfDay=902 * 60., AirTemp=19., TrackTempCrew=30.)
+        adapter = Mock(); adapter.snapshot.side_effect = lambda _: dict(context, SessionTime=now[0] + 1)
+        looked = []
+        with patch('tire_reader.screen_reader.SdkReader', return_value=adapter):
+            for second in range(0, 120, 5):
+                now[0] = float(second)
+                row = reader.sample()
+                if reader.weather.due() is False and shown.get('rect') and (not looked or looked[-1][1] is not shown['rect']):
+                    looked.append((second, shown['rect']))
+                if row['tire_snapshot']['weather_forecast']:
+                    break
+        self.assertEqual(reader.weather_rect, right)
+        self.assertEqual(len(row['tire_snapshot']['weather_forecast']['entries']), 6)
+        self.assertLessEqual(second, 60)   # three monitors, one look every 20 seconds
+        searched = {tuple(sorted(c.args[0].items())) for c in screens.grab.call_args_list}
+        self.assertEqual(searched, {tuple(sorted(m.items())) for m in (left, centre, right)})
+        # Once found, rereads go straight to that monitor.
+        screens.grab.reset_mock()
+        with patch('tire_reader.screen_reader.SdkReader', return_value=adapter):
+            now[0] += 301.; reader.sample()
+        self.assertEqual([c.args[0] for c in screens.grab.call_args_list], [right])
 
 
 if __name__ == '__main__':
