@@ -255,3 +255,13 @@ test('missing tire clips are stated and ranges can be set only for the measured 
     body:JSON.stringify({car:'bmwm4gt3',pressure_low_bar:1.6,pressure_high_bar:1.8,temp_low_c:null,temp_high_c:null,pressure_min_cold_bar:null}),
   })));
 });
+
+test('LMU names its recording files as the source of the setup minimum',async()=>{
+  const state={...initial,lmu_open_setup:true,pressure_floor_files:{files:34,cars:1,scanning:false},advice:{kind:'garage',status:'ready',
+    track_temp_c:30,target_kpa:180,target_source:'driver_range',wheels:{FL:{cold_kpa:136,model:'fitted',stints:3,at_minimum:true,
+      floor_source:'lowest_used',hot_over_target_kpa:0}}}};
+  render(<TireOverlaySettings game="lmu" fetcher={jest.fn(async()=>response({...state}))}/>);
+  expect(await screen.findByText(/셋업 최저 압력은 자동으로 찾습니다 · LMU 기록 파일 34개, 차량 1대/)).toBeVisible();
+  expect(screen.getByRole('note')).toHaveTextContent('LMU 기록 파일(.duckdb) 셋업에서 자동으로 찾은');
+  expect(screen.getByRole('note')).not.toHaveTextContent('iRacing');
+});

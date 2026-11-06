@@ -70,13 +70,14 @@ function ACTIONS(value) {
   return '';
 }
 
-function atMinimumText(advice) {
+function atMinimumText(advice, game) {
   const floored = Object.entries(advice.wheels || {}).filter(([, v]) => v.at_minimum);
   if (!floored.length) return null;
   const over = Math.max(...floored.map(([, v]) => v.hot_over_target_kpa || 0));
   const sources = new Set(floored.map(([, v]) => v.floor_source));
   const source = sources.has('driver_minimum') ? '입력한 셋업 최저값'
     : sources.has('gt3_default') ? 'iRacing GT3 기본 최저값 1.59 bar(159 kPa·23.0 psi)'
+    : game === 'lmu' ? '주행 기록과 LMU 기록 파일(.duckdb) 셋업에서 자동으로 찾은 가장 낮은 냉간 압력'
     : '주행 기록과 iRacing 텔레메트리(.ibt) 셋업에서 자동으로 찾은 가장 낮은 냉간 압력';
   return <p role="note">
     {floored.length === Object.keys(advice.wheels).length ? '모든 바퀴가' : `${floored.map(([w]) => w).join(', ')}가`} 이미 최저 압력이라 더 낮출 수 없습니다.
@@ -84,7 +85,7 @@ function atMinimumText(advice) {
   </p>;
 }
 
-function AdviceView({ advice, voice, audioReady }) {
+function AdviceView({ advice, voice, audioReady, game }) {
   const title = (advice.kind === 'garage' ? '출발 냉간 압력 추천' : '다음 피트 냉간 압력 추천')
     + (advice.status === 'ready' && advice.action === 'keep' ? ' · 지금 압력 유지' : '');
   if (advice.status !== 'ready') return <div className="text-sm" aria-label="압력 추천">
@@ -102,7 +103,7 @@ function AdviceView({ advice, voice, audioReady }) {
         {typeof value.cold_kpa === 'number' ? `${bar(value.cold_kpa)} bar · ${psi(value.cold_kpa)} psi${ACTIONS(value)}` : '근거 없음'}
       </p>)}
     </div>
-    {atMinimumText(advice)}
+    {atMinimumText(advice, game)}
     {forecastText(advice.forecast) && <p className="text-muted-foreground">{forecastText(advice.forecast)}</p>}
     <p className="text-muted-foreground">
       {typeof advice.track_temp_c === 'number' ? `노면 ${advice.track_temp_c.toFixed(1)}°C 기준 · ` : ''}
@@ -305,11 +306,11 @@ export default function TireOverlaySettings({ apiBase, fetcher = fetch, game = '
         </Field>}
         {game === 'lmu' && view && <p className="text-sm text-muted-foreground">LMU 기록은 화면 캡처 없이 게임 데이터만 씁니다. 기록이 쌓여야 압력 추천과 더블 스틴트 예상이 나옵니다.</p>}
         {game === 'lmu' && view && <p className="text-sm text-muted-foreground">LMU는 셋업 고정 여부를 알려주지 않습니다. 셋업을 바꿀 수 있는 경기에서만 켜 주세요. 냉간 압력은 차고와 새 타이어 직후의 실제 측정값을 씁니다.</p>}
-        {game !== 'lmu' && view?.pressure_floor_files && <p className="text-sm text-muted-foreground">
-          셋업 최저 압력은 자동으로 찾습니다 · iRacing 텔레메트리 파일 {view.pressure_floor_files.files}개, 차량 {view.pressure_floor_files.cars}대
+        {view?.pressure_floor_files && <p className="text-sm text-muted-foreground">
+          셋업 최저 압력은 자동으로 찾습니다 · {game === 'lmu' ? 'LMU 기록 파일' : 'iRacing 텔레메트리 파일'} {view.pressure_floor_files.files}개, 차량 {view.pressure_floor_files.cars}대
           {view.pressure_floor_files.scanning ? ' · 새 파일 확인 중' : ''}
         </p>}
-        {view?.advice && (game !== 'lmu' || view.lmu_open_setup) && <AdviceView advice={view.advice} voice={view.voice_enabled} audioReady={view.advice_audio_ready}/>}
+        {view?.advice && (game !== 'lmu' || view.lmu_open_setup) && <AdviceView advice={view.advice} voice={view.voice_enabled} audioReady={view.advice_audio_ready} game={game}/>}
         {game !== 'lmu' && view?.ocr_english === false && <Alert>
           <AlertDescription>
             <p>영어 Windows OCR이 없어 {view.ocr_language ? `현재 언어(${view.ocr_language})로 ` : ''}숫자를 읽고 있습니다. 일부 계기판 숫자를 글자로 잘못 읽어 측정이 보류될 수 있습니다.</p>

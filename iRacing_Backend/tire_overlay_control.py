@@ -36,8 +36,9 @@ class TireOverlayController:
         # Laps of fuel left from the pit wall's own calculation, for timing the next-stop call.
         self.pit_window = pit_window
         self.advice, self.advice_key, self.advice_due, self.advice_busy = None, None, 0., False
-        # iRacing: each car's lowest setup cold pressure, learned from the driver's .ibt files.
-        self.telemetry_dirs, self.floors = tuple(telemetry_dirs), None
+        # Each car's lowest setup cold pressure, learned from the driver's .ibt / .duckdb files.
+        self.telemetry_dirs = telemetry_dirs if callable(telemetry_dirs) else tuple(telemetry_dirs)
+        self.floors = None
         self.path = Path(path) if path is not None else None
         self.popen = popen
         self.operation_lock = threading.RLock()
@@ -60,9 +61,15 @@ class TireOverlayController:
         self.ocr, self.ocr_install, self.digit_reader = None, None, None
 
     def _floors(self):
-        if self.floors is None and self.game == 'iracing' and self.telemetry_dirs:
-            from tire_reader.pressure_floor import PressureFloors
-            self.floors = PressureFloors(self._path().with_name('tires-floors.json'), self.telemetry_dirs)
+        if self.floors is None:
+            from tire_reader import pressure_floor as found
+            # LMU folders are looked up when first needed (Steam libraries, imports).
+            dirs = self.telemetry_dirs() if callable(self.telemetry_dirs) else self.telemetry_dirs
+            if self.game == 'iracing' and dirs:
+                self.floors = found.PressureFloors(self._path().with_name('tires-floors.json'), dirs)
+            elif self.game == 'lmu' and dirs:
+                self.floors = found.PressureFloors(self._path().with_name('tires-floors.json'), dirs,
+                    reader=found.read_lmu_setup, pattern='*.duckdb', resolve=found.lmu_car)
         return self.floors
 
     def _path(self):
@@ -566,9 +573,10 @@ class TireOverlayController:
 class TireOverlays:
     """Separate settings, windows and position maps for the two simulators."""
     def __init__(self, *, audio=None, run_link=lambda snapshot:'', driving_context=lambda snapshot:None, pit_window=lambda:None,
-                 telemetry_dirs=()):
+                 telemetry_dirs=(), lmu_telemetry_dirs=()):
+        dirs = {'iracing': telemetry_dirs, 'lmu': lmu_telemetry_dirs}
         self.controllers = {game: TireOverlayController(game=game, audio=audio,run_link=run_link,
-            driving_context=driving_context, pit_window=pit_window, telemetry_dirs=telemetry_dirs if game == 'iracing' else ())
+            driving_context=driving_context, pit_window=pit_window, telemetry_dirs=dirs[game])
             for game in ('iracing', 'lmu')}
 
     def log_extra(self, run):
