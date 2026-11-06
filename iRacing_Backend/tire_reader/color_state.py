@@ -14,6 +14,23 @@ PROFILES = {
     'amvantageevogt3': ('background', {'red': 'low', 'orange': 'low', 'green': 'ok'}, {}),
     'audir8lmsevo2gt3': ('background', {'red': 'low'}, {}),
 }
+# Manuals: Ferrari 'black' and Audi 'default background' mean optimum. A plain
+# dark cell is also what an occluded or night screen looks like, so it counts as
+# 'ok' only for a cell whose number was read in the same frame (visible proof).
+NEUTRAL_OK = {'ferrari296gt3', 'audir8lmsevo2gt3'}
+
+
+def neutral(image, box):
+    """True when the cell's inset edge is achromatic (black/grey), any brightness."""
+    if box is None:
+        return False
+    x1,y1,x2,y2 = (int(v) for v in box)
+    if x1 < 0 or y1 < 0 or x2 > image.shape[1] or y2 > image.shape[0] or x2-x1 < 8 or y2-y1 < 8:
+        return False
+    s = cv2.cvtColor(image[y1:y2,x1:x2,:3], cv2.COLOR_BGR2HSV)[:,:,1]
+    mask = np.ones(s.shape,dtype=bool)
+    mask[2:-2,2:-2] = False
+    return np.count_nonzero(mask & (s < 50)) / max(1, int(mask.sum())) >= .85
 
 
 def color(image, box, mode):
@@ -45,10 +62,18 @@ def color(image, box, mode):
     return None
 
 
-def states(image, car, pressure, temperature):
+def states(image, car, pressure, temperature, recognized=None):
+    """recognized: {'pressure': wheels, 'temperature': wheels} read in this frame."""
     profile = PROFILES.get(car)
     if profile is None:
         return {}, {}
     mode, pmap, tmap = profile
-    return ({w:pmap.get(color(image,box,mode)) for w,box in pressure.items()},
-            {w:tmap.get(color(image,box,mode)) for w,box in temperature.items()})
+    recognized = recognized or {}
+    def classify(wheel, box, mapping, field):
+        name = color(image, box, mode)
+        if (name is None and mapping and car in NEUTRAL_OK and wheel in recognized.get(field, ())
+                and neutral(image, box)):
+            return 'ok'
+        return mapping.get(name)
+    return ({w:classify(w,box,pmap,'pressure') for w,box in pressure.items()},
+            {w:classify(w,box,tmap,'temperature') for w,box in temperature.items()})

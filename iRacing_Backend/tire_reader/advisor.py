@@ -5,6 +5,8 @@ import uuid
 from .snapshot import TireSnapshot, WHEELS
 
 LABELS = dict(zip(WHEELS, ('왼쪽 앞', '오른쪽 앞', '왼쪽 뒤', '오른쪽 뒤')))
+STATE_MAX_AGE_S = 5  # newest agreeing reading
+STATE_MAX_GAP_S = 6  # between consecutive readings (3 readings may span up to 12 s)
 SHORT_PHRASES = {f'pressure_{state}_{wheel}': f'{label} 타이어 압력 {word}.'
            for wheel, label in LABELS.items() for state, word in (('high', '높음'), ('low', '낮음'))}
 SHORT_PHRASES.update({f'temperature_hot_{wheel}': f'{label} 타이어 과열.' for wheel, label in LABELS.items()})
@@ -101,13 +103,16 @@ class TireAdvisor:
             break
 
     def state(self, field, wheel, now):
-        history = self.history.get((field, wheel), ())
-        fresh = [(state, t) for state, t in history if 0 <= now - t <= 5]
-        if len(fresh) < 3:
+        history = [(state, t) for state, t in self.history.get((field, wheel), ()) if t <= now]
+        if len(history) < 3:
             return None
-        # Require the latest three observations to agree; intermittent missing
-        # measurements cannot turn an old consensus into a new transition.
-        last = fresh[-3:]
+        # Require the latest three readings to agree. A hand or wheel rim can hide
+        # the dash for a few seconds, so readings may be spread out, but the newest
+        # must be recent and no gap may be long: intermittent missing measurements
+        # cannot turn an old consensus into a new transition.
+        last = history[-3:]
+        if now - last[-1][1] > STATE_MAX_AGE_S or any(b[1] - a[1] > STATE_MAX_GAP_S for a, b in zip(last, last[1:])):
+            return None
         return last[-1][0] if len({s for s, _ in last}) == 1 else None
 
     def quiet(self, now):

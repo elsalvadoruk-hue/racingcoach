@@ -11,7 +11,7 @@ const APPEARANCE = [['background_opacity', '배경 불투명도', 85, 100, '%'],
 const TARGETS = [['pressure_low_bar', '압력 하한 (bar)', .01, .4, 4], ['pressure_high_bar', '압력 상한 (bar)', .01, .4, 4],
   ['temp_low_c', '온도 하한 (°C)', 1, -50, 250], ['temp_high_c', '온도 상한 (°C)', 1, -50, 250]];
 
-function TargetRanges({ view, disabled, save }) {
+function TargetRanges({ view, disabled, save, open }) {
   const [values, setValues] = useState(() => ({ ...view.targets }));
   const [error, setError] = useState('');
   const submit = () => {
@@ -23,7 +23,7 @@ function TargetRanges({ view, disabled, save }) {
     }
     setError(''); save({ car: view.car_path, ...next });
   };
-  return <details className="text-sm">
+  return <details className="text-sm" open={open}>
     <summary>차량별 음성 판단 범위{view.car_name ? ` · ${view.car_name}` : ''}</summary>
     <div className="flex flex-col gap-3 pt-3">
       <p className="text-muted-foreground">대시 색을 우선 사용합니다. 색 정보가 없는 항목은 아래 범위로 판단하며, 비워 두면 판단을 보류합니다. 온도는 현재 차량에서 측정하는 종류에 적용됩니다.</p>
@@ -39,6 +39,16 @@ function TargetRanges({ view, disabled, save }) {
       {error && <p role="alert">{error}</p>}
     </div>
   </details>;
+}
+
+function digitText(reader) {
+  if (!reader?.mode) return '';
+  if (reader.mode === 'self') {
+    const rate = typeof reader.agreement === 'number' ? ` · 학습 때 일치율 ${(reader.agreement * 100).toFixed(1)}%` : '';
+    return `숫자 인식: 자체 인식 사용 중${rate} · Windows OCR은 가끔 검증과 보조에만 사용`;
+  }
+  return `숫자 인식: Windows OCR로 학습 중 · 비교 ${reader.compared ?? 0}/${reader.needed ?? 500}`
+    + ` · 숫자 ${reader.digits_learned ?? 0}/10 · 서로 다른 값 ${reader.values_seen ?? 0}/${reader.values_needed ?? 8}`;
 }
 
 function statusText(view) {
@@ -185,10 +195,30 @@ export default function TireOverlaySettings({ apiBase, fetcher = fetch, game = '
           <p className="text-sm text-muted-foreground">표시를 꺼도 음성 안내는 계속됩니다. 기존 피트월 목소리·음량을 사용하며, 근거가 부족하면 안내하지 않습니다.</p>
           {view?.voice_enabled && view.voice_audio_ready === false && <p className="text-sm text-muted-foreground">타이어 안내 음원이 아직 준비되지 않았습니다.</p>}
           {view?.history_error && <p className="text-sm text-muted-foreground">타이어 기록을 저장하지 못했습니다. 측정과 표시는 계속됩니다.</p>}
+          {game !== 'lmu' && view?.digit_reader?.mode && <div className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-muted-foreground">{digitText(view.digit_reader)}</p>
+            <Button variant="outline" size="sm" disabled={disabled || !view.car_path} onClick={() => apply(undefined, true, '/digits/reset')}>현재 차량 숫자 학습 초기화</Button>
+          </div>}
         </div>
         </div>
         </div>
+        {game !== 'lmu' && view?.ocr_english === false && <Alert>
+          <AlertDescription>
+            <p>영어 Windows OCR이 없어 {view.ocr_language ? `현재 언어(${view.ocr_language})로 ` : ''}숫자를 읽고 있습니다. 일부 계기판 숫자를 글자로 잘못 읽어 측정이 보류될 수 있습니다.</p>
+            <p>OCR 구성요소만 추가하며 Windows 표시 언어는 바뀌지 않습니다. 설치에는 관리자 승인과 인터넷이 필요합니다.</p>
+            <div className="flex flex-wrap gap-3 pt-2">
+              {view.ocr_install === 'requested'
+                ? <><span>설치 창이 끝나면 다시 확인을 눌러 주세요.</span>
+                  <Button variant="outline" size="sm" disabled={disabled} onClick={() => apply(undefined, true, '/ocr-language/recheck')}>다시 확인</Button></>
+                : <Button variant="outline" size="sm" disabled={disabled} onClick={() => apply(undefined, true, '/ocr-language/install')}>영어 OCR 설치 (관리자 승인)</Button>}
+            </div>
+          </AlertDescription>
+        </Alert>}
+        {view?.voice_enabled && view.car_path && view.state_source === null && <Alert>
+          <AlertDescription>{view.car_name || '이 차량'}은 대시 색 정보가 없어, 아래 판단 범위를 저장해야 타이어 음성 안내가 나옵니다.</AlertDescription>
+        </Alert>}
         {view && <TargetRanges key={`${game}:${view.car_path || ''}:${JSON.stringify(view.targets || {})}`}
+          open={Boolean(view.voice_enabled && view.car_path && view.state_source === null)}
           view={view} disabled={disabled} save={body => apply(body, false, '/targets')}/>}
         {(error || view?.error) && <Alert variant="destructive"><AlertDescription>{error || view.error}</AlertDescription></Alert>}
       </>

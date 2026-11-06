@@ -134,6 +134,51 @@ test('dragging while a save is delayed sends the final value sequentially',async
   expect(background).toHaveValue('35');
 });
 
+test('without English Windows OCR the user can request it and recheck after installing',async()=>{
+  let state={...initial,enabled:true,running:true,ocr_language:'ko',ocr_english:false,ocr_install:null};
+  const fetcher=jest.fn(async(url,options={})=>{
+    if (url.includes('/ocr-language/install')) state={...state,ocr_install:'requested'};
+    if (url.includes('/ocr-language/recheck')) state={...state,ocr_english:true,ocr_install:null};
+    return response({...state});
+  });
+  render(<TireOverlaySettings fetcher={fetcher}/>);
+  expect(await screen.findByText(/영어 Windows OCR이 없어 현재 언어\(ko\)로/)).toBeVisible();
+  fireEvent.click(screen.getByRole('button',{name:'영어 OCR 설치 (관리자 승인)'}));
+  await waitFor(()=>expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/ocr-language/install'),expect.objectContaining({method:'POST'})));
+  fireEvent.click(await screen.findByRole('button',{name:'다시 확인'}));
+  await waitFor(()=>expect(screen.queryByText(/영어 Windows OCR이 없어/)).not.toBeInTheDocument());
+});
+
+test('LMU never offers Windows OCR installation',async()=>{
+  const fetcher=jest.fn(async()=>response({...initial,ocr_english:false}));
+  render(<TireOverlaySettings game="lmu" fetcher={fetcher}/>);
+  await waitFor(()=>expect(screen.getByRole('switch',{name:'타이어 음성 안내'})).toBeEnabled());
+  expect(screen.queryByRole('button',{name:'영어 OCR 설치 (관리자 승인)'})).not.toBeInTheDocument();
+});
+
+test('a car without dash colors asks for ranges before voice can judge',async()=>{
+  const fetcher=jest.fn(async()=>response({...initial,voice_enabled:true,running:true,car_path:'bmwm4gt3',
+    car_name:'BMW M4 GT3',targets:{},state_source:null}));
+  render(<TireOverlaySettings fetcher={fetcher}/>);
+  expect(await screen.findByText(/BMW M4 GT3은 대시 색 정보가 없어/)).toBeVisible();
+  expect(screen.getByLabelText('압력 하한 (bar)')).toBeVisible();
+});
+
+test('local digit learning progress and reset are shown for iRacing',async()=>{
+  let state={...initial,enabled:true,running:true,car_path:'mclaren720sgt3',state_source:'dash_color',
+    digit_reader:{mode:'learning',compared:120,needed:500,digits_learned:7,values_seen:3,values_needed:8,agreement:.99}};
+  const fetcher=jest.fn(async(url)=>{
+    if (url.includes('/digits/reset')) state={...state,digit_reader:{...state.digit_reader,compared:0,digits_learned:0,values_seen:0}};
+    return response({...state});
+  });
+  render(<TireOverlaySettings fetcher={fetcher}/>);
+  expect(await screen.findByText(/Windows OCR로 학습 중 · 비교 120\/500 · 숫자 7\/10 · 서로 다른 값 3\/8/)).toBeVisible();
+  fireEvent.click(screen.getByRole('button',{name:'현재 차량 숫자 학습 초기화'}));
+  expect(await screen.findByText(/비교 0\/500 · 숫자 0\/10/)).toBeVisible();
+  state={...state,digit_reader:{mode:'self',agreement:.998}};
+  expect(await screen.findByText(/자체 인식 사용 중 · 학습 때 일치율 99.8%/,{},{timeout:3000})).toBeVisible();
+});
+
 test('missing tire clips are stated and ranges can be set only for the measured car',async()=>{
   const fetcher=fixture();fetcher.mockImplementationOnce(async()=>response({...initial,voice_enabled:true,
     voice_audio_ready:false,car_path:'bmwm4gt3',car_name:'BMW M4 GT3',targets:{}}));

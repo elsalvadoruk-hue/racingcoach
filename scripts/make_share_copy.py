@@ -40,7 +40,8 @@ SCRIPTS = ("launch_app.py", "install_ui.py", "serve_ui.py", "prepare_radio_audio
            # 설치.bat and 실행.bat pick a supported Python through this.
            "find_python.bat",
            # The web settings tab and the driving overlay run this window process.
-           "tire_overlay.py", "overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
+           # 설치.bat offers English Windows OCR for it through ensure_ocr_language.py.
+           "tire_overlay.py", "ensure_ocr_language.py", "overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
            "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py", "overlay_race_result.py", "overlay_studio_view.py", "overlay_preview.py")
 REQUIRED_OVERLAY_SCRIPTS = ("overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
                             "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py", "overlay_race_result.py", "overlay_studio_view.py", "overlay_preview.py")
@@ -101,7 +102,8 @@ def tire_reader_files(root: Path) -> list[str]:
     names = [f'{name}.py' for name in ('__init__', 'sdk', 'screen_reader', 'managed_overlay',
         'pressure_ocr', 'pressure_overlay', 'pressure_display', 'cockpit_gate', 'positions',
         'dash_locator', 'multi_dash_locator', 'vehicle_dash', 'window_visibility',
-        'snapshot', 'lmu_source', 'advisor', 'coaching', 'color_state', 'voice_audio', 'targets', 'history', 'log_export')]
+        'snapshot', 'lmu_source', 'advisor', 'coaching', 'color_state', 'voice_audio', 'targets', 'history', 'log_export',
+        'glyphs', 'digit_model', 'ocr_language')]
     manifest = package / 'samples/gt3_dash/sources.json'
     listing = json.loads(manifest.read_text(encoding='utf-8'))
     if len(listing.get('vehicles', [])) != 12:

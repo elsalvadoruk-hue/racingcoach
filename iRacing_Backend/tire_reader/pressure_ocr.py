@@ -45,6 +45,11 @@ def validate_profile(profile):
     if (not isinstance(temperatures,dict) or not set(temperatures)<=set(WHEELS)
             or profile.get('temperature_unit','C') not in ('C','F','unknown')):
         raise ValueError('타이어 온도 영역과 단위를 확인해 주세요.')
+    formats=profile.get('pressure_formats')
+    if formats is not None and (not isinstance(formats,(list,tuple)) or not formats or any(
+            not isinstance(f,(list,tuple)) or len(f)!=2 or f[0] not in KPA_PER_UNIT
+            or type(f[1]) is not int or not 0<=f[1]<=2 for f in formats)):
+        raise ValueError('압력 표시 형식을 확인해 주세요.')
     if not boxes and not temperatures:raise ValueError('읽을 수 있는 숫자 영역이 없습니다.')
     width, height = dimensions
     accepted = []
@@ -87,6 +92,9 @@ def parse_pressure(text, unit, decimals):
     return (value, kpa) if math.isfinite(kpa) and 40 <= kpa <= 400 else None
 
 
+AUTO_PRESSURE_FORMATS=(('bar',2),('psi',1),('psi',2))
+
+
 def parse_auto_pressure(text):
     # Each format must contain the actual decimal point. No repairing glyphs,
     # missing decimals, or ambiguous unit choices using a previous reading.
@@ -94,10 +102,49 @@ def parse_auto_pressure(text):
     # Generic auto detection supports bar or psi. Integer OCR such as "239"
     # must not turn a dropped decimal from "23.9" into a plausible kPa reading.
     # Explicit kPa profiles remain supported by parse_pressure.
-    for unit,decimals in (('bar',2),('psi',1),('psi',2)):
+    for unit,decimals in AUTO_PRESSURE_FORMATS:
         value=parse_pressure(text,unit,decimals)
         if value is not None:candidates.append(value)
     return candidates[0] if len(candidates)==1 else None
+
+
+def parse_formats(text,formats):
+    # Same rule as parse_auto_pressure, limited to the formats of the SDK unit mode.
+    candidates={value for unit,decimals in formats if (value:=parse_pressure(text,unit,decimals)) is not None}
+    return next(iter(candidates)) if len(candidates)==1 else None
+
+
+def dot_recovery(gray,texts,formats):
+    """Restore a decimal point the OCR dropped, only when the pixels show it.
+
+    Every non-empty variant must report the same digits, the cell must split into
+    exactly that many digit glyphs, and exactly one baseline dot must sit where
+    one known format puts it. Otherwise nothing is returned and the cell stays
+    withheld. No digit is ever changed or added.
+    """
+    nonempty=[re.sub(r'\s','',t) for t in texts if t.strip()]
+    if len(nonempty)<2 or len(set(nonempty))!=1 or not re.fullmatch(r'[0-9]{2,4}',nonempty[0]):
+        return None
+    text=nonempty[0]
+    from .glyphs import segment
+    glyphs=segment(gray)
+    if glyphs is None or glyphs.dot is None or len(glyphs.digits)!=len(text):
+        return None
+    places=len(text)-glyphs.dot
+    results={value for unit,decimals in formats if decimals==places and
+             (value:=parse_pressure(text[:glyphs.dot]+'.'+text[glyphs.dot:],unit,decimals)) is not None}
+    return next(iter(results)) if len(results)==1 else None
+
+
+def withheld_reason(texts,valid):
+    """A code for why a cell was not accepted; the OCR text itself is never kept."""
+    nonempty=[re.sub(r'\s','',t) for t in texts if t.strip()]
+    if not nonempty:return 'empty'
+    if len(valid)>1:return 'format_conflict'
+    if valid:return 'single_variant'
+    if any(re.search(r'[^0-9.,-]',t) for t in nonempty):return 'non_digit_glyphs'
+    if all(re.fullmatch(r'[0-9]{2,4}',t) for t in nonempty):return 'digits_without_decimal'
+    return 'unreadable_format'
 
 
 def parse_temperature(text,unit):
@@ -231,8 +278,11 @@ class WindowsPressureOcr:
                 variant = cv2.resize(base, None, fx=scale*stretch, fy=scale, interpolation=cv2.INTER_CUBIC)
                 variant = cv2.copyMakeBorder(variant, 20, 20, 20, 20, cv2.BORDER_CONSTANT, value=border)
                 texts.append(await self._text(variant))
+            formats=[tuple(f) for f in profile.get('pressure_formats') or ()]
             if kind=='temperature':
                 candidates=[parse_temperature(text,profile.get('temperature_unit','C')) for text in texts]
+            elif formats:
+                candidates=[parse_formats(text,formats) for text in texts]
             elif profile.get('screen_unit')=='auto':
                 candidates=[parse_auto_pressure(text) for text in texts]
             else:
@@ -243,11 +293,20 @@ class WindowsPressureOcr:
             accepted = next(iter(valid)) if len(valid) == 1 and sum(v is not None for v in candidates) >= 2 else None
             if car=='ferrari296gt3' and kind=='pressure' and len({i//2 for i,v in enumerate(candidates) if v is not None})<2:
                 accepted=None
+            dot_verified=False
+            independent=car!='ferrari296gt3' or len({i//2 for i,t in enumerate(texts) if t.strip()})>=2
+            if accepted is None and not valid and kind=='pressure' and independent:
+                # The OCR often keeps every digit but drops a small decimal dot.
+                # Integer formats (Cup kPa) never qualify: they have no dot.
+                recovered=dot_recovery(gray,texts,formats or
+                    (AUTO_PRESSURE_FORMATS if profile.get('screen_unit')=='auto' else ((profile['unit'],profile['decimals']),)))
+                if recovered:accepted,dot_verified=recovered,True
             status = 'recognized' if accepted else ('ambiguous' if len(valid) > 1 else
                 ('single_variant' if valid else 'unreadable'))
             target=temperatures if kind=='temperature' else wheels
             target[wheel] = dict(status=status, texts=texts,
                 value=accepted[0] if accepted else None,
+                reason=None if accepted else withheld_reason(texts,valid),dot_verified=dot_verified,
                 **{('celsius' if kind=='temperature' else 'kpa'):accepted[1] if accepted else None})
         return dict(source='offline_screenshot_ocr', language=self.language,
             available_languages=self.languages, unit=profile['unit'], wheels=wheels,temperatures=temperatures,

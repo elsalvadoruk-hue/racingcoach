@@ -17,6 +17,7 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
 
     input_stream, output_stream = input_stream or sys.stdin, output_stream or sys.stdout
     messages, samples, stop = Queue(maxsize=32), Queue(maxsize=1), threading.Event()
+    digit_resets = Queue(maxsize=8)  # cars whose local digit learning starts over
     output_lock = threading.Lock()
 
     def emit(payload):
@@ -45,9 +46,17 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
         sampler = None
         try:
             sampler = sampler_factory()
-            emit({'type': 'ready'})
+            ocr = getattr(sampler, 'ocr', None)
+            # Language tags only, so the app can suggest English Windows OCR.
+            emit({'type': 'ready', **({'ocr_language': getattr(ocr, 'language', None),
+                  'ocr_languages': list(getattr(ocr, 'languages', None) or [])[:16]} if ocr is not None else {})})
             while not stop.is_set():
                 started = time.monotonic()
+                while hasattr(sampler, 'reset_digits'):
+                    try:
+                        sampler.reset_digits(digit_resets.get_nowait())
+                    except Empty:
+                        break
                 row = sampler.sample()
                 if stop.is_set():
                     break
@@ -75,9 +84,13 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
                 sampler_factory = LmuTireReader
             else:
                 import cv2
+                from pathlib import Path
                 cv2.setNumThreads(1)
+                from .digit_model import DigitReader
                 from .screen_reader import ScreenTireReader
-                sampler_factory = ScreenTireReader
+                # Learned digit shapes stay next to this game's tire settings on this PC.
+                digit_folder = Path(position_path).with_name('tires-digits')
+                sampler_factory = lambda: ScreenTireReader(digits=DigitReader(digit_folder))
         except Exception as error:
             emit({'type': 'fatal', 'code': 'dependencies_missing' if isinstance(error, ImportError) else 'ocr_unavailable'})
             return
@@ -129,6 +142,12 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
                     emit({'type': 'reply', 'id': command.get('id'), 'ok': False})
                     continue
                 overlay.set_appearance(**patch)
+            elif action == 'reset_digits' and isinstance(command.get('car'), str):
+                try:
+                    digit_resets.put_nowait(command['car'][:180])
+                except Exception:
+                    emit({'type': 'reply', 'id': command.get('id'), 'ok': False})
+                    continue
             elif action == 'shutdown':
                 stop.set()
             else:
@@ -166,6 +185,7 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
                   'measurement': row.get('measurement'), 'pressure': display.formatted(),
                   'temperature': display.formatted_temperatures(),
                   'display_status': display.status, 'temperature_kind': display.temperature_kind,
+                  'digit_reader': row.get('digit_reader'),
                   'tire_snapshot': row.get('tire_snapshot')})
         root.after(40, tick)
 

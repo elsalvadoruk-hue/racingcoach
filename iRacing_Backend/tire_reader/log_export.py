@@ -70,8 +70,11 @@ def diagnostics(message, snapshot, raw, targets, *, enabled, voice_enabled):
         'stage':token(measurement.get('stage')),
         'source_temperature_unit':measurement.get('temperature_unit') if measurement.get('temperature_unit') in ('C','F') else None,
     }
-    for field in ('pressure','temperature'):
+    for field in ('pressure','temperature','pressure_reason','temperature_reason'):
         result['measurement'][field]={w:token((measurement.get(field) or {}).get(w)) for w in WHEELS}
+    result['measurement']['pressure_dot_verified']={w:(measurement.get('pressure_dot_verified') or {}).get(w) is True for w in WHEELS}
+    for field in ('reader','reader_mode'):
+        result['measurement'][field]=token(measurement.get(field))
     return result
 
 

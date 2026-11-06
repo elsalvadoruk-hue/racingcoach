@@ -94,6 +94,7 @@
 !/scripts/find_python.bat
 !/scripts/overlay_sample.py
 !/scripts/tire_overlay.py
+!/scripts/ensure_ocr_language.py
 !/scripts/overlay_trace.py
 !/scripts/overlay_celebration.py
 !/scripts/overlay_demo_data.py

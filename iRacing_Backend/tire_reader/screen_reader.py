@@ -1,10 +1,14 @@
-"""One local measurement per call. Screen pixels are never saved or transmitted."""
+"""One local measurement per call. Screen pixels are never saved or transmitted.
+
+The optional digit reader keeps only normalized 16x24 digit shapes on this PC
+(see digit_model); never a screenshot, and never in logs or uploads.
+"""
 import asyncio
 import time
 
 from .sdk import SdkReader, finite
 from .cockpit_gate import CockpitGate, cockpit_context
-from .vehicle_dash import canonical_car, name_for
+from .vehicle_dash import canonical_car, name_for, pressure_formats
 from .pressure_ocr import WHEELS, WindowsPressureOcr, make_profile
 from .multi_dash_locator import MultiCarDashLocator, ocr_frame
 from .window_visibility import GameVisibility
@@ -16,7 +20,7 @@ IDENTITY = ('car_path', 'track_id', 'track_config', 'SessionNum', 'session_id', 
 
 class ScreenTireReader:
     def __init__(self, *, sdk_factory=None, screens_factory=None, locator=None, ocr=None,
-                 visibility=None, clock=time.monotonic):
+                 visibility=None, clock=time.monotonic, digits=None):
         if sdk_factory is None:
             import irsdk
             sdk_factory = irsdk.IRSDK
@@ -33,6 +37,12 @@ class ScreenTireReader:
         self.car = self.rect = None
         self.misses = 0
         self.context = {}
+        # Optional local digit reader (digit_model.DigitReader); Windows OCR stays its teacher.
+        self.digits = digits
+
+    def reset_digits(self, car):
+        if self.digits is not None and canonical_car(car):
+            self.digits.reset(canonical_car(car))
 
     def _disconnect(self):
         sdk, self.sdk, self.reader = self.sdk, None, None
@@ -46,6 +56,8 @@ class ScreenTireReader:
             if self.screens is not None:
                 self.screens.close()
                 self.screens = None
+            if self.digits is not None:
+                self.digits.close()
 
     def sample(self):
         from .snapshot import from_iracing
@@ -126,17 +138,32 @@ class ScreenTireReader:
             display_units = before.get('DisplayUnits')
             cup_kpa = car == 'porsche9922cup' and type(display_units) is int and display_units == 1
             unit, decimals = ('kPa', 0) if cup_kpa else ('bar', 2)
+            # The SDK unit mode fixes which text format the dash can show.
+            formats = None if cup_kpa else [list(f) for f in pressure_formats(car, display_units)]
             profile = make_profile(frame, 'live-visible-game', '', pressure, unit, decimals,
                 car_path=car, temperature_boxes=temperatures, automatic_partial=True,
                 screen_unit='kPa' if cup_kpa else 'auto', temperature_kind=location.get('temperature_kind'),
-                temperature_unit={0: 'F', 1: 'C'}.get(before.get('DisplayUnits'), 'unknown'))
+                temperature_unit={0: 'F', 1: 'C'}.get(before.get('DisplayUnits'), 'unknown'),
+                **({'pressure_formats': formats} if formats else {}))
             operation = 'ocr'
-            recognized = asyncio.run(self.ocr.recognize(frame, profile))
+            if self.digits is not None:
+                recognized = self.digits.read(car, frame, profile,
+                                              lambda reduced: asyncio.run(self.ocr.recognize(frame, reduced)))
+                row['digit_reader'] = self.digits.status(car)
+            else:
+                recognized = asyncio.run(self.ocr.recognize(frame, profile))
+            reader = recognized.get('reader') or {}
             row['measurement'] = {'stage': 'ocr', 'locate_ms': found.get('elapsed_ms'),
                 'ocr_ms': recognized.get('elapsed_ms'),
+                'reader': 'digit_model' if reader.get('mode') == 'self' else 'windows_ocr',
+                'reader_mode': reader.get('mode'),
                 'temperature_unit': recognized.get('temperature_unit'),
                 'pressure': {w: recognized['wheels'].get(w, {}).get('status') for w in WHEELS},
-                'temperature': {w: recognized.get('temperatures', {}).get(w, {}).get('status') for w in WHEELS}}
+                'temperature': {w: recognized.get('temperatures', {}).get(w, {}).get('status') for w in WHEELS},
+                # Codes only (why a cell was withheld, whether a dot was confirmed); never OCR text.
+                'pressure_reason': {w: recognized['wheels'].get(w, {}).get('reason') for w in WHEELS},
+                'temperature_reason': {w: recognized.get('temperatures', {}).get(w, {}).get('reason') for w in WHEELS},
+                'pressure_dot_verified': {w: recognized['wheels'].get(w, {}).get('dot_verified') is True for w in WHEELS}}
             operation = 'sdk_after'
             after = self.reader.snapshot(self.generation)
             after['fresh'] = before['fresh'] or after['fresh']
@@ -157,7 +184,9 @@ class ScreenTireReader:
                 row['status'] = 'frame_expired'
             else:
                 from .color_state import states
-                pressure_states, temperature_states = states(frame, car, pressure, temperatures)
+                read = {'pressure': {w for w in WHEELS if finite(recognized['wheels'].get(w, {}).get('kpa')) is not None},
+                        'temperature': {w for w in WHEELS if finite(recognized.get('temperatures', {}).get(w, {}).get('celsius')) is not None}}
+                pressure_states, temperature_states = states(frame, car, pressure, temperatures, read)
                 row.update(status='reading', capture=dict(self.rect),
                            temperature_kind=location.get('temperature_kind'),
                            pressure_states=pressure_states, temperature_states=temperature_states)

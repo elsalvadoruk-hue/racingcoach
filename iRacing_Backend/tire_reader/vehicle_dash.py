@@ -49,7 +49,7 @@ VEHICLES={
     regions([490,339,635,392],[1151,339,1297,392],[486,468,635,520],[1151,467,1297,520]),
     [849,267,955,298],
     regions([650,365,758,414],[1026,365,1138,414],[650,451,758,505],[1026,451,1138,505]),'unspecified',
-    page_note='Magnus Quali'),
+    page_note='Magnus Quali',imperial=('psi',2)),
  'mclaren720sgt3':entry('McLaren 720S GT3 EVO','mclaren_720s_p7.png',[695,132,1504,626],
     regions([1208,245,1281,277],[1392,244,1466,276],[1208,328,1281,361],[1392,326,1466,359]),
     [1261,210,1469,240],
@@ -73,6 +73,22 @@ VEHICLES={
 def canonical_car(value):
     normalized=str(value or '').strip('/\\').lower().replace('\\','/')
     return normalized if normalized in VEHICLES else None
+
+
+def pressure_formats(car_path,display_units):
+    """Pressure text formats for the SDK unit mode (0 imperial, 1 metric).
+
+    Imperial: psi with the decimals shown in the official manual images (all
+    imperial). Metric: bar with two decimals unless a car is verified otherwise
+    (Cup 992.2 integer kPa keeps its own explicit profile). Accepting only the
+    current mode's format stops '23.91' (noise) competing with '23.9'.
+    """
+    from .pressure_ocr import AUTO_PRESSURE_FORMATS
+    spec=VEHICLES.get(canonical_car(car_path))
+    if spec is None:return None
+    if type(display_units) is not int or display_units not in (0,1):return AUTO_PRESSURE_FORMATS
+    if display_units==0:return (tuple(spec.get('imperial') or ('psi',1)),)
+    return (tuple(spec.get('metric') or ('bar',2)),)
 
 
 def name_for(value):return VEHICLES.get(canonical_car(value),{}).get('name',str(value or '차량 대기'))

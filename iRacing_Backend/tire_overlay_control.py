@@ -42,6 +42,7 @@ class TireOverlayController:
         self.appearance = {'background_opacity': 85, 'content_opacity': 100, 'radius': 12}
         self.ready, self.error, self.current = False, None, {}
         self.sequence, self.replies = 0, {}
+        self.ocr, self.ocr_install, self.digit_reader = None, None, None
 
     def _path(self):
         if self.path is None:
@@ -85,14 +86,31 @@ class TireOverlayController:
         from tire_reader.targets import TireTargets
         return TireTargets(self._path().with_name('tires-targets.json'))
 
+    def _state_source(self, car, targets):
+        """How tire states are judged for this car; None means voice has nothing to judge."""
+        from tire_reader.color_state import PROFILES
+        if self.game == 'iracing' and car in PROFILES:
+            return 'dash_color'
+        if targets.get('pressure_low_bar') is not None or targets.get('temp_low_c') is not None:
+            return 'targets'
+        return None
+
     def status(self):
         with self.operation_lock, self.condition:
             self._load()
             running = self.process is not None and self.process.poll() is None
+            car = self.current.get('car_path')
+            targets = self._targets().get(car)
+            from tire_reader.ocr_language import has_english
             return {'version': 1, 'supported': sys.platform == 'win32', 'enabled': self.enabled,
                     'game': self.game, 'voice_enabled': self.voice_enabled,
                     'voice_audio_ready': self.audio.ready() if self.voice_enabled and hasattr(self.audio, 'ready') else None,
-                    'targets': self._targets().get(self.current.get('car_path')),
+                    'state_source': self._state_source(car, targets) if car else None,
+                    'ocr_language': self.ocr['language'] if self.ocr else None,
+                    'ocr_english': has_english(self.ocr['languages']) if self.ocr else None,
+                    'ocr_install': self.ocr_install,
+                    'digit_reader': self.digit_reader,
+                    'targets': targets,
                     'target_temperature_kind': next((v.temp_kind for v in self.snapshot.wheels.values() if v.temp_kind), None) if self.snapshot else None,
                     'history_error': bool(self.history and self.history.error),
                     'coaching': dict(self.advisor.coaching.view),
@@ -118,6 +136,10 @@ class TireOverlayController:
                     kind = message.get('type')
                     if kind == 'ready':
                         self.ready = True
+                        tags = message.get('ocr_languages')
+                        tags = [t[:16] for t in tags if isinstance(t, str)][:16] if isinstance(tags, list) else None
+                        self.ocr = {'language': message['ocr_language'][:16] if isinstance(message.get('ocr_language'), str) else None,
+                                    'languages': tags} if tags is not None else None
                     elif kind == 'state':
                         from tire_reader.snapshot import TireSnapshot
                         data = message.get('tire_snapshot')
@@ -146,6 +168,12 @@ class TireOverlayController:
                         self.current = {key: message.get(key) for key in
                             ('visible', 'status', 'warmup_remaining_s', 'car_name', 'pressure',
                              'temperature', 'display_status', 'temperature_kind', 'car_path', 'measurement')}
+                        digits = message.get('digit_reader')
+                        if isinstance(digits, dict):
+                            self.digit_reader = {'mode': digits.get('mode') if digits.get('mode') in ('learning', 'self') else None,
+                                **{k: digits.get(k) for k in ('compared', 'needed', 'digits_learned', 'values_seen',
+                                   'values_needed', 'verify_disagreements') if type(digits.get(k)) is int},
+                                'agreement': digits.get('agreement') if isinstance(digits.get('agreement'), float) else None}
                     elif kind == 'fatal':
                         self.error = ERRORS.get(message.get('code'), ERRORS['ocr_unavailable'])
                     elif kind == 'reply' and type(message.get('id')) is int:
@@ -313,6 +341,39 @@ class TireOverlayController:
                 self.history.close()
                 self.history = None
 
+    def install_english_ocr(self):
+        """Only on the user's click: UAC prompt, then Windows installs in its own window."""
+        if self.game != 'iracing':
+            raise ValueError('iRacing 화면 측정에서만 사용합니다.')
+        from tire_reader.ocr_language import request_install
+        try:
+            request_install(wait=False)  # No lock held while the UAC prompt is open.
+        except RuntimeError:
+            with self.operation_lock:
+                self.ocr_install = 'not_started'
+            raise
+        with self.operation_lock:
+            self.ocr_install = 'requested'
+            return self.status()
+
+    def recheck_ocr(self):
+        """A new measurement process reads the OCR languages Windows now has."""
+        with self.operation_lock:
+            self._load()
+            if self.enabled or self.voice_enabled:
+                self._stop()
+                self._start()
+            self.ocr_install = None
+            return self.status()
+
+    def reset_digit_learning(self):
+        with self.operation_lock:
+            car = self.current.get('car_path')
+            if not car:
+                raise ValueError('측정 중인 차량이 없습니다.')
+            self._command('reset_digits', car=car)
+            return self.status()
+
     def render_voice(self, identifier):
         with self.operation_lock, self.condition:
             event = self.advisor.current(time.monotonic()) if self.voice_enabled else None
@@ -436,6 +497,31 @@ def routes(controller):
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except OSError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @router.post('/ocr-language/install')
+    def install_english_ocr(game: Literal['iracing', 'lmu'] = 'iracing'):
+        try:
+            return selected(game).install_english_ocr()
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except (OSError, RuntimeError) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @router.post('/ocr-language/recheck')
+    def recheck_ocr(game: Literal['iracing', 'lmu'] = 'iracing'):
+        try:
+            return selected(game).recheck_ocr()
+        except (OSError, RuntimeError) as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @router.post('/digits/reset')
+    def reset_digits(game: Literal['iracing', 'lmu'] = 'iracing'):
+        try:
+            return selected(game).reset_digit_learning()
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except (OSError, RuntimeError) as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
     @router.post('/reset-position')

@@ -31,6 +31,9 @@ rem "call" lets this file continue when python is itself a .bat or .cmd (pyenv-w
 call %COACH_PYTHON% -m pip install --prefer-binary -r "iRacing_Backend\requirements_core.txt" -r "iRacing_Backend\requirements_voice.txt"
 if errorlevel 1 goto install_failed
 echo.
+echo Checking Windows OCR for the tire overlay ^(optional^)...
+call %COACH_PYTHON% "scripts\ensure_ocr_language.py"
+echo.
 echo Preparing the screen...
 call %COACH_PYTHON% "scripts\install_ui.py"
 if errorlevel 1 goto ui_install_failed
