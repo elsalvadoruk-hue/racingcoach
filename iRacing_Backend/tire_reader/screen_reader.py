@@ -41,6 +41,9 @@ class ScreenTireReader:
         self.digits = digits
         from .installed import InstalledPressure
         self.installed, self.installed_fields = InstalledPressure(), {}
+        # A single misread digit (1.64 -> 1.84) is held until the next reading agrees.
+        from .pressure_jump import PressureJumpFilter
+        self.jumps = PressureJumpFilter()
         # The in-sim Weather panel forecast (weather_panel.py), read once a minute at most.
         from .weather_panel import WeatherPanelReader
         self.weather = WeatherPanelReader(self.ocr, clock) if weather else None
@@ -226,7 +229,15 @@ class ScreenTireReader:
                 row.update(status='reading', capture=dict(self.rect),
                            temperature_kind=location.get('temperature_kind'),
                            pressure_states=pressure_states, temperature_states=temperature_states)
-                row.update({'raw_kpa_' + w: finite(recognized['wheels'].get(w, {}).get('kpa')) for w in WHEELS})
+                key = (car, gate['epoch'], *(after.get(k) for k in IDENTITY))
+                pit = after.get('OnPitRoad') in (True, 1) or after.get('IsInGarage') in (True, 1)
+                for w in WHEELS:
+                    kpa, held = self.jumps.check(w, finite(recognized['wheels'].get(w, {}).get('kpa')), after_time,
+                                                 key=key, pit=pit)
+                    row['raw_kpa_' + w] = kpa
+                    if held:
+                        row['measurement']['pressure'][w] = 'held'
+                        row['measurement']['pressure_reason'][w] = 'unconfirmed_jump'
                 row.update({'raw_temp_c_' + w: finite(recognized.get('temperatures', {}).get(w, {}).get('celsius')) for w in WHEELS})
             return row
         except Exception as error:
