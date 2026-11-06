@@ -68,6 +68,12 @@ class TireSnapshot:
     track_wetness_iracing: float | None=None
     track_wetness_fraction_lmu: float | None=None
     tire_compound_index: float | None=None
+    # Evidence-based installed cold pressure (installed.py) and iRacing's last pit measurement.
+    installed_cold_kpa: dict=field(default_factory=dict)
+    installed_cold_source: dict=field(default_factory=dict)
+    pit_snapshot: dict | None=None
+    session_time_of_day_s: float | None=None
+    fixed_setup: bool | None=None
 
     @property
     def source_ok(self):
@@ -124,7 +130,12 @@ def from_iracing(row,context,now):
         cold_pressure_kpa=cold,cold_pressure_source=sources,
         fuel_l=bounded(context.get('FuelLevel'),0,1000),lap_last_s=bounded(context.get('LapLastLapTime'),.001,86400),
         track_wetness_iracing=bounded(context.get('TrackWetness'),0,7),
-        tire_compound_index=bounded(context.get('PlayerTireCompound'),0,255))
+        tire_compound_index=bounded(context.get('PlayerTireCompound'),0,255),
+        installed_cold_kpa={w:bounded((context.get('installed_cold_kpa') or {}).get(w),40,400) for w in WHEELS},
+        installed_cold_source={w:(context.get('installed_cold_source') or {}).get(w) for w in WHEELS},
+        pit_snapshot=context.get('pit_snapshot'),
+        session_time_of_day_s=bounded(context.get('SessionTimeOfDay'),0,86400*2),
+        fixed_setup=context.get('fixed_setup') if type(context.get('fixed_setup')) is bool else None)
 
 
 class TireReadings:

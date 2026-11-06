@@ -1,5 +1,5 @@
 """Bounded local numeric history, written away from the API/OCR threads."""
-from collections import defaultdict
+from collections import Counter, defaultdict
 import json
 from pathlib import Path
 from queue import Queue, Empty, Full
@@ -41,6 +41,7 @@ class TireHistoryStore:
         self.identity=None;self.last_t=None;self.run=None;self.lap=None
         self.coach_run=''
         self.lap_rows=[];self.first_lap=None;self.stint_rows=[];self.was_pit=None;self.count=0
+        self.stint_laps=[];self.last_stint_id=None;self.attached_stop=None
 
     def close(self):
         self.db.close()
@@ -58,7 +59,34 @@ class TireHistoryStore:
             fields['temp_kind']=next(iter(kinds)) if len(kinds)==1 else None
             result[wheel]=fields
         return {'wheels':result,'samples':len(rows),
-            'duration_observed_s':max(0,rows[-1].t-rows[0].t) if rows and all(s.t is not None for s in (rows[0],rows[-1])) else None}
+            'duration_observed_s':max(0,rows[-1].t-rows[0].t) if rows and all(s.t is not None for s in (rows[0],rows[-1])) else None,
+            'conditions':TireHistoryStore.conditions(rows) if rows else {}}
+
+    @staticmethod
+    def conditions(rows):
+        """Track/air temperature, fuel, laps and the evidenced installed cold pressure of the rows."""
+        def values(attr):return [getattr(s,attr) for s in rows if getattr(s,attr,None) is not None]
+        def middle(attr):
+            found=values(attr);return statistics.median(found) if found else None
+        track=values('track_temp_c');laps=sorted({s.lap for s in rows if s.lap is not None})
+        fuel=values('fuel_l');tod=values('session_time_of_day_s')
+        installed,sources={},{}
+        for w in WHEELS:
+            # Only a value that held for every row describes this lap/stint.
+            seen={(s.installed_cold_kpa.get(w),s.installed_cold_source.get(w)) for s in rows}
+            installed[w],sources[w]=next(iter(seen)) if len(seen)==1 else (None,None)
+        states={w:{field:dict(Counter(getattr(s.wheels[w],attr) for s in rows if getattr(s.wheels[w],attr)))
+                   for field,attr in (('pressure','pressure_state'),('temperature','temp_state'))} for w in WHEELS}
+        return {'air_temp_c':middle('air_temp_c'),'track_temp_c':middle('track_temp_c'),
+            'track_temp_range_c':[min(track),max(track)] if track else None,
+            'session_types':sorted({s.session_type for s in rows if s.session_type}),
+            'fuel_start_l':fuel[0] if fuel else None,'fuel_end_l':fuel[-1] if fuel else None,
+            'first_lap':laps[0] if laps else None,'last_lap':laps[-1] if laps else None,'laps':len(laps),
+            'time_of_day_s':[tod[0],tod[-1]] if tod else None,
+            'installed_cold_kpa':installed,'installed_cold_source':sources,
+            'fixed_setup':rows[-1].fixed_setup,'compound':rows[-1].tire_compound_index,
+            'wet':rows[-1].track_wetness_iracing if rows[-1].game=='iracing' else rows[-1].track_wetness_fraction_lmu,
+            'states':states}
 
     def _finish_lap(self):
         if not self.lap_rows:
@@ -74,6 +102,21 @@ class TireHistoryStore:
         data.update(game=rows[0].game,car=rows[0].car,track=rows[0].track,excluded_reasons=reasons)
         self.db.execute('INSERT INTO tire_laps(run,lap,eligible,data,coach_run) VALUES(?,?,?,?,?)',
             (self.run,self.lap,int(not reasons),json.dumps(data,allow_nan=False),self.coach_run))
+        if not reasons:
+            # Eligible laps of this stint: the evidence later used for pressure advice.
+            self.stint_laps.append({'lap':self.lap,**{f'{w}_{key}':data['wheels'][w].get(attr,{}).get('median')
+                for w in WHEELS for key,attr in (('kpa','pressure_kpa'),('c','temp_c'))}})
+
+    def _attach_pit_snapshot(self, s):
+        """iRacing measures temperatures/wear at the stop that ends a stint; keep them with it."""
+        stop=s.pit_snapshot
+        if not isinstance(stop,dict) or stop.get('stop')==self.attached_stop or self.last_stint_id is None:
+            return
+        self.attached_stop=stop.get('stop')
+        row=self.db.execute('SELECT data FROM tire_stints WHERE id=?',(self.last_stint_id,)).fetchone()
+        if row:
+            data=json.loads(row[0]);data['pit_snapshot']=stop
+            self.db.execute('UPDATE tire_stints SET data=? WHERE id=?',(json.dumps(data,allow_nan=False),self.last_stint_id))
 
     def append(self, snapshot, *, run_id='', diagnostics=None, created=None):
         s=snapshot
@@ -91,7 +134,8 @@ class TireHistoryStore:
         changed=s.identity!=self.identity or run_id!=self.coach_run or self.last_t is not None and s.t is not None and s.t<self.last_t
         if changed or not s.active:
             self.identity=s.identity;self.run=uuid.uuid4().hex;self.lap=None
-            self.lap_rows=[];self.stint_rows=[];self.first_lap=None;self.was_pit=None
+            self.lap_rows=[];self.stint_rows=[];self.first_lap=None;self.was_pit=None;self.stint_laps=[]
+        self._attach_pit_snapshot(s)
         self.coach_run=run_id
         self.last_t=s.t
         numeric=any(any(fields.values()) for fields in s.source_ok.values())
@@ -99,8 +143,9 @@ class TireHistoryStore:
         if not s.car or not s.track or not (s.active and numeric or cold):
             self.db.commit()
             return
+        observation=s.to_dict();observation.pop('pit_snapshot',None)  # kept once, with its stint
         self.db.execute('INSERT INTO tire_observations(created,run,game,car,track,lap,t,data,coach_run) VALUES(?,?,?,?,?,?,?,?,?)',
-            (created,self.run,s.game,s.car,s.track,s.lap,s.t,json.dumps(s.to_dict(),allow_nan=False),run_id))
+            (created,self.run,s.game,s.car,s.track,s.lap,s.t,json.dumps(observation,allow_nan=False),run_id))
         if not s.active or not numeric:
             self.db.commit()
             return
@@ -112,9 +157,10 @@ class TireHistoryStore:
         if self.first_lap is None:self.first_lap=s.lap
         if s.on_pit_road is True and self.was_pit is False and self.stint_rows:
             summary=self.summary(self.stint_rows)
-            summary.update(game=s.game,car=s.car,track=s.track)
-            self.db.execute('INSERT INTO tire_stints(run,data,coach_run) VALUES(?,?,?)',(self.run,json.dumps(summary,allow_nan=False),run_id))
-            self.stint_rows=[];self.first_lap=s.lap
+            summary.update(game=s.game,car=s.car,track=s.track,eligible_laps=self.stint_laps)
+            cursor=self.db.execute('INSERT INTO tire_stints(run,data,coach_run) VALUES(?,?,?)',(self.run,json.dumps(summary,allow_nan=False),run_id))
+            self.last_stint_id=cursor.lastrowid
+            self.stint_rows=[];self.first_lap=s.lap;self.stint_laps=[]
         self.was_pit=s.on_pit_road
         self.lap_rows.append(s)
         if s.on_pit_road is False:self.stint_rows.append(s)

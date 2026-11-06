@@ -95,6 +95,37 @@ def _observation(data):
     out['cold_pressure_kpa']={w:finite((data.get('cold_pressure_kpa') or {}).get(w)) for w in WHEELS}
     out['cold_pressure_source']={w:token((data.get('cold_pressure_source') or {}).get(w)) for w in WHEELS}
     out['cold_pressure_installed_verified']=False
+    out['installed_cold_kpa']={w:finite((data.get('installed_cold_kpa') or {}).get(w)) for w in WHEELS}
+    out['installed_cold_source']={w:token((data.get('installed_cold_source') or {}).get(w)) for w in WHEELS}
+    out['session_time_of_day_s']=finite(data.get('session_time_of_day_s'))
+    out['fixed_setup']=data.get('fixed_setup') if type(data.get('fixed_setup')) is bool else None
+    return out
+
+
+def _numbers(values,limit=3):
+    return [finite(v) for v in (values if isinstance(values,list) else [])[:limit]]
+
+
+def _pit_snapshot(data):
+    if not isinstance(data,dict):return None
+    wheels=data.get('wheels') or {}
+    return {'stop':finite(data.get('stop')),'t':finite(data.get('t')),
+        'tire_changed':{w:(data.get('tire_changed') or {}).get(w) if (data.get('tire_changed') or {}).get(w) in (True,False,None) else None for w in WHEELS},
+        'wheels':{w:{'temp_lmr_c':_numbers((wheels.get(w) or {}).get('temp_lmr_c')),
+                     'wear_lmr':_numbers((wheels.get(w) or {}).get('wear_lmr'))} for w in WHEELS}}
+
+
+def _conditions(data):
+    if not isinstance(data,dict):return {}
+    out={k:finite(data.get(k)) for k in ('air_temp_c','track_temp_c','fuel_start_l','fuel_end_l','first_lap','last_lap','laps','compound','wet')}
+    out['track_temp_range_c']=_numbers(data.get('track_temp_range_c'),2) if data.get('track_temp_range_c') else None
+    out['time_of_day_s']=_numbers(data.get('time_of_day_s'),2) if data.get('time_of_day_s') else None
+    out['session_types']=[v for v in data.get('session_types',[])[:4] if v in ('Race','Practice','Offline Testing','Open Qualify','Lone Qualify','Qualify','Warmup')]
+    out['installed_cold_kpa']={w:finite((data.get('installed_cold_kpa') or {}).get(w)) for w in WHEELS}
+    out['installed_cold_source']={w:token((data.get('installed_cold_source') or {}).get(w)) for w in WHEELS}
+    out['fixed_setup']=data.get('fixed_setup') if type(data.get('fixed_setup')) is bool else None
+    out['states']={w:{field:{token(k):finite(v) for k,v in (((data.get('states') or {}).get(w) or {}).get(field) or {}).items() if token(k)}
+                      for field in ('pressure','temperature')} for w in WHEELS}
     return out
 
 
@@ -122,6 +153,12 @@ def _summary(data):
                 fields[key]={k:finite(raw[key].get(k)) for k in ('median','min','max','samples')}
         result['wheels'][w]=fields
     result['excluded_reasons']=[token(v) for v in data.get('excluded_reasons',[]) if token(v)]
+    result['conditions']=_conditions(data.get('conditions'))
+    if 'eligible_laps' in data:
+        result['eligible_laps']=[{k:finite(v) for k,v in row.items() if k=='lap' or re.fullmatch(r'(FL|FR|RL|RR)_(kpa|c)',k)}
+                                 for row in data.get('eligible_laps',[])[:200] if isinstance(row,dict)]
+    if 'pit_snapshot' in data:
+        result['pit_snapshot']=_pit_snapshot(data.get('pit_snapshot'))
     return result
 
 

@@ -6,6 +6,13 @@ def finite(value):
     return value if type(value) in (int, float) and math.isfinite(value) else None
 
 
+SDK_WHEELS = ('LF', 'RF', 'LR', 'RR')
+# Pit service and the tire values iRacing measures at a pit stop (they do not change on track).
+PIT_CHANNELS = (('PitSvFlags', 'PlayerCarInPitStall', 'SessionTimeOfDay')
+                + tuple(f'PitSv{w}P' for w in SDK_WHEELS)
+                + tuple(f'{w}{kind}{side}' for w in SDK_WHEELS for kind in ('wear', 'tempC') for side in 'LMR'))
+
+
 class SdkReader:
     def __init__(self, sdk):
         self.sdk = sdk
@@ -24,7 +31,8 @@ class SdkReader:
                 track_config=str(weekend.get('TrackConfigName') or '')[:160],
                 session_id=finite(weekend.get('SessionID')),
                 subsession_id=finite(weekend.get('SubSessionID')))
-            from setup_capabilities import session_setup_values
+            from setup_capabilities import fixed_setup, session_setup_values
+            self.identity['fixed_setup'] = fixed_setup(weekend)
             try:
                 setup = session_setup_values(self.sdk['CarSetup'] or {})
             except (KeyError, TypeError, AttributeError):
@@ -50,7 +58,7 @@ class SdkReader:
                     'SessionTime', 'SessionNum', 'DisplayUnits', 'Lap', 'AirTemp',
                     'TrackTempCrew', 'OnPitRoad', 'SteeringWheelAngle', 'Throttle', 'Brake', 'Speed',
                     'LFcoldPressure', 'RFcoldPressure', 'LRcoldPressure', 'RRcoldPressure',
-                    'FuelLevel', 'LapLastLapTime', 'TrackWetness', 'PlayerTireCompound')}
+                    'FuelLevel', 'LapLastLapTime', 'TrackWetness', 'PlayerTireCompound') + PIT_CHANNELS}
             row.update(self._identity())
             row['session_type'] = self.session_types.get(row.get('SessionNum'))
             row.update(generation=generation,

@@ -39,6 +39,8 @@ class ScreenTireReader:
         self.context = {}
         # Optional local digit reader (digit_model.DigitReader); Windows OCR stays its teacher.
         self.digits = digits
+        from .installed import InstalledPressure
+        self.installed, self.installed_fields = InstalledPressure(), {}
 
     def reset_digits(self, car):
         if self.digits is not None and canonical_car(car):
@@ -89,6 +91,9 @@ class ScreenTireReader:
                 return row
             operation = 'sdk_before'
             before = self.reader.snapshot(self.generation)
+            # Garage exits and pit stops are tracked every sample, also while the dash is not read.
+            self.installed_fields = self.installed.update(before)
+            before.update(self.installed_fields)
             self.context = before
             gate = self.gate.update(before, tick)
             row.update(status=gate['status'], overlay_ready=gate['ready'],
@@ -167,6 +172,7 @@ class ScreenTireReader:
             operation = 'sdk_after'
             after = self.reader.snapshot(self.generation)
             after['fresh'] = before['fresh'] or after['fresh']
+            after.update(self.installed_fields)
             self.context = after  # Voice timing must use controls after the OCR work.
             before_time, after_time = finite(before.get('SessionTime')), finite(after.get('SessionTime'))
             same = all(before.get(key) == after.get(key) for key in IDENTITY)
