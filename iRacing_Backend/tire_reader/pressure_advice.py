@@ -12,6 +12,11 @@ r is moved by DEFAULT_SLOPE per degree (an estimate, reported as such).
 Target hot pressure: the driver's saved range for the car, else the range in which the
 dash colors said 'ok' (learned from observations). Without a target there is no advice.
 Fixed or unconfirmed setups get no advice (pressure changes are not allowed or unknown).
+
+Floor: setups usually already sit at the lowest allowed cold pressure, so the advice never
+goes below the driver's entered minimum for the car, else the lowest cold pressure this car
+has run with. At the floor the advice is "keep", with the hot pressure that will result.
+Only a raise or a lower that is possible counts as a change worth a voice call.
 """
 from __future__ import annotations
 
@@ -34,6 +39,7 @@ DEFAULT_SLOPE = .0014
 EVIDENCE_SOURCES = ('garage_start', 'pit_tire_change', 'garage_measured', 'pit_new_tire_measured')
 EVIDENCE_SESSIONS = {'Race', 'Practice', 'Offline Testing'}
 LEARN_MIN_OK = 30
+CHANGE_KPA = 1.5  # smaller differences (about 0.2 psi) are advised as "keep"
 
 
 def _connect(path):
@@ -153,8 +159,46 @@ def fit(points, track_temp):
     return statistics.median(r for _, r in usable), 'median_without_temperature'
 
 
-def advise(points, target, track_temp):
-    """Per-wheel advice dicts; a wheel without evidence is withheld."""
+def lowest_used(path, game, car):
+    """Per wheel, the lowest cold pressure this car has run with here (setup value or measured).
+
+    Drivers usually run the minimum the setup allows, so this is the practical floor
+    when the driver has not entered the car's minimum.
+    """
+    lowest = {w: None for w in WHEELS}
+    try:
+        with _connect(path) as db:
+            rows = db.execute('SELECT data FROM tire_observations WHERE game=? AND car=? ORDER BY id DESC LIMIT 20000',
+                              (game, car)).fetchall()
+    except (OSError, sqlite3.Error):
+        return lowest
+    for (text,) in rows:
+        try:
+            data = json.loads(text)
+        except ValueError:
+            continue
+        for key in ('cold_pressure_kpa', 'installed_cold_kpa'):
+            for w, value in (data.get(key) or {}).items():
+                if w in lowest and isinstance(value, (int, float)) and 40 <= value <= 400:
+                    lowest[w] = value if lowest[w] is None else min(lowest[w], value)
+    return lowest
+
+
+def floors(targets, lowest):
+    """{wheel: (floor_kpa, source)}: the driver's minimum for the car, else the lowest used."""
+    minimum = targets.get('pressure_min_cold_bar')
+    if minimum is not None:
+        return {w: (minimum * 100, 'driver_minimum') for w in WHEELS}
+    return {w: (lowest[w], 'lowest_used') if lowest.get(w) is not None else (None, None) for w in WHEELS}
+
+
+def advise(points, target, track_temp, floor=None, current=None):
+    """Per-wheel advice dicts; a wheel without evidence is withheld.
+
+    The cold pressure never goes below the floor (setups usually sit at the minimum already):
+    then the advice is to stay there, with the hot pressure that will result.
+    """
+    floor, current = floor or {}, current or {}
     wheels = {}
     for w in WHEELS:
         rows = points.get(w) or []
@@ -162,17 +206,28 @@ def advise(points, target, track_temp):
             wheels[w] = {'cold_kpa': None, 'reason': 'no_evidence'}
             continue
         ratio, model = fit(rows, track_temp)
-        cold = (target + ATM_KPA) / ratio - ATM_KPA
-        seen = min(c for _, c, _, _ in rows)
+        raw = (target + ATM_KPA) / ratio - ATM_KPA
+        low, low_source = floor.get(w, (None, None))
+        at_minimum = low is not None and raw < low - .5
+        cold = low if at_minimum else raw
+        hot = (cold + ATM_KPA) * ratio - ATM_KPA
+        now = current.get(w)
+        change = round(cold - now, 1) if isinstance(now, (int, float)) else None
+        action = (None if change is None else 'raise' if change >= CHANGE_KPA
+                  else 'lower' if change <= -CHANGE_KPA else 'keep')
         temps = [t for t, *_ in rows if isinstance(t, (int, float))]
-        wheels[w] = {'cold_kpa': round(cold, 1), 'model': model, 'stints': len(rows),
-                     'track_temp_range_c': [min(temps), max(temps)] if temps else None,
-                     'warning': 'below_lowest_used' if cold < seen - 1 else None}
+        wheels[w] = {'cold_kpa': round(cold, 1), 'raw_kpa': round(raw, 1), 'at_minimum': at_minimum,
+                     'floor_kpa': round(low, 1) if low is not None else None, 'floor_source': low_source,
+                     'expected_hot_kpa': round(hot, 1), 'hot_over_target_kpa': round(hot - target, 1),
+                     'current_kpa': now, 'change_kpa': change, 'action': action,
+                     'model': model, 'stints': len(rows),
+                     'track_temp_range_c': [min(temps), max(temps)] if temps else None}
     return wheels
 
 
 def recommendation(path, *, game, car, track, targets, fixed_setup, track_temp, kind, installed=None,
-                   installed_sources=None, forecast=None):
+                   installed_sources=None, forecast=None, current=None):
+    """current: the cold pressures the advice is compared with (setup in the garage, tires now fitted)."""
     """kind: 'garage' (start of the next run) or 'next_pit' (tires fitted at the next stop)."""
     base = {'kind': kind, 'track_temp_c': track_temp, 'forecast': forecast}
     if fixed_setup is not False:
@@ -187,7 +242,11 @@ def recommendation(path, *, game, car, track, targets, fixed_setup, track_temp, 
         for w, *point in stint_points(current) if current else []:
             # The tires on the car now are the closest evidence for this session.
             points[w].insert(0, tuple(point))
-    wheels = advise(points, target, track_temp)
+    wheels = advise(points, target, track_temp, floors(targets, lowest_used(path, game, car)), current)
     if all(v['cold_kpa'] is None for v in wheels.values()):
         return {**base, 'status': 'withheld', 'reason': 'no_evidence', 'target_kpa': target, 'target_source': source}
-    return {**base, 'status': 'ready', 'target_kpa': round(target, 1), 'target_source': source, 'wheels': wheels}
+    actions = {v.get('action') for v in wheels.values() if v.get('cold_kpa') is not None}
+    return {**base, 'status': 'ready', 'target_kpa': round(target, 1), 'target_source': source, 'wheels': wheels,
+            # 'change' only when a wheel should move; staying at the floor is not a change.
+            'action': 'change' if actions & {'raise', 'lower'} else 'keep' if actions <= {'keep'} else None,
+            'at_minimum': [w for w, v in wheels.items() if v.get('at_minimum')]}

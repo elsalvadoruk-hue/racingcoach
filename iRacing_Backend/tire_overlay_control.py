@@ -416,10 +416,13 @@ class TireOverlayController:
         try:
             track_temp, forecast = self._expected_track(s, kind, laps)
             history = self._path().with_name('tires-history.sqlite3')
+            # Compared with the setup in the garage, and with the tires on the car during a run.
+            setup = {w: v for w, v in s.cold_pressure_kpa.items() if v is not None}
+            current = setup if kind == 'garage' and setup else s.installed_cold_kpa
             result = recommendation(history, game=s.game, car=s.car,
                 track=s.track, targets=self._targets().get(s.car), fixed_setup=self._fixed_setup(s),
                 track_temp=track_temp, kind=kind, installed=s.installed_cold_kpa,
-                installed_sources=s.installed_cold_source, forecast=forecast)
+                installed_sources=s.installed_cold_source, forecast=forecast, current=current)
             if kind == 'next_pit':
                 from tire_reader.stint_wear import projection
                 result['double_stint'] = projection(history, s, fuel_laps=laps)
@@ -429,7 +432,8 @@ class TireOverlayController:
         with self.condition:
             self.advice_busy = False
             self.advice = {**result, 'car': s.car, 'fuel_laps': laps if isinstance(laps, (int, float)) else None}
-            ready = result.get('status') == 'ready'
+            # Speak only when a pressure should actually move; "stay at the minimum" is screen-only.
+            ready = result.get('status') == 'ready' and result.get('action') == 'change'
             if ready and self.voice_enabled and kind == 'garage':
                 self.advisor.offer('advice_garage', s.session_key, garage=True, game=s.game)
             elif ready and self.voice_enabled and isinstance(laps, (int, float)) and laps <= ADVICE_PIT_LAPS:
@@ -440,7 +444,7 @@ class TireOverlayController:
                     and all(isinstance(v, (int, float)) for v in change) and abs(change[0] - change[1]) >= TRACK_CHANGE_C):
                 self.advisor.offer('track_temp_change', f"{s.session_key}:{(s.pit_snapshot or {}).get('stop')}",
                                    garage=False, game=s.game)
-            self._send_advice(result if kind == 'garage' and ready else None)
+            self._send_advice(result if kind == 'garage' and result.get('status') == 'ready' else None)
 
     def _send_advice(self, result):
         """Garage numbers for the tire window (bar, two decimals). Fire-and-forget; caller holds the condition."""
@@ -571,6 +575,7 @@ class TireTargetSettings(BaseModel):
     pressure_high_bar: StrictFloat | None = Field(None, ge=.4, le=4)
     temp_low_c: StrictFloat | None = Field(None, ge=-50, le=250)
     temp_high_c: StrictFloat | None = Field(None, ge=-50, le=250)
+    pressure_min_cold_bar: StrictFloat | None = Field(None, ge=.4, le=4)  # the car's lowest allowed setup pressure
 
     @model_validator(mode='after')
     def ranges(self):

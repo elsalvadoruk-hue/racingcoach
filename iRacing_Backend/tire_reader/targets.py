@@ -31,6 +31,9 @@ class TireTargets:
                 result.update({low:a,high:b})
         if isinstance(saved.get('temperature_kind'), str):
             result['temperature_kind'] = saved['temperature_kind'][:32]
+        minimum = bounded(saved.get('pressure_min_cold_bar'), .4, 4.)
+        if minimum is not None:
+            result['pressure_min_cold_bar'] = minimum
         return result
 
     def save(self, car, values):

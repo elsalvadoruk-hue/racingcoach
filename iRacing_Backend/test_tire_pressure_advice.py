@@ -99,9 +99,38 @@ class AdviceTests(unittest.TestCase):
                        stint(150., 190., 30., laps=2), stint(150., 190., 30., source=None))
         self.assertEqual(ask(self.db)['reason'], 'no_evidence')
 
-    def test_warns_below_the_lowest_pressure_ever_used(self):
+    def cold_seen(self, kpa):
+        store = TireHistoryStore(self.db.path)
+        data = {'cold_pressure_kpa': dict.fromkeys(WHEELS, kpa), 'wheels': {}}
+        store.db.execute("INSERT INTO tire_observations(created,run,game,car,track,lap,t,data,coach_run) "
+                         "VALUES(0,'r','iracing',?,?,1,0,?,'')", (CAR, TRACK, json.dumps(data)))
+        store.db.commit(); store.close()
+
+    def test_never_advises_below_the_minimum_and_says_what_the_hot_pressure_will_be(self):
+        # Hot runs 15 kPa over the 185 target at the 160 kPa the car always uses (its minimum).
         self.db.stints(stint(160., 200., 30.))
-        self.assertEqual(ask(self.db)['wheels']['FL']['warning'], 'below_lowest_used')
+        self.cold_seen(160.)
+        result = ask(self.db, current=dict.fromkeys(WHEELS, 160.))
+        fl = result['wheels']['FL']
+        self.assertEqual((fl['cold_kpa'], fl['at_minimum'], fl['floor_source']), (160., True, 'lowest_used'))
+        self.assertEqual((fl['expected_hot_kpa'], fl['hot_over_target_kpa'], fl['action']), (200., 15., 'keep'))
+        self.assertEqual((result['action'], result['at_minimum']), ('keep', list(WHEELS)))
+        self.assertLess(fl['raw_kpa'], 160.)
+
+    def test_driver_minimum_overrides_the_lowest_used(self):
+        self.db.stints(stint(160., 200., 30.))
+        self.cold_seen(160.)
+        targets = {'pressure_low_bar': 1.8, 'pressure_high_bar': 1.9, 'pressure_min_cold_bar': 1.40}
+        fl = ask(self.db, targets=targets, current=dict.fromkeys(WHEELS, 160.))['wheels']['FL']
+        self.assertEqual((fl['at_minimum'], fl['floor_source'], fl['action']), (False, 'driver_minimum', 'lower'))
+
+    def test_cold_track_advises_raising_from_the_minimum(self):
+        # Hot only 175 at 160 cold: the target needs more pressure.
+        self.db.stints(stint(160., 175., 30.))
+        self.cold_seen(160.)
+        result = ask(self.db, current=dict.fromkeys(WHEELS, 160.))
+        self.assertEqual((result['action'], result['wheels']['RR']['action']), ('change', 'raise'))
+        self.assertGreater(result['wheels']['RR']['change_kpa'], 1.5)
 
     def test_dash_colors_give_a_target_when_no_range_is_saved(self):
         self.db.stints(stint(160., 185., 30.))
@@ -159,7 +188,9 @@ class ControllerAdviceTests(unittest.TestCase):
         row = stint(160., 185., 30.); row['car'] = 'mclaren720sgt3'; row['track'] = 'track-layout'
         store.db.execute("INSERT INTO tire_stints(run,data,coach_run) VALUES('r',?,'')", (json.dumps(row),)); store.db.commit(); store.close()
         controller._targets().save('mclaren720sgt3', {'pressure_low_bar': 1.8, 'pressure_high_bar': 1.9})
-        garage = replace(snapshot(0.), active=False, in_garage=True, fixed_setup=False, track_temp_c=30.)
+        # Setup at 150 kPa, below what the 185 kPa target needs: a raise, so the voice call is queued.
+        garage = replace(snapshot(0.), active=False, in_garage=True, fixed_setup=False, track_temp_c=30.,
+                         cold_pressure_kpa=dict.fromkeys(WHEELS, 150.))
         controller._compute_advice(garage, 'garage')
         status = controller.status()
         self.assertEqual((status['advice']['status'], status['advice']['kind']), ('ready', 'garage'))
@@ -168,6 +199,11 @@ class ControllerAdviceTests(unittest.TestCase):
         self.assertEqual(sent[-1]['values']['FL'], f"{status['advice']['wheels']['FL']['cold_kpa'] / 100:.2f}")
         self.assertEqual(controller.advisor.advice_event['key'], 'advice_garage')
         self.assertEqual(controller._advice_kind(garage), 'garage')
+        # Already at the advised pressure: shown on screen, but no voice call.
+        controller.advisor.advice_event = None
+        controller._compute_advice(replace(garage, cold_pressure_kpa=dict.fromkeys(WHEELS, status['advice']['wheels']['FL']['cold_kpa'])), 'garage')
+        self.assertEqual(controller.status()['advice']['action'], 'keep')
+        self.assertIsNone(controller.advisor.advice_event)
         self.assertIsNone(controller._advice_kind(replace(garage, in_garage=False, active=False)))
 
 

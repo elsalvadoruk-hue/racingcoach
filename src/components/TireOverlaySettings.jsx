@@ -9,7 +9,8 @@ import { Input } from './ui/input';
 const APPEARANCE = [['background_opacity', '배경 불투명도', 85, 100, '%'],
   ['content_opacity', '표시 불투명도', 100, 100, '%'], ['radius', '모서리 둥글기 (R)', 12, 32, 'px']];
 const TARGETS = [['pressure_low_bar', '압력 하한 (bar)', .01, .4, 4], ['pressure_high_bar', '압력 상한 (bar)', .01, .4, 4],
-  ['temp_low_c', '온도 하한 (°C)', 1, -50, 250], ['temp_high_c', '온도 상한 (°C)', 1, -50, 250]];
+  ['temp_low_c', '온도 하한 (°C)', 1, -50, 250], ['temp_high_c', '온도 상한 (°C)', 1, -50, 250],
+  ['pressure_min_cold_bar', '셋업 최저 냉간 압력 (bar)', .01, .4, 4]];
 
 function TargetRanges({ view, disabled, save, open }) {
   const [values, setValues] = useState(() => ({ ...view.targets }));
@@ -60,8 +61,30 @@ function forecastText(forecast) {
   return `Weather 예보 기준 약 ${forecast.minutes_ahead}분 뒤 노면 ${forecast.track_c.toFixed(1)}°C${now} · ${offset}로 추정${miss}`;
 }
 
+const signedBar = kpa => `${kpa >= 0 ? '+' : '−'}${Math.abs(kpa / 100).toFixed(2)}`;
+function ACTIONS(value) {
+  if (value.at_minimum) return ' · 최저 유지';
+  if (value.action === 'raise') return ` · ▲ ${signedBar(value.change_kpa)} 올림`;
+  if (value.action === 'lower') return ` · ▼ ${signedBar(value.change_kpa)} 내림`;
+  if (value.action === 'keep') return ' · 유지';
+  return '';
+}
+
+function atMinimumText(advice) {
+  const floored = Object.entries(advice.wheels || {}).filter(([, v]) => v.at_minimum);
+  if (!floored.length) return null;
+  const over = Math.max(...floored.map(([, v]) => v.hot_over_target_kpa || 0));
+  const source = floored.some(([, v]) => v.floor_source === 'driver_minimum') ? '입력한 셋업 최저값'
+    : '이 차량 기록상 가장 낮은 냉간 압력(차량 최저값을 아래에 입력하면 그 값을 씁니다)';
+  return <p role="note">
+    {floored.length === Object.keys(advice.wheels).length ? '모든 바퀴가' : `${floored.map(([w]) => w).join(', ')}가`} 이미 최저 압력이라 더 낮출 수 없습니다.
+    {over > 0 ? ` 이 조건에서는 열간 압력이 목표보다 약 ${(over / 100).toFixed(2)} bar 높게 예상됩니다.` : ''} 최저값 기준: {source}.
+  </p>;
+}
+
 function AdviceView({ advice, voice, audioReady }) {
-  const title = advice.kind === 'garage' ? '출발 냉간 압력 추천' : '다음 피트 냉간 압력 추천';
+  const title = (advice.kind === 'garage' ? '출발 냉간 압력 추천' : '다음 피트 냉간 압력 추천')
+    + (advice.status === 'ready' && advice.action === 'keep' ? ' · 지금 압력 유지' : '');
   if (advice.status !== 'ready') return <div className="text-sm" aria-label="압력 추천">
     <p className="font-medium">{title}</p>
     <p className="text-muted-foreground">{ADVICE_REASONS[advice.reason] || '추천을 보류했습니다.'}</p>
@@ -74,16 +97,16 @@ function AdviceView({ advice, voice, audioReady }) {
     <div className="tire-appearance-grid">
       {wheels.map(([wheel, value]) => <p key={wheel}>
         <span className="text-muted-foreground">{wheel} </span>
-        {typeof value.cold_kpa === 'number' ? `${bar(value.cold_kpa)} bar · ${psi(value.cold_kpa)} psi` : '근거 없음'}
+        {typeof value.cold_kpa === 'number' ? `${bar(value.cold_kpa)} bar · ${psi(value.cold_kpa)} psi${ACTIONS(value)}` : '근거 없음'}
       </p>)}
     </div>
+    {atMinimumText(advice)}
     {forecastText(advice.forecast) && <p className="text-muted-foreground">{forecastText(advice.forecast)}</p>}
     <p className="text-muted-foreground">
       {typeof advice.track_temp_c === 'number' ? `노면 ${advice.track_temp_c.toFixed(1)}°C 기준 · ` : ''}
       목표 열간 {bar(advice.target_kpa)} bar ({advice.target_source === 'driver_range' ? '저장한 범위' : '대시 색 학습'})
       {` · 근거 스틴트 ${stints}개 · ${models}`}
     </p>
-    {wheels.some(([, v]) => v.warning === 'below_lowest_used') && <p role="note">이전에 쓴 가장 낮은 냉간 압력보다 낮은 바퀴가 있습니다. 셋업 하한을 확인해 주세요.</p>}
     <p className="text-muted-foreground">참고값입니다. 반올림 단위는 차량 셋업 단계를 확인하지 않았습니다. 셋업 변경은 직접 판단해 주세요.</p>
     {voice && audioReady === false && <p className="text-muted-foreground">추천 안내 음성은 아직 준비되지 않았습니다. 화면 숫자는 그대로 표시됩니다.</p>}
     {advice.double_stint && <DoubleStint data={advice.double_stint}/>}

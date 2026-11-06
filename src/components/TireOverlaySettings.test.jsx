@@ -183,16 +183,20 @@ test('pressure advice shows numbers with their basis, or why it is withheld',asy
   let state={...initial,enabled:true,running:true,voice_enabled:true,advice_audio_ready:false,advice:{kind:'garage',status:'ready',
     track_temp_c:31.4,target_kpa:186,target_source:'dash_color',forecast:{basis:'forecast_with_current_offset',minutes_ahead:30,
       track_c:31.4,track_now_c:28,recent_misses_c:[1,-2]},wheels:{
-      FL:{cold_kpa:158.6,model:'fitted',stints:4},FR:{cold_kpa:160,model:'fitted',stints:4},
-      RL:{cold_kpa:150,model:'fitted',stints:3,warning:'below_lowest_used'},RR:{cold_kpa:null,reason:'no_evidence'}}}};
+      FL:{cold_kpa:158.6,model:'fitted',stints:4,action:'raise',change_kpa:5},FR:{cold_kpa:160,model:'fitted',stints:4,action:'keep'},
+      RL:{cold_kpa:150,model:'fitted',stints:3,at_minimum:true,floor_source:'lowest_used',hot_over_target_kpa:8},
+      RR:{cold_kpa:null,reason:'no_evidence'}}}};
   const fetcher=jest.fn(async()=>response({...state}));
   render(<TireOverlaySettings fetcher={fetcher}/>);
   expect(await screen.findByText('출발 냉간 압력 추천')).toBeVisible();
-  expect(screen.getByText(/1\.59 bar · 23\.0 psi/)).toBeVisible();
+  expect(screen.getByText(/1\.59 bar · 23\.0 psi · ▲ \+0\.05 올림/)).toBeVisible();
+  expect(screen.getByText(/1\.60 bar · 23\.2 psi · 유지/)).toBeVisible();
+  expect(screen.getByText(/1\.50 bar · 21\.8 psi · 최저 유지/)).toBeVisible();
   expect(screen.getByText(/노면 31\.4°C 기준 · 목표 열간 1\.86 bar \(대시 색 학습\) · 근거 스틴트 4개 · 여러 스틴트 회귀/)).toBeVisible();
   expect(screen.getByText('근거 없음')).toBeVisible();
   expect(screen.getByText(/Weather 예보 기준 약 30분 뒤 노면 31\.4°C \(지금 28\.0°C\) · 지금의 노면-기온 차이로 추정 · 최근 예보 오차 평균 1\.5°C/)).toBeVisible();
-  expect(screen.getByRole('note')).toHaveTextContent('셋업 하한');
+  expect(screen.getByRole('note')).toHaveTextContent('RL가 이미 최저 압력이라 더 낮출 수 없습니다. 이 조건에서는 열간 압력이 목표보다 약 0.08 bar 높게 예상됩니다.');
+  expect(screen.getByRole('note')).toHaveTextContent('이 차량 기록상 가장 낮은 냉간 압력');
   expect(screen.getByText(/추천 안내 음성은 아직 준비되지 않았습니다/)).toBeVisible();
   state={...state,advice:{kind:'next_pit',status:'withheld',reason:'fixed_or_unknown_setup'}};
   expect(await screen.findByText(/고정 셋업이거나/,{},{timeout:3000})).toBeVisible();
@@ -230,6 +234,6 @@ test('missing tire clips are stated and ranges can be set only for the measured 
   fireEvent.change(screen.getByLabelText('압력 상한 (bar)'),{target:{value:'1.8'}});
   fireEvent.click(screen.getByRole('button',{name:'현재 차량 범위 저장'}));
   await waitFor(()=>expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('/targets'),expect.objectContaining({
-    body:JSON.stringify({car:'bmwm4gt3',pressure_low_bar:1.6,pressure_high_bar:1.8,temp_low_c:null,temp_high_c:null}),
+    body:JSON.stringify({car:'bmwm4gt3',pressure_low_bar:1.6,pressure_high_bar:1.8,temp_low_c:null,temp_high_c:null,pressure_min_cold_bar:null}),
   })));
 });
