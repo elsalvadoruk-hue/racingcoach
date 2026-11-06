@@ -3918,7 +3918,8 @@ from tire_reader.coaching import live_context as tire_driving_context
 tire_overlay_controller = TireOverlays(audio=TireVoiceAudio(voice_coach.fixed_audio),
                                       run_link=lambda snapshot: linked_tire_run(live_telemetry,snapshot),
                                       driving_context=lambda snapshot: tire_driving_context(live_telemetry,snapshot),
-                                      pit_window=lambda: live_telemetry.race_view())
+                                      pit_window=lambda: live_telemetry.race_view(),
+                                      telemetry_dirs=TELEMETRY_DIRS)
 overlay_controller = OverlayController(reference=OverlayReference(
     EXTERNAL_REFERENCE_DIR, lambda path: Garage61ReferenceReader(path).parse(), pinned_loader=load_task_overlay_reference,
     personal_loader=PersonalOverlayLoader(overlay_personal_paths, lambda path: repository.load(path),

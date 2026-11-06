@@ -180,7 +180,8 @@ test('local digit learning progress and reset are shown for iRacing',async()=>{
 });
 
 test('pressure advice shows numbers with their basis, or why it is withheld',async()=>{
-  let state={...initial,enabled:true,running:true,voice_enabled:true,advice_audio_ready:false,advice:{kind:'garage',status:'ready',
+  let state={...initial,enabled:true,running:true,voice_enabled:true,advice_audio_ready:false,
+    pressure_floor_files:{files:8,cars:2,scanning:false},advice:{kind:'garage',status:'ready',
     track_temp_c:31.4,target_kpa:186,target_source:'dash_color',forecast:{basis:'forecast_with_current_offset',minutes_ahead:30,
       track_c:31.4,track_now_c:28,recent_misses_c:[1,-2]},wheels:{
       FL:{cold_kpa:158.6,model:'fitted',stints:4,action:'raise',change_kpa:5},FR:{cold_kpa:160,model:'fitted',stints:4,action:'keep'},
@@ -189,6 +190,7 @@ test('pressure advice shows numbers with their basis, or why it is withheld',asy
   const fetcher=jest.fn(async()=>response({...state}));
   render(<TireOverlaySettings fetcher={fetcher}/>);
   expect(await screen.findByText('출발 냉간 압력 추천')).toBeVisible();
+  expect(screen.getByText(/셋업 최저 압력은 자동으로 찾습니다 · iRacing 텔레메트리 파일 8개, 차량 2대/)).toBeVisible();
   expect(screen.getByText(/1\.59 bar · 23\.0 psi · ▲ \+0\.05 올림/)).toBeVisible();
   expect(screen.getByText(/1\.60 bar · 23\.2 psi · 유지/)).toBeVisible();
   expect(screen.getByText(/1\.50 bar · 21\.8 psi · 최저 유지/)).toBeVisible();
@@ -196,7 +198,7 @@ test('pressure advice shows numbers with their basis, or why it is withheld',asy
   expect(screen.getByText('근거 없음')).toBeVisible();
   expect(screen.getByText(/Weather 예보 기준 약 30분 뒤 노면 31\.4°C \(지금 28\.0°C\) · 지금의 노면-기온 차이로 추정 · 최근 예보 오차 평균 1\.5°C/)).toBeVisible();
   expect(screen.getByRole('note')).toHaveTextContent('RL가 이미 최저 압력이라 더 낮출 수 없습니다. 이 조건에서는 열간 압력이 목표보다 약 0.08 bar 높게 예상됩니다.');
-  expect(screen.getByRole('note')).toHaveTextContent('이 차량 기록상 가장 낮은 냉간 압력');
+  expect(screen.getByRole('note')).toHaveTextContent('iRacing 텔레메트리(.ibt) 셋업에서 자동으로 찾은');
   expect(screen.getByText(/추천 안내 음성은 아직 준비되지 않았습니다/)).toBeVisible();
   state={...state,advice:{kind:'next_pit',status:'withheld',reason:'fixed_or_unknown_setup'}};
   expect(await screen.findByText(/고정 셋업이거나/,{},{timeout:3000})).toBeVisible();

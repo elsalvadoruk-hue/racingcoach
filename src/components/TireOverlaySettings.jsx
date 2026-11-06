@@ -10,7 +10,7 @@ const APPEARANCE = [['background_opacity', '배경 불투명도', 85, 100, '%'],
   ['content_opacity', '표시 불투명도', 100, 100, '%'], ['radius', '모서리 둥글기 (R)', 12, 32, 'px']];
 const TARGETS = [['pressure_low_bar', '압력 하한 (bar)', .01, .4, 4], ['pressure_high_bar', '압력 상한 (bar)', .01, .4, 4],
   ['temp_low_c', '온도 하한 (°C)', 1, -50, 250], ['temp_high_c', '온도 상한 (°C)', 1, -50, 250],
-  ['pressure_min_cold_bar', '셋업 최저 냉간 압력 (bar)', .01, .4, 4]];
+  ['pressure_min_cold_bar', '셋업 최저 냉간 압력 (bar, 비우면 자동)', .01, .4, 4]];
 
 function TargetRanges({ view, disabled, save, open }) {
   const [values, setValues] = useState(() => ({ ...view.targets }));
@@ -76,8 +76,8 @@ function atMinimumText(advice) {
   const over = Math.max(...floored.map(([, v]) => v.hot_over_target_kpa || 0));
   const sources = new Set(floored.map(([, v]) => v.floor_source));
   const source = sources.has('driver_minimum') ? '입력한 셋업 최저값'
-    : sources.has('gt3_default') ? 'iRacing GT3 기본 최저값 1.59 bar(159 kPa·23.0 psi). 차량마다 다르면 아래에 입력해 주세요'
-    : '이 차량 기록상 가장 낮은 냉간 압력(차량 최저값을 아래에 입력하면 그 값을 씁니다)';
+    : sources.has('gt3_default') ? 'iRacing GT3 기본 최저값 1.59 bar(159 kPa·23.0 psi)'
+    : '주행 기록과 iRacing 텔레메트리(.ibt) 셋업에서 자동으로 찾은 가장 낮은 냉간 압력';
   return <p role="note">
     {floored.length === Object.keys(advice.wheels).length ? '모든 바퀴가' : `${floored.map(([w]) => w).join(', ')}가`} 이미 최저 압력이라 더 낮출 수 없습니다.
     {over > 0 ? ` 이 조건에서는 열간 압력이 목표보다 약 ${(over / 100).toFixed(2)} bar 높게 예상됩니다.` : ''} 최저값 기준: {source}.
@@ -299,6 +299,10 @@ export default function TireOverlaySettings({ apiBase, fetcher = fetch, game = '
             onCheckedChange={lmu_open_setup => apply({ lmu_open_setup })}/>
         </Field>}
         {game === 'lmu' && view && <p className="text-sm text-muted-foreground">LMU는 셋업 고정 여부를 알려주지 않습니다. 셋업을 바꿀 수 있는 경기에서만 켜 주세요. 냉간 압력은 차고와 새 타이어 직후의 실제 측정값을 씁니다.</p>}
+        {game !== 'lmu' && view?.pressure_floor_files && <p className="text-sm text-muted-foreground">
+          셋업 최저 압력은 자동으로 찾습니다 · iRacing 텔레메트리 파일 {view.pressure_floor_files.files}개, 차량 {view.pressure_floor_files.cars}대
+          {view.pressure_floor_files.scanning ? ' · 새 파일 확인 중' : ''}
+        </p>}
         {view?.advice && (game !== 'lmu' || view.lmu_open_setup) && <AdviceView advice={view.advice} voice={view.voice_enabled} audioReady={view.advice_audio_ready}/>}
         {game !== 'lmu' && view?.ocr_english === false && <Alert>
           <AlertDescription>

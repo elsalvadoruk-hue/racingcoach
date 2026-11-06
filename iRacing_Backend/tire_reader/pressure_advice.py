@@ -186,10 +186,12 @@ def lowest_used(path, game, car):
 
 
 def default_floor(game, car):
-    """iRacing GT3 starting pressure minimum, as the app's setup analysis already uses
-    (setup_analysis.ADJUSTMENT_RULES['starting_pressure_kpa'], 159 kPa = 23.0 psi, the BMW
-    M4 GT3's real setting). Not in iRacing's public notes: the 2021 notes said 148 kPa
-    (21.5 psi) before later tire updates. Other cars and LMU have no default."""
+    """iRacing GT3 starting pressure minimum: 159 kPa (23.0 psi), as the app's setup analysis
+    already uses (setup_analysis.ADJUSTMENT_RULES['starting_pressure_kpa']). Every setup in a
+    driver's 2026-07 .ibt files of BMW M4, McLaren 720S, Mercedes 2020, Mustang, Lamborghini
+    EVO and Porsche 992 R GT3 was at 159 kPa. iRacing's public notes last said 148 kPa (2021).
+    Used only until the driver's own telemetry files show the car (pressure_floor.py).
+    Other cars and LMU have no default."""
     from .vehicle_dash import canonical_car
     car = canonical_car(car) if game == 'iracing' else None
     return GT3_MIN_COLD_KPA if car and car != 'porsche9922cup' else None
@@ -244,8 +246,18 @@ def advise(points, target, track_temp, floor=None, current=None):
     return wheels
 
 
+def merge_lowest(*sources):
+    """Per wheel, the lowest value any source has (e.g. observations and telemetry files)."""
+    merged = {w: None for w in WHEELS}
+    for source in sources:
+        for w, value in (source or {}).items():
+            if w in merged and isinstance(value, (int, float)):
+                merged[w] = value if merged[w] is None else min(merged[w], value)
+    return merged
+
+
 def recommendation(path, *, game, car, track, targets, fixed_setup, track_temp, kind, installed=None,
-                   installed_sources=None, forecast=None, current=None):
+                   installed_sources=None, forecast=None, current=None, file_lowest=None):
     """current: the cold pressures the advice is compared with (setup in the garage, tires now fitted)."""
     """kind: 'garage' (start of the next run) or 'next_pit' (tires fitted at the next stop)."""
     base = {'kind': kind, 'track_temp_c': track_temp, 'forecast': forecast}
@@ -261,7 +273,8 @@ def recommendation(path, *, game, car, track, targets, fixed_setup, track_temp, 
         for w, *point in stint_points(current) if current else []:
             # The tires on the car now are the closest evidence for this session.
             points[w].insert(0, tuple(point))
-    wheels = advise(points, target, track_temp, floors(targets, lowest_used(path, game, car), default_floor(game, car)), current)
+    lowest = merge_lowest(lowest_used(path, game, car), file_lowest)
+    wheels = advise(points, target, track_temp, floors(targets, lowest, default_floor(game, car)), current)
     if all(v['cold_kpa'] is None for v in wheels.values()):
         return {**base, 'status': 'withheld', 'reason': 'no_evidence', 'target_kpa': target, 'target_source': source}
     actions = {v.get('action') for v in wheels.values() if v.get('cold_kpa') is not None}

@@ -27,7 +27,7 @@ ERRORS = {
 
 class TireOverlayController:
     def __init__(self, path=None, *, popen=subprocess.Popen, game='iracing', audio=None, run_link=lambda snapshot:'', driving_context=lambda snapshot:None,
-                 pit_window=lambda:None):
+                 pit_window=lambda:None, telemetry_dirs=()):
         if game not in ('iracing', 'lmu'):
             raise ValueError('Unsupported tire game')
         self.game, self.audio = game, audio
@@ -36,6 +36,8 @@ class TireOverlayController:
         # Laps of fuel left from the pit wall's own calculation, for timing the next-stop call.
         self.pit_window = pit_window
         self.advice, self.advice_key, self.advice_due, self.advice_busy = None, None, 0., False
+        # iRacing: each car's lowest setup cold pressure, learned from the driver's .ibt files.
+        self.telemetry_dirs, self.floors = tuple(telemetry_dirs), None
         self.path = Path(path) if path is not None else None
         self.popen = popen
         self.operation_lock = threading.RLock()
@@ -52,6 +54,12 @@ class TireOverlayController:
         self.ready, self.error, self.current = False, None, {}
         self.sequence, self.replies = 0, {}
         self.ocr, self.ocr_install, self.digit_reader = None, None, None
+
+    def _floors(self):
+        if self.floors is None and self.game == 'iracing' and self.telemetry_dirs:
+            from tire_reader.pressure_floor import PressureFloors
+            self.floors = PressureFloors(self._path().with_name('tires-floors.json'), self.telemetry_dirs)
+        return self.floors
 
     def _path(self):
         if self.path is None:
@@ -122,6 +130,7 @@ class TireOverlayController:
                     'digit_reader': self.digit_reader,
                     'advice': self.advice,
                     'lmu_open_setup': self.lmu_open_setup if self.game == 'lmu' else None,
+                    'pressure_floor_files': self.floors.status() if self.floors is not None else None,
                     'advice_audio_ready': self.audio.advice_ready() if self.voice_enabled and hasattr(self.audio, 'advice_ready') else None,
                     'targets': targets,
                     'target_temperature_kind': next((v.temp_kind for v in self.snapshot.wheels.values() if v.temp_kind), None) if self.snapshot else None,
@@ -298,6 +307,8 @@ class TireOverlayController:
     def start(self):
         with self.operation_lock:
             self._load()
+            if (self.enabled or self.voice_enabled) and self._floors() is not None:
+                self.floors.scan_in_background()  # ready before the first garage visit
             if self.enabled or self.voice_enabled:
                 try:
                     self._start()
@@ -419,10 +430,15 @@ class TireOverlayController:
             # Compared with the setup in the garage, and with the tires on the car during a run.
             setup = {w: v for w, v in s.cold_pressure_kpa.items() if v is not None}
             current = setup if kind == 'garage' and setup else s.installed_cold_kpa
+            floors = self._floors()
+            if floors is not None:
+                floors.scan_in_background()  # new telemetry files since the last scan
+            file_lowest = floors.lowest(s.car)[0] if floors is not None else None
             result = recommendation(history, game=s.game, car=s.car,
                 track=s.track, targets=self._targets().get(s.car), fixed_setup=self._fixed_setup(s),
                 track_temp=track_temp, kind=kind, installed=s.installed_cold_kpa,
-                installed_sources=s.installed_cold_source, forecast=forecast, current=current)
+                installed_sources=s.installed_cold_source, forecast=forecast, current=current,
+                file_lowest=file_lowest)
             if kind == 'next_pit':
                 from tire_reader.stint_wear import projection
                 result['double_stint'] = projection(history, s, fuel_laps=laps)
@@ -529,9 +545,11 @@ class TireOverlayController:
 
 class TireOverlays:
     """Separate settings, windows and position maps for the two simulators."""
-    def __init__(self, *, audio=None, run_link=lambda snapshot:'', driving_context=lambda snapshot:None, pit_window=lambda:None):
+    def __init__(self, *, audio=None, run_link=lambda snapshot:'', driving_context=lambda snapshot:None, pit_window=lambda:None,
+                 telemetry_dirs=()):
         self.controllers = {game: TireOverlayController(game=game, audio=audio,run_link=run_link,
-            driving_context=driving_context, pit_window=pit_window) for game in ('iracing', 'lmu')}
+            driving_context=driving_context, pit_window=pit_window, telemetry_dirs=telemetry_dirs if game == 'iracing' else ())
+            for game in ('iracing', 'lmu')}
 
     def log_extra(self, run):
         from session_log import Extra

@@ -103,7 +103,8 @@ def tire_reader_files(root: Path) -> list[str]:
         'pressure_ocr', 'pressure_overlay', 'pressure_display', 'cockpit_gate', 'positions',
         'dash_locator', 'multi_dash_locator', 'vehicle_dash', 'window_visibility',
         'snapshot', 'lmu_source', 'advisor', 'coaching', 'color_state', 'voice_audio', 'targets', 'history', 'log_export',
-        'glyphs', 'digit_model', 'ocr_language', 'installed', 'pressure_advice', 'weather_panel', 'stint_wear')]
+        'glyphs', 'digit_model', 'ocr_language', 'installed', 'pressure_advice', 'weather_panel', 'stint_wear',
+        'pressure_floor')]
     manifest = package / 'samples/gt3_dash/sources.json'
     listing = json.loads(manifest.read_text(encoding='utf-8'))
     if len(listing.get('vehicles', [])) != 12:
