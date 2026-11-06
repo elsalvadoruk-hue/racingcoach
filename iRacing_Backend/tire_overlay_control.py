@@ -46,6 +46,10 @@ class TireOverlayController:
         self.enabled, self.fixed, self.loaded = False, False, False
         self.voice_enabled = False
         self.lmu_open_setup = False  # LMU only: the driver confirms open setups, so pressure advice may run
+        # LMU only: keep recording tire history with the window and voice off. Shared memory
+        # costs no screen capture, and advice needs the evidence.
+        self.lmu_record = game == 'lmu'
+        self.logged_status = None
         from tire_reader.advisor import TireAdvisor
         self.advisor = TireAdvisor()
         self.snapshot = None
@@ -78,6 +82,7 @@ class TireOverlayController:
                 self.voice_enabled = saved.get('voice_enabled') is True
                 self.fixed = saved.get('fixed') is True
                 self.lmu_open_setup = self.game == 'lmu' and saved.get('lmu_open_setup') is True
+                self.lmu_record = self.game == 'lmu' and saved.get('lmu_record') is not False
                 for key, maximum in (('background_opacity', 100), ('content_opacity', 100), ('radius', 32)):
                     value = saved.get(key)
                     if type(value) is int and 0 <= value <= maximum:
@@ -92,7 +97,8 @@ class TireOverlayController:
         temporary = path.with_suffix('.tmp')
         try:
             temporary.write_text(json.dumps({'enabled': self.enabled, 'voice_enabled': self.voice_enabled,
-                'fixed': self.fixed, 'lmu_open_setup': self.lmu_open_setup, **self.appearance}), encoding='utf-8')
+                'fixed': self.fixed, 'lmu_open_setup': self.lmu_open_setup, 'lmu_record': self.lmu_record,
+                **self.appearance}), encoding='utf-8')
             os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
@@ -130,6 +136,7 @@ class TireOverlayController:
                     'digit_reader': self.digit_reader,
                     'advice': self.advice,
                     'lmu_open_setup': self.lmu_open_setup if self.game == 'lmu' else None,
+                    'lmu_record': self.lmu_record if self.game == 'lmu' else None,
                     'pressure_floor_files': self.floors.status() if self.floors is not None else None,
                     'advice_audio_ready': self.audio.advice_ready() if self.voice_enabled and hasattr(self.audio, 'advice_ready') else None,
                     'targets': targets,
@@ -187,7 +194,14 @@ class TireOverlayController:
                             detail=diagnostics(message,self.snapshot,raw,self._targets().get(selected.car),
                                     enabled=self.enabled,voice_enabled=self.voice_enabled)
                             detail['coaching']=dict(self.advisor.coaching.view)
-                            self.history.submit(self.snapshot,run_id=self.run_link(selected),diagnostics=detail)
+                            status = message.get('status')
+                            # An unsupported car (no tire page) is logged only when the status changes, so long
+                            # sessions in it do not push supported-car evidence out of the bounded history.
+                            if status != 'unsupported_car':
+                                self.history.submit(self.snapshot,run_id=self.run_link(selected),diagnostics=detail)
+                            elif status != self.logged_status:
+                                self.history.submit(None,run_id=self.run_link(selected),diagnostics=detail)
+                            self.logged_status = status
                         self.current = {key: message.get(key) for key in
                             ('visible', 'status', 'warmup_remaining_s', 'car_name', 'pressure',
                              'temperature', 'display_status', 'temperature_kind', 'car_path', 'measurement')}
@@ -214,7 +228,7 @@ class TireOverlayController:
                 if self.process is process:
                     self.ready = False
                     self.current = {}
-                    if (self.enabled or self.voice_enabled) and not self.error:
+                    if self._wants_process(self.enabled, self.voice_enabled) and not self.error:
                         self.error = ERRORS['process_exited']
                     self.condition.notify_all()
 
@@ -304,30 +318,36 @@ class TireOverlayController:
                 if process.stdout:
                     process.stdout.close()
 
+    def _wants_process(self, enabled, voice):
+        """The measurement process runs for the window, the voice, or LMU record-only history."""
+        return enabled or voice or self.game == 'lmu' and self.lmu_record
+
     def start(self):
         with self.operation_lock:
             self._load()
             if (self.enabled or self.voice_enabled) and self._floors() is not None:
                 self.floors.scan_in_background()  # ready before the first garage visit
-            if self.enabled or self.voice_enabled:
+            if self._wants_process(self.enabled, self.voice_enabled):
                 try:
                     self._start()
                 except (OSError, RuntimeError) as error:
                     self.error = str(error)
 
     def update(self, *, enabled=None, voice_enabled=None, fixed=None, background_opacity=None, content_opacity=None, radius=None,
-               lmu_open_setup=None):
+               lmu_open_setup=None, lmu_record=None):
         with self.operation_lock:
             self._load()
+            if (lmu_open_setup is not None or lmu_record is not None) and self.game != 'lmu':
+                raise ValueError('LMU 설정입니다.')
             if lmu_open_setup is not None:
-                if self.game != 'lmu':
-                    raise ValueError('LMU 설정입니다.')
                 self.lmu_open_setup, self.advice, self.advice_key = lmu_open_setup, None, None
+            if lmu_record is not None:
+                self.lmu_record = lmu_record
             appearance = {key: value for key, value in dict(background_opacity=background_opacity,
                 content_opacity=content_opacity, radius=radius).items() if value is not None}
             target_enabled = self.enabled if enabled is None else enabled
             target_voice = self.voice_enabled if voice_enabled is None else voice_enabled
-            if not (target_enabled or target_voice):
+            if not self._wants_process(target_enabled, target_voice):
                 self._stop()
             if fixed is not None and fixed != self.fixed:
                 if self.process is not None and self.process.poll() is None:
@@ -341,7 +361,7 @@ class TireOverlayController:
             already_running = self.process is not None and self.process.poll() is None and self.ready
             self.enabled, self.voice_enabled = target_enabled, target_voice
             try:
-                if target_enabled or target_voice:
+                if self._wants_process(target_enabled, target_voice):
                     self._start()
                     if already_running and previous[0] != target_enabled:
                         self._command('display', enabled=target_enabled)
@@ -351,7 +371,7 @@ class TireOverlayController:
             if not self.voice_enabled:
                 self.advisor.reset()
             self._save()
-            if not (target_enabled or target_voice):
+            if not self._wants_process(target_enabled, target_voice):
                 self.error = None
             return self.status()
 
@@ -584,6 +604,7 @@ class TireSettings(BaseModel):
     content_opacity: StrictInt | None = Field(None, ge=0, le=100)
     radius: StrictInt | None = Field(None, ge=0, le=32)
     lmu_open_setup: StrictBool | None = None
+    lmu_record: StrictBool | None = None
 
 
 class TireTargetSettings(BaseModel):

@@ -69,6 +69,11 @@ class FloorTests(unittest.TestCase):
         self.assertFalse(floors.scan_in_background())
         now[0] = 31 * 60
         self.assertTrue(floors.scan_in_background())
+        import time
+        end = time.monotonic() + 5
+        while floors.status()['scanning'] and time.monotonic() < end:  # finish before the folder goes
+            time.sleep(.01)
+        self.assertFalse(floors.status()['scanning'])
 
     def test_file_minimum_feeds_the_advice_floor(self):
         merged = advice.merge_lowest({'FL': 165.}, dict.fromkeys(WHEELS, 150.))

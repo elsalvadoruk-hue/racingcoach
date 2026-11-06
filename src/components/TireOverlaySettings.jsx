@@ -145,7 +145,7 @@ function digitText(reader) {
 function statusText(view) {
   if (!view) return '상태 확인 중';
   if (!view.supported) return 'Windows에서 사용할 수 있습니다.';
-  if (!view.enabled && !view.voice_enabled) return '꺼짐';
+  if (!view.enabled && !view.voice_enabled) return view.lmu_record && view.running ? '창·음성 꺼짐 · 타이어 기록만 하는 중' : '꺼짐';
   if (!view.running) return '타이어 측정 종료됨';
   if (view.status === 'unsupported_car') return '지원 차량 탑승 대기';
   if (view.status === 'cockpit_warmup') return `계기판 준비 대기 · ${view.warmup_remaining_s ?? 10}초`;
@@ -298,6 +298,12 @@ export default function TireOverlaySettings({ apiBase, fetcher = fetch, game = '
           <Switch id={`${id}-lmu-open`} checked={view.lmu_open_setup === true} disabled={disabled}
             onCheckedChange={lmu_open_setup => apply({ lmu_open_setup })}/>
         </Field>}
+        {game === 'lmu' && view && <Field orientation="horizontal" data-disabled={disabled}>
+          <FieldLabel htmlFor={`${id}-lmu-record`}>창·음성을 꺼도 타이어 기록</FieldLabel>
+          <Switch id={`${id}-lmu-record`} checked={view.lmu_record === true} disabled={disabled}
+            onCheckedChange={lmu_record => apply({ lmu_record })}/>
+        </Field>}
+        {game === 'lmu' && view && <p className="text-sm text-muted-foreground">LMU 기록은 화면 캡처 없이 게임 데이터만 씁니다. 기록이 쌓여야 압력 추천과 더블 스틴트 예상이 나옵니다.</p>}
         {game === 'lmu' && view && <p className="text-sm text-muted-foreground">LMU는 셋업 고정 여부를 알려주지 않습니다. 셋업을 바꿀 수 있는 경기에서만 켜 주세요. 냉간 압력은 차고와 새 타이어 직후의 실제 측정값을 씁니다.</p>}
         {game !== 'lmu' && view?.pressure_floor_files && <p className="text-sm text-muted-foreground">
           셋업 최저 압력은 자동으로 찾습니다 · iRacing 텔레메트리 파일 {view.pressure_floor_files.files}개, 차량 {view.pressure_floor_files.cars}대

@@ -225,6 +225,22 @@ test('LMU advice needs the open-setup switch and shows the double-stint projecti
   expect(screen.getByText(/더블 스틴트 여부는 직접 결정/)).toBeVisible();
 });
 
+test('LMU can keep recording with the window and voice off',async()=>{
+  let state={...initial,lmu_record:true,running:true};
+  const fetcher=jest.fn(async(url,options={})=>{
+    if (options.method==='PUT') state={...state,...JSON.parse(options.body)};
+    state.running=state.lmu_record;
+    return response({...state});
+  });
+  render(<TireOverlaySettings game="lmu" fetcher={fetcher}/>);
+  expect(await screen.findByText('창·음성 꺼짐 · 타이어 기록만 하는 중')).toBeVisible();
+  const record=screen.getByRole('switch',{name:'창·음성을 꺼도 타이어 기록'});
+  await waitFor(()=>expect(record).toBeEnabled());
+  fireEvent.click(record);
+  await waitFor(()=>expect(fetcher).toHaveBeenCalledWith(expect.stringContaining('?game=lmu'),expect.objectContaining({body:JSON.stringify({lmu_record:false})})));
+  expect(await screen.findByText('꺼짐')).toBeVisible();
+});
+
 test('missing tire clips are stated and ranges can be set only for the measured car',async()=>{
   const fetcher=fixture();fetcher.mockImplementationOnce(async()=>response({...initial,voice_enabled:true,
     voice_audio_ready:false,car_path:'bmwm4gt3',car_name:'BMW M4 GT3',targets:{}}));
