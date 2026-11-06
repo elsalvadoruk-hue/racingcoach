@@ -23,7 +23,7 @@
 
 ## 설치와 첫 실행
 
-**[처음 설치용 ZIP 바로 받기 (2.5.0)](https://github.com/elsalvadoruk-hue/racingcoach/releases/download/v2.5.0/racingcoach-setup-2.5.0.zip)**
+**[처음 설치용 ZIP 바로 받기 (2.5.1)](https://github.com/elsalvadoruk-hue/racingcoach/releases/download/v2.5.1/racingcoach-setup-2.5.1.zip)**
 
 1. 처음 설치용 ZIP을 받아 **새 폴더에 압축을 모두 풉니다.** 다른 버전은 [최신 Releases](https://github.com/elsalvadoruk-hue/racingcoach/releases/latest)에서 `racingcoach-setup-*.zip`을 선택하세요.
 2. `설치.bat`을 한 번 실행한 뒤 `실행.bat`으로 앱을 켭니다. 최초 설치에는 인터넷이 필요합니다.
@@ -50,6 +50,8 @@
 | Garage61 기준 비교 | 지원 | 미지원 |
 | 셋업 A/B 효과 비교 | 지원 | 미지원 |
 | 추가 타이어 오버레이·음성 | GT3 11종·Porsche Cup 992.2 계기판 인식 | 공유 메모리 압력·표면 온도 |
+
+iRacing의 **날씨 예보를 활용한 압력 추천·음성 안내는 게임 안 Weather(날씨) 패널의 오른쪽 예보 칸을 계속 띄워 두어야 합니다.** 게임이 걸친 모니터를 순서대로 찾고, 발견 뒤에는 해당 영역만 5분마다 읽습니다.
 
 타이어는 **bar·°C**로 표시하며 숫자 표시와 음성을 따로 선택합니다. 차량·관측 조건과 근거가 부족하면 판단이나 추천을 보류합니다. [측정 조건과 안내 범위](manual/tire-voice.md)를 확인하세요.
 
