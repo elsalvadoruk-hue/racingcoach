@@ -7,6 +7,10 @@ from .snapshot import TireSnapshot, WHEELS
 LABELS = dict(zip(WHEELS, ('왼쪽 앞', '오른쪽 앞', '왼쪽 뒤', '오른쪽 뒤')))
 STATE_MAX_AGE_S = 5  # newest agreeing reading
 STATE_MAX_GAP_S = 6  # between consecutive readings (3 readings may span up to 12 s)
+# Cold tires at the start or after a pit stop always read low. 'Pressure low' waits until
+# that wheel has once come up to ok/high, or this many laps have passed since the start
+# or the pit exit (a tire still low by then really is low).
+WARMUP_LAPS = 2
 SHORT_PHRASES = {f'pressure_{state}_{wheel}': f'{label} 타이어 압력 {word}.'
            for wheel, label in LABELS.items() for state, word in (('high', '높음'), ('low', '낮음'))}
 SHORT_PHRASES.update({f'temperature_hot_{wheel}': f'{label} 타이어 과열.' for wheel, label in LABELS.items()})
@@ -68,6 +72,7 @@ class TireAdvisor:
         self.pending = None
         self.was_warm = False
         self.ok_sent = False
+        self.warm_start_lap, self.warmed, self.on_pit_road = None, set(), False
         from .coaching import TireCoaching
         self.coaching = TireCoaching()
 
@@ -89,6 +94,7 @@ class TireAdvisor:
         if not snapshot.active:
             return
         self.coaching.observe(snapshot, context)
+        self._track_warmup(snapshot)
         if not enabled:
             self.pending=None
             return
@@ -102,13 +108,14 @@ class TireAdvisor:
                     # A newly read number with unknown color/range is evidence
                     # that the old classification is no longer confirmed.
                     history.append((state, now))
+        self.warmed.update(w for w in WHEELS if self.state('pressure', w, now) in ('ok', 'high'))
         self.current(now)  # Drop expired or no longer applicable calls first.
         if self.pending:
             return
         candidates = []
         for wheel in WHEELS:
             for field, state in (('temperature', 'hot'), ('pressure', 'high'), ('pressure', 'low')):
-                if self.state(field, wheel, now) == state:
+                if self.state(field, wheel, now) == state and not (state == 'low' and self.warming(wheel, now)):
                     candidates.append(f'{field}_{state}_{wheel}')
         temps = [self.state('temperature', w, now) for w in WHEELS]
         if any(s == 'ok' for s in temps):
@@ -160,7 +167,25 @@ class TireAdvisor:
         if key == 'tires_ok':
             return all(self.state(f, w, now) == 'ok' for f in ('pressure', 'temperature') for w in WHEELS)
         field, state, wheel = key.split('_')
+        if state == 'low' and self.warming(wheel, now):
+            return False
         return self.state(field, wheel, now) == state
+
+    def _track_warmup(self, snapshot):
+        if snapshot.on_pit_road is True:
+            self.on_pit_road = True
+        elif snapshot.on_pit_road is False and self.on_pit_road:
+            # Leaving the pit lane: fresh or cooled tires warm up again.
+            self.on_pit_road, self.warmed, self.warm_start_lap = False, set(), snapshot.lap
+        if self.warm_start_lap is None:
+            self.warm_start_lap = snapshot.lap
+
+    def warming(self, wheel, now):
+        """True while this wheel's 'pressure low' is only the normal warm-up."""
+        if wheel in self.warmed:
+            return False
+        lap = self.latest.lap if self.latest else None
+        return lap is None or self.warm_start_lap is None or lap - self.warm_start_lap < WARMUP_LAPS
 
     def current(self, now):
         event = self.pending

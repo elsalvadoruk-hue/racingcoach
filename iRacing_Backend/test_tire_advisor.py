@@ -82,3 +82,34 @@ class AdvisorTests(unittest.TestCase):
         self.assertIsNotNone(self.advisor.current(2.))
         self.observe(snapshot(3.,state=None))
         self.assertIsNone(self.advisor.current(3.))
+
+
+class WarmupTests(unittest.TestCase):
+    """Cold tires read low at the start and after a pit stop; that is not a warning."""
+    def setUp(self):
+        self.now=0.;self.advisor=TireAdvisor(clock=lambda:self.now)
+
+    def drive(self, start, lap, state, **patch):
+        for t in (start, start+1., start+2.):
+            self.now=t;self.advisor.observe(replace(snapshot(t,state=state),lap=lap,**patch).to_dict(),enabled=True)
+        return (self.advisor.current(self.now) or {}).get('key')
+
+    def test_low_pressure_waits_through_the_out_lap_but_not_forever(self):
+        self.assertIsNone(self.drive(0.,0,'low'))
+        self.assertIsNone(self.drive(10.,1,'low'))
+        self.assertEqual(self.drive(20.,2,'low'),'pressure_low_FL')   # still low after two laps: really low
+
+    def test_a_wheel_that_warmed_up_and_then_drops_is_warned_at_once(self):
+        self.drive(0.,0,'ok')                                          # warmed up (says the tires are fine)
+        self.advisor.pending=None
+        self.assertEqual(self.drive(10.,0,'low'),'pressure_low_FL')
+
+    def test_leaving_the_pit_lane_starts_the_warm_up_again(self):
+        self.drive(0.,5,'ok')
+        self.drive(10.,6,'ok',on_pit_road=True)
+        self.assertIsNone(self.drive(20.,6,'low'))
+        self.assertIsNone(self.drive(30.,7,'low'))
+        self.assertEqual(self.drive(40.,8,'low'),'pressure_low_FL')
+
+    def test_high_pressure_and_overheating_are_not_held_back(self):
+        self.assertEqual(self.drive(0.,0,'high'),'pressure_high_FL')
