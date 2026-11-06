@@ -136,6 +136,33 @@ def dot_recovery(gray,texts,formats):
     return next(iter(results)) if len(results)==1 else None
 
 
+def format_dot(texts,formats):
+    """Put back a decimal point the OCR dropped, from the game's own unit setting.
+
+    Used only when the SDK unit mode leaves exactly one pressure format (e.g. psi
+    with one decimal), so '242' can only be 24.2. At least two variants and at
+    least half of the non-empty ones must read the same digits, and no variant
+    may read a different number; the point goes where that format puts it and
+    the result must pass the normal range check. No digit is changed or added.
+    Dropped points were the largest group of withheld cells on the official
+    dashboards (2026-11-06: 28 of 53, none wrong).
+    """
+    if not formats or len(formats)!=1 or formats[0][1]<1:
+        return None
+    nonempty=[re.sub(r'\s','',t) for t in texts if t.strip()]
+    digits=[t for t in nonempty if re.fullmatch(r'[0-9]{2,4}',t)]
+    if not digits or len(set(digits))!=1 or len(digits)<max(2,(len(nonempty)+1)//2):
+        return None
+    text,(unit,decimals)=digits[0],formats[0]
+    if len(text)<=decimals:
+        return None
+    dotted=text[:-decimals]+'.'+text[-decimals:]
+    # A variant that kept the point must show the same number; any other number is a conflict.
+    if any(t not in (text,dotted) and re.fullmatch(r'[0-9.,]+',t) for t in nonempty):
+        return None
+    return parse_pressure(dotted,unit,decimals)
+
+
 def withheld_reason(texts,valid):
     """A code for why a cell was not accepted; the OCR text itself is never kept."""
     nonempty=[re.sub(r'\s','',t) for t in texts if t.strip()]
@@ -315,7 +342,7 @@ class WindowsPressureOcr:
             accepted = next(iter(valid)) if len(valid) == 1 and sum(v is not None for v in candidates) >= 2 else None
             if car=='ferrari296gt3' and kind=='pressure' and len({i//2 for i,v in enumerate(candidates) if v is not None})<2:
                 accepted=None
-            dot_verified=False
+            dot_verified=dot_from_format=False
             independent=car!='ferrari296gt3' or len({i//2 for i,t in enumerate(texts) if t.strip()})>=2
             if accepted is None and not valid and kind=='pressure' and independent:
                 # The OCR often keeps every digit but drops a small decimal dot.
@@ -323,12 +350,17 @@ class WindowsPressureOcr:
                 recovered=dot_recovery(gray,texts,formats or
                     (AUTO_PRESSURE_FORMATS if profile.get('screen_unit')=='auto' else ((profile['unit'],profile['decimals']),)))
                 if recovered:accepted,dot_verified=recovered,True
+            if accepted is None and kind=='pressure' and independent and formats:
+                # One variant may have kept the point (single_variant); it must agree.
+                recovered=format_dot(texts,formats)
+                if recovered and (not valid or valid=={recovered}):accepted,dot_from_format=recovered,True
             status = 'recognized' if accepted else ('ambiguous' if len(valid) > 1 else
                 ('single_variant' if valid else 'unreadable'))
             target=temperatures if kind=='temperature' else wheels
             target[wheel] = dict(status=status, texts=texts,
                 value=accepted[0] if accepted else None,
                 reason=None if accepted else withheld_reason(texts,valid),dot_verified=dot_verified,
+                dot_from_format=dot_from_format,
                 **{('celsius' if kind=='temperature' else 'kpa'):accepted[1] if accepted else None})
         return dict(source='offline_screenshot_ocr', language=self.language,
             available_languages=self.languages, unit=profile['unit'], wheels=wheels,temperatures=temperatures,

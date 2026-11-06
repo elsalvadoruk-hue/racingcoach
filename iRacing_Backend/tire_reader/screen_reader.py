@@ -201,7 +201,9 @@ class ScreenTireReader:
                 # Codes only (why a cell was withheld, whether a dot was confirmed); never OCR text.
                 'pressure_reason': {w: recognized['wheels'].get(w, {}).get('reason') for w in WHEELS},
                 'temperature_reason': {w: recognized.get('temperatures', {}).get(w, {}).get('reason') for w in WHEELS},
-                'pressure_dot_verified': {w: recognized['wheels'].get(w, {}).get('dot_verified') is True for w in WHEELS}}
+                'pressure_dot_verified': {w: recognized['wheels'].get(w, {}).get('dot_verified') is True for w in WHEELS},
+                # The decimal point came from the SDK unit setting, not from the pixels.
+                'pressure_dot_from_format': {w: recognized['wheels'].get(w, {}).get('dot_from_format') is True for w in WHEELS}}
             operation = 'sdk_after'
             after = self.reader.snapshot(self.generation)
             after['fresh'] = before['fresh'] or after['fresh']
