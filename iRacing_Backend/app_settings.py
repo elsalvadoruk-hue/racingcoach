@@ -21,7 +21,8 @@ BACKEND = Path(__file__).resolve().parent
 LOCATION_FILE = ROOT / 'data-location.txt'
 SETTINGS_NAME, KEY_NAME, TOKEN_NAME = 'settings.json', 'gcp-key.json', 'garage61_api_token.txt'
 # What the screen may change. Secrets (the key, the token) are files of their own and are never read back.
-DEFAULTS = {'telemetry_dirs': [], 'gcp_project_id': '', 'gcp_location': 'global', 'speech_region': 'us'}
+DEFAULTS = {'telemetry_dirs': [], 'gcp_project_id': '', 'gcp_location': 'global', 'speech_region': 'us',
+            'garage61_selection_mode': 'MATCHED'}
 
 
 def data_dir():
@@ -52,6 +53,8 @@ def load():
         saved = {}
     result = dict(DEFAULTS)
     if isinstance(saved, dict):
+        if saved.get('garage61_selection_mode') in ('MATCHED', 'FASTEST'):
+            result['garage61_selection_mode'] = saved['garage61_selection_mode']
         folders = saved.get('telemetry_dirs')
         if isinstance(folders, list):
             result['telemetry_dirs'] = [str(item).strip() for item in folders if isinstance(item, str) and item.strip()][:12]

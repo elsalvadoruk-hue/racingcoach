@@ -112,6 +112,11 @@ class CollectionRouteTests(unittest.TestCase):
         self.manager.start.assert_not_called()
         self.manager.cancel.assert_not_called()
 
+    def test_start_preserves_selected_collection_mode_in_the_worker_snapshot(self):
+        self.health['context']['selection_mode'] = 'FASTEST'
+        self.start()
+        self.assertEqual(self.manager.start.call_args.args[0]['selection_mode'], 'FASTEST')
+
     def test_cooldown_uses_exact_seconds_instead_of_rounded_display_hours(self):
         self.health.update(last_context_scan_age_hours=.2, last_context_scan_age_seconds=899.5)
         reply = self.start().json()['job']

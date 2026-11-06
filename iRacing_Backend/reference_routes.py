@@ -9,8 +9,14 @@ from fastapi import HTTPException, Query
 import asyncio
 from garage61_auth import TOKEN_MISSING_MESSAGE
 from analysis_models import Garage61CollectRequest
+from pydantic import BaseModel
+import app_settings
 
 logger = logging.getLogger("iRacingSetupTuner")
+
+
+class CollectionPreferences(BaseModel):
+    selection_mode: Literal['MATCHED', 'FASTEST']
 
 
 @dataclass(frozen=True)
@@ -34,6 +40,19 @@ class ReferenceRoutesServices:
 
 
 def register_routes(app, services: ReferenceRoutesServices):
+    @app.get('/api/garage61/collector/preferences')
+    async def get_collection_preferences():
+        settings = await asyncio.to_thread(app_settings.load)
+        return {'selection_mode': settings['garage61_selection_mode']}
+
+    @app.put('/api/garage61/collector/preferences')
+    async def set_collection_preferences(payload: CollectionPreferences):
+        job = await asyncio.to_thread(services.get_garage61_collector().active_job)
+        if job and job.get('busy'):
+            raise HTTPException(status_code=409, detail='수집이 끝난 뒤 가져올 데이터를 변경하세요.')
+        settings = await asyncio.to_thread(app_settings.save, {'garage61_selection_mode': payload.selection_mode})
+        return {'selection_mode': settings['garage61_selection_mode']}
+
     @app.get("/api/external-references")
     async def get_external_references(filename: Optional[str] = None, retained_files: list[str] = Query(default=[])) -> dict[str, Any]:
         path = await asyncio.to_thread(services.resolve_telemetry_file, filename)

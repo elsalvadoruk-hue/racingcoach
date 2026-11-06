@@ -197,6 +197,7 @@ class Garage61CollectorManager:
                 "created_at": now,
                 "updated_at": now,
                 "context_key": payload.get("context_key"),
+                "selection_mode": payload.get('selection_mode', 'MATCHED'),
                 "filename": payload.get("filename"),
                 "target_count": payload.get("target_count"),
                 "progress": 0.0,
@@ -285,7 +286,7 @@ class Garage61CollectorManager:
             # The matching request remains authoritative for both collector modes.
             request = _load_json(paths["request"])
             if request.get("job_id") == resolved:
-                payload.update({key: request.get(key) for key in ("filename", "context_key", "created_at", "target_count")})
+                payload.update({key: request.get(key) for key in ("filename", "context_key", "created_at", "target_count", "selection_mode")})
             running = bool(resolved == self._active_job_id and self._process is not None and self._process.poll() is None)
             payload["busy"] = running
             payload["status_file"] = str(paths["status"])

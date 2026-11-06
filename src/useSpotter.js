@@ -11,6 +11,7 @@ import { createRadioAttempt, radioDiagnostic } from './lib/radioDiagnostics';
 const SETTINGS_KEY = 'iracing.spotter.settings';
 export const RADIO_RENDER_TIMEOUT_MS = 8000;
 const MAX_PLAYBACK_ATTEMPTS = 3;
+const MISSING_SPOTTER_AUDIO = '스포터 음원을 찾지 못했습니다. 스포터를 껐다 켜서 다시 준비해 주세요.';
 export const SPOTTER_VOICES = [['Fenrir', '남성 · 기본'], ['Algieba', '남성'], ['Schedar', '남성'], ['Aoede', '여성']];
 const DEFAULT_SETTINGS = { voice: 'Fenrir', formation_calls: 5, repeat_seconds: 3, clear_delay: .15, traffic_enabled: true, pit_box_enabled: false };
 const savedSettings = game => {
@@ -61,8 +62,9 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const previousGame = useRef(activeGame);
   const [voice, setVoice] = useState(settings.custom_pack || settings.voice);
   const overlapPending = useRef(null);
-  const clips = useRef(null), epoch = useRef(0), mounted = useRef(true);
-  useEffect(() => { clips.current = null; }, [library.revision]);
+  const clips = useRef(null), clipsRevision = useRef(null), epoch = useRef(0), mounted = useRef(true);
+  // A download/list refresh must not remove the active safety clips. Apply the
+  // new library at the next explicit start; voice edits still replace it immediately.
   useEffect(() => {
     const choices = voiceSelections(applied.current);
     if (!Object.keys(choices).length) return undefined;
@@ -151,7 +153,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const ticket = ++epoch.current;
     setError(''); setPreparing(true);
     try {
-      if (!clips.current) {
+      if (!clips.current || clipsRevision.current !== library.revision) {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
           headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...applied.current, wall_alerts: output.current.wallAlerts }) });
         const manifest = await response.json();
@@ -159,6 +161,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         if (!manifest.clips?.test?.audio_base64) throw new Error('스포터 음성을 확인하지 못했습니다.');
         if (!mounted.current || ticket !== epoch.current) return;
         clips.current = manifest.clips;
+        clipsRevision.current = library.revision;
         setVoice((manifest.voice || 'Fenrir').replace('ko-KR-Chirp3-HD-', ''));
       } else {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT',
@@ -188,6 +191,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
           if (!response.ok || !manifest.clips?.test?.audio_base64) throw new Error(manifest.detail || '이 목소리의 스포터 음성을 준비하지 못했습니다.');
           if (!mounted.current || ticket !== epoch.current) return;
           clips.current = manifest.clips;
+          clipsRevision.current = library.revision;
         } else {
           clips.current = null;
           const response = await fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...next, wall_alerts: output.current.wallAlerts }) });
@@ -230,6 +234,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
           if (!prepared.ok || !manifest.clips?.test?.audio_base64) throw new Error('스포터 음성을 확인하지 못했습니다.');
           if (!mounted.current || ticket !== epoch.current) return;
           clips.current = manifest.clips;
+          clipsRevision.current = library.revision;
         }
         if (mounted.current && ticket === epoch.current) { setVoice(applied.current.custom_pack || applied.current.voice); setReadyGame(activeGame); setError(''); }
       } catch (failure) {
@@ -260,6 +265,10 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         interrupt: key !== 'unavailable', whilePlaying: key === 'unavailable' ? valid : undefined,
         channel: 'spotter', valid, onStatus: status, diagnostics }); }
       catch { status('failed', 'playback_error'); return false; }
+    }
+    if (!audio && mounted.current && valid()) {
+      clipsRevision.current = null;
+      setError(MISSING_SPOTTER_AUDIO);
     }
     status(audio ? 'muted' : 'failed', audio ? 'volume_or_mute' : 'missing_clip');
     return false;
@@ -334,9 +343,19 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     try {
       let audio, droppedParts, mime = 'audio/mpeg', text = event.text;
       if (event.cached) {
-        const clip = clips.current?.[event.key];
+        const clip = clips.current?.[event.audio_key || event.key];
         const variant = clip?.variants?.[event.variant] || clip;
-        audio = variant?.audio_base64; text = variant?.text || text;
+        audio = variant?.audio_base64;
+        // The neutral finish clip is shared; its measured/provisional rank stays on screen.
+        if (!event.audio_key) text = variant?.text || text;
+        if (!audio) {
+          if (valid()) {
+            logEvent(event, 'failed', 'missing_clip', undefined, preparation());
+            clipsRevision.current = null;
+            setError(MISSING_SPOTTER_AUDIO); heard.current.add(event.id);
+          }
+          return;
+        }
       } else if (rendered.current.has(event.id)) {
         ({ audio, mime, droppedParts } = rendered.current.get(event.id));
       } else if (!settings.muted && settings.volume > 0) {

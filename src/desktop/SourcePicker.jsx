@@ -93,6 +93,7 @@ export default function SourcePicker({ target, reference, external, onApply, ana
   selectedRef.current = selected;
   const [refreshingReferences, setRefreshingReferences] = useState(false);
   const collection = useGarage61Collection({ filename: file,
+    selectionMode: analysisWorkspace?.garage61Preference?.mode,
     enabled: !lmu && Boolean(analysisWorkspace) && session?.filename === file && session.kind === 'LIVE_LOCAL' && selectableSession(session),
     onCollected: filename => setCollectedFile({ filename }),
   });

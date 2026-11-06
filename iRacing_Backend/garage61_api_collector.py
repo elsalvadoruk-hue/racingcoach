@@ -634,6 +634,8 @@ def rank_candidates(laps: list[dict[str, Any]], request: dict[str, Any]) -> list
             float(item.get("lap_time_s") or math.inf),
         )
     )
+    if request.get('selection_mode') == 'FASTEST':
+        output.sort(key=lambda item: (float(item['lap_time_s']), str(item['lap_id'])))
     return output
 
 
@@ -756,6 +758,10 @@ def query_passes(request: dict[str, Any], track_id: int, car_id: int) -> list[tu
         "round": "metric",
     }
     setup_type = request.get("session_setup_type")
+    if request.get('selection_mode') == 'FASTEST':
+        # Same car/layout, normal laps, one result per driver. No weather,
+        # fuel, setup-type or personal-pace constraints in this mode.
+        return [('FASTEST', base)]
     if setup_type in {1, 2, "1", "2"}:
         base["sessionSetupTypes"] = int(setup_type)
     best = maybe_float(request.get("current_best_lap_s"))
@@ -865,7 +871,7 @@ def run(request_path: Path, status_path: Path, reference_dir: Path, token_file: 
     job_id = str(request.get("job_id") or "")
     global _active_status
     status = StatusWriter(status_path, job_id)
-    status.last.update({key: request.get(key) for key in ("filename", "context_key", "created_at", "target_count")})
+    status.last.update({key: request.get(key) for key in ("filename", "context_key", "created_at", "target_count", "selection_mode")})
     _active_status = status
     reference_dir.mkdir(parents=True, exist_ok=True)
     catalog_path = reference_dir / "garage61_catalog.json"
@@ -980,7 +986,7 @@ def run(request_path: Path, status_path: Path, reference_dir: Path, token_file: 
 
         status.update(
             "RANKING",
-            f"{len(ranked)}개 telemetry 후보를 조건·페이스·최신성·품질로 정렬했습니다.",
+            f"{len(ranked)}개 telemetry 후보를 " + ('랩타임 순으로 정렬했습니다.' if request.get('selection_mode') == 'FASTEST' else '조건·페이스·최신성·품질로 정렬했습니다.'),
             0.46,
             scanned_rows=len(merged),
             candidate_pool=len(ranked),
@@ -1065,6 +1071,7 @@ def run(request_path: Path, status_path: Path, reference_dir: Path, token_file: 
                 status.update("DOWNLOADING", f"API telemetry 확보 중 · {len(context_ids)}/{target_count} · 1건 실패 후 다음 후보 진행", progress, downloaded_count=downloaded, download_failures=failures[-5:])
 
         scan = {
+            "selection_mode": request.get('selection_mode', 'MATCHED'),
             "source_type": "GARAGE61_API",
             "api_version": "v1",
             "api_user_slug": me.get("slug"),

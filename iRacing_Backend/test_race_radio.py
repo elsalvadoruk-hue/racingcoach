@@ -95,6 +95,20 @@ class RaceRadioTests(unittest.TestCase):
         self.tick(session_flags=0xC108)
         self.assertEqual(self.keys(), ['caution'])
 
+    def test_finish_reuses_spotter_clip_while_provisional_rank_can_change(self):
+        self.tick(session_flags=0x1)
+        self.tick(session_flags=0x1,lap_completed=3,class_position=4)
+        self.wait(4)
+        result=next(e for e in self.events() if e['key']=='race_result')
+        self.assertTrue(result['cached'])
+        self.assertEqual(result['audio_key'],'finish')
+        self.assertEqual(result['spoken_text'],STATIC_CALLS['finish'][0])
+        self.tick(class_position=5)
+        result=next(e for e in self.events() if e['key']=='race_result')
+        self.assertIn('5위',result['text'])
+        self.assertEqual(result['audio_key'],'finish')
+        self.assertEqual(len([e for e in self.events() if e['key']=='race_result']),1)
+
     def test_variant_rotates_after_clear_and_cooldown(self):
         self.tick(session_flags=0x20); self.wait(1.6)
         first = self.events()[0]

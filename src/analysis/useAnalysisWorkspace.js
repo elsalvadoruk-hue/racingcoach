@@ -7,6 +7,7 @@ import { analysisContextKey, assignedModeForFile, comparisonContext, formatSetup
 import { useWorkspaceInitialization } from './useWorkspaceInitialization';
 import { useTelemetryEvents } from './useTelemetryEvents';
 import { useCollectorPolling } from './useCollectorPolling';
+import { useGarage61Preference } from './useGarage61Preference';
 import { useAnalysisProgress } from '../desktop/AnalysisProgress';
 import { isSelectableRecording } from '../lib/recordingFiles';
 
@@ -652,6 +653,12 @@ export function useAnalysisWorkspace() {
     return payload;
   };
 
+  const garage61Preference = useGarage61Preference(async () => {
+    collectorAutoContextRef.current = '';
+    await refreshExternalReferences();
+    await loadGarage61CollectorStatus();
+  }, !initialLoading);
+
   const applyExternalReferences = async () => {
     await runAnalysis({
       includeAI: false,
@@ -812,7 +819,7 @@ export function useAnalysisWorkspace() {
       confirmSessionModeChange, controlsExpanded, currentContext, detail, detailLoading,
       displayComparison, displayPriorities, error, externalCornerLoader, externalReferenceAnalysis,
       externalReferenceStatus, externalReferences, feedbackPhase, feedbackSpeed, feedbackSymptom,
-      fileIndex, files, garage61ApiStatus, garage61Collector, garage61CollectorLoading, goal,
+      fileIndex, files, garage61ApiStatus, garage61Collector, garage61CollectorLoading, garage61Preference, goal,
       handleExperimentStored, handleFileChange, handleReferenceLapChange, handleSessionModeChange,
       handleTargetLapChange, hasExternalTrace, hoverHelpEnabled, initialLoading, lapRange,
       loadComparisonDetail, loadFileLaps, loadMemory, loading, localCornerLoader, memorySessions,

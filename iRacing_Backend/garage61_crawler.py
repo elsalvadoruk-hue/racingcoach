@@ -719,6 +719,8 @@ def rank_rows(rows: list[dict[str, Any]], request: dict[str, Any], target_count:
     )
     selected: list[dict[str, Any]] = []
     seen_drivers: set[str] = set()
+    if request.get('selection_mode') == 'FASTEST':
+        ranked.sort(key=lambda item: float(item.get('lap_time_s') or math.inf))
     desired_pool = max(target_count * 3, target_count + 4)
     for item in ranked:
         driver = name_token(item.get("driver_name"))
@@ -2919,7 +2921,7 @@ def main() -> int:
 
     request = load_json(args.request_file)
     status = StatusWriter(args.status_file, str(request.get("job_id") or "") or None)
-    status.last.update({key: request.get(key) for key in ("filename", "context_key", "created_at", "target_count")})
+    status.last.update({key: request.get(key) for key in ("filename", "context_key", "created_at", "target_count", "selection_mode")})
     if args.auto:
         if not request:
             status.update("FAILED", "Auto mode requires --request-file.", progress=1.0)

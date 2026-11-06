@@ -7,7 +7,7 @@ const TERMINAL = new Set(['COMPLETE', 'PARTIAL', 'FAILED', 'CANCELLED', 'SKIPPED
 // A picker can preview another recording without changing the active analysis.
 // Follow that recording's collection independently and leave started workers
 // running when the picker closes; only this view's requests and timers stop.
-export function useGarage61Collection({ filename, enabled, onCollected }) {
+export function useGarage61Collection({ filename, enabled, onCollected, selectionMode = 'MATCHED' }) {
   const [state, setState] = useState(null);
   const [attempt, setAttempt] = useState(0);
   const collected = useRef(onCollected);
@@ -99,7 +99,7 @@ export function useGarage61Collection({ filename, enabled, onCollected }) {
     show('CHECKING', null, '');
     void check();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [filename, enabled, attempt]);
+  }, [filename, enabled, attempt, selectionMode]);
 
   return { ...(state?.filename === filename && enabled ? state : {}), retry };
 }

@@ -1,7 +1,8 @@
 import { Database, RefreshCw, CheckCircle2, TimerReset, Target, TrendingUp, Activity, Thermometer } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { NativeSelect, NativeSelectOption } from "../components/ui/native-select";
-import { Field, FieldLabel } from "../components/ui/field";
+import { Field, FieldGroup, FieldLabel, FieldDescription } from "../components/ui/field";
+import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
 import React from "react";
 import { ISSUE_LABELS, cx, formatLapSeconds, formatNumber, formatSigned } from './analysisShared';
 import { EmptyState, ErrorMessage, MetricCard, MetricMini } from './WorkspaceUi';
@@ -17,6 +18,7 @@ export function ExternalReferencePanel({
   collector,
   collectorLoading,
   apiStatus,
+  preference,
   onToggle,
   onPrimarySelect,
   onRefresh,
@@ -44,6 +46,8 @@ export function ExternalReferencePanel({
   };
   const job = capabilities?.api_token_configured === false ? null : collector?.job || null;
   const collectorBusy = Boolean(job?.busy);
+  const fastest = (preference?.mode || health.selection_mode || referenceStatus?.selection_mode) === 'FASTEST';
+  const preferenceDisabled = collectorBusy || collectorLoading || preference?.loading || preference?.saving;
   const jobState = job?.state || 'IDLE';
   const progress = Math.max(0, Math.min(100, Math.round(Number(job?.progress || 0) * 100)));
   const cacheTone = health?.enough_data && health?.cache_fresh
@@ -54,19 +58,38 @@ export function ExternalReferencePanel({
 
   return (
     <div className="flex flex-col gap-5">
+      {preference && <FieldGroup>
+        <Field data-disabled={preferenceDisabled}>
+          <FieldLabel id="garage61-selection-label">가져올 데이터</FieldLabel>
+          <ToggleGroup type="single" variant="outline" value={preference.mode} disabled={preferenceDisabled}
+            onValueChange={preference.change} aria-labelledby="garage61-selection-label" aria-describedby="garage61-selection-description"
+            className="flex-wrap justify-start">
+            <ToggleGroupItem value="MATCHED">조건에 맞는 데이터</ToggleGroupItem>
+            <ToggleGroupItem value="FASTEST">가장 빠른 데이터</ToggleGroupItem>
+          </ToggleGroup>
+          <FieldDescription id="garage61-selection-description">
+            {fastest ? '같은 차량·트랙·레이아웃의 공개 기록을 랩타임이 빠른 순서로 가져옵니다. 날씨·연료·셋업 조건은 다를 수 있습니다.'
+              : '내 주행과 날씨·연료 등의 조건이 비슷한 기록을 우선 가져옵니다. 기본 설정입니다.'}
+            {' '}선택하면 자동 저장되며 다음 수집부터 적용됩니다.
+            {collectorBusy && ' 수집이 끝난 뒤 변경할 수 있습니다.'}
+          </FieldDescription>
+          {preference.saving && <p role="status" className="text-sm text-muted-foreground">저장 중…</p>}
+          {preference.error && <p role="alert" className="text-sm text-destructive">{preference.error} <Button variant="outline" size="sm" onClick={preference.reload}>다시 확인</Button></p>}
+        </Field>
+      </FieldGroup>}
       <div className="rounded-2xl border border-accent/25 bg-accent/15 p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Database className="h-5 w-5 text-foreground" />
-              <h3 className="font-semibold text-foreground">Garage61 · IBT 조건 기반 Reference Library</h3>
+              <h3 className="font-semibold text-foreground">Garage61 · {fastest ? '가장 빠른 기록' : 'IBT 조건 기반'} Reference Library</h3>
             </div>
             <p className="mt-2 break-all font-mono text-sm text-foreground">
               {referenceStatus?.directory || '데이터 폴더의 Garage61_References'}
             </p>
             <p className="mt-2 max-w-5xl text-sm leading-relaxed text-muted-foreground">
               IBT에서 차량·트랙·레이아웃·노면온도·기온·연료·습도·바람·강수·가능한 BOP/타이어 조건을 읽습니다.
-              Garage61 API로 최대 1,000개 후보를 조건별 단계 검색하고, 공개 telemetry만 내려받습니다. 토큰이 없으면 오류 없이 내 주행 데이터끼리 비교합니다. Garage61을 사용하려면 설정 → 설치 설정 → Garage61 개인 API 토큰에서 등록하세요. 등록한 토큰의 인증·권한 문제는 오류로 안내하며 Playwright 설치 없이 이용할 수 있습니다.
+              {fastest ? 'Garage61 API로 최대 1,000개 공개 후보 중 빠른 랩타임을 우선해 내려받습니다. ' : 'Garage61 API로 최대 1,000개 후보를 조건별 단계 검색하고, 공개 telemetry만 내려받습니다. '}토큰이 없으면 오류 없이 내 주행 데이터끼리 비교합니다. Garage61을 사용하려면 설정 → 설치 설정 → Garage61 개인 API 토큰에서 등록하세요. 등록한 토큰의 인증·권한 문제는 오류로 안내하며 Playwright 설치 없이 이용할 수 있습니다.
               CSV를 검증한 뒤 대표 실주행 한 랩으로 속도·페달·라인·시간차를 비교합니다. 조건이 맞는 다른 드라이버의 기록은 구간별 손실과 개선 방향을 확인하는 보조 자료로 사용합니다. 아래 요약은 속도 손실과 GPS 차이가 큰 상위 2개 구간을 표시합니다.
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
@@ -91,15 +114,15 @@ export function ExternalReferencePanel({
             <Button variant="default"
               type="button"
               onClick={onCollect}
-              disabled={collectorBusy || collectorLoading || !health?.enabled}
+              disabled={collectorBusy || collectorLoading || preference?.loading || preference?.saving || !health?.enabled}
               className=" coach-primary-action px-4 py-2 text-sm   transition  disabled:cursor-not-allowed disabled: disabled:"
             >
-              {collectorBusy ? 'Garage61 수집 중' : '조건 데이터 보충'}
+              {collectorBusy ? 'Garage61 수집 중' : fastest ? '빠른 데이터 보충' : '조건 데이터 보충'}
             </Button>
             <Button variant="outline"
               type="button"
               onClick={onForceCollect}
-              disabled={collectorBusy || collectorLoading || !health?.enabled}
+              disabled={collectorBusy || collectorLoading || preference?.loading || preference?.saving || !health?.enabled}
               className=" border   px-4 py-2 text-sm   transition   disabled:opacity-40"
             >
               강제 새로 수집
@@ -142,18 +165,18 @@ export function ExternalReferencePanel({
               <span className="font-mono text-xs text-muted-foreground">{health?.recommendation || '--'}</span>
             </div>
             <p className="mt-3 text-sm leading-relaxed text-foreground">
-              조건 유사 + 현재보다 빠른 기준 {health?.usable_reference_count ?? 0}/{health?.minimum_usable_references ?? 5}개,
+              {fastest ? '랩타임 우선 기준' : '조건 유사 + 현재보다 빠른 기준'} {health?.usable_reference_count ?? 0}/{health?.minimum_usable_references ?? 5}개,
               서로 다른 드라이버 {health?.usable_distinct_drivers ?? 0}/{health?.minimum_distinct_drivers ?? 3}명.
               {health?.last_context_scan_age_hours !== null && health?.last_context_scan_age_hours !== undefined
-                ? ` 마지막 동일 조건 수집 ${Number(health.last_context_scan_age_hours).toFixed(1)}시간 전.`
-                : ' 동일 조건의 수집 이력이 없습니다.'}
+                ? ` 마지막 ${fastest ? '빠른 데이터' : '동일 조건'} 수집 ${Number(health.last_context_scan_age_hours).toFixed(1)}시간 전.`
+                : ' 선택한 수집 방식의 이력이 없습니다.'}
             </p>
             {(health?.reasons || []).length > 0 && (
               <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{health.reasons.join(' · ')}</p>
             )}
           </div>
           <div className="grid shrink-0 grid-cols-2 gap-2 sm:grid-cols-4 xl:min-w-[470px]">
-            <MetricMini label="적합 빠른 CSV" value={`${health?.usable_reference_count ?? 0}개`} />
+            <MetricMini label={fastest ? '빠른 랩 CSV' : '적합 빠른 CSV'} value={`${health?.usable_reference_count ?? 0}개`} />
             <MetricMini label="드라이버" value={`${health?.usable_distinct_drivers ?? 0}명`} />
             <MetricMini label="수집 목표" value={`${health?.target_reference_count ?? 8}개`} />
             <MetricMini label="캐시 유효" value={health?.cache_fresh ? 'YES' : 'NO'} />
@@ -189,7 +212,7 @@ export function ExternalReferencePanel({
             )}
             {['AUTHENTICATING', 'RESOLVING_IDS', 'QUERYING_LAPS', 'RANKING', 'DOWNLOADING', 'VALIDATING', 'RETRY_WAIT', 'WAITING_RESULTS', 'SCANNING_ROWS'].includes(jobState) && (
               <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-                API 모드에서는 조건 범위를 단계적으로 완화해 후보를 확보하고 CSV를 검증합니다. 브라우저 fallback은 기존 긴 타임아웃/백오프를 유지합니다. 분석 앱은 수집을 기다리지 않고 현재 캐시 결과를 계속 표시합니다.
+                {fastest ? 'API 모드에서 공개 후보를 랩타임 순으로 확인하고 CSV를 검증합니다. ' : 'API 모드에서는 조건 범위를 단계적으로 완화해 후보를 확보하고 CSV를 검증합니다. '}분석 앱은 수집을 기다리지 않고 현재 캐시 결과를 계속 표시합니다.
               </p>
             )}
           </div>
@@ -242,7 +265,7 @@ export function ExternalReferencePanel({
 
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <p className="text-xs leading-relaxed text-muted-foreground">
-          같은 차량·트랙에서 조건과 자료 품질이 적합한 빠른 기록을 우선 추천합니다. 상위 {referenceStatus?.display_limit || 9}개와 현재 선택한 기록을 표시하며, 조건이 부족하면 추천 개수를 채우지 않습니다.
+          {fastest ? '같은 차량·트랙에서 사용 가능한 기록을 랩타임이 빠른 순서로 추천합니다. 날씨·연료 조건은 다를 수 있습니다.' : '같은 차량·트랙에서 조건과 자료 품질이 적합한 빠른 기록을 우선 추천합니다.'} 상위 {referenceStatus?.display_limit || 9}개와 현재 선택한 기록을 표시하며, {fastest ? '사용 가능한 기록이' : '조건이'} 부족하면 추천 개수를 채우지 않습니다.
         </p>
         <div className="flex flex-wrap justify-end gap-2">
         <Button variant="outline"
@@ -360,8 +383,8 @@ export function ExternalReferencePanel({
           }) : (
             <div className="lg:col-span-2 2xl:col-span-3">
               <EmptyState text={collectorBusy
-                ? '현재 IBT 조건에 맞는 Garage61 기준을 백그라운드에서 수집 중입니다. 분석 앱은 기존 IBT 결과를 계속 사용할 수 있습니다.'
-                : '현재 IBT와 같은 차량·트랙·레이아웃의 Garage61 CSV가 없습니다. 조건 데이터 보충을 누르면 IBT 정보를 기준으로 Garage61 수집을 시작합니다.'} />
+                ? '선택한 방식으로 Garage61 기준을 백그라운드에서 수집 중입니다. 분석 앱은 기존 IBT 결과를 계속 사용할 수 있습니다.'
+                : '현재 IBT와 같은 차량·트랙·레이아웃의 Garage61 CSV가 없습니다. 데이터 보충을 누르면 선택한 방식으로 Garage61 수집을 시작합니다.'} />
             </div>
           )}
         </div>

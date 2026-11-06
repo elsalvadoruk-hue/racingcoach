@@ -532,9 +532,13 @@ class RaceRadio:
                            'provisional': rank['provisional'], 'position_source': rank['source']}
             # Reuse an existing neutral chequered clip. Its audio stays valid as
             # live ranks change, including while rendering or already speaking.
-            self.emit('race_result', now, self._result_text(), role='spotter',
-                      speech_text=STATIC_CALLS['finish'][0], prepared_only=True,
-                      ttl=40, delay=3, cooldown=3600, priority=2)
+            event = self.emit('race_result', now, self._result_text(), role='spotter',
+                              speech_text=STATIC_CALLS['finish'][0], prepared_only=True,
+                              ttl=40, delay=3, cooldown=3600, priority=2)
+            if event is not None:
+                # /spotter/prepare already supplies this clip for the selected voice,
+                # including short/custom/default fallback. Do not look in radio_audio.
+                event.update(cached=True, audio_key='finish')
 
     def _result_text(self):
         rank = self.result

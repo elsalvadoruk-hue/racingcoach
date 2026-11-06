@@ -45,6 +45,44 @@ def replay(learner=None, laps=7, patch=None, definitions=True, duration_scale=1,
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_fuel_burn_does_not_discard_validated_repeated_warm_passes(self):
+        for burn in (2.,3.9):
+            for car in ('mclaren720sgt3','bmwm4gt3'):
+                def patch(s,c):
+                    s=replace(s,car=car,fuel_l=80-burn*(s.lap+c['samples'][-1]['distance_pct']))
+                    if car=='bmwm4gt3':
+                        s=replace(s,wheels={w:replace(v,temp_c=None,temp_kind=None) for w,v in s.wheels.items()})
+                    return s,c
+                learner,s,_=replay(patch=patch)
+                with self.subTest(burn=burn,car=car):
+                    self.assertEqual(learner.view['status'],'ready',learner.view)
+                    self.assertGreaterEqual(learner.view['laps'],3)
+                    self.assertGreaterEqual(learner.view['passes'],12)
+                    self.assertTrue(any(s.fuel_l-r['fuel'] < -6 for r in learner._references(s)))
+
+    def test_slower_hot_passes_cannot_forget_faster_heavier_fuel_evidence(self):
+        def patch(s,c):
+            if s.lap>=2:
+                for row in c['samples']:row['lat_accel_mps2']*=1.5
+            return replace(s,fuel_l=80-3.9*(s.lap+c['samples'][-1]['distance_pct'])),c
+        learner,_,_=replay(warm_duration=44,patch=patch)
+        self.assertNotEqual(learner.view['status'],'ready',learner.view)
+        good=TirePerformance._good(list(learner.records))
+        self.assertFalse(any(r['lap'] in (2,3,4) for r in good))
+
+    def test_one_nearby_fuel_lap_cannot_validate_unmatched_fuel_records(self):
+        learner,_,_=replay()
+        base=next(r for r in learner.records if r['lap']==2)
+        rows=[{**base,'lap':i,'age':i,'fuel':80-15*i} for i in range(4)]
+        self.assertEqual(TirePerformance._good(rows),[])
+
+    def test_two_lap_local_comparison_uses_the_faster_pass_as_reference(self):
+        learner,_,_=replay()
+        base=next(r for r in learner.records if r['lap']==2)
+        fast={**base,'lap':2,'duration':3.,'fuel':40.,'age':2}
+        slow={**base,'lap':3,'duration':3.3,'fuel':36.,'age':3}
+        self.assertEqual(TirePerformance._good([fast,slow]),[fast])
+
     def test_repeated_faster_warm_passes_learn_without_controlling_speed_away(self):
         learner,s,context=replay()
         self.assertGreaterEqual(len(learner.records),15)

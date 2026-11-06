@@ -102,12 +102,17 @@ class CollectionContractTests(unittest.TestCase):
         self.addCleanup(setattr, worker, '_active_status', worker._active_status)
         with patch.object(worker, 'API_BASE', f'http://127.0.0.1:{server.server_port}/api/v1'), \
                 patch.dict('os.environ', GARAGE61_API_TOKEN='synthetic-test-token'):
-            for repeat in range(2):
+            for repeat in range(3):
+                if repeat == 2:
+                    self.request.update(selection_mode='FASTEST', context_key='fastest-car-track')
+                    _atomic_json_write(self.paths['request'], self.request)
                 self.assertEqual(worker.run(self.paths['request'], self.paths['status'], self.root / 'refs', None), 0)
                 raw = worker.load_json(self.paths['status'])
                 result = self.manager.status('contract-job')
                 self.assertEqual(raw.get('filename'), 'drive.ibt')
-                self.assertEqual(raw.get('context_key'), 'car-track')
+                self.assertEqual(raw.get('context_key'), self.request['context_key'])
+                if repeat == 2:
+                    self.assertEqual(result['selection_mode'], 'FASTEST')
                 self.assertEqual(result['state'], 'PARTIAL')  # Three of the requested eight.
                 self.assertEqual(result['context_csv_count'], 3)
                 self.assertEqual(result['downloaded_count'], 0 if repeat else 3)
@@ -115,6 +120,9 @@ class CollectionContractTests(unittest.TestCase):
             self.assertEqual(sum(path.endswith('/csv') for path in calls), 3)
             scan = worker.load_json(self.root / 'refs/garage61_catalog.json')['context_scans']['car-track']
             self.assertTrue(scan['partial'])
+            fastest_scan = worker.load_json(self.root / 'refs/garage61_catalog.json')['context_scans']['fastest-car-track']
+            self.assertEqual(fastest_scan['selection_mode'], 'FASTEST')
+            self.assertEqual(scan['selection_mode'], 'MATCHED')
 
 
 if __name__ == '__main__':

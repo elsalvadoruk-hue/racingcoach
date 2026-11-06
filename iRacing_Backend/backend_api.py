@@ -301,7 +301,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "2.5.1"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "2.5.2"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -632,6 +632,8 @@ def external_reference_validation(path: Path) -> dict[str, Any]:
 
 
 def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None, retained_files: Iterable[str] = ()) -> dict[str, Any]:
+    selection_mode = app_settings.load()['garage61_selection_mode']
+    fastest = selection_mode == 'FASTEST'
     files: list[dict[str, Any]] = []
     parse_errors: list[dict[str, str]] = []
     current_best = None
@@ -694,6 +696,8 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
         files = [item for item in files if item.get("compatible")]
 
     def display_rank_key(item: dict[str, Any]) -> tuple[Any, ...]:
+        if fastest:
+            return (0 if item.get('usable') else 1, float(item.get('lap_time_s') or math.inf), item.get('name') or '')
         condition = item.get("condition_similarity") or {}
         setup_compatible = bool(condition.get("setup_compatible", True))
         faster = bool(item.get("faster_than_current_best"))
@@ -752,9 +756,9 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
     # unnecessary recollection even when enough suitable references already exist.
     health_usable = [
         item for item in files
-        if item.get("usable") and float((item.get("condition_similarity") or {}).get("score") or 0.0) >= GARAGE61_CONDITION_SCORE_MIN
+        if item.get("usable") and (fastest or (float((item.get("condition_similarity") or {}).get("score") or 0.0) >= GARAGE61_CONDITION_SCORE_MIN
         and bool((item.get("condition_similarity") or {}).get("setup_compatible", True))
-        and (current_best is None or bool(item.get("faster_than_current_best")))
+        and (current_best is None or bool(item.get("faster_than_current_best")))))
     ]
     health_distinct_drivers = {
         _context_token(item.get("driver_slug") or item.get("driver_name"))
@@ -786,6 +790,7 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
     enriched_count = sum(1 for item in files if item.get("metadata_enriched"))
     return {
         "directory": str(EXTERNAL_REFERENCE_DIR),
+        "selection_mode": selection_mode,
         "catalog_path": str(EXTERNAL_REFERENCE_CATALOG_PATH),
         "files": display_files,
         "api_token_configured": garage61_collector.api_token_configured(),
@@ -795,7 +800,7 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
         "recommended_cohort_size": EXTERNAL_REFERENCE_RECOMMENDED_COHORT,
         "display_limit": EXTERNAL_REFERENCE_DISPLAY_LIMIT,
         "displayed_reference_count": len(display_files),
-        "display_policy": "TOP_SETUP_COMPATIBLE_FAST_CONDITION_MATCHED_UNIQUE_DRIVERS",
+        "display_policy": 'FASTEST_USABLE_UNIQUE_DRIVERS' if fastest else "TOP_SETUP_COMPATIBLE_FAST_CONDITION_MATCHED_UNIQUE_DRIVERS",
         "total_compatible": total_compatible,
         "health_usable_reference_count": len(health_usable),
         "health_usable_distinct_drivers": len(health_distinct_drivers),
@@ -824,7 +829,8 @@ def _collection_bucket(value: Any, step: float) -> str:
     return str(int(round(numeric / step) * step))
 
 
-def garage61_collection_context(telemetry: ParsedTelemetry, filename: str) -> dict[str, Any]:
+def garage61_collection_context(telemetry: ParsedTelemetry, filename: str, selection_mode: Optional[str] = None) -> dict[str, Any]:
+    selection_mode = selection_mode or app_settings.load()['garage61_selection_mode']
     valid_laps = [lap for lap in telemetry.laps if lap.valid and lap.lap_time_s]
     best_segment = min(valid_laps, key=lambda lap: float(lap.lap_time_s or math.inf)) if valid_laps else None
     conditions = telemetry_reference_conditions(telemetry, best_segment)
@@ -846,11 +852,17 @@ def garage61_collection_context(telemetry: ParsedTelemetry, filename: str) -> di
         "tire_compound": conditions.get("tire_compound"),
         "wet": None if wet is None else bool(wet),
     }
+    if selection_mode == 'FASTEST':
+        # Fastest searches depend only on car/layout identity. The legacy
+        # MATCHED key stays intact so existing condition caches remain valid.
+        key_payload = {key: key_payload[key] for key in ('car', 'car_platform_id', 'track', 'track_platform_id', 'config')}
+        key_payload['selection_mode'] = 'FASTEST'
     context_key = hashlib.sha256(
         json.dumps(key_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:24]
     return {
         "context_key": context_key,
+        "selection_mode": selection_mode,
         "filename": filename,
         "car_name": car_name,
         "car_path": telemetry.metadata.get("car_path") or "",
@@ -894,8 +906,10 @@ def garage61_reference_health(
     filename: str,
     reference_payload: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    context = garage61_collection_context(telemetry, filename)
     payload = reference_payload or list_external_reference_metadata(telemetry)
+    selection_mode = payload.get('selection_mode') or app_settings.load()['garage61_selection_mode']
+    fastest = selection_mode == 'FASTEST'
+    context = garage61_collection_context(telemetry, filename, selection_mode)
     files = list(payload.get("files") or [])
     current_best = context.get("current_best_lap_s")
     usable: list[dict[str, Any]] = []
@@ -903,9 +917,9 @@ def garage61_reference_health(
         if not item.get("usable", False):
             continue
         score = float((item.get("condition_similarity") or {}).get("score") or 0.0)
-        if score < GARAGE61_CONDITION_SCORE_MIN:
+        if not fastest and score < GARAGE61_CONDITION_SCORE_MIN:
             continue
-        if current_best is not None and not item.get("faster_than_current_best"):
+        if not fastest and current_best is not None and not item.get("faster_than_current_best"):
             continue
         usable.append(item)
     distinct_drivers = {
@@ -927,11 +941,11 @@ def garage61_reference_health(
     token_configured = garage61_collector.api_token_configured()
     reasons: list[str] = []
     if usable_count < GARAGE61_MIN_USABLE_REFERENCES:
-        reasons.append(f"조건 유사 + 더 빠른 CSV {usable_count}/{GARAGE61_MIN_USABLE_REFERENCES}")
+        reasons.append(f"{'빠른 랩 CSV' if fastest else '조건 유사 + 더 빠른 CSV'} {usable_count}/{GARAGE61_MIN_USABLE_REFERENCES}")
     if distinct_driver_count < GARAGE61_MIN_DISTINCT_DRIVERS:
         reasons.append(f"서로 다른 드라이버 {distinct_driver_count}/{GARAGE61_MIN_DISTINCT_DRIVERS}")
     if not fresh:
-        reasons.append("동일 조건 수집 이력이 없거나 캐시가 오래됨")
+        reasons.append("선택한 수집 방식의 이력이 없거나 캐시가 오래됨")
     recommendation = "USE_CACHE"
     if needs_collection and enough_data:
         recommendation = "BACKGROUND_REFRESH"
@@ -941,6 +955,7 @@ def garage61_reference_health(
         recommendation = "USE_PERSONAL"
     return {
         "enabled": GARAGE61_AUTO_COLLECT_ENABLED,
+        "selection_mode": selection_mode,
         "context": context,
         "compatible_count": int(payload.get("total_compatible", len(files))),
         "usable_reference_count": usable_count,
@@ -966,7 +981,7 @@ def garage61_reference_health(
             "preferred_mode": garage61_collector.preferred_mode(),
             "api_token_configured": token_configured,
             "api_candidate_limit": 1000,
-            "condition_query_strategy": "STRICT_THEN_PROGRESSIVE_RELAXATION",
+            "condition_query_strategy": 'FASTEST_LAP_TIME' if fastest else "STRICT_THEN_PROGRESSIVE_RELAXATION",
             "telemetry_validation": True,
             "navigation_timeout_ms_browser_fallback": GARAGE61_NAVIGATION_TIMEOUT_MS,
             "max_wall_seconds_browser_fallback": GARAGE61_COLLECTOR_MAX_WALL_SECONDS,

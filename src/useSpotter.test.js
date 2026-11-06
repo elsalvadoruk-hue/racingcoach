@@ -174,6 +174,50 @@ test('spotter-owned results remain selectable when pitwall is stopped, regardles
   expect(audio.play).toHaveBeenCalledWith('result-audio','audio/mpeg',expect.any(Object));
 });
 
+test.each(['basic','short','custom','prepared-default'])('finish uses the prepared %s spotter clip and keeps the measured rank visible', async mode => {
+  const recordDelivery=jest.fn();
+  manifest.clips.finish={audio_base64:`finish-${mode}`,text:'체커드 플래그. 경기 종료 표시 확인.'};
+  const {result}=renderHook(()=>useSpotter('http://test',audio,{recordDelivery}));
+  await enable(result);
+  const event={id:'run:finish',key:'race_result',audio_key:'finish',cached:true,prepared_only:true,
+    variant:0,engineer:'spotter',priority:2,serial:1,run_id:'run',expires_in_ms:10000,
+    text:'완주했습니다. 현재 클래스 5위 (잠정).',spoken_text:manifest.clips.finish.text,
+    alert_categories:['spotter.result']};
+  await act(async()=>send(sockets[0],frame(1,null,{radio:{connected:true,run_id:'run',quiet:true,events:[event]}})));
+  expect(audio.play).toHaveBeenCalledWith(`finish-${mode}`,'audio/mpeg',expect.any(Object));
+  expect(fetch.mock.calls.filter(([url])=>url.endsWith('/render'))).toHaveLength(0);
+  expect(result.current.view.last_text).toBe(event.text);
+  expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({key:'race_result',text:manifest.clips.finish.text}),'started','');
+  const options=audio.play.mock.calls.at(-1)[2];
+  await act(async()=>options.onStatus('completed',''));
+  expect(fetch.mock.calls.filter(([url])=>url.endsWith('/ack'))).toHaveLength(1);
+});
+
+test.each(['overlap','finish'])('missing prepared %s audio can recover on the next explicit start without rendering',async missing=>{
+  const recordDelivery=jest.fn();
+  delete manifest.clips.right;
+  const {result}=renderHook(()=>useSpotter('http://test',audio,{recordDelivery}));
+  await enable(result);
+  const event={id:'run:finish',key:'race_result',audio_key:'finish',cached:true,prepared_only:true,
+    variant:0,engineer:'spotter',priority:2,serial:1,run_id:'run',expires_in_ms:10000,
+    text:'완주했습니다. 현재 클래스 5위 (잠정).',alert_categories:['spotter.result']};
+  await act(async()=>send(sockets[0],missing==='overlap'?frame(3,'right'):
+    frame(1,null,{radio:{connected:true,run_id:'run',quiet:true,events:[event]}})));
+  expect(result.current.error).toContain('스포터');
+  expect(recordDelivery.mock.calls.some(([,status,reason])=>status==='failed'&&reason==='missing_clip')).toBe(true);
+  expect(fetch.mock.calls.filter(([url])=>url.endsWith('/render'))).toHaveLength(0);
+  expect(audio.play).not.toHaveBeenCalled();
+  manifest.clips.right={audio_base64:'repaired-right',text:'오른쪽.'};
+  manifest.clips.finish={audio_base64:'repaired-finish',text:'체커드 플래그.'};
+  await act(async()=>result.current.toggle());
+  await enable(result);
+  expect(fetch.mock.calls.filter(([url])=>url.endsWith('/prepare'))).toHaveLength(2);
+  expect(result.current.error).toBe('');
+  await act(async()=>send(sockets.at(-1),missing==='overlap'?frame(3,'right'):
+    frame(1,null,{radio:{connected:true,run_id:'run',quiet:true,events:[event]}})));
+  expect(audio.play).toHaveBeenLastCalledWith(`repaired-${missing==='overlap'?'right':'finish'}`,'audio/mpeg',expect.any(Object));
+});
+
 test('stale, mismatched and duplicate events cannot replay old directions', async () => {
   const { result } = renderHook(() => useSpotter('http://test', audio));
   await enable(result);

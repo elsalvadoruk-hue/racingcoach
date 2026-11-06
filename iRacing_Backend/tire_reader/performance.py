@@ -347,7 +347,7 @@ class TirePerformance:
         return [r for r in self.records if r['key']==self.key
             and not (r['run']==run and r['lap']==s.lap)
             and abs(r['track']-s.track_temp_c)<=3 and abs(r['air']-s.air_temp_c)<=3
-            and abs(r['fuel']-s.fuel_l)<=6 and abs(r['age']-age)<=4]
+            and abs(r['age']-age)<=4]
 
     @staticmethod
     def _good(rows, comparisons=None):
@@ -357,21 +357,26 @@ class TirePerformance:
         good = []
         baselines = {}
         for r in rows:
-            # Judge a historical pass against its own conditions. Filtering the
-            # comparison set to today's tire age first would gradually forget
-            # faster, colder passes and relabel slower warm ones as successful.
+            # Validate performance at each pass's fuel load, then accumulate
+            # those validated passes independently of today's falling fuel.
             condition = (r['corner'],r['track'],r['air'],r['fuel'],r['age'])
             if condition not in baselines:
                 group = [other for other in grouped.get(r['corner'],[]) if
                          abs(other['track']-r['track'])<=3 and abs(other['air']-r['air'])<=3
-                         and abs(other['fuel']-r['fuel'])<=6 and abs(other['age']-r['age'])<=4]
-                if len({(other['run'],other['lap']) for other in group})<3:
+                         and abs(other['age']-r['age'])<=4]
+                local = [other for other in group if abs(other['fuel']-r['fuel'])<=6]
+                if len({(other['run'],other['lap']) for other in local})<2:
                     baselines[condition] = None
                 else:
-                    # Two passes reduce the influence of a single timing outlier.
-                    best = sorted(group,key=lambda other:other['duration'])[:2]
-                    baselines[condition] = (median(other['duration'] for other in best),
-                                             min(other['exit_speed'] for other in best)-2)
+                    # A faster pass on a heavier fuel load remains a conservative
+                    # benchmark. Burning fuel must not erase a faster cold pass.
+                    benchmark = [other for other in group if other['fuel']>=r['fuel']-6]
+                    best = sorted(benchmark,key=lambda other:other['duration'])[:2]
+                    two_laps = len({(other['run'],other['lap']) for other in benchmark})==2
+                    # With only two comparable laps, their average could admit a
+                    # pass 10% slower than the faster one. Keep the strict 5% limit.
+                    baselines[condition] = (best[0]['duration'] if two_laps else median(other['duration'] for other in best),
+                        best[0]['exit_speed']-2 if two_laps else min(other['exit_speed'] for other in best)-2)
             if baselines[condition] is None:
                 continue
             reference, exit_floor = baselines[condition]
