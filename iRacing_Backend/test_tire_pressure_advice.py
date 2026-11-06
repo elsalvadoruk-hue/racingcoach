@@ -107,15 +107,24 @@ class AdviceTests(unittest.TestCase):
         store.db.commit(); store.close()
 
     def test_never_advises_below_the_minimum_and_says_what_the_hot_pressure_will_be(self):
-        # Hot runs 15 kPa over the 185 target at the 160 kPa the car always uses (its minimum).
-        self.db.stints(stint(160., 200., 30.))
-        self.cold_seen(160.)
-        result = ask(self.db, current=dict.fromkeys(WHEELS, 160.))
+        # GT3 at the 159 kPa minimum; hot still runs about 14 kPa over the 185 target.
+        self.db.stints(stint(159., 200., 30.))
+        self.cold_seen(159.)
+        result = ask(self.db, current=dict.fromkeys(WHEELS, 159.))
         fl = result['wheels']['FL']
-        self.assertEqual((fl['cold_kpa'], fl['at_minimum'], fl['floor_source']), (160., True, 'lowest_used'))
+        self.assertEqual((fl['cold_kpa'], fl['at_minimum'], fl['floor_source']), (159., True, 'gt3_default'))
         self.assertEqual((fl['expected_hot_kpa'], fl['hot_over_target_kpa'], fl['action']), (200., 15., 'keep'))
         self.assertEqual((result['action'], result['at_minimum']), ('keep', list(WHEELS)))
-        self.assertLess(fl['raw_kpa'], 160.)
+        self.assertLess(fl['raw_kpa'], 159.)
+
+    def test_gt3_default_minimum_and_proven_lower_use(self):
+        self.assertEqual(advice.default_floor('iracing', 'bmwm4gt3'), 159.)
+        self.assertIsNone(advice.default_floor('iracing', 'porsche9922cup'))
+        self.assertIsNone(advice.default_floor('lmu', 'lmu-car-bmw-m4-lmgt3'))
+        lowest = dict.fromkeys(WHEELS, 150.)
+        self.assertEqual(advice.floors({}, lowest, 159.)['FL'], (150., 'lowest_used'))  # ran lower: allowed
+        self.assertEqual(advice.floors({}, dict.fromkeys(WHEELS, 165.), 159.)['FL'], (159., 'gt3_default'))
+        self.assertEqual(advice.floors({}, {}, None)['FL'], (None, None))
 
     def test_driver_minimum_overrides_the_lowest_used(self):
         self.db.stints(stint(160., 200., 30.))

@@ -40,6 +40,7 @@ EVIDENCE_SOURCES = ('garage_start', 'pit_tire_change', 'garage_measured', 'pit_n
 EVIDENCE_SESSIONS = {'Race', 'Practice', 'Offline Testing'}
 LEARN_MIN_OK = 30
 CHANGE_KPA = 1.5  # smaller differences (about 0.2 psi) are advised as "keep"
+GT3_MIN_COLD_KPA = 159.0  # see default_floor()
 
 
 def _connect(path):
@@ -184,12 +185,30 @@ def lowest_used(path, game, car):
     return lowest
 
 
-def floors(targets, lowest):
-    """{wheel: (floor_kpa, source)}: the driver's minimum for the car, else the lowest used."""
+def default_floor(game, car):
+    """iRacing GT3 starting pressure minimum, as the app's setup analysis already uses
+    (setup_analysis.ADJUSTMENT_RULES['starting_pressure_kpa'], 159 kPa = 23.0 psi, the BMW
+    M4 GT3's real setting). Not in iRacing's public notes: the 2021 notes said 148 kPa
+    (21.5 psi) before later tire updates. Other cars and LMU have no default."""
+    from .vehicle_dash import canonical_car
+    car = canonical_car(car) if game == 'iracing' else None
+    return GT3_MIN_COLD_KPA if car and car != 'porsche9922cup' else None
+
+
+def floors(targets, lowest, default=None):
+    """{wheel: (floor_kpa, source)}: the driver's minimum for the car, else the lower of the
+    class default and the lowest this car has actually run (lower use proves it is allowed)."""
     minimum = targets.get('pressure_min_cold_bar')
     if minimum is not None:
         return {w: (minimum * 100, 'driver_minimum') for w in WHEELS}
-    return {w: (lowest[w], 'lowest_used') if lowest.get(w) is not None else (None, None) for w in WHEELS}
+    result = {}
+    for w in WHEELS:
+        used = lowest.get(w)
+        if default is not None and (used is None or default <= used):
+            result[w] = (default, 'gt3_default')
+        else:
+            result[w] = (used, 'lowest_used') if used is not None else (None, None)
+    return result
 
 
 def advise(points, target, track_temp, floor=None, current=None):
@@ -242,7 +261,7 @@ def recommendation(path, *, game, car, track, targets, fixed_setup, track_temp, 
         for w, *point in stint_points(current) if current else []:
             # The tires on the car now are the closest evidence for this session.
             points[w].insert(0, tuple(point))
-    wheels = advise(points, target, track_temp, floors(targets, lowest_used(path, game, car)), current)
+    wheels = advise(points, target, track_temp, floors(targets, lowest_used(path, game, car), default_floor(game, car)), current)
     if all(v['cold_kpa'] is None for v in wheels.values()):
         return {**base, 'status': 'withheld', 'reason': 'no_evidence', 'target_kpa': target, 'target_source': source}
     actions = {v.get('action') for v in wheels.values() if v.get('cold_kpa') is not None}

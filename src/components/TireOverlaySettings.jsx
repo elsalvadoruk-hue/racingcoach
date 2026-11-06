@@ -74,7 +74,9 @@ function atMinimumText(advice) {
   const floored = Object.entries(advice.wheels || {}).filter(([, v]) => v.at_minimum);
   if (!floored.length) return null;
   const over = Math.max(...floored.map(([, v]) => v.hot_over_target_kpa || 0));
-  const source = floored.some(([, v]) => v.floor_source === 'driver_minimum') ? '입력한 셋업 최저값'
+  const sources = new Set(floored.map(([, v]) => v.floor_source));
+  const source = sources.has('driver_minimum') ? '입력한 셋업 최저값'
+    : sources.has('gt3_default') ? 'iRacing GT3 기본 최저값 1.59 bar(159 kPa·23.0 psi). 차량마다 다르면 아래에 입력해 주세요'
     : '이 차량 기록상 가장 낮은 냉간 압력(차량 최저값을 아래에 입력하면 그 값을 씁니다)';
   return <p role="note">
     {floored.length === Object.keys(advice.wheels).length ? '모든 바퀴가' : `${floored.map(([w]) => w).join(', ')}가`} 이미 최저 압력이라 더 낮출 수 없습니다.
