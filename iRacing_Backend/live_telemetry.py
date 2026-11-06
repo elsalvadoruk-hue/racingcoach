@@ -89,6 +89,7 @@ CHANNELS = {
     'pit_repair_left_s': 'PitRepairLeft', 'pit_optional_repair_left_s': 'PitOptRepairLeft',
     'tow_time_s': 'PlayerCarTowTime',
     'abs_active': 'BrakeABSactive', 'yaw_rate': 'YawRate',
+    'lat_accel_mps2': 'LatAccel', 'long_accel_mps2': 'LongAccel', 'vert_accel_mps2': 'VertAccel',
     'track_wetness': 'TrackWetness', 'declared_wet': 'WeatherDeclaredWet', 'tire_compound': 'PlayerTireCompound',
     'pit_sv_fuel': 'PitSvFuel', 'pit_sv_flags': 'PitSvFlags',
     'finish_status': 'PlayerFinishStatus',

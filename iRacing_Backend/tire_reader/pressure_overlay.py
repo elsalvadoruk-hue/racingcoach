@@ -6,12 +6,13 @@ from .pressure_ocr import WHEELS
 BACKGROUND='#11161d'
 FOREGROUND='#edf3f8'
 MUTED='#aab8c8'
+LEARNED='#71e6a0'
 TRANSPARENT='#010101'
 
 
 class PressureOverlay:
     width=220
-    height=108
+    height=128
 
     def __init__(self,parent,settings_path,on_settings=None,on_stop=None,*,
                  background_opacity=85,content_opacity=100,radius=12):
@@ -49,6 +50,7 @@ class PressureOverlay:
             y=22+(index//2)*52
             self.labels[wheel]=self.canvas.create_text(x,y,text='—',fill=FOREGROUND,font=('Segoe UI',-26,'bold'))
             self.temperature_labels[wheel]=self.canvas.create_text(x,y+24,text='—',fill=MUTED,font=('Segoe UI',-15))
+        self.learning_label=self.canvas.create_text(110,119,text='적정 범위 학습 중',fill=MUTED,font=('Segoe UI',-12))
         menu=tk.Menu(self.window,tearoff=False)
         menu.add_command(label='위치 초기화',command=self.reset_position)
         menu.add_command(label='오버레이 닫기',command=self.on_stop)
@@ -147,6 +149,23 @@ class PressureOverlay:
         for wheel in WHEELS:
             self.canvas.itemconfigure(self.labels[wheel],text=values.get(wheel) or '—')
             self.canvas.itemconfigure(self.temperature_labels[wheel],text='추천 냉간')
+        self.render_learning(None,garage=True)
+
+    def render_learning(self,view,*,garage=False):
+        view=view or {}
+        only_pressure=view.get('mode') == 'pressure_only'
+        for wheel in WHEELS:
+            ready=view.get('front' if wheel in ('FL','FR') else 'rear') is True and not garage
+            self.canvas.itemconfigure(self.labels[wheel],fill=LEARNED if ready and only_pressure else FOREGROUND)
+            self.canvas.itemconfigure(self.temperature_labels[wheel],fill=LEARNED if ready and not only_pressure else MUTED)
+        status=view.get('status')
+        text=('냉간 압력 추천' if garage else '학습 적정 범위' if status=='ready' else
+              '앞 타이어 적정' if view.get('front') else '뒤 타이어 적정' if view.get('rear') else
+              '적정 범위 확인 중' if status=='confirming' else '적정 범위 학습 중')
+        if only_pressure and not garage:
+            text=('학습 적정 압력' if status=='ready' else '앞 압력 적정' if view.get('front') else
+                  '뒤 압력 적정' if view.get('rear') else '적정 압력 확인 중' if status=='confirming' else '적정 압력 학습 중')
+        self.canvas.itemconfigure(self.learning_label,text=text,fill=LEARNED if status=='ready' and not garage else MUTED)
 
     def press(self,event):
         if not self.locked and self.position is not None:

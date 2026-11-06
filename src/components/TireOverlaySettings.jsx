@@ -156,6 +156,36 @@ function statusText(view) {
   return `${view.game === 'lmu' ? 'LMU' : 'iRacing'} 탑승 대기`;
 }
 
+function PerformanceView({ data }) {
+  if (!data) return null;
+  const ready = data.status === 'ready';
+  const pressureOnly = data.mode === 'pressure_only';
+  const label = pressureOnly ? '적정 압력' : '적정 범위';
+  const title = ready ? `내 주행 기준 ${label} 도달`
+    : data.status === 'partial' ? `${data.front ? '앞' : '뒤'} 타이어 학습 ${label} 도달`
+    : data.status === 'confirming' ? `학습 ${label} 확인 중` : `내 주행 기준 ${label} 학습 중`;
+  const range = key => Array.isArray(data.ranges?.[key]) && data.ranges[key].length === 2
+    && data.ranges[key].every(Number.isFinite) ? `${data.ranges[key][0].toFixed(0)}~${data.ranges[key][1].toFixed(0)}°C` : null;
+  const pressure = key => Array.isArray(data.pressure_ranges?.[key]) && data.pressure_ranges[key].length === 2
+    && data.pressure_ranges[key].every(Number.isFinite) ? `${bar(data.pressure_ranges[key][0])}~${bar(data.pressure_ranges[key][1])} bar` : null;
+  const front = range('front'), rear = range('rear');
+  const frontPressure = pressure('front'), rearPressure = pressure('rear');
+  const reason = data.reason === 'unknown_conditions' || data.reason === 'missing_driving_channels'
+    ? '온도 종류·장착 압력·주행 채널 등 비교 조건을 확인하는 중입니다.'
+    : data.reason === 'measurement_gap' ? '새 측정값을 기다리고 있습니다. 이전 숫자로 적정 상태를 판단하지 않습니다.' : null;
+  return <div className="flex flex-col gap-1 text-sm" aria-label="타이어 성능 학습">
+    <p className="font-medium">{title}</p>
+    <p className="text-muted-foreground">좋은 통과 {data.passes ?? 0}회 · 서로 떨어진 구간 {data.corners ?? 0}곳 · {data.laps ?? 0}랩</p>
+    {(front || rear) && <p className="text-muted-foreground">관측된 좋은 통과 온도: {front ? `앞 ${front}` : ''}{front && rear ? ' · ' : ''}{rear ? `뒤 ${rear}` : ''}</p>}
+    {(frontPressure || rearPressure) && <p className="text-muted-foreground">관측된 좋은 통과 압력: {frontPressure ? `앞 ${frontPressure}` : ''}{frontPressure && rearPressure ? ' · ' : ''}{rearPressure ? `뒤 ${rearPressure}` : ''}</p>}
+    {reason && <p className="text-muted-foreground">{reason}</p>}
+    <p className="text-muted-foreground">{pressureOnly
+      ? '이 차량은 타이어 온도 표시가 없어 열간 압력과 코너 통과 기록으로 학습합니다. 반복 근거가 쌓이면 해당 축 압력이 초록색으로 바뀝니다. 온도 도달을 뜻하지 않습니다.'
+      : '비슷한 조건에서 여러 코너를 빠르고 안정적으로 통과한 온도·압력 조합을 학습합니다. 현재 조합의 반복 근거가 쌓이면 온도가 초록색으로 바뀝니다.'}</p>
+    {data.store_error && <p className="text-muted-foreground">학습 기록을 저장하거나 읽지 못했습니다. 현재 실행 중 학습과 숫자 표시는 계속됩니다.</p>}
+  </div>;
+}
+
 export default function TireOverlaySettings({ apiBase, fetcher = fetch, game = 'iracing' }) {
   const id = useId();
   const [view, setView] = useState(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
@@ -266,7 +296,7 @@ export default function TireOverlaySettings({ apiBase, fetcher = fetch, game = '
           <Button variant="outline" size="sm" disabled={disabled} onClick={() => apply(undefined, true)}>타이어 창 위치 초기화</Button>
           {(view?.enabled || view?.voice_enabled) && !view.running && <Button variant="outline" size="sm" disabled={disabled} onClick={() => apply({ enabled: view.enabled, voice_enabled: view.voice_enabled })}>타이어 창 다시 켜기</Button>}
         </div>
-        <p className="text-sm text-muted-foreground">숫자만 표시 · 위치는 차량별 자동 저장 · 첫 측정 전에는 표시하지 않습니다.</p>
+        <p className="text-sm text-muted-foreground">압력·온도와 학습 상태 표시 · 위치는 차량별 자동 저장 · 첫 측정 전에는 표시하지 않습니다.</p>
         </div>
         <div className="tire-settings-controls">
         <FieldGroup className="tire-appearance-grid">
@@ -294,6 +324,7 @@ export default function TireOverlaySettings({ apiBase, fetcher = fetch, game = '
         </div>
         </div>
         </div>
+        <PerformanceView data={view?.performance}/>
         {game === 'lmu' && view && <Field orientation="horizontal" data-disabled={disabled}>
           <FieldLabel htmlFor={`${id}-lmu-open`}>오픈 셋업 경기에서 압력 추천 사용</FieldLabel>
           <Switch id={`${id}-lmu-open`} checked={view.lmu_open_setup === true} disabled={disabled}
@@ -312,7 +343,7 @@ export default function TireOverlaySettings({ apiBase, fetcher = fetch, game = '
         </p>}
         {view?.advice && (game !== 'lmu' || view.lmu_open_setup) && <AdviceView advice={view.advice} voice={view.voice_enabled} audioReady={view.advice_audio_ready} game={game}/>}
         {view?.voice_enabled && view.car_path && view.state_source === null && <Alert>
-          <AlertDescription>{view.car_name || '이 차량'}은 대시 색 정보가 없어, 아래 판단 범위를 저장해야 타이어 음성 안내가 나옵니다.</AlertDescription>
+          <AlertDescription>{view.car_name || '이 차량'}은 대시 색 정보가 없습니다. 아래 범위를 저장하면 상태를 안내하고, 주행 학습 근거가 쌓이면 적정 범위 도달도 안내합니다.</AlertDescription>
         </Alert>}
         {view && <TargetRanges key={`${game}:${view.car_path || ''}:${JSON.stringify(view.targets || {})}`}
           open={Boolean(view.voice_enabled && view.car_path && view.state_source === null)}

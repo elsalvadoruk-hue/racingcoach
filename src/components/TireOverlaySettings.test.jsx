@@ -5,6 +5,34 @@ import TireOverlaySettings from './TireOverlaySettings';
 const initial = {version:1,supported:true,enabled:false,fixed:false,running:false};
 const response = data => ({ok:true,json:async()=>data});
 
+test('learned performance status shows observed axle ranges and evidence without extra requests',async()=>{
+  const fetcher=jest.fn(async()=>response({...initial,performance:{status:'ready',front:true,rear:true,
+    passes:15,corners:3,laps:5,ranges:{front:[84,90],rear:[80,86]},pressure_ranges:{front:[173,178],rear:[171,176]}}}));
+  render(<TireOverlaySettings fetcher={fetcher}/>);
+  expect(await screen.findByText('내 주행 기준 적정 범위 도달')).toBeVisible();
+  expect(screen.getByLabelText('타이어 성능 학습')).toHaveTextContent('좋은 통과 15회');
+  expect(screen.getByText(/관측된 좋은 통과 온도/)).toHaveTextContent('앞 84~90°C · 뒤 80~86°C');
+  expect(screen.getByText(/관측된 좋은 통과 압력/)).toHaveTextContent('앞 1.73~1.78 bar · 뒤 1.71~1.76 bar');
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
+test('missing observations show learning and never claim optimal temperature',async()=>{
+  const fetcher=jest.fn(async()=>response({...initial,performance:{status:'learning',reason:'measurement_gap',
+    passes:0,corners:0,laps:0,ranges:{}}}));
+  render(<TireOverlaySettings game="lmu" fetcher={fetcher}/>);
+  expect(await screen.findByText('내 주행 기준 적정 범위 학습 중')).toBeVisible();
+  expect(screen.getByText(/새 측정값을 기다리고 있습니다/)).toBeVisible();
+  expect(screen.queryByText('내 주행 기준 적정 범위 도달')).not.toBeInTheDocument();
+});
+
+test('cars with no temperature display explain pressure coloring without temperature claims',async()=>{
+  render(<TireOverlaySettings fetcher={jest.fn(async()=>response({...initial,performance:{status:'ready',
+    mode:'pressure_only',front:true,rear:true,passes:15,corners:3,laps:5,ranges:{},pressure_ranges:{front:[173,178],rear:[171,176]}}}))}/>);
+  expect(await screen.findByText('내 주행 기준 적정 압력 도달')).toBeVisible();
+  expect(screen.getByText(/해당 축 압력이 초록색으로 바뀝니다/)).toHaveTextContent('온도 도달을 뜻하지 않습니다.');
+  expect(screen.queryByText(/관측된 좋은 통과 온도/)).not.toBeInTheDocument();
+});
+
 function fixture() {
   let state={...initial};
   const fetcher=jest.fn(async (url,options={})=>{
@@ -145,7 +173,7 @@ test('a car without dash colors asks for ranges before voice can judge',async()=
   const fetcher=jest.fn(async()=>response({...initial,voice_enabled:true,running:true,car_path:'bmwm4gt3',
     car_name:'BMW M4 GT3',targets:{},state_source:null}));
   render(<TireOverlaySettings fetcher={fetcher}/>);
-  expect(await screen.findByText(/BMW M4 GT3은 대시 색 정보가 없어/)).toBeVisible();
+  expect(await screen.findByText(/BMW M4 GT3은 대시 색 정보가 없습니다/)).toBeVisible();
   expect(screen.getByLabelText('압력 하한 (bar)')).toBeVisible();
 });
 

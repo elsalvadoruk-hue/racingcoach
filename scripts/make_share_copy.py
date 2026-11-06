@@ -101,7 +101,7 @@ def tire_reader_files(root: Path) -> list[str]:
     names = [f'{name}.py' for name in ('__init__', 'sdk', 'screen_reader', 'managed_overlay',
         'pressure_ocr', 'pressure_overlay', 'pressure_display', 'cockpit_gate', 'positions',
         'dash_locator', 'multi_dash_locator', 'vehicle_dash', 'window_visibility',
-        'snapshot', 'lmu_source', 'advisor', 'coaching', 'color_state', 'voice_audio', 'targets', 'history', 'log_export',
+        'snapshot', 'lmu_source', 'advisor', 'coaching', 'performance', 'color_state', 'voice_audio', 'targets', 'history', 'log_export',
         'glyphs', 'digit_model', 'installed', 'pressure_advice', 'weather_panel', 'stint_wear',
         'pressure_floor', 'pressure_jump')]
     manifest = package / 'samples/gt3_dash/sources.json'

@@ -132,6 +132,9 @@ class TireOverlayController:
             running = self.process is not None and self.process.poll() is None
             car = self.current.get('car_path')
             targets = self._targets().get(car)
+            performance = dict(self.advisor.performance.view)
+            if not running or self.snapshot is None or not 0 <= time.monotonic()-self.snapshot.observed_at < 2.5:
+                performance.update(status='learning',reason='measurement_gap',front=False,rear=False)
             return {'version': 1, 'supported': sys.platform == 'win32', 'enabled': self.enabled,
                     'game': self.game, 'voice_enabled': self.voice_enabled,
                     'voice_audio_ready': self.audio.ready() if self.voice_enabled and hasattr(self.audio, 'ready') else None,
@@ -147,6 +150,7 @@ class TireOverlayController:
                     'target_temperature_kind': next((v.temp_kind for v in self.snapshot.wheels.values() if v.temp_kind), None) if self.snapshot else None,
                     'history_error': bool(self.history and self.history.error),
                     'coaching': dict(self.advisor.coaching.view),
+                    'performance': performance,
                     'voice_event': self.advisor.current(time.monotonic()) if self.voice_enabled and running else None,
                     'fixed': self.fixed, **self.appearance, 'running': running, 'ready': self.ready and running,
                     **self.current, 'visible': self.enabled and running and self.current.get('visible') is True,
@@ -186,8 +190,11 @@ class TireOverlayController:
                             except (ValueError, KeyError, TypeError):
                                 pass
                         context = self.driving_context(self.snapshot) if self.snapshot else None
+                        if self.snapshot is not None and (self.enabled or self.voice_enabled):
+                            self.advisor.performance.attach(self._path().with_name('tires-performance.json'))
                         self.advisor.observe(self.snapshot.to_dict() if self.snapshot else None,
                                              enabled=self.voice_enabled, context=context, analyze=self.enabled)
+                        self._send_performance()
                         self._schedule_advice()
                         if self.snapshot is not None or previous is not None:
                             from tire_reader.history import TireHistoryWriter
@@ -198,6 +205,7 @@ class TireOverlayController:
                             detail=diagnostics(message,self.snapshot,raw,self._targets().get(selected.car),
                                     enabled=self.enabled,voice_enabled=self.voice_enabled)
                             detail['coaching']=dict(self.advisor.coaching.view)
+                            detail['performance']=dict(self.advisor.performance.view)
                             status = message.get('status')
                             # An unsupported car (no tire page) is logged only when the status changes, so long
                             # sessions in it do not push supported-car evidence out of the bounded history.
@@ -395,6 +403,7 @@ class TireOverlayController:
             if self.history is not None:
                 self.history.close()
                 self.history = None
+            self.advisor.performance.close()
 
     def _fixed_setup(self, s):
         """iRacing tells; LMU does not, so the driver states that the session uses open setups."""
@@ -496,6 +505,20 @@ class TireOverlayController:
                    for w, v in result['wheels'].items()} if result else None)
         try:
             process.stdin.write(json.dumps({'id': 0, 'action': 'advice', 'values': values}) + '\n')
+            process.stdin.flush()
+        except (OSError, ValueError):
+            pass
+
+    def _send_performance(self):
+        """One bounded pipe update per observation; the child independently expires it."""
+        process, s = self.process, self.snapshot
+        if not self.ready or process is None or process.poll() is not None:
+            return
+        view = {k:self.advisor.performance.view.get(k) for k in ('status','front','rear','mode')}
+        if s is not None:
+            view.update(game=s.game,car=s.car,session_key=s.session_key,epoch=s.epoch,updated_at=s.observed_at)
+        try:
+            process.stdin.write(json.dumps({'id':0,'action':'performance','view':view})+'\n')
             process.stdin.flush()
         except (OSError, ValueError):
             pass

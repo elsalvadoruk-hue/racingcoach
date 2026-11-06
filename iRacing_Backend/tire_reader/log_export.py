@@ -54,6 +54,17 @@ def coaching_summary(data):
     return result
 
 
+def performance_summary(data):
+    """Evidence counts and observed ranges only; no local keys or raw profiles."""
+    if not isinstance(data,dict):return {}
+    return {'status':token(data.get('status')),'reason':token(data.get('reason')),'mode':token(data.get('mode')),
+        **{k:data.get(k) is True for k in ('front','rear','store_error')},
+        **{k:finite(data.get(k)) for k in ('passes','corners','laps')},
+        'ranges':{k:_numbers((data.get('ranges') or {}).get(k),2) for k in ('front','rear')},
+        'pressure_ranges':{k:_numbers((data.get('pressure_ranges') or {}).get(k),2) for k in ('front','rear')},
+        'physical_optimum_confirmed':False}
+
+
 def diagnostics(message, snapshot, raw, targets, *, enabled, voice_enabled):
     """Only codes, numbers and semantics; never screenshot/OCR text or coordinates."""
     measurement=message.get('measurement') or {}
@@ -197,6 +208,7 @@ def tire_data(path, *, prepare=lambda:True):
                                 enabled=raw.get('display_enabled') is True,voice_enabled=raw.get('voice_enabled') is True)
                             clean.update(game=run['game'],t=finite(raw.get('t')),writer_dropped_total=finite(raw.get('writer_dropped_total')))
                             clean['coaching']=coaching_summary(raw.get('coaching'))
+                            clean['performance']=performance_summary(raw.get('performance'))
                             clean['source_ok']={w:{f:(raw.get('source_ok',{}).get(w,{}) or {}).get(f) is True
                                 for f in ('pressure','temperature','wear')} for w in WHEELS}
                             clean['color_states']={w:{f:token((raw.get('color_states',{}).get(w,{}) or {}).get(f))

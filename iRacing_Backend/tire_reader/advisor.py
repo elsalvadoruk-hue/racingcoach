@@ -40,6 +40,8 @@ class TireAdvisor:
     """No universal targets, inferred pressure, or wear-to-grip predictions."""
     def __init__(self, *, clock=time.monotonic):
         self.clock = clock
+        from .performance import TirePerformance
+        self.performance = TirePerformance()
         # Advice calls live outside reset(): the garage is not an active cockpit.
         self.advice_event, self.advice_sent = None, set()
         self.reset()
@@ -75,17 +77,21 @@ class TireAdvisor:
         self.warm_start_lap, self.warmed, self.on_pit_road = None, set(), False
         from .coaching import TireCoaching
         self.coaching = TireCoaching()
+        self.performance.reset()
+        self.performance_sent = None
 
     def observe(self, data, *, enabled, context=None, analyze=False):
         now = self.clock()
         if not (enabled or analyze) or not isinstance(data, dict):
             self.pending = None
             self.coaching.reset()
+            self.performance.reset('disabled_or_missing_observation')
             return
         try:
             snapshot = TireSnapshot.from_dict(data)
         except (ValueError, TypeError, KeyError):
             self.pending = None
+            self.performance.reset('invalid_observation')
             return
         if (snapshot.identity != self.identity or not snapshot.active or
                 self.last_t is not None and snapshot.t is not None and snapshot.t < self.last_t):
@@ -94,6 +100,7 @@ class TireAdvisor:
         if not snapshot.active:
             return
         self.coaching.observe(snapshot, context)
+        self.performance.observe(snapshot, context)
         self._track_warmup(snapshot)
         if not enabled:
             self.pending=None
@@ -122,7 +129,8 @@ class TireAdvisor:
             self.was_warm = True
         if self.was_warm and all(s == 'cold' for s in temps):
             candidates.append('temperature_cold')
-        if not self.ok_sent and all(self.state(field, w, now) == 'ok'
+        learned_ok = self.performance.view.get('status') == 'ready' and self.performance_sent != self.performance.token
+        if learned_ok or not self.ok_sent and all(self.state(field, w, now) == 'ok'
                                    for field in ('pressure', 'temperature') for w in WHEELS):
             candidates.append('tires_ok')
         if self.coaching.candidate:
@@ -135,6 +143,8 @@ class TireAdvisor:
                 continue
             self.pending = dict(id=uuid.uuid4().hex, key=key, text=PHRASES[key],
                 family=family, created_at=now, expires_at=now + 12, game=snapshot.game, engineer='coach', priority=0)
+            if key == 'tires_ok' and learned_ok:
+                self.pending.update(basis='learned_performance',token=self.performance.token)
             break
 
     def state(self, field, wheel, now):
@@ -165,6 +175,9 @@ class TireAdvisor:
         if key == 'temperature_cold':
             return all(self.state('temperature', w, now) == 'cold' for w in WHEELS)
         if key == 'tires_ok':
+            if event.get('basis') == 'learned_performance':
+                return bool(self.latest and 0 <= now-self.latest.observed_at < 2.5
+                    and self.performance.view.get('status') == 'ready' and event.get('token') == self.performance.token)
             return all(self.state(f, w, now) == 'ok' for f in ('pressure', 'temperature') for w in WHEELS)
         field, state, wheel = key.split('_')
         if state == 'low' and self.warming(wheel, now):
@@ -209,5 +222,7 @@ class TireAdvisor:
         self.sent[event.get('family',event['key'])] = now, self.latest.lap
         self.coaching.ack(event['key'])
         self.ok_sent |= event['key'] == 'tires_ok'
+        if event.get('basis') == 'learned_performance':
+            self.performance_sent = event['token']
         self.pending = None
         return True

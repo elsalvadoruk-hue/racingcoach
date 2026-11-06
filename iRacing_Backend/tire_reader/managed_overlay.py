@@ -99,6 +99,7 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
     root.withdraw()
     visible, epoch, last_capture = False, None, None
     advice = None  # garage cold-pressure advice (bar text per wheel) sent by the app
+    performance, last_snapshot = None, None
     display = PressureDisplay()
 
     def user_close():
@@ -115,7 +116,7 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
     threading.Thread(target=read_commands, name='tire-commands', daemon=True).start()
 
     def tick():
-        nonlocal visible, epoch, last_capture, display_enabled, advice
+        nonlocal visible, epoch, last_capture, display_enabled, advice, performance, last_snapshot
         if stop.is_set():
             overlay.close()
             root.destroy()
@@ -148,6 +149,8 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
                 values = command.get('values')
                 advice = ({w: values[w][:6] if isinstance(values.get(w), str) else '—' for w in WHEELS}
                           if values else None)
+            elif action == 'performance' and isinstance(command.get('view'),dict):
+                performance=command['view']
             elif action == 'reset_digits' and isinstance(command.get('car'), str):
                 try:
                     digit_resets.put_nowait(command['car'][:180])
@@ -165,6 +168,7 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
         except Empty:
             row = None
         if row is not None:
+            last_snapshot=row.get('tire_snapshot')
             current_epoch = (row.get('cockpit_epoch'), row.get('car_path'))
             if current_epoch != epoch:
                 if visible:
@@ -199,6 +203,9 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
                   'display_status': display.status, 'temperature_kind': display.temperature_kind,
                   'digit_reader': row.get('digit_reader'),
                   'tire_snapshot': row.get('tire_snapshot')})
+        if visible and not (advice is not None and (last_snapshot or {}).get('in_garage') is True):
+            from .performance import display_learning
+            overlay.render_learning(display_learning(performance,last_snapshot,time.monotonic()))
         root.after(40, tick)
 
     root.after(40, tick)
