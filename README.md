@@ -17,7 +17,9 @@
 | 랩·코너별 시간 차이, 지도·고스트·입력 그래프 | 한국어 스포터·피트월, 기본 / 짧은 무전 개별 선택 | 다음 주행의 연습 과제와 한 항목씩 바꾸는 셋업 A/B |
 | 내 기록 / Garage61 기준 비교 | 세션별 코칭 오버레이와 별도 타이어 숫자·음성 안내 | 드라이버 리포트, 입력 성향, 체감·도전·주행 기록 |
 
-화면과 자세한 사용법은 **[매뉴얼 바로 읽기](https://elsalvadoruk-hue.github.io/racingcoach/)**에서 확인하세요. [HTML 다운로드](https://elsalvadoruk-hue.github.io/racingcoach/download.html)는 그림까지 포함한 파일 하나이며, 저장한 뒤 브라우저로 열면 인터넷 없이 읽을 수 있습니다.
+화면과 자세한 사용법은 **[매뉴얼 바로 읽기](https://elsalvadoruk-hue.github.io/racingcoach/)**에서 확인하세요. 기능별 활용 순서, 설정 항목의 의미·선택·저장 방법, 증상별 문제 해결을 확대 가능한 화면으로 안내합니다. [HTML 다운로드](https://elsalvadoruk-hue.github.io/racingcoach/download.html)는 그림까지 포함한 파일 하나이며, 저장한 뒤 브라우저로 열면 인터넷 없이 읽을 수 있습니다.
+
+[처음 사용하기](https://elsalvadoruk-hue.github.io/racingcoach/#quick) · [음성·장치 설정](https://elsalvadoruk-hue.github.io/racingcoach/#audio) · [오버레이 설정](https://elsalvadoruk-hue.github.io/racingcoach/#overlay) · [타이어 설정](https://elsalvadoruk-hue.github.io/racingcoach/#tire-targets) · [증상별 문제 해결](https://elsalvadoruk-hue.github.io/racingcoach/#help)
 
 <a name="getting-started"></a>
 
