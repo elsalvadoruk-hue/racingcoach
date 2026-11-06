@@ -181,7 +181,8 @@ test('local digit learning progress and reset are shown for iRacing',async()=>{
 
 test('pressure advice shows numbers with their basis, or why it is withheld',async()=>{
   let state={...initial,enabled:true,running:true,voice_enabled:true,advice_audio_ready:false,advice:{kind:'garage',status:'ready',
-    track_temp_c:31.4,target_kpa:186,target_source:'dash_color',wheels:{
+    track_temp_c:31.4,target_kpa:186,target_source:'dash_color',forecast:{basis:'forecast_with_current_offset',minutes_ahead:30,
+      track_c:31.4,track_now_c:28,recent_misses_c:[1,-2]},wheels:{
       FL:{cold_kpa:158.6,model:'fitted',stints:4},FR:{cold_kpa:160,model:'fitted',stints:4},
       RL:{cold_kpa:150,model:'fitted',stints:3,warning:'below_lowest_used'},RR:{cold_kpa:null,reason:'no_evidence'}}}};
   const fetcher=jest.fn(async()=>response({...state}));
@@ -190,6 +191,7 @@ test('pressure advice shows numbers with their basis, or why it is withheld',asy
   expect(screen.getByText(/1\.59 bar · 23\.0 psi/)).toBeVisible();
   expect(screen.getByText(/노면 31\.4°C 기준 · 목표 열간 1\.86 bar \(대시 색 학습\) · 근거 스틴트 4개 · 여러 스틴트 회귀/)).toBeVisible();
   expect(screen.getByText('근거 없음')).toBeVisible();
+  expect(screen.getByText(/Weather 예보 기준 약 30분 뒤 노면 31\.4°C \(지금 28\.0°C\) · 지금의 노면-기온 차이로 추정 · 최근 예보 오차 평균 1\.5°C/)).toBeVisible();
   expect(screen.getByRole('note')).toHaveTextContent('셋업 하한');
   expect(screen.getByText(/추천 안내 음성은 아직 준비되지 않았습니다/)).toBeVisible();
   state={...state,advice:{kind:'next_pit',status:'withheld',reason:'fixed_or_unknown_setup'}};

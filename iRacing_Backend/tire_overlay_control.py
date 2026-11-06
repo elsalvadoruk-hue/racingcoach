@@ -16,6 +16,8 @@ from pydantic import BaseModel, ConfigDict, StrictBool, Field, StrictInt, Strict
 ROOT = Path(__file__).resolve().parents[1]
 ADVICE_INTERVAL_S = 30   # recompute pressure advice at most this often for the same context
 ADVICE_PIT_LAPS = 3      # say the next-stop advice when the pit wall has this many fuel laps left
+STINT_MIDDLE_S = 30 * 60  # advice targets the middle of a typical stint after the stop (or the start)
+TRACK_CHANGE_C = 3.      # forecast track temperature change worth a call before the next stop
 ERRORS = {
     'dependencies_missing': '타이어 OCR 패키지가 없습니다. 설치.bat을 실행한 뒤 다시 켜 주세요.',
     'ocr_unavailable': 'Windows OCR을 시작하지 못했습니다. Windows 언어의 OCR 기능을 확인한 뒤 다시 켜 주세요.',
@@ -373,21 +375,39 @@ class TireOverlayController:
         self.advice_busy, self.advice_key, self.advice_due = True, key, now + ADVICE_INTERVAL_S
         threading.Thread(target=self._compute_advice, args=(s, kind), name='tire-advice', daemon=True).start()
 
+    def _expected_track(self, s, kind, laps):
+        """Track temperature for the middle of the stint the advice is for, and how it was found."""
+        from tire_reader.weather_panel import Forecast, expected_track, learned_offset
+        forecast = Forecast.from_view(s.weather_forecast) if s.weather_forecast else None
+        now = s.session_time_of_day_s
+        if forecast is None or not forecast.entries or now is None:
+            return s.track_temp_c, {'basis': 'current', 'track_now_c': s.track_temp_c}
+        ahead = 0.
+        if kind == 'next_pit' and isinstance(laps, (int, float)) and isinstance(s.lap_last_s, (int, float)):
+            ahead = laps * s.lap_last_s  # until the stop, then half of a typical stint
+        at = now + ahead + STINT_MIDDLE_S
+        learned = learned_offset(self._path().with_name('tires-history.sqlite3'), s.game, s.track, at)
+        value, basis = expected_track(forecast, at_s=at, air_now=s.air_temp_c, track_now=s.track_temp_c, learned=learned)
+        return value, {'basis': basis or 'current', 'minutes_ahead': round((at - now) / 60), 'air_c': forecast.air_at(at),
+                       'track_c': value, 'track_now_c': s.track_temp_c, 'recent_misses_c': forecast.misses[-4:]}
+
     def _compute_advice(self, s, kind):
         from tire_reader.pressure_advice import recommendation
-        try:
-            result = recommendation(self._path().with_name('tires-history.sqlite3'), game=s.game, car=s.car,
-                track=s.track, targets=self._targets().get(s.car), fixed_setup=s.fixed_setup,
-                track_temp=s.track_temp_c, kind=kind, installed=s.installed_cold_kpa,
-                installed_sources=s.installed_cold_source, forecast=None)
-        except Exception as error:  # advice must never stop measurement or voice
-            result = {'kind': kind, 'status': 'withheld', 'reason': 'advice_error', 'error_type': type(error).__name__}
         laps = None
-        if kind == 'next_pit' and result.get('status') == 'ready':
+        if kind == 'next_pit':
             try:
                 laps = (self.pit_window() or {}).get('fuel_laps')
             except Exception:
                 laps = None
+        try:
+            track_temp, forecast = self._expected_track(s, kind, laps)
+            result = recommendation(self._path().with_name('tires-history.sqlite3'), game=s.game, car=s.car,
+                track=s.track, targets=self._targets().get(s.car), fixed_setup=s.fixed_setup,
+                track_temp=track_temp, kind=kind, installed=s.installed_cold_kpa,
+                installed_sources=s.installed_cold_source, forecast=forecast)
+        except Exception as error:  # advice must never stop measurement or voice
+            result = {'kind': kind, 'status': 'withheld', 'reason': 'advice_error', 'error_type': type(error).__name__}
+            forecast = None
         with self.condition:
             self.advice_busy = False
             self.advice = {**result, 'car': s.car, 'fuel_laps': laps if isinstance(laps, (int, float)) else None}
@@ -396,6 +416,11 @@ class TireOverlayController:
                 self.advisor.offer('advice_garage', s.session_key, garage=True, game=s.game)
             elif ready and self.voice_enabled and isinstance(laps, (int, float)) and laps <= ADVICE_PIT_LAPS:
                 self.advisor.offer('advice_next_pit', f"{s.session_key}:{(s.pit_snapshot or {}).get('stop')}",
+                                   garage=False, game=s.game)
+            change = (forecast or {}).get('track_c'), (forecast or {}).get('track_now_c')
+            if (ready and kind == 'next_pit' and self.voice_enabled and str((forecast or {}).get('basis')).startswith('forecast')
+                    and all(isinstance(v, (int, float)) for v in change) and abs(change[0] - change[1]) >= TRACK_CHANGE_C):
+                self.advisor.offer('track_temp_change', f"{s.session_key}:{(s.pit_snapshot or {}).get('stop')}",
                                    garage=False, game=s.game)
             self._send_advice(result if kind == 'garage' and ready else None)
 

@@ -74,6 +74,7 @@ class TireSnapshot:
     pit_snapshot: dict | None=None
     session_time_of_day_s: float | None=None
     fixed_setup: bool | None=None
+    weather_forecast: dict | None=None  # weather_panel.Forecast.view(): air temperature by quarter hour
 
     @property
     def source_ok(self):
@@ -135,7 +136,8 @@ def from_iracing(row,context,now):
         installed_cold_source={w:(context.get('installed_cold_source') or {}).get(w) for w in WHEELS},
         pit_snapshot=context.get('pit_snapshot'),
         session_time_of_day_s=bounded(context.get('SessionTimeOfDay'),0,86400*2),
-        fixed_setup=context.get('fixed_setup') if type(context.get('fixed_setup')) is bool else None)
+        fixed_setup=context.get('fixed_setup') if type(context.get('fixed_setup')) is bool else None,
+        weather_forecast=context.get('weather_forecast') if isinstance(context.get('weather_forecast'),dict) else None)
 
 
 class TireReadings:

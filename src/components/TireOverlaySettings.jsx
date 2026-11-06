@@ -51,6 +51,15 @@ const ADVICE_MODELS = { fitted: '여러 스틴트 회귀', nearest_with_default_
   median_without_temperature: '노면 온도 없이 중앙값' };
 const bar = kpa => (kpa / 100).toFixed(2), psi = kpa => (kpa / 6.894757293).toFixed(1);
 
+function forecastText(forecast) {
+  if (!forecast || !String(forecast.basis || '').startsWith('forecast') || typeof forecast.track_c !== 'number') return '';
+  const offset = forecast.basis === 'forecast_with_learned_offset' ? '이 트랙 기록의 노면-기온 차이' : '지금의 노면-기온 차이';
+  const misses = (forecast.recent_misses_c || []).filter(v => typeof v === 'number');
+  const miss = misses.length ? ` · 최근 예보 오차 평균 ${(misses.reduce((a, b) => a + Math.abs(b), 0) / misses.length).toFixed(1)}°C` : '';
+  const now = typeof forecast.track_now_c === 'number' ? ` (지금 ${forecast.track_now_c.toFixed(1)}°C)` : '';
+  return `Weather 예보 기준 약 ${forecast.minutes_ahead}분 뒤 노면 ${forecast.track_c.toFixed(1)}°C${now} · ${offset}로 추정${miss}`;
+}
+
 function AdviceView({ advice, voice, audioReady }) {
   const title = advice.kind === 'garage' ? '출발 냉간 압력 추천' : '다음 피트 냉간 압력 추천';
   if (advice.status !== 'ready') return <div className="text-sm" aria-label="압력 추천">
@@ -68,6 +77,7 @@ function AdviceView({ advice, voice, audioReady }) {
         {typeof value.cold_kpa === 'number' ? `${bar(value.cold_kpa)} bar · ${psi(value.cold_kpa)} psi` : '근거 없음'}
       </p>)}
     </div>
+    {forecastText(advice.forecast) && <p className="text-muted-foreground">{forecastText(advice.forecast)}</p>}
     <p className="text-muted-foreground">
       {typeof advice.track_temp_c === 'number' ? `노면 ${advice.track_temp_c.toFixed(1)}°C 기준 · ` : ''}
       목표 열간 {bar(advice.target_kpa)} bar ({advice.target_source === 'driver_range' ? '저장한 범위' : '대시 색 학습'})

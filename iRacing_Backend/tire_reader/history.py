@@ -144,6 +144,7 @@ class TireHistoryStore:
             self.db.commit()
             return
         observation=s.to_dict();observation.pop('pit_snapshot',None)  # kept once, with its stint
+        observation.pop('weather_forecast',None)  # the whole forecast does not belong in every 1 s row
         self.db.execute('INSERT INTO tire_observations(created,run,game,car,track,lap,t,data,coach_run) VALUES(?,?,?,?,?,?,?,?,?)',
             (created,self.run,s.game,s.car,s.track,s.lap,s.t,json.dumps(observation,allow_nan=False),run_id))
         if not s.active or not numeric:

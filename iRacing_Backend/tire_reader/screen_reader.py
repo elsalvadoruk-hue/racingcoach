@@ -20,7 +20,7 @@ IDENTITY = ('car_path', 'track_id', 'track_config', 'SessionNum', 'session_id', 
 
 class ScreenTireReader:
     def __init__(self, *, sdk_factory=None, screens_factory=None, locator=None, ocr=None,
-                 visibility=None, clock=time.monotonic, digits=None):
+                 visibility=None, clock=time.monotonic, digits=None, weather=False):
         if sdk_factory is None:
             import irsdk
             sdk_factory = irsdk.IRSDK
@@ -41,6 +41,9 @@ class ScreenTireReader:
         self.digits = digits
         from .installed import InstalledPressure
         self.installed, self.installed_fields = InstalledPressure(), {}
+        # The in-sim Weather panel forecast (weather_panel.py), read once a minute at most.
+        from .weather_panel import WeatherPanelReader
+        self.weather = WeatherPanelReader(self.ocr, clock) if weather else None
 
     def reset_digits(self, car):
         if self.digits is not None and canonical_car(car):
@@ -64,8 +67,35 @@ class ScreenTireReader:
     def sample(self):
         from .snapshot import from_iracing
         row = self._sample()
+        self._read_weather()
         row['tire_snapshot'] = from_iracing(row, self.context, self.clock()).to_dict()
         return row
+
+    def _read_weather(self):
+        """Separate from the dash frame: never delays or invalidates a tire reading."""
+        if self.weather is None or self.sdk is None or not self.context:
+            return
+        context = self.context
+        image = None
+        if self.weather.due():
+            try:
+                import numpy as np
+                if self.screens is None:
+                    self.screens = self.screens_factory()
+                physical = [{key: int(m[key]) for key in GEOMETRY} for m in self.screens.monitors[1:]]
+                for rect in ([self.rect] if self.rect in physical else []) + [m for m in physical if m != self.rect]:
+                    if rect['width'] * rect['height'] <= MAX_PIXELS and self.visibility.window_visible(rect):
+                        image = np.asarray(self.screens.grab(rect))[:, :, :3].copy()
+                        break
+            except Exception:
+                image = None
+        identity = tuple(context.get(k) for k in ('track_id', 'track_config', 'session_id', 'subsession_id'))
+        try:
+            forecast = self.weather.maybe_read(image, identity, finite(context.get('SessionTimeOfDay')),
+                                               finite(context.get('AirTemp')))
+        except Exception:
+            return
+        context['weather_forecast'] = forecast.view() if forecast.entries else None
 
     def _sample(self):
         tick = self.clock()

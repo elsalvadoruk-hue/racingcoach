@@ -202,6 +202,25 @@ class WindowsPressureOcr:
                 bitmap.close()
             writer.close()
 
+    async def words(self, gray):
+        """Word texts with their pixel boxes, for layouts read by position (the weather panel)."""
+        import cv2
+        from winrt.windows.graphics.imaging import SoftwareBitmap, BitmapPixelFormat
+        from winrt.windows.storage.streams import DataWriter
+        bgra = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGRA)
+        writer, bitmap = DataWriter(), None
+        try:
+            writer.write_bytes(bgra.tobytes())
+            bitmap = SoftwareBitmap.create_copy_from_buffer(writer.detach_buffer(),
+                BitmapPixelFormat.BGRA8, bgra.shape[1], bgra.shape[0])
+            result = await self.engine.recognize_async(bitmap)
+            return [(w.text, w.bounding_rect.x, w.bounding_rect.y, w.bounding_rect.width, w.bounding_rect.height)
+                    for line in result.lines for w in line.words]
+        finally:
+            if bitmap is not None:
+                bitmap.close()
+            writer.close()
+
     async def recognize(self, image, profile):
         import cv2
         validate_profile(profile)

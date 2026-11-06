@@ -91,7 +91,7 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
                 from .screen_reader import ScreenTireReader
                 # Learned digit shapes stay next to this game's tire settings on this PC.
                 digit_folder = Path(position_path).with_name('tires-digits')
-                sampler_factory = lambda: ScreenTireReader(digits=DigitReader(digit_folder))
+                sampler_factory = lambda: ScreenTireReader(digits=DigitReader(digit_folder), weather=True)
         except Exception as error:
             emit({'type': 'fatal', 'code': 'dependencies_missing' if isinstance(error, ImportError) else 'ocr_unavailable'})
             return
