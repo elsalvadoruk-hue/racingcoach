@@ -50,6 +50,22 @@ class Packs(unittest.TestCase):
         with zipfile.ZipFile(z,'a') as f:f.writestr('script.py','bad')
         with self.assertRaises(ValueError):self.manager.install(z)
         self.assertEqual(self.manager.audio('spotter',VARIANTS['test'][0]),old);self.assertFalse((self.root/'installed/test@2').exists())
+    def test_next_app_start_skips_reading_an_unchanged_pack_but_catches_a_changed_file(self):
+        from unittest.mock import patch
+        import custom_voice_packs, os
+        self.manager.install(self.pack());self.manager.select('test@1')
+        self.assertTrue((self.root/'voice-pack-checks.json').is_file())
+        with patch.object(custom_voice_packs,'inspect_pack',wraps=custom_voice_packs.inspect_pack) as inspect:
+            restarted=CustomVoicePacks(self.root/'installed');restarted.select('test@1')
+            inspect.assert_not_called()
+            self.assertEqual(base64.b64decode(restarted.audio('spotter',VARIANTS['test'][0]).split(',')[1]),self.data)
+            clip=next((self.root/'installed/test@1/clips').iterdir())   # .wav here, .ogg in the Opus tests
+            clip.write_bytes(b'\0'*len(self.data));info=clip.stat();os.utime(clip,ns=(info.st_atime_ns,info.st_mtime_ns+1_000_000))
+            changed=CustomVoicePacks(self.root/'installed')
+            with self.assertRaises(ValueError):changed.select('test@1')
+            self.assertEqual(inspect.call_count,1)
+            clip.unlink()
+            with self.assertRaises((ValueError,OSError)):CustomVoicePacks(self.root/'installed').select('test@1')
     def test_repeat_install_and_folder_import(self):
         z=self.pack();self.manager.install(z);self.assertEqual(self.manager.install(z)['key'],'test@1')
         copy=CustomVoicePacks(self.root/'copy');self.assertEqual(copy.install(self.root/'installed/test@1')['key'],'test@1')

@@ -1,7 +1,7 @@
 """Managed, verified custom radio packs. Import never executes model or pack code."""
-import base64,hashlib,io,json,shutil,threading,uuid,zipfile
+import base64,hashlib,io,json,os,shutil,stat,threading,uuid,zipfile
 from pathlib import Path
-from custom_voice_pack_format import inspect_pack,check_audio,audio_mime,validate_manifest,MAX_MANIFEST,ID,ROLES,binding_signature,radio_style
+from custom_voice_pack_format import inspect_pack,check_audio,audio_mime,validate_manifest,MAX_MANIFEST,ID,ROLES,binding_signature,radio_style,safe_name
 from voice_pack_installation import InstallProgress
 from builtin_radio import PACKS as BUILTIN_PACKS
 
@@ -120,13 +120,62 @@ class CustomVoicePacks:
                 nonlocal done
                 done+=1
                 if progress:progress('checking',done=done)
+            checks=self._checks()
             for key in set(selections.values()):
                 if key in self.loaded:loaded[key]=self.loaded[key];continue
-                if self.is_builtin(key):self._manifest(key)
-                m=inspect_pack(self._folder(key),checked if progress else None);loaded[key]=(m,{(r['role'],r['sourceText']):r for r in m['entries']})
+                # A pack whose files are exactly as when it last passed is not read again.
+                m,stamp=self._unchanged(key,checks.get(key))
+                if m is None:
+                    if self.is_builtin(key):self._manifest(key)
+                    m=inspect_pack(self._folder(key),checked if progress else None)
+                    stamp=self._stamp(key,m)
+                    if stamp:checks[key]=stamp;self._save_checks(checks)
+                loaded[key]=(m,{(r['role'],r['sourceText']):r for r in m['entries']})
             for role,key in selections.items():
                 if not any(r['role']==role for r in loaded[key][0]['entries']):raise ValueError('이 팩에는 선택한 역할의 음성이 없습니다.')
             self.loaded,self.selections=loaded,dict(selections)
+    # Every audio file of a pack is hashed when it is selected (seconds for thousands of
+    # files, longer on a cold disk). After a pack passes once, its manifest hash and the
+    # size and modification time of each file are kept; while those stay the same the
+    # next app start skips the reading. Any change, missing file or link reads it all again.
+    def _checks_path(self):return self.root.parent/'voice-pack-checks.json'
+    def _checks(self):
+        try:
+            data=json.loads(self._checks_path().read_text(encoding='utf-8'))
+            return dict(data.get('packs') or {}) if data.get('version')==1 else {}
+        except (OSError,ValueError,AttributeError):return {}
+    def _save_checks(self,checks):
+        path=self._checks_path();temporary=path.with_name(path.name+'.tmp')
+        try:
+            path.parent.mkdir(parents=True,exist_ok=True)
+            temporary.write_text(json.dumps({'version':1,'packs':checks}),encoding='utf-8');temporary.replace(path)
+        except OSError:temporary.unlink(missing_ok=True)
+    def _stamp(self,key,m,manifest_bytes=None):
+        """Manifest hash plus every file's size and modification time, or None if any is unusable."""
+        try:
+            folder=self._folder(key);manifest=folder/'manifest.json'
+            raw=manifest_bytes if manifest_bytes is not None else manifest.read_bytes()
+            names=sorted({safe_name(r['audio']) for r in m['entries']})
+            # One lstat per file: a link is refused, and no folder inside the pack may be a link.
+            for sub in {Path(name).parent for name in names}-{Path('.')}:
+                if (folder/sub).is_symlink() or (folder/sub).is_junction():return None
+            stats=[]
+            for name in [*names,'manifest.json']:
+                info=os.lstat(folder/name)
+                if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):return None
+                stats.append([name,info.st_size,info.st_mtime_ns])
+            return {'manifest':hashlib.sha256(raw).hexdigest(),'files':hashlib.sha256(json.dumps(stats).encode()).hexdigest()}
+        except (OSError,ValueError):return None
+    def _unchanged(self,key,stamp):
+        """The manifest when it and every file are byte-for-byte what passed the full check before."""
+        if not stamp:return None,None
+        try:
+            raw=(self._folder(key)/'manifest.json').read_bytes()
+            # The same bytes already passed validate_manifest when the stamp was made.
+            if len(raw)>MAX_MANIFEST or hashlib.sha256(raw).hexdigest()!=stamp.get('manifest'):return None,None
+            m=json.loads(raw.decode('utf-8-sig'))
+        except (OSError,ValueError):return None,None
+        return (m,stamp) if self._stamp(key,m,raw)==stamp else (None,None)
     def _row(self,role,text):
         key=self.selections.get(role)
         return key,self.loaded[key][1].get((role,text)) if key else None
