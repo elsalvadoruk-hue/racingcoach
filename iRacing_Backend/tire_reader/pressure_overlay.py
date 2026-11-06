@@ -142,6 +142,12 @@ class PressureOverlay:
         for wheel,value in display.formatted_temperatures().items():
             self.canvas.itemconfigure(self.temperature_labels[wheel],text=value.removesuffix('°C'))
 
+    def render_advice(self,values):
+        """Garage: advised cold pressures (bar) in the same 2x2 layout, marked as advice."""
+        for wheel in WHEELS:
+            self.canvas.itemconfigure(self.labels[wheel],text=values.get(wheel) or '—')
+            self.canvas.itemconfigure(self.temperature_labels[wheel],text='추천 냉간')
+
     def press(self,event):
         if not self.locked and self.position is not None:
             self.drag=(event.x_root,event.y_root,*self.position)

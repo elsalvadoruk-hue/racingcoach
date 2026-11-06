@@ -23,13 +23,41 @@ PHRASES.update(temperature_cold='타이어가 식었습니다.', tires_ok='타�
     input_front='앞 타이어 온도가 오르고 있습니다. 코너 진입 속도를 조금 낮춰 보세요.',
     input_rear='뒤 타이어 온도가 오르고 있습니다. 코너 탈출에서 가속을 조금 부드럽게 해 주세요.',
     temperature_recovered='타이어 온도가 앞선 랩 수준으로 내려왔습니다.')
+# Pressure advice: the numbers are on screen; the voice only says where to look.
+# Their clips are made separately; until then these are skipped like any missing clip.
+ADVICE_PHRASES = dict(advice_garage='출발 냉간 압력 추천이 준비됐습니다. 화면을 확인해 주세요.',
+    advice_next_pit='다음 피트 냉간 압력 추천이 준비됐습니다.',
+    track_temp_change='노면 온도가 크게 바뀔 예정입니다. 다음 피트 압력을 확인해 주세요.')
+ADVICE_SHORT_PHRASES = dict(advice_garage='출발 압력 추천 준비.', advice_next_pit='다음 피트 압력 추천 준비.',
+    track_temp_change='노면 온도 변화 예정. 피트 압력 확인.')
 
 
 class TireAdvisor:
     """No universal targets, inferred pressure, or wear-to-grip predictions."""
     def __init__(self, *, clock=time.monotonic):
         self.clock = clock
+        # Advice calls live outside reset(): the garage is not an active cockpit.
+        self.advice_event, self.advice_sent = None, set()
         self.reset()
+
+    def offer(self, key, token, *, garage, game='iracing'):
+        """Queue one advice call; each (key, token) is said at most once."""
+        now = self.clock()
+        current = self.advice_event
+        if (key, token) in self.advice_sent or current and (current['key'], current['token']) == (key, token):
+            return
+        self.advice_event = dict(id=uuid.uuid4().hex, key=key, token=token, text=ADVICE_PHRASES[key], family=key,
+            created_at=now, expires_at=now + 60, garage=garage, game=game, engineer='coach', priority=0)
+
+    def withdraw(self, key):
+        if self.advice_event and self.advice_event['key'] == key:
+            self.advice_event = None
+
+    def _advice_quiet(self, event, now):
+        if not event['garage']:
+            return self.quiet(now)
+        s = self.latest  # Not driving: say it while sitting in the garage.
+        return bool(s and s.in_garage is True and 0 <= now - s.observed_at < 2.5)
 
     def reset(self):
         self.identity = None
@@ -138,12 +166,21 @@ class TireAdvisor:
         event = self.pending
         if event and (now >= event['expires_at'] or not self.applicable(event, now)):
             self.pending = event = None
-        return {**event, 'quiet': self.quiet(now), 'remaining_s': event['expires_at'] - now} if event else None
+        if event:
+            return {**event, 'quiet': self.quiet(now), 'remaining_s': event['expires_at'] - now}
+        advice = self.advice_event
+        if advice and now >= advice['expires_at']:
+            self.advice_event = advice = None
+        return {**advice, 'quiet': self._advice_quiet(advice, now), 'remaining_s': advice['expires_at'] - now} if advice else None
 
     def ack(self, identifier, now):
         event = self.current(now)
         if not event or event['id'] != identifier or not event['quiet']:
             return False
+        if self.advice_event and event['id'] == self.advice_event['id']:
+            self.advice_sent.add((event['key'], event['token']))
+            self.advice_event = None
+            return True
         self.sent[event.get('family',event['key'])] = now, self.latest.lap
         self.coaching.ack(event['key'])
         self.ok_sent |= event['key'] == 'tires_ok'

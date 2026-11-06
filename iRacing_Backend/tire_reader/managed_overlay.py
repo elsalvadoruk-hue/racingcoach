@@ -1,6 +1,7 @@
 """Private-pipe native tire window, with capture/OCR off the Tk and API threads."""
 import json
 from queue import Empty, Queue
+from .pressure_ocr import WHEELS
 import sys
 import threading
 import time
@@ -97,6 +98,7 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
     root = tk.Tk()
     root.withdraw()
     visible, epoch, last_capture = False, None, None
+    advice = None  # garage cold-pressure advice (bar text per wheel) sent by the app
     display = PressureDisplay()
 
     def user_close():
@@ -113,7 +115,7 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
     threading.Thread(target=read_commands, name='tire-commands', daemon=True).start()
 
     def tick():
-        nonlocal visible, epoch, last_capture, display_enabled
+        nonlocal visible, epoch, last_capture, display_enabled, advice
         if stop.is_set():
             overlay.close()
             root.destroy()
@@ -142,6 +144,10 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
                     emit({'type': 'reply', 'id': command.get('id'), 'ok': False})
                     continue
                 overlay.set_appearance(**patch)
+            elif action == 'advice' and (command.get('values') is None or isinstance(command.get('values'), dict)):
+                values = command.get('values')
+                advice = ({w: values[w][:6] if isinstance(values.get(w), str) else '—' for w in WHEELS}
+                          if values else None)
             elif action == 'reset_digits' and isinstance(command.get('car'), str):
                 try:
                     digit_resets.put_nowait(command['car'][:180])
@@ -171,14 +177,20 @@ def run(position_path, *, fixed=False, background_opacity=85, content_opacity=10
             # Stay hidden until real numbers arrive. Once acquired, temporary OCR
             # misses hold values and never flash the window on/off in this stint.
             ready = display_enabled and row.get('overlay_ready') is True and display.updates > 0
+            # In the garage the same window shows the advised cold pressures instead.
+            garage = display_enabled and advice is not None and (row.get('tire_snapshot') or {}).get('in_garage') is True
             if ready:
                 last_capture = row.get('capture') or last_capture
                 overlay.render(display)
                 if not visible:
                     overlay.show(last_capture)
+            elif garage:
+                overlay.render_advice(advice)
+                if not visible:
+                    overlay.show(last_capture)
             elif visible:
                 overlay.hide()
-            visible = ready
+            visible = ready or garage
             emit({'type': 'state', 'visible': visible, 'status': row.get('status'),
                   'warmup_remaining_s': row.get('warmup_remaining_s'),
                   'car_name': row.get('car_name'), 'car_path': row.get('car_path'),

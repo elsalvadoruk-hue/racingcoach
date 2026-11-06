@@ -14,6 +14,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, StrictBool, Field, StrictInt, StrictFloat, model_validator
 
 ROOT = Path(__file__).resolve().parents[1]
+ADVICE_INTERVAL_S = 30   # recompute pressure advice at most this often for the same context
+ADVICE_PIT_LAPS = 3      # say the next-stop advice when the pit wall has this many fuel laps left
 ERRORS = {
     'dependencies_missing': '타이어 OCR 패키지가 없습니다. 설치.bat을 실행한 뒤 다시 켜 주세요.',
     'ocr_unavailable': 'Windows OCR을 시작하지 못했습니다. Windows 언어의 OCR 기능을 확인한 뒤 다시 켜 주세요.',
@@ -22,12 +24,16 @@ ERRORS = {
 
 
 class TireOverlayController:
-    def __init__(self, path=None, *, popen=subprocess.Popen, game='iracing', audio=None, run_link=lambda snapshot:'', driving_context=lambda snapshot:None):
+    def __init__(self, path=None, *, popen=subprocess.Popen, game='iracing', audio=None, run_link=lambda snapshot:'', driving_context=lambda snapshot:None,
+                 pit_window=lambda:None):
         if game not in ('iracing', 'lmu'):
             raise ValueError('Unsupported tire game')
         self.game, self.audio = game, audio
         self.run_link = run_link
         self.driving_context = driving_context
+        # Laps of fuel left from the pit wall's own calculation, for timing the next-stop call.
+        self.pit_window = pit_window
+        self.advice, self.advice_key, self.advice_due, self.advice_busy = None, None, 0., False
         self.path = Path(path) if path is not None else None
         self.popen = popen
         self.operation_lock = threading.RLock()
@@ -110,6 +116,8 @@ class TireOverlayController:
                     'ocr_english': has_english(self.ocr['languages']) if self.ocr else None,
                     'ocr_install': self.ocr_install,
                     'digit_reader': self.digit_reader,
+                    'advice': self.advice,
+                    'advice_audio_ready': self.audio.advice_ready() if self.voice_enabled and hasattr(self.audio, 'advice_ready') else None,
                     'targets': targets,
                     'target_temperature_kind': next((v.temp_kind for v in self.snapshot.wheels.values() if v.temp_kind), None) if self.snapshot else None,
                     'history_error': bool(self.history and self.history.error),
@@ -155,6 +163,7 @@ class TireOverlayController:
                         context = self.driving_context(self.snapshot) if self.snapshot else None
                         self.advisor.observe(self.snapshot.to_dict() if self.snapshot else None,
                                              enabled=self.voice_enabled, context=context, analyze=self.enabled)
+                        self._schedule_advice()
                         if self.snapshot is not None or previous is not None:
                             from tire_reader.history import TireHistoryWriter
                             from tire_reader.log_export import diagnostics
@@ -341,6 +350,68 @@ class TireOverlayController:
                 self.history.close()
                 self.history = None
 
+    def _advice_kind(self, s):
+        if self.game != 'iracing' or s is None or not s.car or not s.track:
+            return None
+        if s.in_garage is True:
+            return 'garage'
+        if s.active and s.on_pit_road is False and s.session_type in ('Race', 'Practice', 'Offline Testing'):
+            return 'next_pit'
+        return None
+
+    def _schedule_advice(self):
+        """Called with the condition held; the database work runs on its own thread."""
+        s = self.snapshot
+        kind = self._advice_kind(s)
+        if kind is None:
+            return
+        key = (kind, s.car, s.track, s.session_key, tuple(sorted(s.installed_cold_kpa.items())),
+               (s.pit_snapshot or {}).get('stop'))
+        now = time.monotonic()
+        if self.advice_busy or key == self.advice_key and now < self.advice_due:
+            return
+        self.advice_busy, self.advice_key, self.advice_due = True, key, now + ADVICE_INTERVAL_S
+        threading.Thread(target=self._compute_advice, args=(s, kind), name='tire-advice', daemon=True).start()
+
+    def _compute_advice(self, s, kind):
+        from tire_reader.pressure_advice import recommendation
+        try:
+            result = recommendation(self._path().with_name('tires-history.sqlite3'), game=s.game, car=s.car,
+                track=s.track, targets=self._targets().get(s.car), fixed_setup=s.fixed_setup,
+                track_temp=s.track_temp_c, kind=kind, installed=s.installed_cold_kpa,
+                installed_sources=s.installed_cold_source, forecast=None)
+        except Exception as error:  # advice must never stop measurement or voice
+            result = {'kind': kind, 'status': 'withheld', 'reason': 'advice_error', 'error_type': type(error).__name__}
+        laps = None
+        if kind == 'next_pit' and result.get('status') == 'ready':
+            try:
+                laps = (self.pit_window() or {}).get('fuel_laps')
+            except Exception:
+                laps = None
+        with self.condition:
+            self.advice_busy = False
+            self.advice = {**result, 'car': s.car, 'fuel_laps': laps if isinstance(laps, (int, float)) else None}
+            ready = result.get('status') == 'ready'
+            if ready and self.voice_enabled and kind == 'garage':
+                self.advisor.offer('advice_garage', s.session_key, garage=True, game=s.game)
+            elif ready and self.voice_enabled and isinstance(laps, (int, float)) and laps <= ADVICE_PIT_LAPS:
+                self.advisor.offer('advice_next_pit', f"{s.session_key}:{(s.pit_snapshot or {}).get('stop')}",
+                                   garage=False, game=s.game)
+            self._send_advice(result if kind == 'garage' and ready else None)
+
+    def _send_advice(self, result):
+        """Garage numbers for the tire window (bar, two decimals). Fire-and-forget; caller holds the condition."""
+        process = self.process
+        if process is None or process.poll() is not None or not self.ready:
+            return
+        values = ({w: (f"{v['cold_kpa'] / 100:.2f}" if isinstance(v.get('cold_kpa'), (int, float)) else None)
+                   for w, v in result['wheels'].items()} if result else None)
+        try:
+            process.stdin.write(json.dumps({'id': 0, 'action': 'advice', 'values': values}) + '\n')
+            process.stdin.flush()
+        except (OSError, ValueError):
+            pass
+
     def install_english_ocr(self):
         """Only on the user's click: UAC prompt, then Windows installs in its own window."""
         if self.game != 'iracing':
@@ -411,9 +482,9 @@ class TireOverlayController:
 
 class TireOverlays:
     """Separate settings, windows and position maps for the two simulators."""
-    def __init__(self, *, audio=None, run_link=lambda snapshot:'', driving_context=lambda snapshot:None):
+    def __init__(self, *, audio=None, run_link=lambda snapshot:'', driving_context=lambda snapshot:None, pit_window=lambda:None):
         self.controllers = {game: TireOverlayController(game=game, audio=audio,run_link=run_link,
-            driving_context=driving_context) for game in ('iracing', 'lmu')}
+            driving_context=driving_context, pit_window=pit_window) for game in ('iracing', 'lmu')}
 
     def log_extra(self, run):
         from session_log import Extra

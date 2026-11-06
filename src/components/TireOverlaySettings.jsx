@@ -41,6 +41,44 @@ function TargetRanges({ view, disabled, save, open }) {
   </details>;
 }
 
+const ADVICE_REASONS = {
+  fixed_or_unknown_setup: '고정 셋업이거나 셋업 종류를 확인하지 못해 압력 추천을 하지 않습니다.',
+  no_target_range: '목표 열간 압력 범위가 없습니다. 아래 판단 범위를 저장하거나, 대시 색이 바뀌는 차량은 주행 기록이 쌓이면 자동으로 정해집니다.',
+  no_evidence: '근거가 되는 스틴트가 아직 없습니다. 장착 압력이 확인된 레이스·연습 스틴트(근거 랩 3개 이상)가 필요합니다.',
+  advice_error: '추천을 계산하지 못했습니다. 측정과 표시는 계속됩니다.',
+};
+const ADVICE_MODELS = { fitted: '여러 스틴트 회귀', nearest_with_default_slope: '가장 비슷한 스틴트 + 노면 온도 추정 보정',
+  median_without_temperature: '노면 온도 없이 중앙값' };
+const bar = kpa => (kpa / 100).toFixed(2), psi = kpa => (kpa / 6.894757293).toFixed(1);
+
+function AdviceView({ advice, voice, audioReady }) {
+  const title = advice.kind === 'garage' ? '출발 냉간 압력 추천' : '다음 피트 냉간 압력 추천';
+  if (advice.status !== 'ready') return <div className="text-sm" aria-label="압력 추천">
+    <p className="font-medium">{title}</p>
+    <p className="text-muted-foreground">{ADVICE_REASONS[advice.reason] || '추천을 보류했습니다.'}</p>
+  </div>;
+  const wheels = Object.entries(advice.wheels || {});
+  const stints = Math.max(0, ...wheels.map(([, v]) => v.stints || 0));
+  const models = [...new Set(wheels.map(([, v]) => v.model).filter(Boolean))].map(m => ADVICE_MODELS[m] || m).join(', ');
+  return <div className="flex flex-col gap-2 text-sm" aria-label="압력 추천">
+    <p className="font-medium">{title}</p>
+    <div className="tire-appearance-grid">
+      {wheels.map(([wheel, value]) => <p key={wheel}>
+        <span className="text-muted-foreground">{wheel} </span>
+        {typeof value.cold_kpa === 'number' ? `${bar(value.cold_kpa)} bar · ${psi(value.cold_kpa)} psi` : '근거 없음'}
+      </p>)}
+    </div>
+    <p className="text-muted-foreground">
+      {typeof advice.track_temp_c === 'number' ? `노면 ${advice.track_temp_c.toFixed(1)}°C 기준 · ` : ''}
+      목표 열간 {bar(advice.target_kpa)} bar ({advice.target_source === 'driver_range' ? '저장한 범위' : '대시 색 학습'})
+      {` · 근거 스틴트 ${stints}개 · ${models}`}
+    </p>
+    {wheels.some(([, v]) => v.warning === 'below_lowest_used') && <p role="note">이전에 쓴 가장 낮은 냉간 압력보다 낮은 바퀴가 있습니다. 셋업 하한을 확인해 주세요.</p>}
+    <p className="text-muted-foreground">참고값입니다. 반올림 단위는 차량 셋업 단계를 확인하지 않았습니다. 셋업 변경은 직접 판단해 주세요.</p>
+    {voice && audioReady === false && <p className="text-muted-foreground">추천 안내 음성은 아직 준비되지 않았습니다. 화면 숫자는 그대로 표시됩니다.</p>}
+  </div>;
+}
+
 function digitText(reader) {
   if (!reader?.mode) return '';
   if (reader.mode === 'self') {
@@ -202,6 +240,7 @@ export default function TireOverlaySettings({ apiBase, fetcher = fetch, game = '
         </div>
         </div>
         </div>
+        {game !== 'lmu' && view?.advice && <AdviceView advice={view.advice} voice={view.voice_enabled} audioReady={view.advice_audio_ready}/>}
         {game !== 'lmu' && view?.ocr_english === false && <Alert>
           <AlertDescription>
             <p>영어 Windows OCR이 없어 {view.ocr_language ? `현재 언어(${view.ocr_language})로 ` : ''}숫자를 읽고 있습니다. 일부 계기판 숫자를 글자로 잘못 읽어 측정이 보류될 수 있습니다.</p>
