@@ -332,7 +332,8 @@ class TireOverlayController:
     def start(self):
         with self.operation_lock:
             self._load()
-            if (self.enabled or self.voice_enabled) and self._floors() is not None:
+            # LMU's record-only mode runs too, so its minimum is learned before the first garage visit.
+            if self._wants_process(self.enabled, self.voice_enabled) and self._floors() is not None:
                 self.floors.scan_in_background()  # ready before the first garage visit
             if self._wants_process(self.enabled, self.voice_enabled):
                 try:
