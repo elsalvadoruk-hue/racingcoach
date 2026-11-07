@@ -10,6 +10,7 @@ import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group';
 import SpotterPanel from '../components/SpotterPanel';
 import PitWall from '../components/PitWall';
 import { AudioPreferences } from './RuntimePreview';
+import DrivingLearning from '../components/DrivingLearning';
 
 export function VoiceWorkspace({ runtime, onSettings }) {
   const { controls, change, speech, host } = runtime;
@@ -30,6 +31,7 @@ export function VoiceWorkspace({ runtime, onSettings }) {
           : <Alert className="voice-api-notice"><Mic aria-hidden="true" /><AlertDescription>마이크 질문을 사용하려면 Google 음성 API 연결을 확인해 주세요. 스포터·피트월 설정은 계속 사용할 수 있습니다.</AlertDescription></Alert>}
         {host.error && <Alert variant="destructive"><AlertDescription>{host.error}</AlertDescription></Alert>}
         <AudioPreferences runtime={runtime} />
+        <DrivingLearning learning={host.status?.driving_learning} connected={!!host.status?.connected} />
       </div>
       <div className="voice-column" aria-label="스포터 설정 영역" tabIndex={0}><SpotterPanel voiceLocked={host.wallEnabled} apiBase={runtime.apiBase} spotter={host.spotter} muted={controls.muted} volume={controls.volume / 100} audioError={host.audioOutput.message} /><p className="text-xs text-muted-foreground"><Headphones className="inline" aria-hidden="true" /> 스포터를 켜면 엔지니어 자동 보고도 함께 시작합니다. 피트월은 별도로 끌 수 있습니다.</p></div>
       <div className="voice-column" aria-label="피트월 설정 영역" tabIndex={0}><PitWall spotter={host.spotter} enabled={host.wallEnabled} onToggle={host.toggleWall} preferences={host.wallPreferences} onChange={host.changeWallPreferences} view={host.wallView} engineers={host.status?.engineers} onTestVoice={host.testVoice} busy={busy} speaking={host.audioOutput.isPlaying} standby={host.audioOutput.standby} /></div>

@@ -802,6 +802,8 @@ class RaceRadio:
             return False
         s = self.latest
         kind, value = event.get('condition') or (None, None)
+        if kind == 'driving_learning':
+            return getattr(self,'driving_valid',lambda token,stamp:False)(value,now)
         if kind == 'control_setting':
             from control_recommendations import FIELDS
             field=(value[2] if len(value)>2 else None) or FIELDS.get(value[0])

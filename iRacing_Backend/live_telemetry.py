@@ -43,6 +43,7 @@ from traffic_log import TrafficLog, traffic_snapshot
 from oval_spotter import track_context, read_pacing
 from banter_shadow import BanterShadow
 from oval_procedures import OvalProcedures
+from driving_service import DrivingLearningService
 
 logger = logging.getLogger('iRacingLive')
 
@@ -71,6 +72,8 @@ def session_identity(weekend, driver_info):
 
 
 CHANNELS = {
+    **{f'{w}_shock': f'{w}shockDefl' for w in ('LF','RF','LR','RR')},
+    **{f'{w}_rumble': f'Tire{w}_RumblePitch' for w in ('LF','RF','LR','RR')},
     'session_time': 'SessionTime', 'session_num': 'SessionNum', 'lap_number': 'Lap',
     'distance_pct': 'LapDistPct', 'speed_mps': 'Speed', 'brake': 'Brake',
     'throttle': 'Throttle', 'steering_rad': 'SteeringWheelAngle', 'steering_lock_ratio': 'SteeringLockRatio', 'gear': 'Gear',
@@ -148,6 +151,9 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.pit_wall.traffic = self.radio.traffic
         self.pit_wall.shared_traffic = True
         self.corners = LiveCornerCoach()
+        self.driving_learning = DrivingLearningService()
+        self.driving_audio_ready = lambda text: False
+        self.radio.driving_valid = lambda token, now: self.driving_learning.valid(token,now)
         self.controls = ControlAdvisor()
         self.control_recommendations = ControlRecommendations()
         self.setup_advisor = SetupAdvisor()
@@ -192,6 +198,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         if self.thread and self.thread.is_alive():
             return
         self.stop_event.clear()
+        self.driving_learning.resume()
         self.formation_archive.closing = False
         self.thread = threading.Thread(target=self._loop, name='iracing-live-reader', daemon=True)
         self.thread.start()
@@ -201,6 +208,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         if self.thread:
             self.thread.join(timeout=3)
         self.traffic_log.close()
+        self.driving_learning.close()
         self.formation_archive.close()
         with self.lock:
             self._flush_timing()
@@ -257,6 +265,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.spotter.reset()
                 self.radio.reset()
                 self.corners.reset()
+                self.driving_learning.reset()
                 self.controls.reset()
                 self.control_recommendations.reset()
                 self.setup_advisor.reset()
@@ -575,8 +584,11 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                     try:setup=sdk['CarSetup'] or {}
                     except (KeyError,TypeError):setup={}
                     self._setup_values=session_setup_values(setup) if self.game=='iracing' else {}
+                    from driving_observations import digest
+                    self._setup_fingerprint = digest(setup) if setup and self.game == 'iracing' else None
                     self._setup_cache_key=setup_key;self._setup_read_at=self.clock()
                 sample.update(self._setup_values)
+                sample['setup_fingerprint'] = self._setup_fingerprint
                 sample.update(read_setup_channels(sdk,names))
                 sample['setup_fixed']=fixed_setup(weekend) if self.game=='iracing' else None
                 # CarSetup is a garage snapshot, not proof of post-stop installation.

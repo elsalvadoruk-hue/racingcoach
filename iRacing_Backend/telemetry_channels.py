@@ -28,6 +28,7 @@ CORE_CHANNELS = {
 
 
 ANALYSIS_CHANNELS = {
+    "EngineWarnings", "PitRepairLeft", "CarLeftRight",
     # Session/lap state
     "SessionTime",
     "SessionTick",

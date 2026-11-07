@@ -1,4 +1,5 @@
 import VoiceVolumeSlider from './VoiceVolumeSlider';
+import DrivingLearning from './DrivingLearning';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { ToggleGroup, ToggleGroupItem } from './ui/toggle-group';
@@ -422,6 +423,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     <PitWall spotter={spotter} enabled={wallEnabled} onToggle={toggleWall} preferences={wallPreferences} onChange={changeWallPreferences} view={wallView} engineers={status?.engineers} onTestVoice={testVoice} busy={phase !== 'idle'} speaking={isPlaying} standby={audioOutput.standby} />
     {visible && <Card asChild><section aria-label="엔지니어 음성 준비" className="coach-panel"><CardContent className="p-0"><RadioAudioPrepare apiBase={apiBase} /></CardContent></section></Card>}
     <CornerCoach coach={status?.corner_coach} controls={status?.controls} connected={!!status?.connected} />
+    <DrivingLearning learning={status?.driving_learning} connected={!!status?.connected} />
     <RadioDiagnostics apiBase={apiBase} />
     <Card asChild><section aria-label="주행 중 대화와 코너 메모" className="coach-panel">
       <LiveHeader title="주행 중 대화와 코너 메모" topic="voiceCoach" icon={Radio} description="질문과 코너 느낌을 말한 순간의 주행 위치와 함께 기록합니다." />

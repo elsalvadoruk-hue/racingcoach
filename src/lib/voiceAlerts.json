@@ -560,6 +560,33 @@
           "legacyImportant": false
         },
         {
+          "id": "learned_technique",
+          "label": "개인 제동·가속 학습",
+          "description": "비슷한 조건의 독립 통과에서 반복 이득을 확인한 제동·가속 방식",
+          "example": "다음 코너, 브레이크를 조금 일찍 풀어 보세요.",
+          "keys": ["learned_technique"],
+          "games": ["iracing"],
+          "legacyImportant": false
+        },
+        {
+          "id": "learned_chain",
+          "label": "연속 코너 연결 학습",
+          "description": "첫 진입을 양보한 뒤 연결 구간 전체에서 반복 이득을 확인했을 때",
+          "example": "연속 코너, 첫 진입 조금 낮춰요.",
+          "keys": ["learned_chain"],
+          "games": ["iracing"],
+          "legacyImportant": false
+        },
+        {
+          "id": "learned_impact",
+          "label": "연석·충격 통과 학습",
+          "description": "서스펜션과 수직 가속도에서 충격을 측정하고 작은 충격의 반복 이득을 확인했을 때",
+          "example": "다음 코너, 차가 덜 튀도록 통과해 보세요.",
+          "keys": ["learned_impact"],
+          "games": ["iracing"],
+          "legacyImportant": false
+        },
+        {
           "id": "halfway",
           "label": "경기 중반 순위",
           "description": "경기 중반의 클래스 순위 안내",

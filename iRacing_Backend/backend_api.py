@@ -1550,6 +1550,8 @@ class TelemetryAnalyzer(ExternalAnalysis, SetupAnalysis, VehicleAnalysis, Corner
         result["performance"]["corner_names_confirmed"] = bool(confirmed_names)
         result["performance"]["corner_consistency"] = self._corner_consistency(corners, (lap_selection or {}).get("target_lap"))
         result['handling'] = self._handling_analysis(corners)
+        from driving_observations import analysis_result as driving_result
+        result['driving_learning'] = driving_result(self,corners)
         if result['handling'] is not None:
             try:
                 history = HandlingHistory(os.getenv('IRACING_HANDLING_HISTORY_PATH') or app_settings.data_dir() / 'handling-history.json')
@@ -3762,6 +3764,8 @@ from driver_results import LiveResultCapture
 _driver_result_capture = LiveResultCapture()
 live_telemetry = LiveTelemetry(sdk_factory=default_game_sdk if os.name == 'nt' else None,
                                result_observer=_driver_result_capture.submit)
+from driving_learning import DrivingHistory
+live_telemetry.driving_learning.history = DrivingHistory(os.getenv('IRACING_DRIVING_HISTORY_PATH') or MEMORY_DB_PATH.parent / 'driving-learning.json')
 # Pit facts learned from driven stops live beside the database (seeded by scripts/learn_pit_history.py).
 live_telemetry.pit_knowledge = PitKnowledge(os.getenv("IRACING_PIT_KNOWLEDGE_PATH") or MEMORY_DB_PATH.parent / "pit-knowledge.json")
 live_telemetry.race_history = RaceHistory(os.getenv("IRACING_RACE_HISTORY_PATH") or MEMORY_DB_PATH.parent / "race-history.json")

@@ -133,6 +133,7 @@ class LiveViews:
                     'fuel_feedback': list(self.fuel_feedback),
                     'wheel_observation': wheel_view(latest, self.game),
                     'corner_coach': self.corners.view(),
+                    'driving_learning': self.driving_learning.view(),
                     'controls': self.controls.view(),
                     'setup_controls': self.setup_advisor.view(latest),
                     'radio': {'briefing': self.radio.briefing(), 'capabilities': self.radio.capabilities(),

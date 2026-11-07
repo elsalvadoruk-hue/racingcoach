@@ -6,6 +6,17 @@ import { activateSession } from './sessionData';
 jest.mock('./Telemetry', () => ({ TrackMap: () => <div /> }));
 jest.mock('../components/PracticeCoach', () => () => <div />);
 
+test('personal learning dialog uses the selected comparison result',()=>{
+  activateSession({filename:'fixture.ibt',session:{track_length_m:5000},laps:[],corners:[]});
+  render(<DrivingSummary names={{}} comparison={{corners:[],rows:[],paths:{target:[]},analysisResult:{
+    driving_learning:{state:'LEARNING',observations:13,eligible:0,rejections:{INPUT_MISSING:2}}}}} />);
+  fireEvent.click(screen.getByRole('button',{name:'개인 주행 학습'}));
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  expect(screen.getByText('저장 구간 13회 · 주변 차량까지 확인된 구간 0회')).toBeInTheDocument();
+  fireEvent.keyDown(screen.getByRole('dialog'),{key:'Escape',code:'Escape'});
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+});
+
 test.each([['analysis', '비교·분석'], ['next', '다음 주행에서 할 일']])('task selection keeps %s expanded until the tasks background is clicked', (column, label) => {
   activateSession({ filename: 'fixture.ibt', session: { track_length_m: 5000 }, laps: [], corners: [] });
   const corners = [1, 2, 3].map(i => ({ id: `C${i}`, label: `구간 ${i}`, delta_s: i / 10,

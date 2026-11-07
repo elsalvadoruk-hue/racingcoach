@@ -27,8 +27,11 @@ class LiveCoaching:
             from spotter_context import traffic_context
             context = traffic_context(self.radio.metadata, sample.get('session_time'))
             self.corners.ingest({**sample, 'traffic_context': context}, identity, now, self.radio.metadata.get('track_length_m'))
+            superseded = self._coach_driving(identity,sample,context,now)
             self.radio.corner_revision = self.corners.revision
             pending = self.corners.focus
+            if pending and superseded is True:
+                pending['announced'] = True
             if pending is None:
                 self._corner_call = (None, None)
             if pending and not pending['announced']:
@@ -91,6 +94,35 @@ class LiveCoaching:
             if not self._corner_failure:
                 self._corner_failure = True
                 logger.exception('Live corner comparison failed; continuing without it')
+
+    def _coach_driving(self, identity, sample, context, now):
+        try:
+            service = self.driving_learning
+            service.ingest(identity,{**sample,'traffic_context':context},self.run_id,
+                           self.corners.definitions,self.radio.metadata.get('track_length_m'),now)
+            from driving_phrases import VARIANTS
+            if now-getattr(self,'_driving_check_at',-1e9) >= 1:
+                self._driving_check_at = now
+                phrases = {action: choices[int(sample.get('lap_number') or 0)%3] for action,choices in VARIANTS.items()}
+                suggestion = service.choose(now,phrases)
+                if suggestion:
+                    category = 'chain' if suggestion['kind']=='chain' else 'impact' if suggestion['action']=='impact_less' else 'technique'
+                    key = 'learned_'+category
+                    from radio_policy import quiet_window
+                    if self.radio.allows(key) and quiet_window(sample) and self.driving_audio_ready(suggestion['speech']):
+                        before = self.radio.serial
+                        self.radio.emit(key,now,suggestion['text'],role='coach',ttl=3,cooldown=0,group='corner_focus',
+                            condition=('driving_learning',suggestion['token']),speech_text=suggestion['speech'])
+                        event = next((e for e in self.radio.pending if e['serial']>before and e['key']==key),None)
+                        if event:
+                            event['prepared_only']=True
+                    service.mark_announced()
+            return bool(self.corners.focus and service.supersedes(self.corners.focus.get('id')))
+        except Exception:
+            if not getattr(self,'_driving_failure',False):
+                self._driving_failure = True
+                logger.exception('Personal driving coach unavailable; existing coaching continues')
+            return False
 
     def _track_sectors(self, identity, sample, race, session_time):
         """Own sectors at 30Hz, every car's at the 1Hz race data, and the laps of the stint in progress."""

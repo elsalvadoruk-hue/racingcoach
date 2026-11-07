@@ -180,6 +180,8 @@ def fixed_catalog():
     found.update({('coach', text): None for text in PHRASES.values()})
     from tire_reader.advisor import PHRASES as TIRE_PHRASES
     found.update({('coach', text): None for text in TIRE_PHRASES.values()})
+    from driving_phrases import VARIANTS as DRIVING_PHRASES
+    found.update({('coach', text): None for choices in DRIVING_PHRASES.values() for text in choices})
     return list(found)
 
 

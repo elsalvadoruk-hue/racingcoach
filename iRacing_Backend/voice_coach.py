@@ -404,6 +404,10 @@ class VoiceCoach:
         self.custom_packs = CustomVoicePacks(self.store.path.parent / 'custom_voice_packs',self.store.path.parent / 'short_radio')
         self.fixed_audio.custom_packs = self.custom_packs
         self.live.setup_audio_ready=lambda text:self.fixed_audio.cached('coach',text)
+        self.live.driving_audio_ready=lambda text: (
+            self.custom_packs.has('coach',text) if self.custom_packs.has_selection('coach')
+            else self.fixed_audio.cached('coach',text)
+        )
         self._report_notes = (None, [])
         self.audio_preparation = AudioPreparation(RadioAudioCache(self.speech,self.fixed_audio.directory))
 
@@ -680,6 +684,9 @@ class VoiceCoach:
         Multipart calls keep their first sentence; missing later sentences may be omitted.
         """
         cache, role = self.fixed_audio, item.get('engineer')
+        if item.get('prepared_only') and item.get('key','').startswith('learned_') and item.get('speech_text'):
+            # Voice selection can change while an observed recommendation is queued.
+            return self.live.driving_audio_ready(item['speech_text'])
         if item.get('speech_parts'):
             sentences = item['speech_parts'][:1] if optional_parts else item['speech_parts']
             return all(cache.cached(role, sentence) for sentence in sentences)
