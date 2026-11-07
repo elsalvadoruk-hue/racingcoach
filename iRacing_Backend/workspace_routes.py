@@ -241,6 +241,8 @@ def register_routes(app, services: WorkspaceRoutesServices):
                     personal = await asyncio.to_thread(select_personal_reference, services, telemetry, body.get('target_lap'))
                     result = {'files': [{key: row.get(key) for key in fields} for row in catalog['files']],
                               'api_token_configured': catalog.get('api_token_configured'),
+                              'effective_selection_mode': catalog.get('effective_selection_mode'),
+                              'configured_selection_mode': catalog.get('configured_selection_mode'),
                               'recommended_selection': catalog.get('recommended_selection', []), 'personalReference': personal}
                 elif route == 'overlay':
                     result = await asyncio.to_thread(services.lap_overlay_payload, telemetry, LapOverlayRequest(**body))

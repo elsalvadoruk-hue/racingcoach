@@ -5,6 +5,8 @@ const endpoint = '/api/garage61/collector/preferences';
 
 export function useGarage61Preference(onChanged, enabled = true) {
   const [mode, setMode] = useState('MATCHED');
+  const [tokenConfigured, setTokenConfigured] = useState(null);
+  const [effectiveMode, setEffectiveMode] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -20,7 +22,10 @@ export function useGarage61Preference(onChanged, enabled = true) {
     setLoading(true);
     try {
       const payload = await requestJson(endpoint, { signal: controller.signal });
-      if (mounted.current && !controller.signal.aborted) { setMode(payload.selection_mode); setError(''); }
+      if (mounted.current && !controller.signal.aborted) {
+        setMode(payload.selection_mode); setTokenConfigured(payload.api_token_configured);
+        setEffectiveMode(payload.effective_selection_mode); setError('');
+      }
     } catch (failure) {
       if (mounted.current && !controller.signal.aborted) setError(`수집 설정을 불러오지 못했습니다. ${failure.message}`);
     } finally {
@@ -43,6 +48,8 @@ export function useGarage61Preference(onChanged, enabled = true) {
       });
       if (!mounted.current) return;
       setMode(payload.selection_mode);
+      setTokenConfigured(payload.api_token_configured);
+      setEffectiveMode(payload.effective_selection_mode);
       setError('');
       await changed.current?.();
     } catch (failure) {
@@ -52,5 +59,5 @@ export function useGarage61Preference(onChanged, enabled = true) {
       if (mounted.current) setSaving(false);
     }
   }, [mode, loading, enabled]);
-  return { mode, loading, saving, error, reload, change };
+  return { mode, effectiveMode, tokenConfigured, loading, saving, error, reload, change };
 }

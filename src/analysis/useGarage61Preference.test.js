@@ -33,6 +33,20 @@ test('save failure retains previous mode and does not refresh or apply selected 
   expect(changed).not.toHaveBeenCalled();
 });
 
+test('token-free effective fastest is shown while the saved matched choice stays selected', async () => {
+  requestJson.mockResolvedValue({ selection_mode: 'MATCHED', effective_selection_mode: 'FASTEST', api_token_configured: false });
+  const { result } = renderHook(() => useGarage61Preference());
+  await waitFor(() => expect(result.current.loading).toBe(false));
+  expect(result.current.mode).toBe('MATCHED');
+  expect(result.current.effectiveMode).toBe('FASTEST');
+  render(<ExternalReferencePanel preference={result.current} collector={{health:{enabled:true}}} />);
+  expect(screen.getByRole('radio',{name:'조건에 맞는 데이터'})).toHaveAttribute('aria-checked','true');
+  expect(screen.getByText(/토큰이 없어 저장된 CSV 중 가장 빠른 랩/)).toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'빠른 데이터 보충'})).toBeDisabled();
+  expect(screen.getByRole('button',{name:'강제 새로 수집'})).toBeDisabled();
+  expect(requestJson).toHaveBeenCalledTimes(1);
+});
+
 test('failed load can be retried and rapid duplicate saves send one request', async () => {
   requestJson.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({ selection_mode: 'MATCHED' });
   const { result } = renderHook(() => useGarage61Preference());

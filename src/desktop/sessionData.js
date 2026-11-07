@@ -53,6 +53,7 @@ export function rememberSession(session, target, reference, external) {
     else localStorage.setItem(key, JSON.stringify({ filename: session.filename, target_lap: Number(target), reference_lap: reference ? Number(reference) : null,
       external_reference_files: external, reference_mode: external.length > 1 ? 'AGGREGATE' : external.length ? 'SINGLE' : 'LOCAL',
       ...(session.reference_filename ? { reference_filename: session.reference_filename } : {}),
+      ...(session.reference_source === 'LOCAL' ? { reference_source: 'LOCAL' } : {}),
       ...(session.reference_selection ? { reference_selection: session.reference_selection } : {}) }));
   } catch { /* Browsing still works if local storage is unavailable. */ }
 }

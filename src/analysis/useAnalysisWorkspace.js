@@ -9,6 +9,7 @@ import { useTelemetryEvents } from './useTelemetryEvents';
 import { useCollectorPolling } from './useCollectorPolling';
 import { useGarage61Preference } from './useGarage61Preference';
 import { useAnalysisProgress } from '../desktop/AnalysisProgress';
+import { readDesktopReferenceSource } from './desktopSelection';
 import { isSelectableRecording } from '../lib/recordingFiles';
 
 export function useAnalysisWorkspace() {
@@ -228,19 +229,13 @@ export function useAnalysisWorkspace() {
         setSelectedExternalReferences(activeTrialRef.current.reference_files);
         const nextRecommended = (payload.recommended_selection || []).slice(0, payload.display_limit || payload.max_selection || 9);
         if (JSON.stringify(nextRecommended) !== JSON.stringify(activeTrialRef.current.reference_files)) setPendingReferences(nextRecommended);
-      } else if (payload.api_token_configured === false) {
-        // Without a token nothing is recommended automatically. Laps the driver
-        // brought in from the Garage61 website and chose stay selected.
-        const available = new Set(nextFiles.filter((item) => item.usable !== false && item.compatible !== false).map((item) => item.name));
-        const kept = (autoSelect ? readDraft(effectiveFilename).referenceFiles : selectedExternalRef.current) || [];
-        appliedSelection = available.has(kept[0]) ? kept.filter((name) => available.has(name)) : [];
-        setSelectedExternalReferences(appliedSelection);
       } else if (autoSelect) {
         const draftReferences = readDraft(effectiveFilename).referenceFiles;
         const available = new Set(nextFiles.filter((item) => item.usable !== false).map((item) => item.name));
         const missingPrimary = draftReferences?.length && !available.has(draftReferences[0]);
         const restoredReferences = Array.isArray(draftReferences) ? draftReferences.filter((name) => available.has(name)) : null;
-        appliedSelection = (missingPrimary ? [] : restoredReferences?.length ? restoredReferences : payload.recommended_selection || []).slice(0, payload.max_selection || 12);
+        appliedSelection = (readDesktopReferenceSource(effectiveFilename) === 'LOCAL' || missingPrimary
+          ? [] : restoredReferences?.length ? restoredReferences : payload.recommended_selection || []).slice(0, payload.max_selection || 12);
         setSelectedExternalReferences(appliedSelection);
       } else {
         const available = new Set(nextFiles.filter((item) => item.usable !== false).map((item) => item.name));
@@ -401,7 +396,9 @@ export function useAnalysisWorkspace() {
           ? selectedExternalReferences
           : externalReferencesOverride;
         const chosenReferenceMode = activeTrialRef.current?.reference_mode || referenceModeOverride || fileDraft?.referenceMode || referenceModeRef.current;
-        const effectiveMode = chosenReferenceMode !== 'LOCAL' && requestedReferences.length ? chosenReferenceMode : 'LOCAL';
+        const automaticMode = forceAutoLaps && !activeTrialRef.current && chosenReferenceMode === 'LOCAL' && requestedReferences.length
+          ? 'AGGREGATE' : chosenReferenceMode;
+        const effectiveMode = automaticMode !== 'LOCAL' && requestedReferences.length ? automaticMode : 'LOCAL';
         const effectiveExternalReferences = effectiveMode === 'LOCAL' ? [] : effectiveMode === 'SINGLE' ? requestedReferences.slice(0, 1) : requestedReferences;
         if (chosenReferenceMode !== effectiveMode) setReferenceMode(effectiveMode);
         const fileEntry = filesRef.current.find((item) => item.name === effectiveFilename);
@@ -419,6 +416,7 @@ export function useAnalysisWorkspace() {
         const referenceSelection = referenceSelectionOverride ?? (!forceAutoLaps && analysisSnapshot?.filename === effectiveFilename ? analysisSnapshot.referenceSelection : undefined);
         const snapshot = { filename: effectiveFilename, ...effectiveFeedback,
           referenceMode: effectiveMode, references: effectiveExternalReferences, targetLap: requestedTargetLap, referenceLap: requestedReferenceLap,
+          referenceSource: forceAutoLaps ? readDesktopReferenceSource(effectiveFilename) : analysisSnapshot?.filename === effectiveFilename ? analysisSnapshot.referenceSource : null,
           ...(referenceFilename ? { referenceFilename } : {}),
           ...(referenceSelection ? { referenceSelection } : {}) };
 
@@ -808,6 +806,7 @@ export function useAnalysisWorkspace() {
     setAnalysis(payload); setDetail(null); setLoading(false); setError(''); setNewFileNotice('');
     setAnalysisSnapshot({ filename, ...nextFeedback,
       referenceMode: mode, references: refs, targetLap: sessionData.defaultTarget, referenceLap: sessionData.defaultReference,
+      referenceSource: sessionData.reference_source,
       referenceFilename: sessionData.reference_filename, referenceSelection: sessionData.reference_selection });
     // Keep the accepted comparison visible while the normal collection policy
     // checks whether this recording needs more matching references.

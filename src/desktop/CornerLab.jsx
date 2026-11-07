@@ -106,7 +106,7 @@ export default function CornerLab({ analysisWorkspace, game = 'iracing', onGameC
       feedback_symptom: snapshot.feedbackSymptom || null, setup_mode: snapshot.setupMode || 'EXPLORE' };
     labRequest('session', body, controller.signal).then(next => {
       if (controller.signal.aborted) return;
-      activateSession(currentSessionResult(next, next.initialComparison, body.external_reference_files)); setVersion(v => v + 1);
+      activateSession(currentSessionResult({ ...next, reference_source: snapshot.referenceSource }, next.initialComparison, body.external_reference_files)); setVersion(v => v + 1);
     }).catch(e => { if (!controller.signal.aborted) setError(e.message); })
       .finally(() => { endProgress(progressId); if (!controller.signal.aborted) setLoading(false); });
     return () => { controller.abort(); endProgress(progressId); };

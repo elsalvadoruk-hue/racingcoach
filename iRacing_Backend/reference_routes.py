@@ -40,10 +40,16 @@ class ReferenceRoutesServices:
 
 
 def register_routes(app, services: ReferenceRoutesServices):
+    async def preference_view(settings):
+        configured = await asyncio.to_thread(services.get_garage61_collector().api_token_configured)
+        return {'selection_mode': settings['garage61_selection_mode'],
+                'effective_selection_mode': settings['garage61_selection_mode'] if configured else 'FASTEST',
+                'api_token_configured': configured}
+
     @app.get('/api/garage61/collector/preferences')
     async def get_collection_preferences():
         settings = await asyncio.to_thread(app_settings.load)
-        return {'selection_mode': settings['garage61_selection_mode']}
+        return await preference_view(settings)
 
     @app.put('/api/garage61/collector/preferences')
     async def set_collection_preferences(payload: CollectionPreferences):
@@ -51,7 +57,7 @@ def register_routes(app, services: ReferenceRoutesServices):
         if job and job.get('busy'):
             raise HTTPException(status_code=409, detail='수집이 끝난 뒤 가져올 데이터를 변경하세요.')
         settings = await asyncio.to_thread(app_settings.save, {'garage61_selection_mode': payload.selection_mode})
-        return {'selection_mode': settings['garage61_selection_mode']}
+        return await preference_view(settings)
 
     @app.get("/api/external-references")
     async def get_external_references(filename: Optional[str] = None, retained_files: list[str] = Query(default=[])) -> dict[str, Any]:

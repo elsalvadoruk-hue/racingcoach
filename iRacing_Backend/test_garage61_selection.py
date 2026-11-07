@@ -42,6 +42,15 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual(self.client.put(url, json={'selection_mode': 'FASTEST'}).status_code, 409)
         self.assertFalse((self.root / 'settings.json').exists())
 
+    def test_no_token_reports_effective_fastest_without_overwriting_saved_mode(self):
+        app_settings.save({'garage61_selection_mode': 'MATCHED'})
+        before = (self.root/'settings.json').read_bytes()
+        with patch.object(api.garage61_collector,'api_token_configured',return_value=False):
+            payload = self.client.get('/api/garage61/collector/preferences').json()
+        self.assertEqual(payload,{'selection_mode':'MATCHED','effective_selection_mode':'FASTEST','api_token_configured':False})
+        self.assertEqual((self.root/'settings.json').read_bytes(),before)
+        self.assertEqual(self.client.get('/api/garage61/collector/preferences').json()['effective_selection_mode'],'MATCHED')
+
     def test_unknown_saved_preference_defaults_safely(self):
         (self.root / 'settings.json').write_text(json.dumps({'garage61_selection_mode': 'invalid'}))
         self.assertEqual(app_settings.load()['garage61_selection_mode'], 'MATCHED')
@@ -102,14 +111,19 @@ class SelectionTests(unittest.TestCase):
             'score': .95 if meta['driver_name'] == 'Match' else .1, 'setup_compatible': meta['driver_name'] == 'Match'}))
         self.enterContext(patch.object(api, 'telemetry_reference_conditions', return_value={}))
         self.enterContext(patch.object(api, '_garage61_context_scan', return_value={}))
-        for mode, first, count in [('MATCHED', 'match.csv', 1), ('FASTEST', 'fast.csv', 2)]:
+        for mode, token, first, count in [('MATCHED', True, 'match.csv', 1), ('FASTEST', True, 'fast.csv', 2),
+                                         ('MATCHED', False, 'fast.csv', 2)]:
             app_settings.save({'garage61_selection_mode': mode})
-            payload = api.list_external_reference_metadata(telemetry)
+            before = (self.root/'settings.json').read_bytes()
+            with patch.object(api.garage61_collector,'api_token_configured',return_value=token):
+                payload = api.list_external_reference_metadata(telemetry)
+                health = api.garage61_reference_health(telemetry, 'drive.ibt', payload)
             self.assertEqual(payload['files'][0]['name'], first)
             self.assertEqual(payload['recommended_primary'], first)
-            health = api.garage61_reference_health(telemetry, 'drive.ibt', payload)
+            self.assertEqual(payload['effective_selection_mode'],mode if token else 'FASTEST')
+            self.assertEqual((self.root/'settings.json').read_bytes(),before)
             self.assertEqual(health['usable_reference_count'], count)
-            self.assertEqual(health['context']['selection_mode'], mode)
+            self.assertEqual(health['context']['selection_mode'], mode if token else 'FASTEST')
             self.assertFalse(health['cache_fresh'])
             # A fastest retrieval does not upgrade setup compatibility evidence.
             fast = next(row for row in payload['files'] if row['name'] == 'fast.csv')

@@ -301,7 +301,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "2.5.2"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "2.5.3"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -441,50 +441,8 @@ def experiment_setup_evidence(baseline: Any, candidate: Any) -> dict[str, Any]:
             "setup_data_available": bool(baseline.setup and candidate.setup)}
 
 
-GARAGE61_FILENAME_RE = re.compile(
-    r"^Garage 61 - (?P<driver>.+?) - (?P<car>.+?) - (?P<track>.+?) - "
-    r"(?P<time>\d{2}\.\d{2}\.\d{3}) - (?P<lap_id>[^.]+)\.csv$",
-    re.IGNORECASE,
-)
-
-
-def _garage61_lap_time_seconds(value: str) -> Optional[float]:
-    parts = str(value or "").strip().split(".")
-    if len(parts) != 3:
-        return None
-    try:
-        minutes, seconds, milliseconds = (int(part) for part in parts)
-    except ValueError:
-        return None
-    total = minutes * 60.0 + seconds + milliseconds / 1000.0
-    return total if total > 0 else None
-
-
-def _garage61_track_parts(value: str) -> tuple[str, str]:
-    text = str(value or "").strip()
-    match = re.match(r"^(.*?)\s*\(([^()]*)\)\s*$", text)
-    if match:
-        return match.group(1).strip(), match.group(2).strip()
-    return text, ""
-
-
-def garage61_filename_metadata(path: Path) -> Optional[dict[str, Any]]:
-    match = GARAGE61_FILENAME_RE.match(path.name)
-    if not match:
-        return None
-    lap_time_s = _garage61_lap_time_seconds(match.group("time"))
-    if lap_time_s is None:
-        return None
-    track_name, track_config = _garage61_track_parts(match.group("track"))
-    return {
-        "name": path.name,
-        "driver_name": match.group("driver").strip(),
-        "car_name": match.group("car").strip(),
-        "track_name": track_name,
-        "track_config": track_config,
-        "lap_time_s": lap_time_s,
-        "lap_id": match.group("lap_id").strip(),
-    }
+from garage61_filename import (GARAGE61_FILENAME_RE, _garage61_lap_time_seconds,
+    _garage61_track_parts, garage61_filename_metadata)
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -633,7 +591,9 @@ def external_reference_validation(path: Path) -> dict[str, Any]:
 
 def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None, retained_files: Iterable[str] = ()) -> dict[str, Any]:
     selection_mode = app_settings.load()['garage61_selection_mode']
-    fastest = selection_mode == 'FASTEST'
+    token_configured = garage61_collector.api_token_configured()
+    effective_mode = selection_mode if token_configured else 'FASTEST'
+    fastest = effective_mode == 'FASTEST'
     files: list[dict[str, Any]] = []
     parse_errors: list[dict[str, str]] = []
     current_best = None
@@ -790,10 +750,13 @@ def list_external_reference_metadata(telemetry: Optional[ParsedTelemetry] = None
     enriched_count = sum(1 for item in files if item.get("metadata_enriched"))
     return {
         "directory": str(EXTERNAL_REFERENCE_DIR),
-        "selection_mode": selection_mode,
+        "selection_mode": effective_mode,
+        "configured_selection_mode": selection_mode,
+        "effective_selection_mode": effective_mode,
+        "selection_mode_reason": "CONFIGURED" if token_configured else "TOKEN_MISSING",
         "catalog_path": str(EXTERNAL_REFERENCE_CATALOG_PATH),
         "files": display_files,
-        "api_token_configured": garage61_collector.api_token_configured(),
+        "api_token_configured": token_configured,
         "recommended_selection": recommended,
         "recommended_primary": recommended[0] if recommended else None,
         "selection_policy": "FIRST_FILE_PRIMARY_REMAINING_SUPPORT",

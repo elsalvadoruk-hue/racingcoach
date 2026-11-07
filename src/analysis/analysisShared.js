@@ -94,7 +94,8 @@ export function sameVehicleAndTrack(left, right) {
 
 export function analysisContextKey(context) {
   const [primary, ...support] = context.references || [];
-  return JSON.stringify({ ...context, references: primary ? [primary, ...support.sort()] : [] });
+  // Remembering an explicit source is UI intent, not a different calculation.
+  return JSON.stringify({ ...context, referenceSource: undefined, references: primary ? [primary, ...support.sort()] : [] });
 }
 
 export function comparisonContextLabel(file) {

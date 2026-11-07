@@ -158,11 +158,12 @@ function noTokenReferences() {
     job: { state: 'FAILED', busy: false, message: 'old authentication failure' } });
 }
 
-test('no token never recommends Garage61 laps automatically and stays quiet', async () => {
+// User-approved follow-up: token-free local CSVs now supply the automatic fastest reference.
+test('no token automatically recommends a stored Garage61 lap without collection or authentication errors', async () => {
   noTokenReferences();
   render(<SourcePicker target="2" reference="2" external={[]} onApply={onApply} analysisWorkspace={{ game: 'iracing' }} />);
   await ready();
-  expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
+  expect(screen.getByLabelText('기준 종류')).toHaveValue('GARAGE61');
   expect(screen.queryByRole('status', { name: 'Garage61 수집 상태' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Garage61 다시 확인' })).not.toBeInTheDocument();
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -171,7 +172,7 @@ test('no token never recommends Garage61 laps automatically and stays quiet', as
   fireEvent.click(screen.getByRole('button', { name: '선택한 랩 비교하기' }));
   await waitFor(() => expect(onApply).toHaveBeenCalled());
   const body = labRequest.mock.calls.find(([route]) => route === 'comparison')[1];
-  expect(body).toMatchObject({ reference_mode: 'LOCAL', external_reference_files: [] });
+  expect(body).toMatchObject({ reference_mode: 'SINGLE', external_reference_files: ['new.csv'] });
 });
 
 test('no token keeps a Garage61 lap the driver chose, such as one brought in from the website', async () => {

@@ -540,9 +540,38 @@ test.each([
   expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/garage61/collector/start'))).toHaveLength(0);
 });
 
-test('no token ignores cached recommendations and the saved Garage61 selection on startup', async () => {
+// User-approved follow-up: absent a token, compatible local CSVs are automatic references.
+test.each([true, false])('an old automatic LOCAL draft cannot override Garage61 recommendations with token %s', async token => {
+  localStorage.setItem('iracing-tuner.workflow.v1', JSON.stringify({ version: 1,
+    preferences: { selectedFile: 'A.ibt' }, drafts: { 'A.ibt': { referenceMode: 'LOCAL', referenceFiles: [] } } }));
   localStorage.setItem('iracing.desktop.last-session.v1', JSON.stringify({ filename: 'A.ibt',
-    target_lap: 2, reference_lap: 1, external_reference_files: ['cached.csv'] }));
+    target_lap: 2, reference_lap: 1, reference_mode: 'LOCAL', reference_selection: 'AUTO', external_reference_files: [] }));
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.includes('/api/external-references')
+    ? response({ files: [{ name: 'cached.csv', usable: true }], recommended_selection: ['cached.csv'], api_token_configured: token })
+    : original(url, options));
+  const { result } = await ready();
+  expect(requests()[0].external_reference_files).toEqual(['cached.csv']);
+  expect(result.current.analysisSnapshot.referenceMode).not.toBe('LOCAL');
+});
+
+test.each([{reference_source: 'LOCAL', reference_selection: 'AUTO'}, {reference_selection: 'MANUAL'}])('startup preserves explicit personal source %j', async choice => {
+  localStorage.setItem('iracing-tuner.workflow.v1', JSON.stringify({ version: 1,
+    preferences: { selectedFile: 'A.ibt' }, drafts: { 'A.ibt': { referenceMode: 'LOCAL', referenceFiles: [] } } }));
+  localStorage.setItem('iracing.desktop.last-session.v1', JSON.stringify({ filename: 'A.ibt',
+    target_lap: 2, reference_lap: 1, reference_mode: 'LOCAL', external_reference_files: [], ...choice }));
+  const original = global.fetch.getMockImplementation();
+  global.fetch.mockImplementation((url, options) => url.includes('/api/external-references')
+    ? response({ files: [{ name: 'cached.csv', usable: true }], recommended_selection: ['cached.csv'] })
+    : original(url, options));
+  const { result } = await ready();
+  expect(requests()[0].external_reference_files).toEqual([]);
+  expect(result.current.analysisSnapshot.referenceMode).toBe('LOCAL');
+});
+
+test.each([{ saved: [] }, { saved: ['cached.csv'] }])('no token restores or automatically chooses a stored reference on startup: $saved', async ({ saved }) => {
+  localStorage.setItem('iracing.desktop.last-session.v1', JSON.stringify({ filename: 'A.ibt',
+    target_lap: 2, reference_lap: 1, external_reference_files: saved }));
   const original = global.fetch.getMockImplementation();
   global.fetch.mockImplementation((url, options) => url.includes('/api/external-references')
     ? response({ files: [{ name: 'cached.csv', usable: true }], recommended_selection: ['cached.csv'],
@@ -550,9 +579,9 @@ test('no token ignores cached recommendations and the saved Garage61 selection o
       collector_health: { enabled: true, needs_collection: false, collection_policy: { api_token_configured: false } } })
     : original(url, options));
   const { result } = await ready();
-  expect(result.current.selectedExternalReferences).toEqual([]);
-  expect(result.current.analysisSnapshot.referenceMode).toBe('LOCAL');
-  expect(requests()[0]).toMatchObject({ external_reference_files: [] });
+  expect(result.current.selectedExternalReferences).toEqual(['cached.csv']);
+  expect(result.current.analysisSnapshot.referenceMode).not.toBe('LOCAL');
+  expect(requests()[0]).toMatchObject({ external_reference_files: ['cached.csv'] });
   expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/api/garage61/collector/start'))).toHaveLength(0);
 });
 

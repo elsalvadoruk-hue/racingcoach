@@ -136,6 +136,9 @@ class RecommendedPrimaryTests(unittest.TestCase):
         self.directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.rows = {}
         stack = self.enterContext(ExitStack())
+        # Condition-priority tests exercise token-backed MATCHED selection.
+        stack.enter_context(patch.object(api.garage61_collector, 'api_token_configured', return_value=True))
+        stack.enter_context(patch.object(api.app_settings, 'load', return_value={'garage61_selection_mode': 'MATCHED'}))
         stack.enter_context(patch.object(api, '_external_reference_paths', side_effect=lambda: list(self.directory.glob('*.csv'))))
         stack.enter_context(patch.object(api, '_reference_catalog', return_value={}))
         stack.enter_context(patch.object(api, 'garage61_reference_metadata', side_effect=lambda path, _: self.rows[path.name]))

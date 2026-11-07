@@ -46,7 +46,9 @@ export function ExternalReferencePanel({
   };
   const job = capabilities?.api_token_configured === false ? null : collector?.job || null;
   const collectorBusy = Boolean(job?.busy);
-  const fastest = (preference?.mode || health.selection_mode || referenceStatus?.selection_mode) === 'FASTEST';
+  const noToken = (referenceStatus?.api_token_configured ?? preference?.tokenConfigured ?? capabilities?.api_token_configured) === false;
+  const savedFastest = (preference?.mode || health.selection_mode || referenceStatus?.selection_mode) === 'FASTEST';
+  const fastest = noToken || savedFastest;
   const preferenceDisabled = collectorBusy || collectorLoading || preference?.loading || preference?.saving;
   const jobState = job?.state || 'IDLE';
   const progress = Math.max(0, Math.min(100, Math.round(Number(job?.progress || 0) * 100)));
@@ -68,10 +70,11 @@ export function ExternalReferencePanel({
             <ToggleGroupItem value="FASTEST">가장 빠른 데이터</ToggleGroupItem>
           </ToggleGroup>
           <FieldDescription id="garage61-selection-description">
-            {fastest ? '같은 차량·트랙·레이아웃의 공개 기록을 랩타임이 빠른 순서로 가져옵니다. 날씨·연료·셋업 조건은 다를 수 있습니다.'
+            {savedFastest ? '같은 차량·트랙·레이아웃의 공개 기록을 랩타임이 빠른 순서로 가져옵니다. 날씨·연료·셋업 조건은 다를 수 있습니다.'
               : '내 주행과 날씨·연료 등의 조건이 비슷한 기록을 우선 가져옵니다. 기본 설정입니다.'}
             {' '}선택하면 자동 저장되며 다음 수집부터 적용됩니다.
             {collectorBusy && ' 수집이 끝난 뒤 변경할 수 있습니다.'}
+            {noToken && <span role="status"> 토큰이 없어 저장된 CSV 중 가장 빠른 랩을 자동 기준으로 사용합니다. 저장된 수집 설정은 유지됩니다.</span>}
           </FieldDescription>
           {preference.saving && <p role="status" className="text-sm text-muted-foreground">저장 중…</p>}
           {preference.error && <p role="alert" className="text-sm text-destructive">{preference.error} <Button variant="outline" size="sm" onClick={preference.reload}>다시 확인</Button></p>}
@@ -89,7 +92,7 @@ export function ExternalReferencePanel({
             </p>
             <p className="mt-2 max-w-5xl text-sm leading-relaxed text-muted-foreground">
               IBT에서 차량·트랙·레이아웃·노면온도·기온·연료·습도·바람·강수·가능한 BOP/타이어 조건을 읽습니다.
-              {fastest ? 'Garage61 API로 최대 1,000개 공개 후보 중 빠른 랩타임을 우선해 내려받습니다. ' : 'Garage61 API로 최대 1,000개 후보를 조건별 단계 검색하고, 공개 telemetry만 내려받습니다. '}토큰이 없으면 오류 없이 내 주행 데이터끼리 비교합니다. Garage61을 사용하려면 설정 → 설치 설정 → Garage61 개인 API 토큰에서 등록하세요. 등록한 토큰의 인증·권한 문제는 오류로 안내하며 Playwright 설치 없이 이용할 수 있습니다.
+              {fastest ? 'Garage61 API로 최대 1,000개 공개 후보 중 빠른 랩타임을 우선해 내려받습니다. ' : 'Garage61 API로 최대 1,000개 후보를 조건별 단계 검색하고, 공개 telemetry만 내려받습니다. '}토큰이 없어도 같은 차량·트랙·레이아웃의 사용 가능한 CSV가 있으면 가장 빠른 랩을 자동 기준으로 사용하고, 없으면 내 기준 랩을 사용합니다. API 자동 수집을 사용하려면 설정 → 설치 설정 → Garage61 개인 API 토큰에서 등록하세요. 등록한 토큰의 인증·권한 문제는 오류로 안내하며 Playwright 설치 없이 이용할 수 있습니다.
               CSV를 검증한 뒤 대표 실주행 한 랩으로 속도·페달·라인·시간차를 비교합니다. 조건이 맞는 다른 드라이버의 기록은 구간별 손실과 개선 방향을 확인하는 보조 자료로 사용합니다. 아래 요약은 속도 손실과 GPS 차이가 큰 상위 2개 구간을 표시합니다.
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
@@ -114,7 +117,7 @@ export function ExternalReferencePanel({
             <Button variant="default"
               type="button"
               onClick={onCollect}
-              disabled={collectorBusy || collectorLoading || preference?.loading || preference?.saving || !health?.enabled}
+              disabled={noToken || collectorBusy || collectorLoading || preference?.loading || preference?.saving || !health?.enabled}
               className=" coach-primary-action px-4 py-2 text-sm   transition  disabled:cursor-not-allowed disabled: disabled:"
             >
               {collectorBusy ? 'Garage61 수집 중' : fastest ? '빠른 데이터 보충' : '조건 데이터 보충'}
@@ -122,7 +125,7 @@ export function ExternalReferencePanel({
             <Button variant="outline"
               type="button"
               onClick={onForceCollect}
-              disabled={collectorBusy || collectorLoading || preference?.loading || preference?.saving || !health?.enabled}
+              disabled={noToken || collectorBusy || collectorLoading || preference?.loading || preference?.saving || !health?.enabled}
               className=" border   px-4 py-2 text-sm   transition   disabled:opacity-40"
             >
               강제 새로 수집

@@ -438,6 +438,47 @@ class OverlayReference:
                          'similarity': candidate['similarity'], 'coverage': candidate['coverage'],
                          'condition_note': note, 'quality': quality}
 
+    def _web_fallback(self, key, context, length):
+        """Worker-only fallback. Unknown lap/date/conditions never become verified metadata."""
+        if (context.get('game', 'iracing') != 'iracing' or context.get('pinned_reference')
+                or context['conditions'].get('weather_declared_wet') is not False
+                or not length or length <= 0):
+            return None
+        from garage61_filename import garage61_filename_metadata
+        from reference_conditions import external_reference_compatibility
+        candidates = []
+        paths = []
+        catalog = g61.load_json(self.directory/'garage61_catalog.json')
+        catalog_laps = catalog.get('laps') or {}
+        known_ids = {str(value).upper() for value in catalog_laps} if isinstance(catalog_laps, dict) else set()
+        known_ids.update(str(item.get('lap_id', '')).upper() for item in catalog.get('items', []) if isinstance(item, dict))
+        for folder in (self.directory, self.directory/'live'):
+            for path in folder.glob('Garage 61 - *.csv'):
+                try:
+                    # An API lap rejected by its metadata must not re-enter as a web export.
+                    if (path.is_symlink() or path.with_suffix('.meta.json').exists()
+                            or Path(str(path)+'.meta.json').exists()):
+                        continue
+                    paths.append((path.stat().st_mtime_ns, path))
+                except OSError:
+                    continue
+        for _, path in sorted(paths, key=lambda item: item[0], reverse=True)[:1500]:
+            meta = garage61_filename_metadata(path)
+            if (meta and meta['lap_id'].upper() not in known_ids
+                    and external_reference_compatibility(meta, context['identity']).get('compatible')):
+                candidates.append({**meta, '_path': path})
+        for candidate in sorted(candidates, key=lambda item: (item['lap_time_s'], item['name'])):
+            if not self._active(key):
+                return None
+            try:
+                aligned, state = self._load({**candidate, 'similarity': 0., 'coverage': 0.}, length)
+                return aligned, {**state, 'source': 'GARAGE61', 'unverified_conditions': True,
+                    'message': 'Garage61 웹 CSV · 조건 미확인 기준',
+                    'condition_note': '조건 미확인 기준 · 깨끗한 랩·180일 이내 여부·날씨·연료·타이어 미확인'}
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return None
+
     def _prepare_garage(self, key, context, length):
         if length is None or length <= 0:
             return None, {'state': 'UNAVAILABLE', 'message': '트랙 길이 확인 필요'}
@@ -550,7 +591,7 @@ class OverlayReference:
             result = self._prepare_garage(key, context, length)
             # A missing token or search limit still allows an already cached lap as the fallback.
             if result[0] is None and not context.get('pinned_reference') and (length or 0) > 0:
-                result = self._relaxed(key, context, length) or result
+                result = self._relaxed(key, context, length) or self._web_fallback(key, context, length) or result
             return result
         if length is None or length <= 0:
             return None, {'state': 'UNAVAILABLE', 'message': '트랙 길이 확인 필요'}
@@ -568,7 +609,7 @@ class OverlayReference:
                 if result[0] is not None:
                     return result
                 if context.get('source') == 'garage61':
-                    return self._relaxed(key, context, length) or result
+                    return self._relaxed(key, context, length) or self._web_fallback(key, context, length) or result
             except (error.HTTPError, OSError, ValueError, KeyError):
                 garage = 'Garage61 확인 실패'
                 if context.get('source') == 'garage61':
@@ -583,6 +624,9 @@ class OverlayReference:
             fallback = None
         if fallback:
             return fallback
+        web = None if personal_only else self._web_fallback(key, context, length)
+        if web:
+            return web
         return None, {'state': 'NO_MATCH', 'source': 'PERSONAL',
                       'message': (f'Garage61: {garage} · ' if garage else '')+'조건에 맞는 내 기록 없음 · 내 입력만 표시합니다.'}
 

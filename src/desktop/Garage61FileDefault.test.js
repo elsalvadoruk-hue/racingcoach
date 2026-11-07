@@ -1,7 +1,7 @@
 import React from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import SourcePicker from './SourcePicker';
-import { activateSession, currentSessionResult, labRequest, selectGame } from './sessionData';
+import { activateSession, currentSessionResult, labRequest, selectGame, rememberSession, LAST_SESSION_KEY } from './sessionData';
 import { requestJson } from '../analysis/analysisClient';
 
 jest.mock('../analysis/analysisClient', () => ({ requestJson: jest.fn() }));
@@ -94,14 +94,54 @@ test('switching files selects compatible server recommendations and applying use
   expect(selected()).toEqual(['A.csv']);
 });
 
-test('a new file defaults to Garage61 even when the current file uses a local reference', async () => {
-  await picker({ external: [] });
+test('a new file defaults to Garage61 even when the current file uses an explicitly chosen local reference', async () => {
+  await picker({ external: [], snapshot: { reference_source: 'LOCAL', reference_selection: 'AUTO' } });
   expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
   await changeFile('B.ibt');
   expect(screen.getByLabelText('기준 종류')).toHaveValue('GARAGE61');
   expect(selected()).toEqual(['B2.csv']);
   fireEvent.change(screen.getByLabelText('기준 종류'), { target: { value: 'LOCAL' } });
   expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
+});
+
+test.each([true, false, undefined])('opening the same automatic recording defaults to Garage61 with token state %s', async token => {
+  catalogs['A.ibt'].api_token_configured = token;
+  await picker({ external: [], snapshot: { reference_selection: 'AUTO' } });
+  expect(screen.getByLabelText('기준 종류')).toHaveValue('GARAGE61');
+  expect(selected()).toEqual(['A.csv']);
+});
+
+test.each([true, false])('a manually chosen personal lap stays local with token state %s', async token => {
+  catalogs['A.ibt'].api_token_configured = token;
+  await picker({ external: [], snapshot: { reference_selection: 'MANUAL' } });
+  expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
+});
+
+test('explicit automatic personal source stays local on reopening', async () => {
+  await picker({ external: [], snapshot: { reference_source: 'LOCAL', reference_selection: 'AUTO' } });
+  expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
+});
+
+test('selecting personal source is preserved in the applied session and saved for restart', async () => {
+  activateSession(currentSessionResult({ ...session('A.ibt'), reference_selection: 'AUTO' }));
+  const onApply = jest.fn();
+  render(<SourcePicker target="2" reference="2" external={[]} onApply={onApply} analysisWorkspace={{ game: 'iracing' }} />);
+  await ready();
+  fireEvent.change(screen.getByLabelText('기준 종류'), { target: { value: 'LOCAL' } });
+  await ready();
+  fireEvent.click(screen.getByRole('button', { name: '선택한 랩 비교하기' }));
+  await waitFor(() => expect(onApply).toHaveBeenCalled());
+  const applied = onApply.mock.calls[0][0];
+  expect(applied).toMatchObject({ reference_source: 'LOCAL', reference_selection: 'AUTO' });
+  rememberSession(applied, '2', '2', []);
+  expect(JSON.parse(localStorage.getItem(LAST_SESSION_KEY)).reference_source).toBe('LOCAL');
+});
+
+test('initial Garage61 recommendation does not reset the selected driving lap', async () => {
+  catalogs['A.ibt'].api_token_configured = false;
+  await picker({ external: [], snapshot: { reference_selection: 'AUTO', defaultTarget: 3, laps: [lap, { ...lap, lap_number: 3 }] } });
+  expect(screen.getByLabelText('기준 종류')).toHaveValue('GARAGE61');
+  expect(screen.getByLabelText('내 주행')).toHaveValue('2');
 });
 
 test('no compatible Garage61 falls back locally and the next available file uses Garage61 again', async () => {
