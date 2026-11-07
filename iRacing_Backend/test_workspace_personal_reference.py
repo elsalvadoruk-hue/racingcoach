@@ -82,15 +82,18 @@ class WorkspacePersonalReferenceTests(BackToBackLaps, unittest.TestCase):
         self.assertEqual(response.json()['defaultReferenceFile'], 'best.ibt')
         self.assertEqual(response.json()['referenceFallback'], 'GARAGE61_UNAVAILABLE')
 
-    def test_no_token_uses_personal_best_even_with_cached_garage61_selection(self):
+    def test_no_token_keeps_an_explicitly_chosen_imported_garage61_lap(self):
+        # A driver without a token can bring laps in from the Garage61 website.
+        # Choosing one explicitly must not be silently replaced by a personal lap;
+        # automatic selection stays off without a token (see useAnalysisWorkspace).
         with patch.object(api, 'list_external_reference_metadata', return_value={
                 'api_token_configured': False,
                 'files': [{'name': 'cached.csv', 'usable': True, 'compatible': True}],
                 'recommended_selection': ['cached.csv']}):
             response = self.post(reference_mode='SINGLE', external_reference_files=['cached.csv'])
-        self.assertEqual(response.status_code, 200, response.text)
-        self.assertEqual(response.json()['defaultReferenceFile'], 'best.ibt')
-        self.assertEqual(response.json()['initialComparison']['referenceTime'], 100)
+        # The fake catalog has no real CSV behind it, so the request reaches the
+        # Garage61 reader instead of falling back to the personal best.
+        self.assertNotEqual(response.json().get('referenceFallback'), 'GARAGE61_UNAVAILABLE', response.text)
 
     def test_no_token_health_is_normal_personal_mode_without_collection(self):
         with patch.object(api.garage61_collector, 'api_token_configured', return_value=False), \

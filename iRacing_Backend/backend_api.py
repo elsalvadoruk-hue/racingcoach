@@ -4394,6 +4394,13 @@ _handlers = register_reference_routes(app, ReferenceRoutesServices(
     get_repository=lambda: repository,
     resolve_telemetry_file=lambda *args, **kwargs: resolve_telemetry_file(*args, **kwargs),
 ))
+from garage61_imports import register_routes as register_garage61_import_routes
+register_garage61_import_routes(
+    app,
+    reference_dir=lambda: EXTERNAL_REFERENCE_DIR,
+    validate=lambda path: Garage61ReferenceReader(path).parse(),
+    metadata=lambda path: garage61_filename_metadata(path),
+)
 get_external_references = _handlers.get_external_references
 get_garage61_api_status = _handlers.get_garage61_api_status
 get_garage61_collector_status = _handlers.get_garage61_collector_status

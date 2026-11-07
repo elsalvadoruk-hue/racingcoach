@@ -237,7 +237,7 @@ def register_routes(app, services: WorkspaceRoutesServices):
                     except (OSError, ValueError):
                         catalog = {'files': []}
                     fields = ('name', 'driver_name', 'car_name', 'track_name', 'track_config', 'track_platform_id',
-                              'lap_time_s', 'usable', 'compatible', 'condition_similarity', 'validation_error')
+                              'lap_time_s', 'usable', 'compatible', 'compatibility_reason', 'condition_similarity', 'validation_error')
                     personal = await asyncio.to_thread(select_personal_reference, services, telemetry, body.get('target_lap'))
                     result = {'files': [{key: row.get(key) for key in fields} for row in catalog['files']],
                               'api_token_configured': catalog.get('api_token_configured'),
@@ -256,9 +256,9 @@ def register_routes(app, services: WorkspaceRoutesServices):
                         try:
                             catalog = await asyncio.to_thread(services.list_external_reference_metadata, telemetry,
                                 retained_files=body.get('external_reference_files') or [])
+                            # Without a token nothing is collected automatically, but laps the
+                            # driver brought in from the Garage61 website stay usable.
                             usable = {row.get('name') for row in catalog.get('files', []) if row.get('usable') and row.get('compatible')}
-                            if catalog.get('api_token_configured') is False:
-                                usable = set()
                         except (OSError, ValueError):
                             usable = set()
                         selected_files = body.get('external_reference_files') or []

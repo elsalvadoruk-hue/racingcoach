@@ -229,8 +229,12 @@ export function useAnalysisWorkspace() {
         const nextRecommended = (payload.recommended_selection || []).slice(0, payload.display_limit || payload.max_selection || 9);
         if (JSON.stringify(nextRecommended) !== JSON.stringify(activeTrialRef.current.reference_files)) setPendingReferences(nextRecommended);
       } else if (payload.api_token_configured === false) {
-        appliedSelection = [];
-        setSelectedExternalReferences([]);
+        // Without a token nothing is recommended automatically. Laps the driver
+        // brought in from the Garage61 website and chose stay selected.
+        const available = new Set(nextFiles.filter((item) => item.usable !== false && item.compatible !== false).map((item) => item.name));
+        const kept = (autoSelect ? readDraft(effectiveFilename).referenceFiles : selectedExternalRef.current) || [];
+        appliedSelection = available.has(kept[0]) ? kept.filter((name) => available.has(name)) : [];
+        setSelectedExternalReferences(appliedSelection);
       } else if (autoSelect) {
         const draftReferences = readDraft(effectiveFilename).referenceFiles;
         const available = new Set(nextFiles.filter((item) => item.usable !== false).map((item) => item.name));

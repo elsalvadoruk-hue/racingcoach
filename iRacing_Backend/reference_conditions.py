@@ -373,7 +373,21 @@ def external_reference_compatibility(reference: dict[str, Any], telemetry_metada
     if track_id_known:
         track_match = True
     else:
-        track_match = bool(track_ref and track_ref in track_candidates and config_ref == config_current)
+        # Garage61 leaves the layout out of an export's file name when the
+        # layout is already part of the track name (Sebring International
+        # Raceway / International, Circuit des 24 Heures du Mans / 24 Heures du
+        # Mans, Detroit Grand Prix at Belle Isle / Belle Isle). Only then may an
+        # empty reference layout stand for the current one. Checked against 502
+        # Garage61 laps whose API metadata gives the real layout (2026-11-07).
+        layout_in_name = (not config_ref and bool(config_current)
+                          and config_current in _context_token(reference.get("track_name")))
+        if layout_in_name:
+            track_ref = _track_identity(reference.get("track_name"), resolved_config)
+        # Single-layout venues such as Long Beach are exported as "(Unknown)";
+        # iRacing reports no layout name for them.
+        unknown_single = config_ref == "unknown" and not config_current
+        track_match = bool(track_ref and track_ref in track_candidates
+                           and (config_ref == config_current or layout_in_name or unknown_single))
 
     if car_match and track_match:
         method = "MIXED_ID_NAME" if (car_id_known or track_id_known) else "LEGACY_NAME_CONFIG"

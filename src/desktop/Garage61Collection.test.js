@@ -148,7 +148,7 @@ test('LMU never checks or starts Garage61 collection', async () => {
   expect(requestJson.mock.calls.filter(([url]) => url.includes('/garage61/collector'))).toHaveLength(0);
 });
 
-test('no token uses personal comparison even with cached recommendations and old external selection', async () => {
+function noTokenReferences() {
   const original = labRequest.getMockImplementation();
   labRequest.mockImplementation(async (route, body, signal) => route === 'references'
     ? { files: refs, recommended_selection: ['new.csv'], api_token_configured: false,
@@ -156,10 +156,13 @@ test('no token uses personal comparison even with cached recommendations and old
     : original(route, body, signal));
   requestJson.mockResolvedValue({ health: { ...health('A.ibt'), collection_policy: { api_token_configured: false } },
     job: { state: 'FAILED', busy: false, message: 'old authentication failure' } });
-  render(<SourcePicker target="2" reference="2" external={['new.csv']} onApply={onApply} analysisWorkspace={{ game: 'iracing' }} />);
+}
+
+test('no token never recommends Garage61 laps automatically and stays quiet', async () => {
+  noTokenReferences();
+  render(<SourcePicker target="2" reference="2" external={[]} onApply={onApply} analysisWorkspace={{ game: 'iracing' }} />);
   await ready();
   expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
-  expect(screen.queryByRole('option', { name: 'Garage61 · 내려받은 기준' })).not.toBeInTheDocument();
   expect(screen.queryByRole('status', { name: 'Garage61 수집 상태' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Garage61 다시 확인' })).not.toBeInTheDocument();
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -169,6 +172,19 @@ test('no token uses personal comparison even with cached recommendations and old
   await waitFor(() => expect(onApply).toHaveBeenCalled());
   const body = labRequest.mock.calls.find(([route]) => route === 'comparison')[1];
   expect(body).toMatchObject({ reference_mode: 'LOCAL', external_reference_files: [] });
+});
+
+test('no token keeps a Garage61 lap the driver chose, such as one brought in from the website', async () => {
+  noTokenReferences();
+  render(<SourcePicker target="2" reference="2" external={['new.csv']} onApply={onApply} analysisWorkspace={{ game: 'iracing' }} />);
+  await ready();
+  expect(screen.getByRole('option', { name: 'Garage61 · 내려받은 기준' })).toBeInTheDocument();
+  expect(screen.getByLabelText('기준 종류')).toHaveValue('GARAGE61');
+  expect(starts()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: '선택한 랩 비교하기' }));
+  await waitFor(() => expect(onApply).toHaveBeenCalled());
+  const body = labRequest.mock.calls.find(([route]) => route === 'comparison')[1];
+  expect(body.external_reference_files).toEqual(['new.csv']);
 });
 
 test('registering a token can surface authentication errors and deleting it clears them on recheck', async () => {
@@ -268,5 +284,47 @@ test('collection completion during an older reference search cannot be overwritt
   await act(async () => finish({ files: [], personalReference: { filename: 'B.ibt', lap: 2 } }));
   await ready();
   await waitFor(() => expect(screen.getByRole('option', { name: 'Garage61 · 내려받은 기준' })).toBeEnabled());
+  expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
+});
+
+test('a lap brought in from the Garage61 website becomes the primary reference without a token', async () => {
+  const web = { name: 'Garage 61 - Web - Car - Track - 01.29.000 - 01M3HJNV67E0C95DYS6DXM80Q9.csv', usable: true, compatible: true, driver_name: '웹 드라이버', lap_time_s: 89 };
+  let kept = false;
+  const original = labRequest.getMockImplementation();
+  labRequest.mockImplementation(async (route, body, signal) => route === 'references'
+    ? { files: kept ? [web] : [], recommended_selection: [], api_token_configured: false, personalReference: { filename: body.filename, lap: 2 } }
+    : original(route, body, signal));
+  requestJson.mockImplementation(async (url, options) => {
+    if (url === '/api/garage61/downloads') return { available: true, files: kept ? [] : [{ name: web.name, driver_name: '웹 드라이버', lap_time_s: 89, imported: false }] };
+    if (url === '/api/garage61/downloads/import') { kept = true; return { name: JSON.parse(options.body).name, already_imported: false }; }
+    return { health: { ...health('A.ibt'), collection_policy: { api_token_configured: false } }, job: null };
+  });
+  await open();
+  expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
+  fireEvent.click(await screen.findByRole('button', { name: '가져오기' }));
+  await waitFor(() => expect(screen.getByLabelText('기준 종류')).toHaveValue('GARAGE61'));
+  expect(labRequest.mock.calls.some(([route, body]) => route === 'references' && body.external_reference_files?.[0] === web.name)).toBe(true);
+  expect(screen.getByLabelText('Garage61 대표 기준')).toHaveValue(web.name);
+  expect(starts()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: '선택한 랩 비교하기' }));
+  await waitFor(() => expect(onApply).toHaveBeenCalled());
+  const body = labRequest.mock.calls.find(([route]) => route === 'comparison')[1];
+  expect(body).toMatchObject({ reference_mode: 'SINGLE', external_reference_files: [web.name] });
+});
+
+test('a website lap for another car or track is explained instead of selected', async () => {
+  const web = { name: 'Garage 61 - Web - Other - Track - 01.29.000 - 01M3HJNV67E0C95DYS6DXM80Q8.csv', usable: true, compatible: false, compatibility_reason: 'CAR_MISMATCH' };
+  const original = labRequest.getMockImplementation();
+  labRequest.mockImplementation(async (route, body, signal) => route === 'references'
+    ? { files: body.external_reference_files?.length ? [web] : [], recommended_selection: [], api_token_configured: false, personalReference: { filename: body.filename, lap: 2 } }
+    : original(route, body, signal));
+  requestJson.mockImplementation(async (url, options) => {
+    if (url === '/api/garage61/downloads') return { available: true, files: [{ name: web.name, lap_time_s: 89, imported: false }] };
+    if (url === '/api/garage61/downloads/import') return { name: JSON.parse(options.body).name, already_imported: false };
+    return { health: { ...health('A.ibt'), collection_policy: { api_token_configured: false } }, job: null };
+  });
+  await open();
+  fireEvent.click(await screen.findByRole('button', { name: '가져오기' }));
+  expect(await screen.findByText(/차량·트랙·레이아웃이 달라 비교할 수 없습니다/)).toBeInTheDocument();
   expect(screen.getByLabelText('기준 종류')).toHaveValue('LOCAL');
 });

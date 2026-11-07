@@ -650,6 +650,11 @@ body { min-width: 1100px; }
 .source-picker-collection > button { flex-shrink:0; }
 .source-picker-help summary { cursor:pointer; font-size:13px; font-weight:600; }
 .source-picker-help p { margin-top:8px; }
+.garage61-web-import ol { margin:8px 0 0; padding-left:18px; display:grid; gap:4px; font-size:13px; }
+.garage61-web-import-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+.garage61-web-import-list { list-style:none; margin:10px 0 0; padding:0; display:grid; gap:6px; }
+.garage61-web-import-list li { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:13px; min-width:0; }
+.garage61-web-import-list li span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .source-picker-columns .desktop-connection-controls { margin-top:0; font-size:13px; }
 .source-picker-reference p { overflow-wrap:anywhere; }
 @media (max-width:760px) {
