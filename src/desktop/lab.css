@@ -575,6 +575,19 @@ body { min-width: 1100px; }
 .brake-key,.throttle-key { width:13px; border-top:2px solid hsl(var(--destructive)); }
 .throttle-key { border-color:hsl(var(--success)); margin-left:7px; }
 .pedal-brake { stroke:hsl(var(--destructive)); }
+.input-hover { position:fixed; z-index:40; pointer-events:none; display:flex; user-select:none; }
+.input-hover svg { display:block; flex:none; overflow:visible; }
+.input-wheel-background { fill:#191d21; fill-opacity:.94; }
+.input-wheel-ring { fill:none; stroke:hsl(var(--muted-foreground) / .65); stroke-width:1.8; }
+.input-wheel-zero { stroke:hsl(var(--muted-foreground)); stroke-width:1; }
+.input-wheel-own { fill:none; stroke:hsl(var(--success)); stroke-width:1.8; stroke-linecap:round; }
+.input-wheel-own-dot { fill:hsl(var(--success)); }
+.input-reference-mark { stroke:white; stroke-width:1.8; stroke-linecap:round; }
+.input-wheel-value,.input-pedal-value { fill:white; font-size:10px; font-weight:600; font-variant-numeric:tabular-nums; paint-order:stroke; stroke:#191d21; stroke-width:2.5; stroke-linejoin:round; }
+.input-pedal-track { fill:#191d21; fill-opacity:.94; stroke:hsl(var(--muted-foreground) / .65); stroke-width:1.2; }
+.input-pedal-brake { fill:hsl(var(--destructive)); }
+.input-pedal-throttle { fill:hsl(var(--success)); }
+.input-pedal-value { font-size:9px; }
 .pedal-throttle { stroke:hsl(var(--success)); }
 .reference-trace.pedal-brake,.reference-trace.pedal-throttle { opacity:.65; }
 .channel-value .brake-value { color:hsl(var(--destructive)); }

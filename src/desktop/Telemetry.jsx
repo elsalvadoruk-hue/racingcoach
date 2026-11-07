@@ -8,6 +8,7 @@ import { finite, number, signed, length } from './sessionData';
 import { controlWindow, controlStatus } from './controlEvents';
 import { annotationRange } from './annotationRanges';
 import GraphGhostCursor from './GraphGhostCursor';
+import InputHover from './InputHover';
 
 export function ControlLegend({ controls = {}, range }) {
   return <div className="assist-status"><span data-testid="abs-status"><b>ABS</b><span className="target-control-status"><i className="abs-line-key" aria-hidden="true" />내 랩 {controlStatus(controls.abs?.target, range[0] / length, range[1] / length)}</span><span className="reference-control-status"><i className="abs-fill-key" aria-hidden="true" />기준 {controlStatus(controls.abs?.reference, range[0] / length, range[1] / length)}</span></span></div>;
@@ -150,6 +151,7 @@ export function TelemetryChart({ channel, rows, position, onPosition, ghost, gho
         })}
         {last && [0, .25, .5, .75, 1].map(t => <text key={t} x={plotLeft + (plotRight - plotLeft) * t} y={size.height - 2} textAnchor={t === 0 ? 'start' : t === 1 ? 'end' : 'middle'} className="axis-label">{Math.round(range[0] + (range[1] - range[0]) * t).toLocaleString()} m</text>)}
       </svg>
+      <InputHover host={canvasRef} rows={rows} channelKey={channel.key} unit={channel.unit} range={range} width={size.width} height={size.height} />
     </div>
     <div className="channel-value">{pedals ? <><strong className="brake-value">{number(current?.brake, 0)}<small>{number(reference?.referenceBrake, 0)}</small></strong><strong className="throttle-value">{number(current?.throttle, 0)}<small>{number(reference?.referenceThrottle, 0)}</small></strong></> : <><strong>{channel.key === 'delta' ? signed(current?.delta) : number(current?.[channel.key], 0)}</strong>{channel.reference && <span>{number(reference?.[channel.reference], 0)}</span>}</>}</div>
   </div>;
