@@ -192,10 +192,11 @@ class FuelSavingTests(unittest.TestCase):
         self.live.ingest({'track_id': '1'}, sample(721, 7, .01, fuel_l=8.6))
         self.assertEqual(list(self.live.fuel_feedback), [])
 
-    def test_refueling_clears_old_stint_consumption_and_feedback(self):
+    def test_refueling_preserves_measured_consumption_and_clears_feedback(self):
         self.drive(4, 10, 1.4)
         self.live.ingest({'track_id': '1'}, sample(506, 5, .01, fuel_l=25.))
-        self.assertEqual(list(self.live.fuel_history), [])
+        self.assertEqual(list(self.live.fuel_history), [2., 2., 2., 1.4])
+        self.assertFalse(self.live.lap_fuel['measured'])
         self.assertEqual(list(self.live.fuel_feedback), [])
 
 

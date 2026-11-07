@@ -113,7 +113,9 @@ FUEL_LOW_MIN_L = .5
 
 def fuel_low_limit(sample):
     use = num(sample.get('fuel_l_per_lap'))
-    return max(FUEL_LOW_MIN_L, FUEL_LOW_LAPS * use) if use is not None and use > 0 else FUEL_LOW_MIN_L
+    left = num(sample.get('fuel_finish_remaining_laps'))
+    laps = min(FUEL_LOW_LAPS, max(0, left)) if left is not None and sample.get('session_state') == 5 else FUEL_LOW_LAPS
+    return max(FUEL_LOW_MIN_L, laps * use) if use is not None and use > 0 else FUEL_LOW_MIN_L
 
 class RaceRadio:
     """Only real changes produce calls; uncertain gaps establish a new baseline."""
@@ -194,11 +196,18 @@ class RaceRadio:
     def allows(self, key):
         return allowed(category(key), self.alerts, self.wall_alerts)
 
+    def _race_start_allowed(self):
+        # OneLapToGreen can rise again in CoolDown. A leader's chequered bit
+        # alone does not confirm our finish; terminal phases/own result do.
+        return (str(self.metadata.get('session_type') or '').strip().lower() == 'race'
+                and self.latest.get('session_state') in (1, 2, 3, 4)
+                and self.latest.get('finish_status') not in (1, 2, 3) and not self.result)
+
     def emit(self, key, now, text=None, role='spotter', priority=1, ttl=18, condition=None, cooldown=30, group=None, delay=0, speech_key=None, speech_text=None,
              speech_parts=None, part_categories=None, screen_parts=None, alert_category=None, immediate=False, prepared_only=False):
         # iRacing can raise start bits in Offline Testing too. Their race wording
         # needs an actual race; safety flags keep their existing independent rules.
-        if key in RACE_START_CALLS and str(self.metadata.get('session_type') or '').strip().lower() != 'race':
+        if key in RACE_START_CALLS and not self._race_start_allowed():
             return
         names = [alert_category or category(key)]
         if part_categories is not None:
@@ -259,6 +268,8 @@ class RaceRadio:
         """Bounded receipts survive acknowledgement and a short same-run data gap."""
         if event is None:
             return
+        if position is not None:
+            event['position_value'] = position
         self._deliveries[event['id']] = {'run_id': event['run_id'], 'serial': event['serial'],
                                         'key': event['key'], 'position': num(position), 'brief': brief, 'completed': False}
         while len(self._deliveries) > 128:
@@ -301,6 +312,15 @@ class RaceRadio:
         count = self.spoken_counts.get(phrase, 0)
         self.spoken_counts[phrase] = count + 1
         return radio_phrases.build(phrase, count, **values)['text']
+
+    def current_position(self):
+        """The same verified value for standalone, straight and manual reports."""
+        if 'position_confirmed' in self.latest:
+            return num(self.latest['position_confirmed'])
+        if self.metadata.get('game') == 'iracing':
+            from race_engineer import confirmed_position
+            return confirmed_position(self.metadata, self.latest, self.metadata.get('sample_time'))
+        return num(self.latest.get('class_position'))
 
     def say(self, key, now, values=None, **options):
         """A varied engineer call: one of its wordings with the measured values filled in."""
@@ -637,15 +657,8 @@ class RaceRadio:
                         parts.append(self.wording('pace_slower_by' if delta > 0 else 'pace_faster_by', loss=abs(delta)))
                         categories.append(category('pace_detail'))
                         screen.append(f'이전 {len(self.laps)}개 완주랩의 중앙 기록보다 {abs(delta):.2f}초 {"느립니다" if delta > 0 else "빠릅니다"}.')
-                position = num(s.get('class_position'))
-                racing = str(self.metadata.get('session_type', '')).lower() == 'race' and s.get('session_state') == 4
-                if (racing and position and position > 0 and self.lap_position is not None and position != self.lap_position
-                        and now - self.sent.get('position', -math.inf) > 60 and s.get('on_pit_road') is False):
-                    parts.append(self.wording('position_now', pos=position))
-                    categories.append(category('position'))
-                    screen.append(f'현재 클래스 {int(position)}위입니다.')
-                if racing and position:
-                    self.lap_position = position
+                # Position scoring often catches up just after the line. Keep lap
+                # calls about the completed lap; the settled position has its own call.
                 remaining = completed['at'] + LAP_CALL_START_S - now
                 if remaining > 0:
                     self.emit(key, now, ' '.join(screen), ttl=remaining,
@@ -684,14 +697,14 @@ class RaceRadio:
             if any(e['key'] == 'position' for e in self.pending):
                 self.pending = deque((e for e in self.pending if e['key'] != 'position'), maxlen=48)
             return
-        position = num(s.get('class_position'))
+        position = self.current_position()
         if s.get('session_state') != 4 or position is None or position <= 0:
             self.position_candidate = self.position_since = None
             return
         if position != self.position_candidate:
             old = self.position_candidate
             self.position_candidate, self.position_since = position, now
-            if old is not None:
+            if old is not None or 'position_confirmed' in s and self.position_said != position:
                 self.position_changed = True
         elif s.get('on_pit_road') is True:
             # Places fall one after another during a stop; the place is said once, back on track.
@@ -703,7 +716,14 @@ class RaceRadio:
             if now - self.sent.get('position', -math.inf) < 15:
                 return
             said = self.position_said
-            wording = 'position_now' if said is None or said == position else 'position_up' if position < said else 'position_down'
+            if said == position:
+                self.position_changed = False
+                return
+            if any(e.get('position_value') == position and self.valid(e, now) for e in self.pending):
+                return
+            # A scoring correction or a pit cycle is not an observed overtake.
+            wording = ('position_now' if 'position_confirmed' in s or self.metadata.get('game') == 'iracing'
+                       or said is None or said == position else 'position_up' if position < said else 'position_down')
             event = self.emit('position', now, (f'현재 클래스 {int(position)}위입니다.', f'클래스 순위, {int(position)}위입니다.'), condition=('position', position), group='position', cooldown=15, ttl=POSITION_CALL_S,
                               speech_text=self.wording(wording, pos=position))
             if event is not None:
@@ -792,7 +812,7 @@ class RaceRadio:
                 or self.latest.get('finish_status') in (2, 3)
                 or int(self.latest.get('session_flags') or 0) & 0x20000):
             return False
-        if event.get('key') in RACE_START_CALLS and str(self.metadata.get('session_type') or '').strip().lower() != 'race':
+        if event.get('key') in RACE_START_CALLS and not self._race_start_allowed():
             return False
         if not event_allowed(event, self.alerts, self.wall_alerts):
             return False
@@ -801,6 +821,8 @@ class RaceRadio:
                 or event['run_id'] != self.run_id or not event['not_before'] <= now < event['expires_at']):
             return False
         s = self.latest
+        if event.get('position_value') is not None and self.current_position() != event['position_value']:
+            return False
         kind, value = event.get('condition') or (None, None)
         if kind == 'driving_learning':
             return getattr(self,'driving_valid',lambda token,stamp:False)(value,now)
@@ -860,7 +882,7 @@ class RaceRadio:
         if kind == 'racing': return s.get('session_state') == 4
         if kind == 'lap': return s.get('lap_completed') == value
         if kind == 'position': return (str(self.metadata.get('session_type') or '').strip().lower() == 'race'
-                                       and s.get('class_position') == value and s.get('session_state') == 4)
+                                       and self.current_position() == value and s.get('session_state') == 4)
         if kind == 'laps_left': return num(s.get('session_laps_remaining')) is not None and value - 1 < s['session_laps_remaining'] <= value and s.get('session_state') == 4
         if kind == 'incidents': return s.get('incidents') == value
         if kind == 'tow': return (num(s.get('tow_time_s')) or 0) > 0

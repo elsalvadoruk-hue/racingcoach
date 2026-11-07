@@ -14,9 +14,10 @@ def race_and_sample(*, own_lap=10, own_pct=.874, leader_lap=11, leader_pct=.18, 
             'tank_capacity_l': 45., 'cars': cars}
     sample = {'session_time': 785.7, 'lap_completed': own_lap, 'lap_number': own_lap + 1,
               'distance_pct': own_pct, 'session_time_remaining_s': time_left, 'fuel_l': 20.,
-              'on_pit_road': False, 'session_state': 4, 'session_flags': 2}
+              'on_pit_road': False, 'session_state': 4, 'session_flags': 2, 'class_position': 2}
     wall = RaceEngineer()
     wall.race = race
+    wall.race_at = sample['session_time']
     wall.paces = {0: [61.1] * 3, 1: [61.3] * 3}
     return wall, sample
 
@@ -112,7 +113,7 @@ class LastLapCallTests(unittest.TestCase):
         self.assertNotIn('last_lap', calls(wall, {**sample, 'session_state': 6}, view))
 
     def test_last_lap_wording_and_priority_are_preserved(self):
-        wall, sample = race_and_sample(own_lap=11, total=12, time_left=None)
+        wall, sample = race_and_sample(own_lap=11, leader_pct=.95, total=12, time_left=None)
         view = wall.view(sample)
         base = calls(wall, sample, view)['last_lap']
         close = {**view['ahead'], 'gap_estimate_s': .8}

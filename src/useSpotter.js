@@ -6,7 +6,7 @@ import { eventSound, playBeep } from './drillBeeps';
 import useVoiceLibrary, { cleanVoiceSettings, voiceSelections } from './lib/voiceLibrary';
 import { readAlerts, voiceEventAllowed } from './lib/voiceAlerts';
 import { banterObservation } from './banterObservation';
-import { createRadioAttempt, radioDiagnostic } from './lib/radioDiagnostics';
+import { createRadioAttempt, radioDiagnostic, createRadioWait, observeRadioWait, snapshotRadioWait } from './lib/radioDiagnostics';
 
 const SETTINGS_KEY = 'iracing.spotter.settings';
 export const RADIO_RENDER_TIMEOUT_MS = 8000;
@@ -86,11 +86,13 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const logEvent = useCallback((event, status, reason = '', droppedParts, playback) => {
     const radio = state.current.radio || {};
     const omitted = droppedParts ?? rendered.current.get(event.id)?.droppedParts;
+    const waiting = snapshotRadioWait(event.queueWait);
     output.current.recordDelivery?.({ event_id: event.id, run_id: event.run_id || '', key: event.key,
       backend_version: event.backend_version || null,
       engineer: event.engineer || 'spotter', text: event.spoken_text || event.text || '', session_time: radio.session_time,
       lap_number: radio.lap_number, distance_pct: radio.distance_pct,
       ...(playback ? { playback } : {}),
+      ...(waiting ? { waiting } : {}),
       ...(Number.isInteger(omitted) && omitted >= 0 ? { dropped_parts: omitted } : {}) }, status, reason);
   }, []);
   const radioQueue = useRef(new Map()), heard = useRef(new Set()), rendering = useRef(null), processing = useRef(new Set()), lastCall = useRef(0), resumed = useRef(new Map());
@@ -309,7 +311,39 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const settings = output.current, current = state.current;
     // A standby tab neither renders nor acknowledges: the speaking tab owns every call.
     if (settings.standby) return;
-    if (!current.radio?.connected || occupied(current, applied.current.alerts) || Date.now() - lastFrame.current > 600) return;
+    const workloadFor = (e) => e.brief ? (state.current.radio?.brief_quiet ?? state.current.radio?.quiet) : state.current.radio?.quiet;
+    // The server applies the driver's hold (no start while braking/steering or shortly before it).
+    const quietFor = (e) => e.immediate || workloadFor(e);
+    // Reuse each queue entry's bounded summary across fresh frames. No additional
+    // state updates, timers, delivery rows or requests are made for observations.
+    const observeQueue = (selected, globalReason) => {
+      const now = Date.now();
+      for (const e of radioQueue.current.values()) {
+        if (!e.queueWait || heard.current.has(e.id) || now >= e.local_expires) continue;
+        let reason = globalReason;
+        if (!reason) {
+          if (processing.current.has(e.id)) reason = pendingPlayback.current.has(e.id) ? 'playback_pending'
+            : rendering.current?.event.id === e.id ? 'preparing_audio' : 'processing';
+          else if (now < (playbackFailures.current.get(e.id)?.retryAt || 0)) reason = 'retry_backoff';
+          else if (!voiceEventAllowed(e, applied.current.alerts, settings.wallAlerts)) reason = 'alerts_disabled';
+          else if (e.immediate && closeBattle(current)) reason = 'close_battle';
+          else if (!settings.wallAlerts && !e.key?.startsWith('drill_') && settings.level !== 'all'
+            && ['pace_detail', 'incident_coaching', 'corner_focus', 'straight_brief'].includes(e.key)) reason = 'level_filtered';
+          else if (!settings.wallAlerts && !settings.specialists && e.engineer !== 'spotter' && !e.key?.startsWith('drill_')) reason = 'specialists_disabled';
+          else if (e.priority < 2 && settings.busy) reason = 'coach_busy';
+          else if (e.priority < 2 && settings.audioBusy?.() && !(e.immediate && settings.canStartLap?.())) reason = 'audio_busy';
+          else if (e.priority < 2 && (e.cached || rendered.current.has(e.id)) && !quietFor(e)) reason = 'workload';
+          else if (e.priority < 2 && !e.immediate && now - lastCall.current <= 1200) reason = 'call_spacing';
+          else if (!e.cached && rendering.current) reason = 'render_busy';
+          else reason = selected?.id === e.id ? 'eligible' : 'queue_priority';
+        }
+        observeRadioWait(e.queueWait, reason, now);
+      }
+    };
+    const globalReason = !current.radio?.connected ? 'radio_disconnected'
+      : occupied(current, applied.current.alerts) ? 'overlap'
+        : Date.now() - lastFrame.current > 600 ? 'stale_frame' : null;
+    if (globalReason) { observeQueue(null, globalReason); return; }
     const events = [...radioQueue.current.values()].filter((event) => !heard.current.has(event.id)
       && !processing.current.has(event.id) && Date.now() < event.local_expires
       && Date.now() >= (playbackFailures.current.get(event.id)?.retryAt || 0)
@@ -319,13 +353,11 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       && (settings.wallAlerts || event.key?.startsWith('drill_') || settings.level === 'all' || !['pace_detail', 'incident_coaching', 'corner_focus', 'straight_brief'].includes(event.key))
       && (settings.wallAlerts || settings.specialists || event.engineer === 'spotter' || event.key?.startsWith('drill_')))
       .sort((a, b) => b.priority - a.priority || Number(Boolean(b.immediate)) - Number(Boolean(a.immediate)) || a.serial - b.serial);
-    const workloadFor = (e) => e.brief ? (state.current.radio?.brief_quiet ?? state.current.radio?.quiet) : state.current.radio?.quiet;
-    // The server applies the driver's hold (no start while braking/steering or shortly before it).
-    const quietFor = (e) => e.immediate || workloadFor(e);
     // Prepare a short call before its driving window; cloud latency must not
     // consume the only quiet moment after crossing the line.
     const event = events.find((e) => e.priority >= 2 || (!settings.busy && (!settings.audioBusy?.() || (e.immediate && settings.canStartLap?.()))
       && ((!e.cached && !rendered.current.has(e.id)) || quietFor(e)) && (e.immediate || Date.now() - lastCall.current > 1200)));
+    observeQueue(event);
     if (!event || (!event.cached && rendering.current)) return;
     const ticket = epoch.current;
     const revision = alertRevision.current;
@@ -359,6 +391,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       } else if (rendered.current.has(event.id)) {
         ({ audio, mime, droppedParts } = rendered.current.get(event.id));
       } else if (!settings.muted && settings.volume > 0) {
+        observeRadioWait(event.queueWait, 'preparing_audio');
         const controller = new AbortController();
         let timer, cancel;
         const cancelled = new Promise(resolve => { cancel = reason => resolve({ cancelled: reason }); });
@@ -388,20 +421,23 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         if (result.missing_prepared_audio) {
           logEvent(event, 'cancelled', 'missing_prepared_audio', undefined, preparation()); heard.current.add(event.id); return;
         }
-        if (result.busy || !result.event) return;
+        if (result.busy || !result.event) { observeRadioWait(event.queueWait, 'render_deferred'); return; }
         // Only retained whole sentences count toward the multipart playback rate.
         audio = result.audio_parts?.length ? result.audio_parts : result.audio_base64; mime = result.audio_mime || 'audio/mpeg';
         droppedParts = result.dropped_parts;
         if (audio) rendered.current.set(event.id, { audio, mime, droppedParts });
       }
       if (!valid()) return;
-      if (event.priority < 2 && (output.current.busy || !quietFor(event))) return;
+      if (event.priority < 2 && (output.current.busy || !quietFor(event))) {
+        observeRadioWait(event.queueWait, output.current.busy ? 'coach_busy' : 'workload'); return;
+      }
       const silent = output.current.muted || output.current.volume === 0;
-      if (!silent && !audio) return;
+      if (!silent && !audio) { observeRadioWait(event.queueWait, 'audio_unavailable'); return; }
       const acknowledge = () => fetch(`${apiBase}/api/live-coach/spotter/radio/${encodeURIComponent(event.id)}/ack`, { method: 'POST' }).catch(() => {});
       let began = false;
       pending = { controller: new AbortController(), cancelled: false, event };
       pendingPlayback.current.set(event.id, pending);
+      observeRadioWait(event.queueWait, 'playback_pending');
       const started = silent || await output.current.play(audio, mime, {
         diagnostics,
         signal: pending.controller.signal,
@@ -453,7 +489,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
           } else acknowledge();
         },
       });
-      if (!started || !valid()) return;
+      if (!started) { observeRadioWait(event.queueWait, 'playback_declined'); return; }
+      if (!valid()) return;
       heard.current.add(event.id);
       if (silent) logEvent(event, 'muted', 'volume_or_mute', droppedParts);
       if (heard.current.size > 256) heard.current.delete(heard.current.values().next().value);
@@ -553,6 +590,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         }
         const nextQueue = new Map((frame.radio?.events || []).map((event) => [event.id, { ...event,
           backend_version: event.backend_version || frame.backend_version || null,
+          queueWait: radioQueue.current.get(event.id)?.run_id === event.run_id
+            ? radioQueue.current.get(event.id).queueWait : createRadioWait(event.key, now),
           local_expires: Math.min(radioQueue.current.get(event.id)?.local_expires ?? Infinity,
             now + Math.min(120000, event.expires_in_ms) - (typeof frame.sent_at === 'number' ? Math.max(0, now - frame.sent_at * 1000 - serverOffset) : 0)) }]));
         if (rendering.current && !nextQueue.has(rendering.current.event.id)) cancelRender('condition_or_session_changed');

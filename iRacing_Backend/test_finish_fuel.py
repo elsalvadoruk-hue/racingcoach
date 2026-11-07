@@ -149,11 +149,11 @@ class TimedFinishTests(unittest.TestCase):
         self.assertEqual(sure['pit_fuel_plan']['speech_text'], '급유는 22리터입니다.')
         self.assertNotIn('pit_fuel_plan', self.reports(950., .50, .20, fuel=20.)[0])      # not near the stop yet
 
-    def test_a_full_tank_is_not_given_as_a_number(self):
+    def test_a_full_tank_names_the_maximum_addition_setting(self):
         self.race['tank_capacity_l'] = 30.
         reports, view = self.reports(2500., .50, .20, fuel=5.5, lap=1)
         self.assertTrue(view['fuel_next_stop_full'])
-        self.assertNotIn('pit_fuel_plan', reports)
+        self.assertEqual(reports['pit_fuel_plan']['speech_text'], '급유 설정은 30리터입니다. 가득 채워야 합니다.')
 
     def test_the_pit_window_opens_when_one_stop_reaches_the_flag(self):
         self.race['tank_capacity_l'] = 30.
@@ -183,9 +183,10 @@ class TimedFinishTests(unittest.TestCase):
 
     def test_the_box_call_says_when_in_the_lap_it_applies(self):
         early, _ = self.reports(950., .05, .20, fuel=2.6)            # just over a lap left at the start of the lap
-        self.assertEqual(early['fuel_critical']['speech_text'], '이번 랩 끝나고 피트합니다.')
+        self.assertEqual(early['fuel_critical']['speech_parts'][0], '이번 랩 끝나고 피트합니다.')
+        self.assertIn('리터', early['fuel_critical']['speech_parts'][1])
         late, _ = self.reports(880., .80, .20, fuel=.8)
-        self.assertEqual(late['fuel_critical']['speech_text'], '이번 랩에 피트 들어오세요.')
+        self.assertEqual(late['fuel_critical']['speech_parts'][0], '이번 랩에 피트 들어오세요.')
 
     def test_a_lap_more_is_only_reported_when_it_leaves_the_tank_short(self):
         view, s = self.view(950., .50, .20)

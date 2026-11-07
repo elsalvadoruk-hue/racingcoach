@@ -25,7 +25,7 @@
 
 ## 설치와 첫 실행
 
-**[처음 설치용 ZIP 바로 받기 (2.5.3)](https://github.com/elsalvadoruk-hue/racingcoach/releases/download/v2.5.3/racingcoach-setup-2.5.3.zip)**
+**[처음 설치용 ZIP 바로 받기 (2.5.4)](https://github.com/elsalvadoruk-hue/racingcoach/releases/download/v2.5.4/racingcoach-setup-2.5.4.zip)**
 
 1. 처음 설치용 ZIP을 받아 **새 폴더에 압축을 모두 풉니다.** 다른 버전은 [최신 Releases](https://github.com/elsalvadoruk-hue/racingcoach/releases/latest)에서 `racingcoach-setup-*.zip`을 선택하세요.
 2. `설치.bat`을 한 번 실행한 뒤 `실행.bat`으로 앱을 켭니다. 최초 설치에는 인터넷이 필요합니다.
@@ -41,6 +41,8 @@
 | Source code (zip / tar.gz) | 개발용 소스. Python과 완성된 화면이 없어 Python·Node.js가 필요합니다. |
 
 기존 앱은 **설정 → 업데이트 → 업데이트 받기 → 지금 다시 시작해서 적용**으로 갱신합니다. 기존 데이터 폴더는 유지하세요. 자세한 이전·수동 설치 방법은 [설치 상세 안내](manual/설치-상세-안내.md)를 참고하세요.
+
+내구 경기에서는 피트 지시에 필요한 추가 급유량을 함께 안내하고, iRacing 순위는 최신 집계와 차량 진행 거리를 교차 확인합니다. 준비된 음성이나 관측 근거가 부족하면 화면 표시 또는 안내 보류로 구분합니다. [연료·순위·랩타임 안내 범위](manual/radio-timing-recovery.md) · [코너 비교의 작은 조향·페달 표시](manual/input-hover.md)
 
 ## 지원 게임
 

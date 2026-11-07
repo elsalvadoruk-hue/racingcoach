@@ -107,7 +107,7 @@ class LiveReporting:
                 continue
             options.append((f'stint_{side}', 'strategy', [[(f'stint_{side}', {'laps': laps}),
                             ('stint_more' if laps > own_stint else 'stint_less', {'laps': abs(laps - own_stint)})]]))
-        if view.get('class_position'):
+        if view.get('class_position') and self.radio.position_said != view['class_position']:
             options.append(('position', 'spotter', [[('position_now', {'pos': view['class_position']})]]))
         left = sample.get('session_time_remaining_s')
         if type(left) in (int, float) and 11 * 60 <= left < 60 * 60:   # the last ten minutes have their own calls

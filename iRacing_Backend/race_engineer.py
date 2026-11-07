@@ -41,6 +41,52 @@ def positive(value):
     return value if value is not None and value > 0 else None
 
 
+def confirmed_position(race, snapshot, race_at):
+    """Corroborate iRacing scoring with current progress; never invent a rank.
+
+    Scoring can lag for most of a long lap. Unseen active cars contribute an
+    interval. Disconnected cars reset their progress to -1; for those cars only
+    the retained scoring order is available. LMU keeps native scoring semantics.
+    """
+    own = next((c for c in race.get('cars', []) if c.get('idx') == race.get('player_idx')), {})
+    rank = positive(own.get('class_position'))
+    if race.get('game') != 'iracing':
+        return rank
+    at = numeric(snapshot.get('session_time'))
+    if (at is None or race_at is None or not 0 <= at-race_at <= 2
+            or own.get('class_id') is None or rank != positive(snapshot.get('class_position'))):
+        return None
+    lap, pct = numeric(own.get('lap_completed')), numeric(own.get('distance_pct'))
+    if lap is None or lap < 0 or pct is None or not 0 <= pct <= 1 or own.get('track_surface') == -1:
+        return None
+    progress, ahead, unknown = lap+pct, 0, 0
+    for car in race.get('cars', []):
+        if (car.get('idx') == own.get('idx') or car.get('is_pace_car')
+                or car.get('class_id') != own['class_id']):
+            continue
+        other_lap, other_pct = numeric(car.get('lap_completed')), numeric(car.get('distance_pct'))
+        if other_lap is not None and other_lap >= 0:
+            if other_pct is not None and 0 <= other_pct <= 1 and car.get('track_surface') != -1:
+                difference = other_lap+other_pct-progress
+                if abs(difference) < .0001:
+                    unknown += 1
+                elif difference > 0:
+                    ahead += 1
+            elif other_lap > progress:
+                ahead += 1
+            elif other_lap+1 >= progress:
+                unknown += 1
+        elif other_lap == -1 and car.get('track_surface') == -1:
+            retained = positive(car.get('class_position'))
+            if retained is None or retained == rank:
+                unknown += 1
+            elif retained < rank:
+                ahead += 1
+        else:
+            unknown += 1
+    return rank if not unknown and rank == ahead+1 else None
+
+
 def limit_value(value):
     try:
         result = float(value)
@@ -334,7 +380,8 @@ class RaceEngineer:
             lap, pct = numeric(car.get('lap_completed')), numeric(car.get('distance_pct'))
             return lap + pct if lap is not None and lap >= 0 and pct is not None and 0 <= pct <= 1 else None
         own_progress = progress(own) if own else None
-        position = positive(own.get('class_position')) if own else None
+        observed_position = positive(own.get('class_position')) if own else None
+        position = confirmed_position(race, snapshot, self.race_at)
         rivals = [c for c in race.get('cars', []) if own and own.get('class_id') is not None
                   and c.get('class_id') == own.get('class_id') and positive(c.get('class_position'))]
         def describe(car):
@@ -366,6 +413,12 @@ class RaceEngineer:
                     'lap_difference': round(difference, 2) if difference is not None else None}
         def neighbor(offset):
             car = describe(next((c for c in rivals if position and c.get('class_position') == position + offset), None))
+            if car and race.get('game') == 'iracing':
+                ranked = sorted((c for c in rivals if progress(c) is not None), key=lambda c: -progress(c))
+                own_index = next((i for i, c in enumerate(ranked) if c['idx'] == own['idx']), -999)
+                index = own_index + offset
+                if not 0 <= index < len(ranked) or ranked[index]['idx'] != car['idx']:
+                    return None
             if car:
                 points = list(self.gap_history.get((car['idx'], 'ahead' if offset < 0 else 'behind', position, car.get('class_position')), []))
                 consecutive = (len(points) >= 3 and all(b['lap'] == a['lap'] + 1 for a, b in zip(points, points[1:]))
@@ -481,7 +534,7 @@ class RaceEngineer:
         longer = add + use if add is not None and use and finish and finish['may_extend'] else None
         fill_longer = min(longer, room) if longer is not None and room is not None else longer
         rejoin = rejoin_close = None
-        if active and own_pace and own_progress is not None and positive(pit_loss_s) and len(rivals) > 1:
+        if active and position and own_pace and own_progress is not None and positive(pit_loss_s) and len(rivals) > 1:
             usable = [c for c in rivals if c['idx'] != own['idx'] and progress(c) is not None
                       and pace(c) and not c.get('on_pit_road') and c.get('track_surface') not in (-1, 0)]
             # Current class order, extrapolated progress and each rival's own pace.
@@ -509,7 +562,8 @@ class RaceEngineer:
                     traffic.append({**describe(car), 'side': 'ahead' if delta >= 0 else 'behind',
                                     'gap_estimate_s': round(gap, 1)})
         return {'active': active, 'session_type': race.get('session_type'), 'state': race.get('state'),
-                'flags': race.get('flags'), 'class_position': position,
+                'flags': race.get('flags'), 'class_position': position, 'observed_class_position': observed_position,
+                'position_source': ('SCORING_PROGRESS_CHECKED' if position else 'UNCONFIRMED') if race.get('game') == 'iracing' else race.get('position_source'),
                 'time_remaining_s': race.get('time_remaining_s'), 'pace_s': own_pace,
                 'pace_samples': len(self.paces.get(own['idx'], [])) if own else 0,
                 'ahead': neighbor(-1), 'behind': neighbor(1),
@@ -556,7 +610,8 @@ class RaceEngineer:
                 spoken = ' '.join(sentences)
                 speech = {'speech_key': None, 'spoken_text': spoken, 'speech_text': spoken}
                 speech['speech_specs'] = [('phrase', name, dict(values)) for name, values in (phrase, *also)]
-                speech['part_categories'] = [category('brief:rejoin') if name == 'pit_rejoin' else category(key)
+                speech['part_categories'] = [category('brief:rejoin') if name == 'pit_rejoin' else
+                                             category('pit_fuel_plan') if name in ('pit_fuel_add', 'pit_fuel_full') else category(key)
                                              for name, _ in (phrase, *also)]
                 if len(sentences) > 1:
                     speech['speech_parts'] = sentences
@@ -569,6 +624,12 @@ class RaceEngineer:
         available, fuel_add = view['fuel_laps'], view['fuel_to_add_l']
         short = (view.get('fuel_finish_shortfall_l') or 0) > .1
         pct, lap = numeric(snapshot.get('distance_pct')), snapshot.get('lap_number')
+        amount = view.get('fuel_next_stop_longer_l') or view.get('fuel_next_stop_l')
+        # The full-tank setting is a maximum addition; the simulator stops at tank
+        # capacity. A partial last stop is an addition, never a tank-total target.
+        litres = math.ceil(view.get('tank_capacity_l') or amount) if amount and view.get('fuel_next_stop_full') else math.ceil(amount) if amount else None
+        fuel_phrase = 'pit_fuel_full' if view.get('fuel_next_stop_full') else 'pit_fuel_add'
+        fuel_part = [(fuel_phrase, {'liters': litres})] if litres and litres >= 1 else []
         # Fuel is only talked about when it asks for a decision, and never while the car is being fuelled.
         if snapshot.get('on_pit_road') or available is None:
             pass
@@ -580,7 +641,11 @@ class RaceEngineer:
                 late = pct is not None and pct >= .75
                 # Said so that it cannot be taken for "pit now" at the start of the lap.
                 add('fuel_critical', 'strategy', f'현재 소비량 기준 연료가 약 {available:.1f}랩분 남았습니다. 이번 랩에 피트로 들어오세요.', 3,
-                    token=f'{lap}:{late}', cooldown=3600, phrase=('box_now' if late else 'box_end_of_lap', {}))
+                    token=f'{lap}:{late}', cooldown=3600, phrase=('box_now' if late else 'box_end_of_lap', {}), also=fuel_part)
+                if fuel_part:
+                    reports[-1]['text'] += f' 급유 설정은 추가 {litres}리터입니다.' + (' 탱크 한도까지 채우는 최대 설정입니다.' if view.get('fuel_next_stop_full') else '')
+                    reports[-1]['fuel_plan_token'] = str(litres)
+                    reports[-1]['prepared_only'] = True
             elif short and view.get('fuel_save_feasible'):
                 # Close enough to the finish that lifting could replace a stop: worth one call per stint.
                 add('fuel_short', 'strategy', fuel_advice(view, brief=True), 2, cooldown=1800,
@@ -599,12 +664,12 @@ class RaceEngineer:
                         also=[('pit_run_dry', {})] if view.get('fuel_run_dry') else [('pit_rejoin', {'pos': rejoin})] if rejoin else ())
                 # How much goes in at this stop, to the litre, and what a lap more would need.
                 amount = view.get('fuel_next_stop_l')
-                # A full tank needs no number; the last stop of the race is the one that is measured out.
+                # Full-tank litres are the maximum setting; partial stops use the measured addition.
                 # One number only (the driver's decision): when the race may still run a lap longer,
                 # that lap is simply included. "It might be a lap more" is not something to act on.
-                if 1.3 < available <= 2.5 and amount is not None and amount >= 1 and not view.get('fuel_next_stop_full'):
-                    litres = math.ceil(view.get('fuel_next_stop_longer_l') or amount)
-                    add('pit_fuel_plan', 'strategy', priority=2, cooldown=900, token=str(litres), phrase=('pit_fuel_add', {'liters': litres}))
+                if available <= 2.5 and fuel_part:
+                    add('pit_fuel_plan', 'strategy', priority=2, cooldown=900, token=str(litres), phrase=(fuel_phrase, {'liters': litres}))
+                    reports[-1]['prepared_only'] = True
                 # From here one stop reaches the flag: the stop can now be timed freely.
                 if available > 2.5 and view.get('stops_needed') == 1 and not view.get('fuel_next_stop_full'):
                     add('pit_window', 'strategy', priority=1, cooldown=7200, phrase=('pit_window_open', {}))
@@ -621,7 +686,8 @@ class RaceEngineer:
                         full = view.get('fuel_next_stop_full')
                         add('pit_fuel_check', 'strategy', priority=2, cooldown=1800, token=f'{round(planned)}:{"full" if full else round(needed)}',
                             phrase=('pit_fuel_full', {'liters': planned}) if full else ('pit_fuel_low', {'liters': planned, 'need': needed}))
-        elif fuel_add is not None and fuel_add > .1:
+        elif (fuel_add is not None and fuel_add > .1 and snapshot.get('session_state') != 5
+              and (view.get('remaining_laps') is None or view['remaining_laps'] > 1)):
             add('fuel_reserve', 'strategy', '현재 소비량으로 완주는 예상되지만 안전 여유분이 부족합니다. ' + fuel_advice(view, brief=True), 1, cooldown=3600)
         if ENERGY_CALLS_ENABLED and view.get('game') == 'lmu' and not snapshot.get('on_pit_road'):
             self._energy_calls(view, add)
@@ -663,8 +729,6 @@ class RaceEngineer:
             if (total > seen['said'] and now - seen['since'] >= 20 and left is not None and left <= 12
                     and (view.get('fuel_finish_shortfall_l') or 0) > .1):
                 add('finish_laps', 'strategy', priority=2, cooldown=60, token=str(total), phrase=('finish_laps_more', {}))
-            elif total < seen['said'] and now - seen['since'] >= 20:
-                seen['said'] = total
         fraction, flags = view.get('race_fraction'), int(numeric(snapshot.get('session_flags')) or 0)
         if fraction is not None and .5 <= fraction < .58 and view.get('class_position'):
             add('halfway', 'race', cooldown=36000, phrase=('halfway', {'pos': view['class_position']}))
@@ -799,7 +863,10 @@ class RaceEngineer:
     def delivered(self, report, session_time):
         self.last_report = session_time
         if report['key'] == 'finish_laps' and getattr(self, 'finish_seen', None):
-            self.finish_seen['said'] = self.finish_seen['now']
+            self.finish_seen['said'] = max(self.finish_seen['said'], self.finish_seen['now'])
+        if (report.get('fuel_plan_token') and not report.get('fuel_audio_omitted')
+                and any(name in ('pit_fuel_add', 'pit_fuel_full') for _, name, _ in report.get('speech_specs', []))):
+            self.reported['pit_fuel_plan'] = {'at': session_time, 'token': report['fuel_plan_token']}
         self.spoken[report['key']] = self.spoken.get(report['key'], 0) + 1
         self.reported[report['key']] = {'at': session_time, 'token': report['token']}
 

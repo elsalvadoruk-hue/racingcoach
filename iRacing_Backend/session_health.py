@@ -19,7 +19,8 @@ OVAL_IDENTITY_KEYS = ('track_id', 'track_type', 'track_direction', 'track_catego
                       'course_cautions', 'restarts', 'standing_start')
 FEEDBACK_FIELDS = ('session_time', 'lap_number', 'distance_pct', 'on_track', 'is_replay',
                    'on_pit_road', 'session_state', 'session_flags', 'speed_mps', 'brake', 'throttle',
-                   'steering_rad', 'steering_lock_ratio', 'workload_in_s', 'corner_in_s', 'speech_hold_s')
+                   'steering_rad', 'steering_lock_ratio', 'workload_in_s', 'corner_in_s', 'speech_hold_s',
+                   'car_left_right')
 
 
 def scalar(value):

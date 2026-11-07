@@ -16,7 +16,7 @@ import os
 import threading
 import time
 import uuid
-from race_engineer import RaceEngineer, read_race, parse_measure
+from race_engineer import RaceEngineer, read_race, parse_measure, confirmed_position
 from spotter import AlongsideSpeed, Spotter
 from race_radio import RaceRadio
 from qualifying_traffic import is_open_qualifying
@@ -259,6 +259,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.lap_fuel = None
                 self.fuel_history.clear()
                 self.fuel_feedback.clear()
+                self._fuel_measured_at = self._fuel_condition = None
                 self.energy.reset()
                 self.speech_windows.reset()
                 self.pit_wall.reset()
@@ -302,6 +303,13 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self._track_fuel(sample)
             self.energy.ingest(sample)
             sample['fuel_l_per_lap'] = max(self.fuel_history) if self.fuel_history else None
+            if self.pit_wall.race.get('game') == 'iracing':
+                sample['position_confirmed'] = confirmed_position(self.pit_wall.race, sample, self.pit_wall.race_at)
+            if sample.get('session_state') == 5:
+                endpoint = self.pit_wall.final_progress
+                completed, pct = number(sample.get('lap_completed')), number(sample.get('distance_pct'))
+                if endpoint is not None and completed is not None and pct is not None and 0 <= pct <= 1:
+                    sample['fuel_finish_remaining_laps'] = max(0, endpoint-completed-pct)
             # Only explicitly open qualifying has shared-track side calls. Lone/unknown qualifying
             # keeps its existing silence. Use this tick's metadata, including the first session sample.
             session_metadata = race if race is not None else self.radio.metadata
@@ -409,28 +417,45 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         usable = (sample.get('on_track') is True and sample.get('is_replay') is False
                   and sample.get('on_pit_road') is False)
         continuous = (previous is not None and 0 < sample['session_time'] - previous['at'] <= 2)
-        if previous and fuel > previous['fuel'] + .2:
+        # Refuelling invalidates this lap's measurement, not already measured
+        # consumption. The old adjacent-sample reset depended on SDK cadence.
+        if previous and fuel > previous['fuel'] + .02:
+            self.fuel_feedback.clear()
+        last_measurement = getattr(self, '_fuel_measured_at', None)
+        wet = number(sample.get('track_wetness'))
+        condition = wet >= 3 if wet is not None and wet >= 1 else None
+        old_condition = getattr(self, '_fuel_condition', None)
+        if (last_measurement is not None and not 0 <= sample['session_time']-last_measurement <= 3600
+                or condition is not None and old_condition is not None and condition != old_condition):
             self.fuel_history.clear()
             self.fuel_feedback.clear()
+            previous = None
+            self._fuel_measured_at = None
+        if condition is not None:
+            self._fuel_condition = condition
         if previous and lap != previous['lap']:
             use = previous['start_fuel'] - fuel
-            if (previous['clean'] and usable and continuous and sample.get('incidents') == previous['incidents']
+            if (previous.get('measured', previous['clean']) and usable and continuous
                     and previous['distance'] >= .94 and previous['pct'] >= .95 and pct <= .03
                     and lap == previous['lap'] + 1 and .05 < use < previous['start_fuel']):
                 self.fuel_history.append(round(use, 3))
-                self.fuel_feedback.append({'lap': previous['lap'], 'use_l': round(use, 3),
-                    'target_l': previous['target_l'], 'mode': previous['mode'], 'reserve_laps': previous['reserve_laps'], 'at': sample['session_time']})
+                self._fuel_measured_at = sample['session_time']
+                if previous['clean'] and sample.get('incidents') == previous['incidents']:
+                    self.fuel_feedback.append({'lap': previous['lap'], 'use_l': round(use, 3),
+                        'target_l': previous['target_l'], 'mode': previous['mode'], 'reserve_laps': previous['reserve_laps'], 'at': sample['session_time']})
             previous = None
         if previous is None:
             view = self.pit_wall.view(sample, max(self.fuel_history) if self.fuel_history else None,
                                       len(self.fuel_history), **self.race_options)
             self.lap_fuel = {'lap': lap, 'pct': pct, 'distance': 0., 'start_fuel': fuel, 'fuel': fuel,
-                             'incidents': sample.get('incidents'), 'clean': pct <= .03 and usable,
+                             'incidents': sample.get('incidents'), 'clean': pct <= .03 and usable, 'measured': pct <= .03 and usable,
                              'at': sample['session_time'], 'target_l': view.get('fuel_save_target_l_per_lap'),
                              'reserve_laps': self.race_options.get('reserve_laps', .5),
                              'mode': self.race_options.get('fuel_save_mode', 'finish')}
         else:
             delta = pct - previous['pct']
+            if not continuous or not usable or not 0 <= delta <= .1 or fuel > previous['fuel'] + .02:
+                previous['measured'] = False
             if (not continuous or not usable or not 0 <= delta <= .1 or fuel > previous['fuel'] + .2
                     or sample.get('incidents') != previous['incidents'] or int(sample.get('session_flags') or 0) & 0xC108):
                 previous['clean'] = False

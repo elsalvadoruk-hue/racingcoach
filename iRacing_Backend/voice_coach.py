@@ -18,7 +18,7 @@ import time
 import uuid
 import wave
 import zipfile
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Request
 from pydantic import BaseModel, Field
@@ -71,6 +71,23 @@ class RadioPlaybackDiagnostics(BaseModel):
     ended_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
 
 
+RadioWaitReason = Literal['radio_disconnected', 'overlap', 'stale_frame', 'processing',
+    'playback_pending', 'preparing_audio', 'retry_backoff', 'alerts_disabled', 'close_battle',
+    'level_filtered', 'specialists_disabled', 'coach_busy', 'audio_busy', 'workload',
+    'call_spacing', 'render_busy', 'queue_priority', 'eligible', 'render_deferred',
+    'audio_unavailable', 'playback_declined']
+
+
+class RadioQueueDiagnostics(BaseModel):
+    """Bounded browser queue observations; no device/account identifiers."""
+    model_config = {'extra': 'forbid'}
+    scope: Literal['QUEUE_OBSERVATIONS']
+    observations: int = Field(ge=1, le=65535, strict=True)
+    elapsed_ms: float = Field(ge=0, le=120000, allow_inf_nan=False)
+    reasons: dict[RadioWaitReason, Annotated[int, Field(ge=1, le=65535, strict=True)]] = Field(min_length=1, max_length=21)
+    last_reason: RadioWaitReason
+
+
 class RadioDeliveryEvent(BaseModel):
     event_id: str = Field(min_length=1, max_length=160)
     run_id: str = Field(default='', max_length=80)
@@ -86,6 +103,7 @@ class RadioDeliveryEvent(BaseModel):
     dropped_parts: int = Field(default=0, ge=0, strict=True)
     diagnostics_dropped: int = Field(default=0, ge=0, strict=True)
     playback: RadioPlaybackDiagnostics | None = None
+    waiting: RadioQueueDiagnostics | None = None
     frontend_version: str | None = Field(default=None, max_length=64, pattern=r'^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')
     backend_version: str | None = Field(default=None, max_length=64, pattern=r'^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$')
 
@@ -522,7 +540,7 @@ class VoiceCoach:
                 limit = (context.get('radio') or {}).get('pit_speed_limit_kph')
                 return (f'피트 제한속도는 {limit:g}킬로미터입니다.' if limit is not None else '피트 제한속도 데이터를 읽지 못했습니다. 게임의 표시를 확인하세요.'), 'MEASURED'
             if any(w in text for w in ('순위', '몇 등', '몇등')):
-                position = number(snapshot.get('class_position'))
+                position = number(snapshot.get('position_confirmed')) if 'position_confirmed' in snapshot else number(snapshot.get('class_position'))
                 return (f'현재 클래스 {int(position)}위입니다.' if position and position > 0 else '현재 클래스 순위는 확인 중입니다.'), 'MEASURED'
             raw = snapshot.get('car_left_right')
             from spotter import PHRASES, STATE_KEYS
@@ -678,6 +696,24 @@ class VoiceCoach:
                     ack, warning = None, service_error(exc)
             return {'note': public_note(note), 'audio_base64': audio, 'audio_parts': parts, 'warning': warning, 'audio_stored': False, 'ack': ack}
 
+    def prepared_lap_fallback(self, item):
+        """Keep the measured time on screen, with an existing update-only clip.
+
+        Long pit laps may lack minute pieces. Never synthesize on the immediate
+        path, round the time into a different lap, or switch the selected voice.
+        """
+        key = item.get('key')
+        if key not in ('lap_time', 'personal_best'):
+            return None
+        for text in fixed_texts(key):
+            packs = getattr(self, 'custom_packs', None)
+            if packs is not None and packs.has_selection(item['engineer']) and not packs.has(item['engineer'], text):
+                continue
+            if self.fixed_audio.cached(item['engineer'], text):
+                fallback = {k:v for k,v in item.items() if k not in ('speech_parts','speech_key','part_categories','screen_parts')}
+                return {**fallback, 'speech_text':text, 'spoken_text':text, 'numeric_audio_missing':True}
+        return None
+
     def audio_on_disk(self, item, optional_parts=True):
         """Whether the mandatory audio is cached and can play during a cloud question.
 
@@ -687,6 +723,13 @@ class VoiceCoach:
         if item.get('prepared_only') and item.get('key','').startswith('learned_') and item.get('speech_text'):
             # Voice selection can change while an observed recommendation is queued.
             return self.live.driving_audio_ready(item['speech_text'])
+        packs = getattr(self, 'custom_packs', None)
+        if (item.get('prepared_only') and item.get('key') in ('fuel_critical', 'pit_fuel_plan')
+                and packs is not None and packs.has_selection(role)):
+            sentences = item.get('speech_parts') or [item.get('speech_text')]
+            if optional_parts:
+                sentences = sentences[:1]
+            return all(sentence and packs.has(role, sentence) for sentence in sentences)
         if item.get('speech_parts'):
             sentences = item['speech_parts'][:1] if optional_parts else item['speech_parts']
             return all(cache.cached(role, sentence) for sentence in sentences)
@@ -699,6 +742,13 @@ class VoiceCoach:
             except (KeyError, IndexError, ValueError):
                 return False
         return False
+
+    def prepared_report_ready(self, item):
+        if not item.get('prepared_only') or self.audio_on_disk(item, optional_parts=False):
+            return True
+        specs = item.get('speech_specs') or []
+        return (item['key'] == 'fuel_critical' and bool(item.get('speech_parts')) and bool(specs)
+                and specs[0][1] in ('box_now', 'box_end_of_lap') and self.audio_on_disk(item))
 
     def radio_audio_mode(self, item):
         """(can bypass the cloud lock, omit cold optional clips).
@@ -760,6 +810,8 @@ class VoiceCoach:
                     owned = ('yellow', 'finish', 'class_traffic') if payload.alerts is None and self.live.radio.traffic_enabled else ('yellow', 'finish')
                     candidates = [c for c in candidates if c['key'] not in owned]
                 candidates = reports_enabled(candidates, payload.alerts)
+                if payload.speak:
+                    candidates = [c for c in candidates if self.prepared_report_ready(c)]
                 report = self.live.pit_wall.select(candidates, snapshot, selection_level, cached_audio=True)
             if not report:
                 with self.lock:
@@ -775,17 +827,34 @@ class VoiceCoach:
                     return {**result, 'pit_wall': view, 'report': pending['response']}
                 self.pending_report = None
             audio, warning, parts = None, '', None
+            audible = report
             if payload.speak:
                 on_disk = self.audio_on_disk(report, optional_parts=False)
+                if report.get('prepared_only') and not on_disk:
+                    # An absent optional litre clip must not silence a prepared
+                    # urgent pit instruction. Keep the quantity visible and let
+                    # its separate plan remain eligible for later delivery.
+                    specs = report.get('speech_specs') or []
+                    if (report['key'] != 'fuel_critical' or not report.get('speech_parts')
+                            or not specs or specs[0][1] not in ('box_now', 'box_end_of_lap')
+                            or not self.audio_on_disk(report)):
+                        return result
+                    first = report['speech_parts'][0]
+                    audible = {**report, 'speech_parts':[first], 'spoken_text':first, 'speech_text':first,
+                               'fuel_audio_omitted':True,
+                               'alert_categories':[category('fuel_critical')]}
+                    on_disk = True
                 if not on_disk and self.cloud_lock.locked():
                     return result           # it needs synthesis while a question is using the cloud: the next poll
                 try:
                     async with (contextlib.nullcontext() if on_disk else self.cloud_lock):
-                        if report.get('speech_parts'):
-                            parts = [await asyncio.to_thread(self.fixed_audio.phrase, report['engineer'], sentence) for sentence in report['speech_parts']]
+                        if audible.get('speech_parts'):
+                            reader = self.fixed_audio.read_prepared if audible.get('prepared_only') else self.fixed_audio.phrase
+                            parts = [await asyncio.to_thread(reader, audible['engineer'], sentence) for sentence in audible['speech_parts']]
                             audio = parts[0]
                         elif report.get('speech_text'):
-                            audio = await asyncio.to_thread(self.fixed_audio.phrase, report['engineer'], report['speech_text'])
+                            reader = self.fixed_audio.read_prepared if report.get('prepared_only') else self.fixed_audio.phrase
+                            audio = await asyncio.to_thread(reader, report['engineer'], report['speech_text'])
                         elif report.get('speech_key'):
                             audio = await asyncio.to_thread(self.fixed_audio.clip, report['speech_key'])
                 except Exception as exc:
@@ -802,9 +871,12 @@ class VoiceCoach:
                     owned = ('yellow', 'finish', 'class_traffic') if payload.alerts is None and self.live.radio.traffic_enabled else ('yellow', 'finish')
                     current = [c for c in current if c['key'] not in owned]
                 current = reports_enabled(current, payload.alerts)
+                if payload.speak:
+                    current = [c for c in current if self.prepared_report_ready(c)]
                 selected = self.live.pit_wall.select(current, latest['snapshot'], selection_level, cached_audio=True)
                 if not selected or selected['key'] != report['key'] or selected['token'] != report['token'] or selected['text'] != report['text'] or selected.get('speech_key') != report.get('speech_key'):
                     return result
+            report = audible
             note_context = {**context, 'backend_version': getattr(self, 'app_version', None),
                             'engineer': report['engineer'], 'pit_wall': view, 'report_key': report['key'], 'report_delivery': 'PREPARED',
                             'spoken_text': report.get('spoken_text'), 'speech_source': 'FIXED_CACHE'}
@@ -1045,7 +1117,10 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
         on_disk, cached_only = coach.radio_audio_mode(event)
         prepared_only = event.get('immediate') or event.get('prepared_only')
         if prepared_only and not on_disk:
-            return {'event': None, 'missing_prepared_audio': True}
+            fallback = coach.prepared_lap_fallback(event)
+            if fallback is None:
+                return {'event': None, 'missing_prepared_audio': True}
+            event, on_disk = fallback, True
         if coach.custom_packs.has_selection(event.get('engineer','spotter')) and not on_disk:
             return {'event':None,'missing_custom_audio':True}
         if event.get('control_recommendation',{}).get('setup') and not on_disk:
@@ -1055,10 +1130,13 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
         if not on_disk and coach.cloud_lock.locked():
             return {'busy': True}
         async with (contextlib.nullcontext() if on_disk else coach.cloud_lock):
+            fallback = event if event.get('numeric_audio_missing') else None
             with coach.live.lock:
                 event = coach.live.radio.get(identifier, coach.live.clock())
             if event is None:
                 return {'event': None}
+            if fallback:
+                event = fallback
             parts, dropped_parts = None, 0
             try:
                 if event.get('control_recommendation',{}).get('setup'):
@@ -1081,6 +1159,9 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
                 current = coach.live.radio.get(identifier, coach.live.clock())
             if current is None:
                 return {'event': None}
+            if event.get('numeric_audio_missing'):
+                current = {**current, **{key:event[key] for key in ('spoken_text','speech_text','numeric_audio_missing')},
+                           'speech_parts':None}
             return {'event': {k: v for k, v in current.items() if k != 'condition'}, 'audio_base64': audio,
                     'audio_parts': parts, 'audio_mime': 'audio/mpeg', 'dropped_parts': dropped_parts}
 

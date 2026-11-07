@@ -69,7 +69,7 @@ class CoachingPresentation:
                  (config.get('modes') or {}).get(session), repr((view.get('practice') or {}).get('scope')),
                  tuple((view.get('identity') or {}).get(key) for key in
                        ('game', 'car_id', 'car_path', 'track_id', 'track_config')))
-        previous = self.previous
+        previous = self.previous if scope == self.scope else None
         broken = previous and (at is None or not 0 <= at-previous['at'] <= .5
                     or sample.get('incidents') != previous['incidents']
                     or pct is not None and previous['pct'] is not None

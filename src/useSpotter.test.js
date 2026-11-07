@@ -308,6 +308,84 @@ const radioEvent = (key, extra = {}) => ({ id: `run:${key}`, serial: 1, key, tex
 const radioFrame = (events, quiet = true, extra = {}) => frame(1, null, { serial: 0,
   radio: { connected: true, run_id: 'run', events, quiet }, ...extra });
 
+test.each(['overlap', 'close_battle', 'coach_busy', 'audio_busy', 'render_busy'])('lap expiry records %s without changing safety or the start deadline', async reason => {
+  jest.useFakeTimers();
+  const recordDelivery = jest.fn();
+  audio.audioBusy = () => reason === 'audio_busy';
+  const { result } = renderHook(() => useSpotter('http://test', audio, { recordDelivery, busy: reason === 'coach_busy' }));
+  await enable(result);
+  if (reason === 'render_busy') {
+    global.fetch = jest.fn(() => new Promise(() => {}));
+    send(sockets[0], radioFrame([radioEvent('position')]));
+    await act(async () => { await Promise.resolve(); });
+  }
+  const event = radioEvent('lap_time', { immediate: true, expires_in_ms: 2000 });
+  const events = reason === 'render_busy' ? [radioEvent('position'),event] : [event];
+  const message = radioFrame(events, false, { occupied: reason === 'overlap', radio: {
+    connected: true, run_id: 'run', events, quiet: false,
+    traffic: { nearby: reason === 'close_battle' ? [{ gap_estimate_s: .5 }] : [] },
+  } });
+  for (let i = 0; i < 9; i += 1) {
+    send(sockets[0], message);
+    await act(async () => { await Promise.resolve(); });
+    act(() => jest.advanceTimersByTime(250));
+  }
+  send(sockets[0], radioFrame([]));
+  const row = recordDelivery.mock.calls.find(([data,status]) => data.event_id === event.id && status === 'expired');
+  expect(row).toBeDefined();
+  expect(row[0].waiting.scope).toBe('QUEUE_OBSERVATIONS');
+  expect(row[0].waiting.reasons[reason]).toBeGreaterThan(0);
+  expect(row[0].waiting.elapsed_ms).toBeLessThanOrEqual(2000);
+  expect(audio.play).not.toHaveBeenCalled();
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/ack'))).toHaveLength(0);
+  expect(recordDelivery.mock.calls.filter(([data]) => data.event_id === event.id)).toHaveLength(1);
+});
+
+test('waiting history follows one event, resets for the next run and never reports per frame', async () => {
+  const recordDelivery = jest.fn();
+  const { result, rerender } = renderHook(({ busy }) => useSpotter('http://test', audio, { busy, recordDelivery }), { initialProps: { busy: true } });
+  await enable(result);
+  const event = radioEvent('personal_best', { cached: true, immediate: true, audio_key: 'test' });
+  send(sockets[0], radioFrame([event]));
+  send(sockets[0], radioFrame([event]));
+  expect(recordDelivery).not.toHaveBeenCalled();
+  rerender({ busy: false });
+  send(sockets[0], radioFrame([event]));
+  await act(async () => { await Promise.resolve(); });
+  expect(recordDelivery.mock.calls[0][0].waiting.reasons.coach_busy).toBe(2);
+  const next = { ...event, id: 'next:personal_best', run_id: 'next' };
+  send(sockets[0], radioFrame([next],true,{ run_id:'next', radio:{ connected:true, run_id:'next',events:[next],quiet:true } }));
+  await act(async () => { await Promise.resolve(); });
+  const row = recordDelivery.mock.calls.find(([data]) => data.event_id === next.id);
+  expect(row[0].waiting.reasons.coach_busy).toBeUndefined();
+  expect(audio.play).toHaveBeenCalledTimes(2);
+});
+
+test.each(['preparing_audio', 'render_deferred', 'playback_pending', 'playback_declined'])('lap diagnostics retain %s when no playback status callback arrives', async reason => {
+  jest.useFakeTimers();
+  const recordDelivery = jest.fn();
+  if (reason === 'preparing_audio') global.fetch = jest.fn(url => url.endsWith('/render')
+    ? new Promise(() => {}) : Promise.resolve({ ok: true, json: async () => manifest }));
+  if (reason === 'render_deferred') global.fetch = jest.fn(async url => ({ ok: true,
+    json: async () => url.endsWith('/render') ? { busy: true } : manifest }));
+  if (reason === 'playback_pending') audio.play = jest.fn(() => new Promise(() => {}));
+  if (reason === 'playback_declined') audio.play = jest.fn(async () => false);
+  const { result } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));
+  await enable(result);
+  const event = radioEvent('personal_best', { immediate: true, expires_in_ms: 2000,
+    cached: ['playback_pending','playback_declined'].includes(reason), audio_key: 'test' });
+  for (let i = 0; i < 9; i += 1) {
+    send(sockets[0], radioFrame([event]));
+    await act(async () => { await Promise.resolve(); });
+    act(() => jest.advanceTimersByTime(250));
+  }
+  send(sockets[0], radioFrame([]));
+  const row = recordDelivery.mock.calls.find(([data,status]) => data.event_id === event.id && status === 'expired');
+  expect(row[0].waiting.reasons[reason]).toBeGreaterThan(0);
+  expect(row[0].playback).toBeUndefined();
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/ack'))).toHaveLength(0);
+});
+
 test('immediate lap bypasses driving hold and the routine gap without raising safety priority', async () => {
   global.fetch = jest.fn(async url => ({ ok: true, json: async () => url.endsWith('/render')
     ? { event: {}, audio_base64: 'lap-audio' } : manifest }));

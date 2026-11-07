@@ -101,7 +101,7 @@ def instant_answer(text, context, live=None):
         parts = [part for part in parts if part]
         return ('strategy', parts) if parts else None
     if any(word in compact for word in ('순위', '몇등', '몇위')) and not re.search(r'\d+위', compact):
-        position = number(snapshot.get('class_position'))
+        position = number(snapshot.get('position_confirmed')) if 'position_confirmed' in snapshot else number(snapshot.get('class_position'))
         return ('spotter', [sentence('position_now', pos=position)]) if position and position > 0 else None
     if racing and any(word in compact for word in ('몇랩남', '남은랩', '랩얼마나')) and view.get('finish_laps_to_go'):
         # The counted distance to the flag: one number, no maybes.

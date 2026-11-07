@@ -51,7 +51,8 @@ class EnduranceFuelTests(unittest.TestCase):
         self.assertNotIn('fuel_short', keys)        # 300 litres short is not news in a 4-hour race
         self.assertNotIn('pit_soon', keys)          # five laps are forty minutes here
         self.assertNotIn('pit_fuel_check', keys)    # the tank is set to full already
-        self.assertEqual(keys, ['pit_two'])
+        self.assertEqual(keys, ['pit_two', 'pit_fuel_plan'])
+        self.assertIn('98리터', heard[1][2])
         self.assertEqual(heard[0][1], 4)            # with two laps and a bit in the tank
 
     def test_the_in_lap_is_called_twice_and_never_from_the_pit_lane(self):
