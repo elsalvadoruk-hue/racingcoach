@@ -151,6 +151,38 @@ class RaceTests(unittest.TestCase):
 
 
 class PitWallIntegrationTests(unittest.TestCase):
+    def test_prepared_report_cache_is_bounded_and_does_not_cross_runs(self):
+        decision = dict(key='last_lap', token='lap-4', text='마지막 랩입니다.',
+                        engineer='race', priority=3, cooldown=1000)
+        with patch.object(self.live.pit_wall, 'candidates') as candidates:
+            for index in range(10):
+                candidates.return_value = [{**decision, 'token': str(index), 'text': f'상황 보고 {index}'}]
+                old = asyncio.run(self.coach.report(ReportRequest(speak=False)))['report']
+            self.assertEqual(len(self.coach.prepared_reports), 8)
+            self.live.ingest({'track_id': '99', 'car_id': '2'}, {**self.sample, 'session_time': 1}, self.race)
+            current = asyncio.run(self.coach.report(ReportRequest(speak=False)))['report']
+            self.assertNotEqual(old['note']['id'], current['note']['id'])
+            self.assertEqual(len(self.coach.prepared_reports), 1)
+            self.assertFalse(self.coach.acknowledge_report(old['note']['id'])['accepted'])
+
+    def test_undelivered_decision_is_reused_after_long_wait_and_workload_gap(self):
+        decision = dict(key='last_lap', token='lap-4', text='마지막 랩입니다.',
+                        engineer='race', priority=3, cooldown=1000)
+        with patch.object(self.live.pit_wall, 'candidates', return_value=[decision]) as candidates:
+            first = asyncio.run(self.coach.report(ReportRequest(speak=False)))['report']
+            for elapsed in (20, 60, 300, 453):
+                self.live.ingest({'track_id': '1', 'car_id': '2'},
+                    {**self.sample, 'session_time': 100 + elapsed}, self.race)
+                candidates.return_value = []
+                self.assertIsNone(asyncio.run(self.coach.report(ReportRequest(speak=False)))['report'])
+                candidates.return_value = [decision]
+                again = asyncio.run(self.coach.report(ReportRequest(speak=False)))['report']
+                self.assertEqual(first['note']['id'], again['note']['id'])
+            self.assertEqual(len(self.store.list()), 1)
+            self.assertEqual(again['note']['context']['report_delivery'], 'PREPARED')
+            self.assertTrue(self.coach.acknowledge_report(first['note']['id'])['accepted'])
+            self.assertIsNone(asyncio.run(self.coach.report(ReportRequest(speak=False)))['report'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.store = VoiceNoteStore(Path(self.temp.name) / 'voice.sqlite3')

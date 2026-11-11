@@ -11,6 +11,7 @@ import { colourRuns } from '../lib/lossColours';
 import { gapAt, heldPositionAt as heldAt, replayPair, timeline } from '../lib/ghost';
 import { useGame } from '../lib/gameContext';
 import { readGameItem, writeGameItem } from '../lib/gameStorage';
+import MapInputs from './MapInputs';
 
 const EMPTY_LINE = [];
 
@@ -89,9 +90,12 @@ export function channelsAt(rows, pct) {
   }
   const a = rows[lo], b = rows[hi];
   const f = b.distance_pct === a.distance_pct ? 0 : (pct - a.distance_pct) / (b.distance_pct - a.distance_pct);
-  const mix = key => (finite(a[key]) && finite(b[key]) ? a[key] + (b[key] - a[key]) * f : null);
+  if (b.breakBefore && f > 0 && f < 1) return null;
+  const mix = key => f === 0 ? (finite(a[key]) ? a[key] : null) : f === 1 ? (finite(b[key]) ? b[key] : null)
+    : (finite(a[key]) && finite(b[key]) ? a[key] + (b[key] - a[key]) * f : null);
   const near = f < .5 ? a : b;
-  return { speed: mix('speed'), throttle: mix('throttle'), brake: mix('brake'), gear: finite(near.gear) ? near.gear : null,
+  return { speed: mix('speed'), throttle: mix('throttle'), brake: mix('brake'), steering: mix('steering'),
+    referenceSteering: mix('referenceSteering'), gear: finite(near.gear) ? near.gear : null,
     referenceSpeed: mix('referenceSpeed'), referenceThrottle: mix('referenceThrottle'), referenceBrake: mix('referenceBrake'),
     referenceGear: finite(near.referenceGear) ? near.referenceGear : null };
 }
@@ -478,7 +482,8 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
       </span>}
       {detailLoading && <span role="status" className="text-xs text-muted-foreground">정밀 GPS 경로 불러오는 중…</span>}
     </div>);
-  return <div className={`coach-map-workspace${compactControls ? ' compact-map-workspace' : ''}`}>
+  return <div className={`coach-map-workspace${compactControls ? ' compact-map-workspace' : ''}`}
+    data-inputs={!diagramMode && traceRows.length > 0} data-replay={Boolean(ghostTarget)}>
     {compactControls ? <p id={hintId} className="sr-only">휠로 확대·축소 · 왼쪽 버튼을 누른 채 드래그하여 이동</p> : <>
       <div className="coach-map-toolbar"><div><h3>{diagramMode ? courseDiagram.displayName : selected ? selected.label || selected.id : '전체 트랙'}</h3><p id={hintId}>휠로 확대·축소 · 왼쪽 버튼을 누른 채 드래그하여 이동</p></div>{mapActions}</div>
       {backgroundSource}{lineSource}
@@ -538,6 +543,9 @@ export default function CornerMap({ projected, referenceProjected = EMPTY_PATH, 
       </g>}
     </svg>
     {ghostTarget && <GhostPanel target={channelsAt(traceRows, ghostTarget.pct)} reference={ghostReference ? channelsAt(traceRows, ghostReference.pct) : null} gap={ghostGap} lineLabel={lineLabel} aggregate={referenceLineSource?.chart_basis === 'AGGREGATE'} />}
+    {!diagramMode && traceRows.length > 0 && <MapInputs rows={traceRows} pct={ghostTarget?.pct ?? activePct}
+      values={channelsAt(traceRows, ghostTarget?.pct ?? activePct)} range={selectedRange}
+      angleAvailable={!schematic && selectedGame !== 'lmu'} aggregate={referenceLineSource?.chart_basis === 'AGGREGATE'} />}
     {/* The scale sits on the screen, not in the map: a camera that moves every frame (the ghost replay's
         "따라가기") would otherwise drag it along a step behind. */}
     {metersPerUnit > 0 && <div data-testid="map-distance-scale" aria-label={`${scaleMeters}미터 눈금`} className="pointer-events-none absolute bottom-2.5 left-2.5 rounded-[5px] px-2 pb-1.5 pt-1 text-[11px] leading-tight"

@@ -137,6 +137,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const appliedAudio = audioOutput.applied || audioOutput;
   const stopSpeaking = audioOutput.stopNormal || audioOutput.stop;
   const blocked = useRef(null), busyAudio = useRef(null), reportResumes = useRef(new Map());
+  const reportFailures = useRef(new Map());
   blocked.current = audioOutput.isPriorityBlocked; busyAudio.current = audioOutput.audioBusy;
   const recorder = useRef(null), microphoneEpoch = useRef(0), state = useRef({ phase: 'idle', armed: false });
   const spotter = useSpotter(apiBase, audioOutput, { busy: phase !== 'idle', specialists: wallEnabled && appliedWall.level !== 'off', level: appliedWall.level, wallAlerts: appliedWall.alerts, recordDelivery });
@@ -275,6 +276,13 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
         setWallView(response.pit_wall);
         if (!response.report || state.current.phase !== 'idle' || playing.current || isPriorityBlocked?.()) return;
         const { note, warning } = response.report;
+        const attemptKey = `${epoch}:${note.context?.snapshot?.run_id || ''}:${note.id}`;
+        if (Date.now() < (reportFailures.current.get(attemptKey)?.next || 0)) return;
+        const failedAttempt = () => {
+          const count = Math.min(5, (reportFailures.current.get(attemptKey)?.count || 0) + 1);
+          reportFailures.current.set(attemptKey, { count, next: Date.now() + Math.min(30000, 5000 * 2 ** (count - 1)) });
+          if (reportFailures.current.size > 32) reportFailures.current.delete(reportFailures.current.keys().next().value);
+        };
         const reportAllowed = () => voiceEventAllowed({ key: note.context?.report_key || '',
           alert_categories: response.report.alert_categories }, {}, wallOptions.current.alerts);
         if (!reportAllowed()) return;
@@ -301,7 +309,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
               || (current.brake != null && current.brake < .05 && current.steering_rad != null
                 && (Math.abs(current.steering_rad) < .12 || (response.report.brief && current.throttle >= .9 && Math.abs(current.steering_rad) < .30)));
           };
-          let finish;
+          let finish, terminal;
           const finished = new Promise((resolve) => { finish = resolve; });
           const started = await play(audio, mime, {
             diagnostics: createRadioAttempt(activeGame, epoch),
@@ -311,21 +319,31 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
             workloadValid: urgent ? undefined : workloadValid,
             onStatus: (status, reason, playback) => {
               recordDelivery({ ...deliveryEvent(note, response.report.spoken_text), ...(playback ? { playback } : {}) }, status, reason);
-              if (status !== 'started') finish({ status, reason });
+              if (status !== 'started') { terminal = { status, reason }; finish(terminal); }
             },
           });
-          if (!started) return;
+          if (!started) { if (terminal?.status === 'failed') failedAttempt(); return; }
           // The report counts as delivered when it was heard to the end. One that was cut off stays
           // undelivered, so the next poll offers it again if it is still true.
-          const outcome = await Promise.race([finished, new Promise((resolve) => setTimeout(() => resolve({ status: 'completed' }), 30000))]);
+          let timeout;
+          const outcome = await Promise.race([finished, new Promise((resolve) => {
+            timeout = setTimeout(() => resolve({ status: 'failed', reason: 'completion_timeout' }), 30000);
+          })]);
+          clearTimeout(timeout);
+          if (stopped || !mounted.current || epoch !== reportEpoch.current || !reportCurrent()) return;
+          if (outcome.status === 'failed') { failedAttempt(); return; }
           const call = `${note.context?.report_key}:${response.report.spoken_text || note.reply}`;
           const resumes = reportResumes.current.get(call) || 0;
-          if (outcome.status === 'interrupted' && RESUMABLE.includes(outcome.reason) && resumes < MAX_RESUMES) {
-            reportResumes.current.set(call, resumes + 1);
-            if (reportResumes.current.size > 32) reportResumes.current.delete(reportResumes.current.keys().next().value);
+          if (outcome.status === 'interrupted' && RESUMABLE.includes(outcome.reason)) {
+            if (resumes < MAX_RESUMES) {
+              reportResumes.current.set(call, resumes + 1);
+              if (reportResumes.current.size > 32) reportResumes.current.delete(reportResumes.current.keys().next().value);
+            } else failedAttempt();
             return;
           }
+          if (outcome.status !== 'completed') return;
           reportResumes.current.delete(call);
+          reportFailures.current.delete(attemptKey);
         } else recordDelivery(deliveryEvent(note), 'muted', 'text_only');
         const delivered = await request(`/reports/${note.id}/ack`, {});
         if (!stopped && mounted.current && delivered.note) setNotes((current) => current.map((n) => n.id === note.id ? delivered.note : n));

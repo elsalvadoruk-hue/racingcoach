@@ -339,6 +339,22 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
             included = [extra for extra in included if extra.group != group]
             status[group].update(included=False, reason='size_limit', file_bytes_with=size)
             data = build()
+    # A large later group may have forced an earlier, small health document out.
+    # Restore it before optional detail spends the freed space; never displace
+    # retained traffic or change the oval removal policy to do so.
+    if limit is not None and len(data) <= limit and status.get('session_health', {}).get('reason') == 'size_limit':
+        health_extra = next((extra for extra in made if extra.group == 'session_health' and extra.files), None)
+        if health_extra is not None:
+            previous = dict(status['session_health'])
+            included.append(health_extra)
+            status['session_health'] = {**previous, 'included': True, 'reason': None}
+            status['session_health'].pop('file_bytes_with', None)
+            candidate = build()
+            if len(candidate) <= limit:
+                data = candidate
+            else:
+                included.remove(health_extra)
+                status['session_health'] = previous
     # A supplement never displaces an existing file. Measure the complete ZIP,
     # including its manifest and directory entries, for every whole-corner bundle.
     summary = next((e for e in included if e.group == 'drive_summary' and e.supplement), None)

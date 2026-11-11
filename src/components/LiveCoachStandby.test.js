@@ -26,6 +26,36 @@ beforeEach(() => {
 });
 afterEach(() => { global.fetch = originalFetch; global.WebSocket = originalSocket; jest.useRealTimers(); });
 
+test('failed report starts back off without acknowledgement, then a completed retry delivers once', async () => {
+  jest.useFakeTimers();
+  const fallback = global.fetch;
+  const report = { priority: 3, audio_base64: 'report-clip', note: { id: 7, reply: '상황 보고',
+    context: { report_key: 'fuel_critical', snapshot: { run_id: 'test' } } } };
+  global.fetch = jest.fn(async (url, ...args) => url.endsWith('/reports')
+    ? { ok: true, json: async () => ({ pit_wall: {}, report }) } : fallback(url, ...args));
+  output.play.mockImplementationOnce(async (_audio, _mime, options) => {
+    options.onStatus('failed', 'playback_start_timeout'); return false;
+  });
+  const view = render(<LiveCoach apiBase="http://test" visible />);
+  fireEvent.click(screen.getByRole('button', { name: '자동 보고 시작' }));
+  await act(async () => jest.advanceTimersByTime(0));
+  expect(output.play).toHaveBeenCalledTimes(1);
+  await act(async () => jest.advanceTimersByTime(4000));
+  expect(output.play).toHaveBeenCalledTimes(1);
+  expect(global.fetch.mock.calls.some(([url]) => url.endsWith('/reports/7/ack'))).toBe(false);
+  await act(async () => jest.advanceTimersByTime(2000));
+  expect(output.play).toHaveBeenCalledTimes(2);
+  act(() => output.play.mock.calls[1][2].onStatus('failed', 'playback_stalled'));
+  await act(async () => {});
+  expect(global.fetch.mock.calls.some(([url]) => url.endsWith('/reports/7/ack'))).toBe(false);
+  await act(async () => jest.advanceTimersByTime(10000));
+  expect(output.play).toHaveBeenCalledTimes(3);
+  act(() => output.play.mock.calls[2][2].onStatus('completed', ''));
+  await act(async () => {});
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/reports/7/ack'))).toHaveLength(1);
+  view.unmount();
+});
+
 test('a silent observer never logs failures for the speaking client, including disconnect and disable', async () => {
   const heard = jest.fn(), silent = jest.fn();
   const standby = { ...output, play: jest.fn(), standby: true };

@@ -86,7 +86,10 @@ export function warm(settings, sinkId = '') {
       loading.audioWorklet.addModule(`${process.env.PUBLIC_URL || ''}/radio-pop-worklet.js`)
         .then(() => { if (context === loading) popsReady = true; }, () => {}).finally(() => { if (context === loading) popsLoading = false; });
     }
-    if (sinkFlight) return Promise.all([resuming, sinkFlight.then(() => warm(settings, sinkId))]);
+    if (sinkFlight) {
+      const waiting = context;
+      return Promise.all([resuming, sinkFlight.then(() => context === waiting ? warm(settings, sinkId) : undefined)]);
+    }
     if (sinkId !== contextSink && typeof context.setSinkId === 'function') {
       const wanted = sinkId, routing = context;
       const flight = routing.setSinkId(wanted).then(() => { if (context === routing) contextSink = wanted; }, () => {})
@@ -195,6 +198,19 @@ export function attach(audio, settings, { sinkId = '', volume = 1, muted = false
     if (source) { try { source.disconnect(); source.connect(context.destination); } catch { /* Context failed. */ } }
     return source ? { start() {}, update() {}, release() { source.disconnect(); } } : null;
   }
+}
+
+// Only enum state crosses the diagnostic boundary; no sink/device identity.
+export function contextState() {
+  return ['suspended', 'running', 'closed', 'interrupted'].includes(context?.state) ? context.state : 'unavailable';
+}
+
+// Called after the failed player has released its nodes. A hung close promise
+// must not keep the radio occupied or affect the next context's asynchronous work.
+export function recover() {
+  const old = context;
+  reset();
+  try { old?.close?.().catch?.(() => {}); } catch { /* Already closed. */ }
 }
 
 // For tests: forget the context.

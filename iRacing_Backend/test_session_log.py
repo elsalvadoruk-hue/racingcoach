@@ -26,6 +26,25 @@ def context(run=RUN, **extra):
 
 
 class SessionLogTests(unittest.TestCase):
+    def test_small_health_extra_returns_before_optional_detail_uses_remaining_budget(self):
+        import random
+        rng = random.Random(47)
+        health = session_log.Extra('session_health', {'session-health.json': rng.randbytes(12000)})
+        traffic = session_log.Extra('nearby_cars', {'nearby-cars.bin': rng.randbytes(90000)})
+        summary = session_log.Extra('drive_summary', {'summary.json': b'{}'},
+            supplement=lambda: iter([session_log.Extra('handling_traces', {'corner.bin': rng.randbytes(35000)},
+                {'passes': 1, 'samples': 100})]))
+        _, data = session_log.export(self.store, RUN, '2.5.4', limit=50000,
+            extras=[lambda run: health, lambda run: traffic, lambda run: summary])
+        manifest = session_log.read(data)[0]
+        files = zipfile.ZipFile(io.BytesIO(data))
+        self.assertLessEqual(len(data), 50000)
+        self.assertEqual(files.read('session-health.json'), health.files['session-health.json'])
+        self.assertTrue(manifest['extras']['session_health']['included'])
+        self.assertIsNone(manifest['extras']['session_health']['reason'])
+        self.assertFalse(manifest['extras']['nearby_cars']['included'])
+        self.assertEqual(set(files.namelist()), set(manifest['files']) | {'manifest.json'})
+
     def setUp(self):
         folder = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(folder.cleanup)

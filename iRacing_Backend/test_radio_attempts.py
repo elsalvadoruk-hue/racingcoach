@@ -24,7 +24,10 @@ class RadioAttemptTests(unittest.TestCase):
         base = self.attempt()
         for fields in ({'device_id': 'headset'}, {'stage': 'unknown'}, {'elapsed_ms': float('nan')},
                        {'started': 'false'}, {'part_index': True}, {'attempt_id': 'C:/user/private'},
-                       {'game': 'other'}, {'duration_s': float('inf')}):
+                       {'game': 'other'}, {'duration_s': float('inf')},
+                       {'ready_state': 5}, {'network_state': True}, {'media_error': 0},
+                       {'paused': 'false'}, {'effect_attached': 1}, {'context_state': 'USB headset'},
+                       {'recovery_plain': 'true'}, {'start_failures': 256}):
             with self.subTest(fields=fields), self.assertRaises(ValidationError):
                 voice_coach.RadioPlaybackDiagnostics(**{**base, **fields})
 
@@ -39,7 +42,9 @@ class RadioAttemptTests(unittest.TestCase):
             with patch.object(voice_coach, 'SpotterAudio'):
                 voice_coach.register_voice_routes(app, coach, None, None, None, None)
             events = [dict(event_id='same-event', run_id='synthetic-run', key='yellow', status='failed',
-                           reason='playback_start_timeout', playback=self.attempt(), diagnostics_dropped=3),
+                           reason='playback_start_timeout', playback=self.attempt(ready_state=0, network_state=2,
+                               paused=True, effect_attached=True, context_state='suspended', recovery_plain=False,
+                               start_failures=2, media_error=None), diagnostics_dropped=3),
                       dict(event_id='same-event', run_id='synthetic-run', key='yellow', status='started',
                            playback={**self.attempt(), 'attempt_id': 'radio-random:2', 'stage': 'playing', 'started': True}),
                       dict(event_id='same-event', run_id='synthetic-run', key='yellow', status='completed',
@@ -51,6 +56,9 @@ class RadioAttemptTests(unittest.TestCase):
             self.assertEqual([e['playback']['attempt_id'] for e in radio], ['radio-random:1', 'radio-random:2', 'radio-random:2'])
             self.assertEqual(radio[0]['playback']['stage'], 'routing')
             self.assertFalse(radio[0]['playback']['started'])
+            self.assertEqual(radio[0]['playback']['start_failures'], 2)
+            self.assertEqual(radio[0]['playback']['context_state'], 'suspended')
+            self.assertTrue(radio[0]['playback']['paused'])
             self.assertEqual(radio[0]['diagnostics_dropped'], 3)
             self.assertEqual(manifest['calls']['yellow']['completed'], 1)
 

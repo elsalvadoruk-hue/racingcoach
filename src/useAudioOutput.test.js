@@ -16,6 +16,33 @@ const originalMedia = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices')
 const originalSink = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'setSinkId');
 let media, players;
 
+test('repeated native start failures recover once, keep warning until success and preserve output preference', async () => {
+  jest.useFakeTimers();
+  localStorage.setItem(storageKey, 'headset');
+  const recover = jest.spyOn(radioEffect, 'recover').mockImplementation(() => {});
+  const attach = jest.spyOn(radioEffect, 'attach');
+  const { result, unmount } = renderHook(useAudioOutput);
+  for (let i = 0; i < 3; i += 1) {
+    global.Audio.mockImplementationOnce(src => {
+      const part = { src, pause: jest.fn(), play: jest.fn(() => new Promise(() => {})),
+        setSinkId: jest.fn(async () => {}), readyState: 0, networkState: 2, paused: true };
+      players.push(part); return part;
+    });
+    let pending;
+    await act(async () => { pending = result.current.play('hung'); });
+    if (i > 0) expect(result.current.message).toMatch(/재생/);
+    await act(async () => { jest.advanceTimersByTime(AUDIO_START_TIMEOUT_MS); await pending; });
+  }
+  expect(recover).toHaveBeenCalledTimes(1);
+  const attachedBefore = attach.mock.calls.length;
+  await act(async () => result.current.play('working'));
+  expect(attach).toHaveBeenCalledTimes(attachedBefore);
+  expect(result.current.message).not.toMatch(/연속|테스트 소리/);
+  expect(localStorage.getItem(storageKey)).toBe('headset');
+  expect(players.at(-1).setSinkId).toHaveBeenCalledWith('headset');
+  unmount(); recover.mockRestore(); attach.mockRestore();
+});
+
 test('routing cancellation is a distinct unstarted attempt and never interrupts the next owner', async () => {
   const { result, unmount } = renderHook(useAudioOutput);
   let release;

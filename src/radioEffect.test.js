@@ -29,6 +29,25 @@ function fakeContext({ state = 'running', sink = true } = {}) {
 const settings = (patch = {}) => radioEffect.cleanSettings({ level: 'medium', ...patch });
 afterEach(() => { radioEffect.reset(); delete window.AudioContext; localStorage.clear(); });
 
+test('recovery releases a hung context without waiting or letting old routing change the new output', async () => {
+  const { Context } = fakeContext();
+  window.AudioContext = Context;
+  let release;
+  Context.prototype.setSinkId = jest.fn().mockImplementationOnce(() => new Promise(resolve => { release = resolve; }))
+    .mockResolvedValue();
+  Context.prototype.close = jest.fn(() => new Promise(() => {}));
+  const old = radioEffect.warm(settings(), 'old');
+  const queued = radioEffect.warm(settings(), 'stale');
+  const previous = Context.last;
+  radioEffect.recover();
+  expect(previous.close).toHaveBeenCalledTimes(1);
+  expect(radioEffect.contextState()).toBe('unavailable');
+  await radioEffect.warm(settings(), 'new');
+  release(); await old; await queued;
+  expect(radioEffect.ready(settings(), 'new')).toBe(true);
+  expect(Context.prototype.setSinkId.mock.calls.map(([id]) => id)).toEqual(['old', 'new']);
+});
+
 test('plain speech gains 30% without radio filters and responds to live volume changes', () => {
   const { Context, made } = fakeContext();
   window.AudioContext = Context;

@@ -86,6 +86,8 @@ export default function useAudioOutput() {
   const [refreshing, setRefreshing] = useState(false);
   const [devices, setDevices] = useState([]);
   const [message, setMessage] = useState(() => (storedOutput(selectedGame) === COMMUNICATIONS ? COMMUNICATIONS_MESSAGE : ''));
+  const [failureMessage, setFailureMessage] = useState('');
+  const health = useRef({ failures: 0, plainUntil: 0, recoveredAt: -Infinity });
   const [playback, setPlayback, appliedPlayback] = useGameSettings(savedPlayback, storePlayback);
   const [isPlaying, setIsPlaying] = useState(false);
   const playbackSettings = useRef(appliedPlayback); playbackSettings.current = appliedPlayback;
@@ -271,6 +273,7 @@ export default function useAudioOutput() {
     if (signal?.aborted || !valid() || (priority < 3 && priorityGate.current)
       || (player.current && ((!interrupt) || (priority > 0 && priority <= player.current._priority && !nearerPitBox) || (priority === 0 && player.current._priority > 0)))) return false;
     stop('preempted'); setMessage('');
+    const plain = Date.now() < health.current.plainUntil;
     // A list is one call of several whole sentences: they play back to back and nothing slips in between.
     const rest = Array.isArray(encoded) ? encoded.slice(1) : [];
     const current = new Audio(clipSource(Array.isArray(encoded) ? encoded[0] : encoded, mime));
@@ -294,6 +297,12 @@ export default function useAudioOutput() {
         output_route: !supported ? 'unsupported' : sinkId ? 'selected' : unavailableOutput.current ? 'fallback' : 'default',
         media_time_s: Number.isFinite(part.currentTime) ? part.currentTime : null,
         duration_s: Number.isFinite(part.duration) ? part.duration : null,
+        ready_state: Number.isInteger(part.readyState) ? part.readyState : null,
+        network_state: Number.isInteger(part.networkState) ? part.networkState : null,
+        media_error: Number.isInteger(part.error?.code) ? part.error.code : null,
+        paused: typeof part.paused === 'boolean' ? part.paused : null,
+        effect_attached: !!part._effect, context_state: radioEffect.contextState(),
+        recovery_plain: plain, start_failures: health.current.failures,
         ...times,
         ...(['completed', 'cancelled', 'failed', 'interrupted'].includes(value) ? { ended_at: Date.now() / 1000 } : {}),
       }));
@@ -306,6 +315,18 @@ export default function useAudioOutput() {
       clearInterval(monitor); clearTimeout(deadlineTimer); signal?.removeEventListener('abort', abortPending); metadataReady?.(); settle();
       // Diagnostics are captured before stop releases the current media element.
       reportStatus(value, reason);
+    };
+    const startFailed = () => {
+      health.current.failures = Math.min(255, health.current.failures + 1);
+      setFailureMessage(health.current.failures < 2
+        ? '음성 재생을 시작하지 못했습니다. 다음 안내에서 다시 시도합니다.'
+        : '음성 재생 시작이 연속 실패했습니다. 임시로 효과 없이 다시 시도합니다. 계속 조용하면 “테스트 소리”를 누르거나 앱을 다시 실행하세요.');
+      if (health.current.failures >= 2 && Date.now() - health.current.recoveredAt >= 30000) {
+        health.current.recoveredAt = Date.now(); health.current.plainUntil = Date.now() + 30000;
+        // finish/stop first: an old player must not close a new owner's route.
+        return true;
+      }
+      return false;
     };
     current._finish = finish;
     current._stop = reason => finish(began ? 'interrupted' : 'cancelled', reason);
@@ -330,6 +351,7 @@ export default function useAudioOutput() {
       return true;
     };
     const progress = part => {
+      if (part === current) { health.current.failures = 0; setFailureMessage(''); }
       partStarted = true;
       if (part === current) { began = true; clearTimeout(deadlineTimer); }
       lastProgress = Date.now(); lastPosition = Number(part.currentTime) || 0;
@@ -354,7 +376,9 @@ export default function useAudioOutput() {
       console.warn('[RacingCoach audio]', { reason, stage, priority, channel,
         current_time_s: Number.isFinite(position) ? position : null, duration_s: Number.isFinite(part.duration) ? part.duration : null });
       setMessage('음성 재생이 멈춰 이번 안내를 건너뛰었습니다. 다음 안내에서 출력장치 연결을 다시 확인합니다.');
+      const recover = !partStarted && stage === 'play' ? startFailed() : false;
       finish('failed', reason); if (player.current === part) stop();
+      if (recover && !player.current) radioEffect.recover();
     }, 250);
     if (Number.isFinite(startDeadline)) deadlineTimer = setTimeout(() => {
       if (!began && active(current)) { finish('cancelled', 'start_deadline'); stop(); }
@@ -403,9 +427,9 @@ export default function useAudioOutput() {
         const start = async () => {
           try {
             if (!await route(next)) return;
-            setStage('effect'); await wait(radioEffect.warm(effectSettings.current, sinkId));
+            setStage('effect'); if (!plain) await wait(radioEffect.warm(effectSettings.current, sinkId));
             if (!active(next)) return;
-            next._effect = radioEffect.attach(next, effectSettings.current, { sinkId, ...playbackSettings.current });
+            next._effect = plain ? null : radioEffect.attach(next, effectSettings.current, { sinkId, ...playbackSettings.current });
             next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;
             next._effect?.start(false);
             setStage('play'); await wait(next.play());
@@ -464,10 +488,10 @@ export default function useAudioOutput() {
       }
       if (workloadValid && !workloadValid()) { current._finish('cancelled', 'driving_workload'); stop(); return false; }
       // Routed through the radio effect only when that is certain to be heard on the chosen device.
-      setStage('effect'); await wait(radioEffect.warm(effectSettings.current, sinkId));
+      setStage('effect'); if (!plain) await wait(radioEffect.warm(effectSettings.current, sinkId));
       if (!mounted.current || player.current !== current || terminal) return false;
       if (!valid() || (priority < 3 && priorityGate.current) || (workloadValid && !workloadValid())) { stop(); return false; }
-      current._effect = radioEffect.attach(current, effectSettings.current, { sinkId, ...playbackSettings.current });
+      current._effect = plain ? null : radioEffect.attach(current, effectSettings.current, { sinkId, ...playbackSettings.current });
       current.volume = Math.min(1, playbackSettings.current.volume); current.muted = playbackSettings.current.muted;
       if (playbackSettings.current.volume > 1 && !current._effect?.boosted) setMessage('이 브라우저 또는 출력장치에서는 증폭을 사용할 수 없어 100%로 재생합니다. 최신 Chrome 또는 Edge와 출력장치 설정을 확인하세요.');
       current._effect?.start(true);
@@ -481,14 +505,17 @@ export default function useAudioOutput() {
       return true;
     } catch (failure) {
       if (!mounted.current || player.current !== current) return;
+      const recover = !began && stage === 'play' && failure.name !== 'NotAllowedError' ? startFailed() : false;
+      if (failure.name === 'NotAllowedError') setFailureMessage('음성 자동 재생이 차단되었습니다. “답변 다시 듣기” 또는 “테스트 소리”를 눌러주세요.');
       setMessage(failure.name === 'NotAllowedError'
         ? '음성 자동 재생이 차단되었습니다. “답변 다시 듣기” 또는 “테스트 소리”를 눌러주세요.'
         : '소리를 재생하지 못했습니다. 출력장치 연결을 확인하고 다시 시도하세요.');
       current._finish('failed', failure.name || 'playback_error'); stop();
+      if (recover && !player.current) radioEffect.recover();
     }
   }, [supported, stop]);
   return { applied: { ...appliedPlayback, outputId: appliedOutput }, outputId, devices, supported, standby: !host,
-    message: host ? message : STANDBY_MESSAGE, refresh, refreshing, changeOutput, play, stop, stopNormal,
+    message: host ? failureMessage || message : STANDBY_MESSAGE, refresh, refreshing, changeOutput, play, stop, stopNormal,
     setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, canStartLap, isPlaying,
     volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, rate: playback.rate, changeRate,
     spotterRate: playback.spotterRate, changeSpotterRate, pitwallRate: playback.pitwallRate, changePitwallRate, effect, changeEffect };

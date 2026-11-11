@@ -1,11 +1,86 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import CornerMap, { fitMapView, startFinish, zoomMapView } from './CornerMap';
+import CornerMap, { channelsAt, fitMapView, startFinish, zoomMapView } from './CornerMap';
 import library from '../data/registeredTrackMaps.json';
+import MapInputs from './MapInputs';
 
 const points = Array.from({ length: 101 }, (_, i) => ({ distance_pct: i / 100, x: i * 5, y: 80 + Math.sin(i / 10) * 60 }));
 const corner = { id: 'C17', label: '자동 구간 17', entry_pct: .45, exit_pct: .55, apex_pct: .5 };
 const camera = () => screen.getByTestId('comparison-map').getAttribute('viewBox').split(' ').map(Number);
+
+const inputs = points.map((p, i) => ({ ...p, time_s: p.distance_pct * 100,
+  throttle: i, brake: 100 - i, referenceThrottle: 100 - i, referenceBrake: i,
+  steering: i - 50, referenceSteering: 50 - i, gear: 3, referenceGear: 4 }));
+
+test('map inputs compare the same distance while the reference ghost is ahead in time', () => {
+  render(<CornerMap projected={inputs} referenceProjected={inputs.map(p => ({ ...p, time_s: p.time_s * .8 }))}
+    traceRows={inputs} corners={[]} activePct={.2} onSelect={jest.fn()} onHover={jest.fn()} />);
+  expect(screen.getByTestId('map-inputs')).toHaveAttribute('data-position', '0.2');
+  expect(screen.getByTestId('map-input-pedals').querySelectorAll('path[fill-opacity=".16"]')).toHaveLength(2);
+  expect(screen.getByTestId('map-input-pedals').querySelectorAll('path[stroke-width="1.8"]')).toHaveLength(2);
+  const graph = screen.getByTestId('map-input-pedals');
+  const firstView = graph.getAttribute('viewBox').split(' ').map(Number);
+  expect(firstView[0] + firstView[2] * .8).toBeCloseTo(2000);
+  fireEvent.click(screen.getByTestId('ghost-play'));
+  fireEvent.change(screen.getByTestId('ghost-time'), { target: { value: '50' } });
+  expect(screen.getByTestId('map-inputs')).toHaveAttribute('data-position', '0.5');
+  expect(screen.getAllByTestId('map-input-cursor')).toHaveLength(1);
+  expect(screen.getAllByTestId('map-input-cursor').every(line => line.getAttribute('x1') === '5000')).toBe(true);
+  const movedView = graph.getAttribute('viewBox').split(' ').map(Number);
+  expect(movedView[0] + movedView[2] * .8).toBeCloseTo(5000);
+  expect(movedView[2]).toBe(firstView[2]);
+  expect(Number(screen.getByTestId('ghost-reference').getAttribute('cx'))).toBeGreaterThan(250);
+  expect(screen.getByTestId('map-input-gear')).toHaveTextContent('3');
+  expect(screen.getByTestId('map-input-reference-steering')).toHaveAttribute('stroke', 'white');
+  expect(screen.getByTestId('map-input-own-steering')).toHaveAttribute('stroke', '#4ade80');
+});
+
+test('input sampling keeps exact measured values and never bridges missing rows or observed breaks', () => {
+  const rows = [{ distance_pct: .2, throttle: 25, steering: -30, gear: 2 },
+    { distance_pct: .4, throttle: null, steering: 30, gear: 3, breakBefore: true }];
+  expect(channelsAt(rows, .1)).toBeNull();
+  expect(channelsAt(rows, .5)).toBeNull();
+  expect(channelsAt(rows, .3)).toBeNull();
+  expect(channelsAt(rows, .2)).toMatchObject({ throttle: 25, steering: -30, referenceSteering: null });
+  expect(channelsAt(rows, .4)).toMatchObject({ throttle: null, steering: 30 });
+  expect(channelsAt([{ ...rows[0] }, { ...rows[1], breakBefore: false }], .3)).toMatchObject({ throttle: null, steering: expect.any(Number) });
+});
+
+test('large map gear follows overlay comparison colors without comparing missing, neutral or invalid gears', () => {
+  const props = { rows: inputs, pct: .2 };
+  const { rerender } = render(<MapInputs {...props} values={{ gear: 2, referenceGear: 3 }} />);
+  expect(screen.getByTestId('map-input-gear')).toHaveAttribute('font-size', '48');
+  for (const [own, reference, label, color] of [
+    [2, 3, '2', '#ff4040'], [3, 3, '3', '#f6faff'], [4, 3, '4', '#4dff6a'],
+    [3, null, '3', '#bed0e6'], [null, 3, '—', '#bed0e6'],
+    [0, 3, 'N', '#bed0e6'], [-1, 3, 'R', '#bed0e6'], [3, 0, '3', '#bed0e6'],
+    [2.5, 3, '—', '#bed0e6'], [3, NaN, '3', '#bed0e6'], [21, 3, '—', '#bed0e6'],
+  ]) {
+    rerender(<MapInputs {...props} values={{ gear: own, referenceGear: reference }} />);
+    expect(screen.getByTestId('map-input-gear')).toHaveTextContent(label);
+    expect(screen.getByTestId('map-input-gear')).toHaveAttribute('fill', color);
+  }
+});
+
+test('LMU input overlay retains measured gear and pedals without inventing a wheel angle', () => {
+  const { rerender } = render(<CornerMap schematic projected={inputs} traceRows={inputs} corners={[]} activePct={.2} onSelect={jest.fn()} onHover={jest.fn()} />);
+  expect(screen.getByTestId('map-inputs')).toHaveTextContent('핸들 회전각 미제공');
+  expect(screen.queryByTestId('map-input-own-steering')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('map-input-reference-steering')).not.toBeInTheDocument();
+  expect(screen.getByTestId('map-input-gear')).toHaveTextContent('3');
+  rerender(<CornerMap schematic projected={inputs} traceRows={[]} corners={[]} activePct={.2} onSelect={jest.fn()} onHover={jest.fn()} />);
+  expect(screen.queryByTestId('map-inputs')).not.toBeInTheDocument();
+});
+
+test('map inputs clear unavailable measurements after a range or reference change', () => {
+  const props = { projected: inputs, corners: [], onSelect: jest.fn(), onHover: jest.fn(), activePct: .2 };
+  const { rerender } = render(<CornerMap {...props} traceRows={inputs} selectedRange={[.1, .3]} />);
+  expect(screen.getByTestId('map-input-gear')).toHaveTextContent('3');
+  rerender(<CornerMap {...props} traceRows={inputs.filter(p => p.distance_pct >= .4)} selectedRange={[.4, .6]} />);
+  expect(screen.getByTestId('map-input-gear')).toHaveTextContent('—');
+  expect(screen.queryByTestId('map-input-reference-steering')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('map-input-cursor')).not.toBeInTheDocument();
+});
 
 test('segment ghosts discard earlier lap deficits, keep local pace and reset for an equal-duration different segment', () => {
   const target = points.map(p => ({ ...p, time_s: 100 * p.distance_pct + 35 }));

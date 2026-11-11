@@ -62,6 +62,14 @@ class RadioPlaybackDiagnostics(BaseModel):
     output_route: Literal['unsupported', 'selected', 'fallback', 'default'] | None = None
     media_time_s: float | None = Field(default=None, ge=0, le=604800, allow_inf_nan=False)
     duration_s: float | None = Field(default=None, ge=0, le=604800, allow_inf_nan=False)
+    ready_state: int | None = Field(default=None, ge=0, le=4, strict=True)
+    network_state: int | None = Field(default=None, ge=0, le=3, strict=True)
+    media_error: int | None = Field(default=None, ge=1, le=4, strict=True)
+    paused: bool | None = Field(default=None, strict=True)
+    effect_attached: bool | None = Field(default=None, strict=True)
+    context_state: Literal['unavailable', 'suspended', 'running', 'closed', 'interrupted'] | None = None
+    recovery_plain: bool | None = Field(default=None, strict=True)
+    start_failures: int | None = Field(default=None, ge=0, le=255, strict=True)
     routing_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
     metadata_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
     effect_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
@@ -416,6 +424,7 @@ class VoiceCoach:
         self.report_lock = asyncio.Lock()
         self.race_options = {'reserve_laps': .5, 'pit_loss_s': None}
         self.pending_report = None
+        self.prepared_reports = []  # At most eight still-undelivered decisions, current run only.
         self.radio_audio = OrderedDict()
         self.fixed_audio = RadioAudioCache(self.speech, self.store.path.parent / 'radio_audio')
         from custom_voice_packs import CustomVoicePacks
@@ -796,6 +805,7 @@ class VoiceCoach:
             if payload.level == 'off' or not context.get('connected'):
                 with self.lock:
                     self.pending_report = None
+                    self.prepared_reports.clear()
             return result
         async with self.report_lock:
             notes = await asyncio.to_thread(self.report_notes)
@@ -818,12 +828,20 @@ class VoiceCoach:
                     self.pending_report = None
                 return result
             with self.lock:
-                pending = self.pending_report
-                if (pending and pending['run_id'] == snapshot['run_id']
-                        and 0 <= snapshot['session_time'] - pending['at'] <= 15
-                        and pending['decision']['key'] == report['key'] and pending['decision']['token'] == report['token']
-                        and pending['decision']['text'] == report['text']
-                        and pending['speak'] == payload.speak and pending['options'] == options and pending.get('alerts') == payload.alerts):
+                # Selection above always rechecks the live situation and workload.
+                # Preparation is not delivery: a long wait must not create a new
+                # note/audio for the same decision on every fifteen-second cycle.
+                self.prepared_reports = [p for p in self.prepared_reports
+                    if p['run_id'] == snapshot['run_id'] and 0 <= snapshot['session_time'] - p['at'] <= 1200]
+                pending = next((p for p in reversed(self.prepared_reports)
+                    if (p['decision']['key'] == report['key'] and p['decision']['token'] == report['token']
+                        and p['decision']['text'] == report['text']
+                        and p['decision'].get('speech_parts') == report.get('speech_parts')
+                        and p['decision'].get('speech_text') == report.get('speech_text')
+                        and p['decision'].get('speech_key') == report.get('speech_key')
+                        and p['speak'] == payload.speak and p['options'] == options and p.get('alerts') == payload.alerts)), None)
+                if pending:
+                    self.pending_report = pending
                     return {**result, 'pit_wall': view, 'report': pending['response']}
                 self.pending_report = None
             audio, warning, parts = None, '', None
@@ -889,7 +907,10 @@ class VoiceCoach:
                         'audio_mime': 'audio/mpeg'}
             with self.lock:
                 self.pending_report = {'run_id': snapshot['run_id'], 'at': snapshot['session_time'],
-                    'decision': report, 'response': response, 'speak': payload.speak, 'options': options, 'alerts': payload.alerts}
+                    'decision': selected, 'response': response, 'speak': payload.speak, 'options': options, 'alerts': payload.alerts,
+                    'audible': report}
+                self.prepared_reports.append(self.pending_report)
+                self.prepared_reports = self.prepared_reports[-8:]
             return {**result, 'pit_wall': view, 'report': response}
 
     def acknowledge_report(self, note_id):
@@ -902,7 +923,8 @@ class VoiceCoach:
                 self.pending_report = None
                 return {'accepted': False}
             note = self.store.update(note_id, report_delivery='DELIVERED')
-            self.live.pit_wall.delivered(pending['decision'], context['snapshot']['session_time'])
+            self.live.pit_wall.delivered(pending.get('audible', pending['decision']), context['snapshot']['session_time'])
+            self.prepared_reports = [p for p in self.prepared_reports if p is not pending]
             self.pending_report = None
             return {'accepted': True, 'note': public_note(note)}
 
