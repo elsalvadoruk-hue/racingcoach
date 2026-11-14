@@ -6,7 +6,7 @@ import { eventSound, playBeep } from './drillBeeps';
 import useVoiceLibrary, { cleanVoiceSettings, voiceSelections } from './lib/voiceLibrary';
 import { readAlerts, voiceEventAllowed } from './lib/voiceAlerts';
 import { banterObservation } from './banterObservation';
-import { createRadioAttempt, radioDiagnostic, createRadioWait, observeRadioWait, snapshotRadioWait } from './lib/radioDiagnostics';
+import { createRadioAttempt, radioDiagnostic, createRadioWait, observeRadioWait, snapshotRadioWait, observeRadioPreparation } from './lib/radioDiagnostics';
 
 const SETTINGS_KEY = 'iracing.spotter.settings';
 export const RADIO_RENDER_TIMEOUT_MS = 8000;
@@ -31,8 +31,9 @@ const storeSettings = (game, value) => writeGameItem(SETTINGS_KEY, game, JSON.st
 
 const occupied = (frame, alerts) => frame.occupied && alerts?.overlap !== false;
 // Optional oval clips never trigger a fetch or synthesis. Older packs keep their side calls.
-const overlapClip = (clips, key, audioKey, variant) => {
+const overlapClip = (clips, key, audioKey, variant, chooseReviewed) => {
   const clip = (audioKey && clips?.[audioKey]?.audio_base64 ? clips[audioKey] : clips?.[key]);
+  if (clip?.reviewed && chooseReviewed) return chooseReviewed(key, clip);
   return clip?.variants?.length ? clip.variants[(variant ?? 0) % clip.variants.length] : clip;
 };
 // The existing bumper threshold is .7s. Include the car ahead as well as behind.
@@ -98,9 +99,26 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const radioQueue = useRef(new Map()), heard = useRef(new Set()), rendering = useRef(null), processing = useRef(new Set()), lastCall = useRef(0), resumed = useRef(new Map());
   const playbackFailures = useRef(new Map());
   const pendingPlayback = useRef(new Map());
+  const takeCursors = useRef(new Map()), eventTakes = useRef(new Map());
+  const chooseReviewed = useCallback((key, clip, id) => {
+    if (!clip?.reviewed || !clip.variants?.length) return null;
+    if (id && eventTakes.current.has(id)) return eventTakes.current.get(id);
+    const index = (takeCursors.current.get(key) || 0) % clip.variants.length;
+    const chosen = clip.variants[index]; takeCursors.current.set(key, index + 1);
+    if (id) {
+      eventTakes.current.set(id, chosen);
+      if (eventTakes.current.size > 256) eventTakes.current.delete(eventTakes.current.keys().next().value);
+    }
+    return chosen;
+  }, []);
+  // One prepared-only lap request can bypass a slow routine render. This does
+  // not change playback priority, safety gates or either event's deadline.
+  const lapRendering = useRef(null);
   const shadowSeen = useRef(new Set());
   const cancelRender = useCallback(reason => {
     rendering.current?.cancel(reason);
+    lapRendering.current?.cancel(reason);
+    eventTakes.current.clear();
     if (!['condition_or_session_changed', 'session_changed'].includes(reason)) {
       for (const pending of pendingPlayback.current.values()) {
         if (pending.cancelled) continue;
@@ -250,7 +268,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const announce = useCallback(async (key, valid, variant = null, onStatus, audioKey = null) => {
     if (output.current.standby) return false;
     if (key !== 'test' && !voiceEventAllowed({ key }, applied.current.alerts)) return false;
-    const selected = overlapClip(clips.current, key, audioKey, variant);
+    const selected = overlapClip(clips.current, key, audioKey, variant, chooseReviewed);
     const audio = selected?.audio_base64;
     const settings = output.current;
     const event = { id: `${state.current.run_id || 'local'}:overlap:${Date.now()}:${key}`, run_id: state.current.run_id,
@@ -274,7 +292,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     }
     status(audio ? 'muted' : 'failed', audio ? 'volume_or_mute' : 'missing_clip');
     return false;
-  }, [logEvent]);
+  }, [logEvent, chooseReviewed]);
   const pumpOverlap = useCallback(() => {
     if (output.current.standby) return;
     const pending = overlapPending.current;
@@ -323,7 +341,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         let reason = globalReason;
         if (!reason) {
           if (processing.current.has(e.id)) reason = pendingPlayback.current.has(e.id) ? 'playback_pending'
-            : rendering.current?.event.id === e.id ? 'preparing_audio' : 'processing';
+            : (e.immediate ? lapRendering : rendering).current?.event.id === e.id ? 'preparing_audio' : 'processing';
           else if (now < (playbackFailures.current.get(e.id)?.retryAt || 0)) reason = 'retry_backoff';
           else if (!voiceEventAllowed(e, applied.current.alerts, settings.wallAlerts)) reason = 'alerts_disabled';
           else if (e.immediate && closeBattle(current)) reason = 'close_battle';
@@ -334,7 +352,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
           else if (e.priority < 2 && settings.audioBusy?.() && !(e.immediate && settings.canStartLap?.())) reason = 'audio_busy';
           else if (e.priority < 2 && (e.cached || rendered.current.has(e.id)) && !quietFor(e)) reason = 'workload';
           else if (e.priority < 2 && !e.immediate && now - lastCall.current <= 1200) reason = 'call_spacing';
-          else if (!e.cached && rendering.current) reason = 'render_busy';
+          else if (!e.cached && (e.immediate ? lapRendering : rendering).current) reason = 'render_busy';
           else reason = selected?.id === e.id ? 'eligible' : 'queue_priority';
         }
         observeRadioWait(e.queueWait, reason, now);
@@ -355,10 +373,12 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       .sort((a, b) => b.priority - a.priority || Number(Boolean(b.immediate)) - Number(Boolean(a.immediate)) || a.serial - b.serial);
     // Prepare a short call before its driving window; cloud latency must not
     // consume the only quiet moment after crossing the line.
-    const event = events.find((e) => e.priority >= 2 || (!settings.busy && (!settings.audioBusy?.() || (e.immediate && settings.canStartLap?.()))
-      && ((!e.cached && !rendered.current.has(e.id)) || quietFor(e)) && (e.immediate || Date.now() - lastCall.current > 1200)));
+    const event = events.find((e) => (e.cached || rendered.current.has(e.id) || !(e.immediate ? lapRendering : rendering).current)
+      && (e.priority >= 2 || (!settings.busy && (!settings.audioBusy?.() || (e.immediate && settings.canStartLap?.()))
+      && ((!e.cached && !rendered.current.has(e.id)) || quietFor(e)) && (e.immediate || Date.now() - lastCall.current > 1200))));
     observeQueue(event);
-    if (!event || (!event.cached && rendering.current)) return;
+    if (!event) return;
+    const renderSlot = event.immediate ? lapRendering : rendering;
     const ticket = epoch.current;
     const revision = alertRevision.current;
     const valid = () => mounted.current && !output.current.standby && ticket === epoch.current && state.current.radio?.connected
@@ -376,7 +396,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       let audio, droppedParts, mime = 'audio/mpeg', text = event.text;
       if (event.cached) {
         const clip = clips.current?.[event.audio_key || event.key];
-        const variant = clip?.variants?.[event.variant] || clip;
+        const variant = chooseReviewed(event.audio_key || event.key, clip, event.id) || clip?.variants?.[event.variant] || clip;
         audio = variant?.audio_base64;
         // The neutral finish clip is shared; its measured/provisional rank stays on screen.
         if (!event.audio_key) text = variant?.text || text;
@@ -392,18 +412,23 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         ({ audio, mime, droppedParts } = rendered.current.get(event.id));
       } else if (!settings.muted && settings.volume > 0) {
         observeRadioWait(event.queueWait, 'preparing_audio');
+        observeRadioPreparation(event.queueWait, 'requested');
         const controller = new AbortController();
         let timer, cancel;
         const cancelled = new Promise(resolve => { cancel = reason => resolve({ cancelled: reason }); });
         flight = { event, cancel: reason => {
+          observeRadioPreparation(event.queueWait, reason === 'timeout' ? 'timeout' : 'cancelled');
           clearTimeout(timer); controller.abort(); cancel(reason);
-          if (rendering.current === flight) rendering.current = null;
+          if (renderSlot.current === flight) renderSlot.current = null;
         } };
-        rendering.current = flight;
+        renderSlot.current = flight;
         timer = setTimeout(() => flight.cancel('timeout'), Math.max(0, Math.min(RADIO_RENDER_TIMEOUT_MS, event.local_expires - Date.now())));
         const request = async () => {
           const response = await fetch(`${apiBase}/api/live-coach/spotter/radio/${encodeURIComponent(event.id)}/render`, { method: 'POST', signal: controller.signal });
-          return { response, result: await response.json() };
+          const result = await response.json();
+          if (!controller.signal.aborted) observeRadioPreparation(event.queueWait,
+            !response.ok ? 'error' : result.busy ? 'deferred' : !result.event ? 'unavailable' : 'ready');
+          return { response, result };
         };
         let renderedResponse;
         try { renderedResponse = await Promise.race([request(), cancelled]); }
@@ -505,9 +530,9 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       }
     } finally {
       if (pendingPlayback.current.get(event.id) === pending) pendingPlayback.current.delete(event.id);
-      processing.current.delete(event.id); if (flight && rendering.current === flight) rendering.current = null;
+      processing.current.delete(event.id); if (flight && renderSlot.current === flight) renderSlot.current = null;
     }
-  }, [apiBase, logEvent]);
+  }, [apiBase, logEvent, chooseReviewed]);
   useEffect(() => {
     if (!enabled || readyGame !== activeGame) return undefined;
     let socket, retry, stopped = false;
@@ -548,7 +573,9 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         }
         lastFrame.current = now;
         const previous = state.current;
-        if (rendering.current && rendering.current.event.run_id !== frame.radio?.run_id) cancelRender('session_changed');
+        for (const slot of [rendering, lapRendering]) {
+          if (slot.current && slot.current.event.run_id !== frame.radio?.run_id) slot.current.cancel('session_changed');
+        }
         // A brief raw 'clear' candidate must not cut off a confirmed overlap call.
         const replaced = (previous.active && !frame.active) || previous.run_id !== frame.run_id || previous.state !== frame.state
           || previous.profile !== frame.profile;
@@ -564,7 +591,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
             if (shadowSeen.current.size > 128) shadowSeen.current.delete(shadowSeen.current.values().next().value);
             try {
               output.current.recordDelivery.observeBanter(banterObservation(candidate, frame, output.current,
-                rendering.current || overlapPending.current || radioQueue.current.size));
+                rendering.current || lapRendering.current || overlapPending.current || radioQueue.current.size));
             } catch { /* Optional diagnostics cannot interrupt existing radio delivery. */ }
           }
         }
@@ -576,7 +603,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
             if (shadowSeen.current.size > 128) shadowSeen.current.delete(shadowSeen.current.values().next().value);
             try {
               output.current.recordDelivery.observeOval(banterObservation(candidate, frame, output.current,
-                rendering.current || overlapPending.current || radioQueue.current.size));
+                rendering.current || lapRendering.current || overlapPending.current || radioQueue.current.size));
             } catch { /* Diagnostics cannot interrupt radio delivery. */ }
           }
         }
@@ -594,7 +621,9 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
             ? radioQueue.current.get(event.id).queueWait : createRadioWait(event.key, now),
           local_expires: Math.min(radioQueue.current.get(event.id)?.local_expires ?? Infinity,
             now + Math.min(120000, event.expires_in_ms) - (typeof frame.sent_at === 'number' ? Math.max(0, now - frame.sent_at * 1000 - serverOffset) : 0)) }]));
-        if (rendering.current && !nextQueue.has(rendering.current.event.id)) cancelRender('condition_or_session_changed');
+        for (const slot of [rendering, lapRendering]) {
+          if (slot.current && !nextQueue.has(slot.current.event.id)) slot.current.cancel('condition_or_session_changed');
+        }
         for (const event of radioQueue.current.values()) {
           if (!output.current.standby && !nextQueue.has(event.id) && !heard.current.has(event.id)) {
             const pending = pendingPlayback.current.get(event.id);

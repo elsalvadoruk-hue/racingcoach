@@ -39,6 +39,7 @@ BACKEND_SKIP = ("gcp-key.json", "garage61_api_token.txt")
 SCRIPTS = ("launch_app.py", "install_ui.py", "serve_ui.py", "prepare_radio_audio.py", "test_launch_app.py", "make_share_copy.py", "make_patch.py", "read_coach_log.py", "read_timing_log.py",
            # 설치.bat and 실행.bat pick a supported Python through this.
            "find_python.bat",
+           "review_short_radio.py", "short-radio-review.html", "open_short_radio_review.bat",
            # The web settings tab and the driving overlay run this window process.
            "tire_overlay.py", "overlay_sample.py", "overlay_trace.py", "overlay_celebration.py", "overlay_demo_data.py",
            "overlay_native.py", "overlay_theme.py", "overlay_rendering.py", "overlay_commands.py", "overlay_race_result.py", "overlay_studio_view.py", "overlay_preview.py")

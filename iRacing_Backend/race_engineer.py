@@ -237,6 +237,8 @@ class RaceEngineer:
         self.spoken = {}
         self.finish_seen = None
         self.race_at = None
+        self.lmu_countdown = None
+        self.lmu_clock_expired = False
         # Every car's stint: the lap it last left the pit road on, and its stops. Known from the start
         # only for cars first seen before their first lap was done; otherwise from their first stop.
         self.stints = {}
@@ -245,7 +247,26 @@ class RaceEngineer:
         if self.run_id != run_id:
             self.reset()
             self.run_id = run_id
-        self.race = race or {}
+        race = race or {}
+        # LMU can stop publishing the countdown just after zero. Only bridge
+        # that boundary when fresh same-run observations actually cross it.
+        # An arbitrary missing value, a pause/gap or a new session is unknown.
+        continuous = (self.race_at is not None and 0 <= session_time - self.race_at <= 3)
+        eligible_clock = (race.get('game') == 'lmu' and str(race.get('session_type', '')).lower() == 'race'
+                          and race.get('state') in (4, 5))
+        left = numeric(race.get('time_remaining_s'))
+        if not continuous or not eligible_clock:
+            self.lmu_clock_expired = False
+            self.lmu_countdown = None
+        if eligible_clock:
+            if left is not None:
+                self.lmu_clock_expired = left == 0
+                self.lmu_countdown = (session_time, left) if 0 <= left <= 3 else None
+            elif self.lmu_countdown is not None:
+                at, previous_left = self.lmu_countdown
+                self.lmu_clock_expired = (continuous and previous_left <= session_time - at <= 3)
+                self.lmu_countdown = None
+        self.race = race
         self.race_at = session_time
         # Standalone pit-wall users collect the same history. LiveTelemetry shares
         # the radio instance, whose wall-clock ingest happens once per metadata frame.
@@ -442,6 +463,10 @@ class RaceEngineer:
             time_left = numeric(snapshot.get('session_time_remaining_s'))
             if time_left is None:
                 time_left = numeric(race.get('time_remaining_s'))
+            if (time_left is None and self.lmu_clock_expired and self.race_at is not None
+                    and numeric(snapshot.get('session_time')) is not None
+                    and 0 <= snapshot['session_time'] - self.race_at <= 2):
+                time_left = 0
             if time_left is not None and -86400 < time_left < 0:
                 time_left = max(0, time_left)
             duration = numeric(race.get('session_duration_s'))

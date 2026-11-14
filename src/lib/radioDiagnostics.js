@@ -34,5 +34,14 @@ export function observeRadioWait(wait, reason, now = Date.now()) {
 
 export function snapshotRadioWait(wait) {
   return wait?.observations ? { scope: 'QUEUE_OBSERVATIONS', observations: wait.observations,
-    elapsed_ms: wait.elapsed_ms, reasons: { ...wait.reasons }, last_reason: wait.last_reason } : undefined;
+    elapsed_ms: wait.elapsed_ms, reasons: { ...wait.reasons }, last_reason: wait.last_reason,
+    ...(wait.preparation ? { preparation: { ...wait.preparation } } : {}) } : undefined;
+}
+
+export function observeRadioPreparation(wait, status, now = Date.now()) {
+  if (!wait) return;
+  const elapsed = Math.min(120000, Math.max(0, now - wait.first));
+  wait.preparation = status === 'requested'
+    ? { requests: Math.min(255, (wait.preparation?.requests || 0) + 1), requested_ms: elapsed, status }
+    : { ...wait.preparation, response_ms: elapsed, status };
 }

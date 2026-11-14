@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>짧은 무전 · 청취와 적용 선택</title>
+<style>
+:root{color-scheme:dark;font:15px system-ui,sans-serif;background:#111a26;color:#edf2f8}body{margin:0}main{max-width:1360px;margin:auto;padding:24px}h1{font-size:25px;margin:0 0 12px}p{line-height:1.6}.muted{color:#aabbcc}.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:12px 0}.panel{padding:16px;background:#1a2839;border:1px solid #35465c;border-radius:10px}button,select,input,textarea{font:inherit;border:1px solid #52647b;border-radius:5px;background:#203248;color:inherit;padding:8px}button{cursor:pointer}button:disabled{cursor:default;opacity:.55}button.primary{background:#285b45}button.reject{padding:5px 9px}input[type=checkbox]{width:20px;height:20px;accent-color:#75d6a8}input[type=search]{min-width:230px;flex:1}audio{width:100%}.playback{position:sticky;top:0;z-index:2;background:#111a26;padding:8px 0}#message{min-height:24px;white-space:pre-wrap}.error{color:#ffc1b6}.ok{color:#a4efbf}.badge{display:inline-block;font-size:12px;padding:3px 6px;background:#304359;border-radius:4px;margin:2px}.active{background:#26523d}.pending{background:#624f25}.excluded{background:#603936}table{width:100%;border-collapse:collapse}th,td{text-align:left;border-bottom:1px solid #35465c;padding:11px 8px;vertical-align:top}th{color:#aabbcc;font-weight:500}td:first-child{width:68px}tr.playing{background:#203c50}tr.rejected{opacity:.55}textarea{width:180px;min-height:48px;box-sizing:border-box;resize:vertical}.phrase{font-size:16px;margin-bottom:6px}.detail{font-size:12px;color:#aabbcc;word-break:break-all}.controls{display:flex;gap:6px;flex-wrap:wrap}.scroll{overflow:auto}@media(max-width:760px){main{padding:14px}h1{font-size:22px}th,td{padding:9px 6px}textarea{width:130px}table{min-width:780px}.bar>button{flex-grow:1}}
+</style></head><body><main>
+<h1>짧은 무전 · 청취와 적용 선택</h1>
+<p>같은 문장의 파형·발화 시간을 비교해 안내별 최대 5개를 남깁니다. <strong>앞 클래스는 원래 테이크 2·4·5를 유지합니다.</strong></p>
+<div class="panel"><div id="summary"></div><p class="muted" id="current-note"></p>
+<div class="bar"><button id="approved">기존 승인본 선택</button><button id="current">현재 적용 목록 선택</button><button id="export">선택·메모 내보내기</button><label>선택 파일 불러오기 <input id="import" type="file" accept="application/json,.json"></label></div>
+<div class="bar"><button class="primary" id="apply">선택 목록 저장</button><span class="muted" id="save-help"></span></div>
+<div id="missing" class="muted"></div><div id="message" role="status" aria-live="polite"></div></div>
+<div class="playback"><audio id="player" controls></audio><div id="now" class="muted">테이크를 눌러 들어보세요.</div></div>
+<div class="bar"><input id="query" type="search" placeholder="문장·테이크 번호 검색" aria-label="문장·테이크 검색"><select id="category" aria-label="음원 출처"><option value="all">모든 출처</option><option value="approved">기존 승인본</option><option value="new-natural">추가 생성 원본</option><option value="new-tempo">추가 속도 파생본</option></select><select id="state-filter" aria-label="선택 상태"><option value="all">모든 선택 상태</option><option value="selected">다음 적용에 선택</option><option value="pending">추가 후보 · 미선택</option><option value="rejected">제외로 표시</option><option value="active">현재 적용 중</option></select><span id="count"></span></div>
+<div class="scroll"><table><thead><tr><th>다음 적용</th><th>안내 · 테이크</th><th>출처 · 현재 상태</th><th>듣기</th><th>청취 메모</th></tr></thead><tbody id="rows"></tbody></table></div>
+<p class="muted">목록 저장은 짧은 무전의 선택 파일만 바꿉니다. 기본 음성과 무전·LMU 개선은 유지됩니다. 저장 후 앱과 검은 실행창을 완전히 닫고 실행.bat으로 다시 열면 반영됩니다.</p>
+</main><script>
+const boot=__REVIEW_BOOTSTRAP__;
+let state=boot.state;
+const catalog=state.catalog, entries=catalog.manifest.entries, byId=new Map(entries.map(row=>[row.id,row]));
+const front=new Set(['class_traffic_ahead-take2','class_traffic_ahead-take4','class_traffic_ahead-take5'].filter(id=>byId.has(id)));
+const approvedIds=entries.filter(row=>catalog.metadata[row.id].priorApproved).map(row=>row.id);
+const storageKey='racingcoach.short-review.v1.'+catalog.sha256;
+const diversity=state.previousSelection?.selectionMethod==='waveform-duration-diversity-v1';
+let selected=new Set(),rejected=new Set(),notes={};
+const el=id=>document.getElementById(id), player=el('player'), trById=new Map();
+const categories={approved:'기존 승인본','new-natural':'추가 생성 원본','new-tempo':'추가 속도 파생본'};
+function category(row){const meta=catalog.metadata[row.id];return meta.priorApproved?'approved':meta.kind==='tempo'?'new-tempo':'new-natural'}
+function tell(text,error=false){el('message').textContent=text;el('message').className=error?'error':'ok'}
+function enforceFront(){for(const id of front){selected.add(id);rejected.delete(id)}}
+function useSelection(value){
+ if(value.format!=='racingcoach-short-radio-selection'||value.schemaVersion!==1||value.catalogSha256!==catalog.sha256)throw Error('이 검수 목록의 선택 파일을 불러오세요.');
+ if(value.activeManifestSha256!==state.activeManifestSha256)throw Error('실사용 목록이 바뀌었습니다. 페이지를 새로 열고 선택 파일을 확인하세요.');
+ for(const key of ['selectedIds','rejectedIds'])if(!Array.isArray(value[key])||value[key].some(id=>!byId.has(id))||new Set(value[key]).size!==value[key].length)throw Error('목록에 없는 테이크 또는 중복 선택이 있습니다.');
+ if(value.selectedIds.some(id=>value.rejectedIds.includes(id)))throw Error('사용과 제외가 겹치는 테이크가 있습니다.');
+ if([...front].some(id=>!value.selectedIds.includes(id)))throw Error('앞 클래스 테이크 2·4·5를 유지해야 합니다.');
+ const counts={};for(const id of value.selectedIds){const key=byId.get(id).eventKey;counts[key]=(counts[key]||0)+1}if(Object.values(counts).some(count=>count>5))throw Error('안내별로 최대 5개만 선택할 수 있습니다.');
+ const incoming=value.notes||{};if(typeof incoming!=='object'||Array.isArray(incoming)||Object.entries(incoming).some(([id,note])=>!byId.has(id)||typeof note!=='string'||note.length>2000))throw Error('청취 메모를 확인하세요.');
+ selected=new Set(value.selectedIds);rejected=new Set(value.rejectedIds);notes={...incoming};enforceFront();
+}
+function selection(){return {format:'racingcoach-short-radio-selection',schemaVersion:1,catalogSha256:catalog.sha256,activeManifestSha256:state.activeManifestSha256,selectedIds:entries.filter(row=>selected.has(row.id)).map(row=>row.id),rejectedIds:entries.filter(row=>rejected.has(row.id)).map(row=>row.id),notes:{...notes},...(diversity?{selectionMethod:'waveform-duration-diversity-v1'}:{})}}
+function persist(){try{localStorage.setItem(storageKey,JSON.stringify(selection()))}catch{tell('브라우저 임시 저장을 사용할 수 없습니다. 선택·메모 내보내기를 이용하세요.',true)}}
+function missing(){const groups=new Map();for(const row of entries){if(!groups.has(row.eventKey))groups.set(row.eventKey,[]);groups.get(row.eventKey).push(row)}return [...groups.values()].filter(rows=>!rows.some(row=>selected.has(row.id))).map(rows=>rows[0].spoken)}
+function refresh(){
+ const active=new Set(state.activeIds), totals={approved:0,'new-natural':0,'new-tempo':0};for(const row of entries)if(active.has(row.id))totals[category(row)]++;
+ const roots=new Set(entries.filter(row=>active.has(row.id)).map(row=>catalog.metadata[row.id].rootPcmSha256));
+ const listened=(state.previousSelection?.userApprovedIds||[]).filter(id=>active.has(id)).length;
+ el('summary').textContent=`실사용 ${active.size}파일 · 청취 승인 ${listened}개 · 안내별 최대 5개(앞 클래스 3개) · 출처: 기존 승인 원본 ${totals.approved} · 추가 원본 ${totals['new-natural']} · 속도 파생본 ${totals['new-tempo']} · 서로 다른 합성 원본 ${roots.size}개 · 미선정 ${entries.length-active.size}파일 보관`;
+ el('current-note').textContent=`현재 실사용 ${active.size}파일 / 다음 적용 선택 ${selected.size}파일. ‘현재 적용 중’은 청취 승인 여부와 별개입니다. 목록을 저장하기 전까지 현재 실사용 상태를 유지합니다.`;
+ const gaps=missing();el('missing').textContent=gaps.length?'아직 사용할 테이크를 고르지 않은 안내: '+gaps.join(' / '):'모든 대상 안내에 사용할 테이크가 선택됐습니다.';
+ const query=el('query').value.trim().toLowerCase(), filter=el('category').value, status=el('state-filter').value;let visible=0;
+ for(const row of entries){const tr=trById.get(row.id),meta=catalog.metadata[row.id];tr.querySelector('input[type=checkbox]').checked=selected.has(row.id);tr.querySelector('.review-status').textContent=selected.has(row.id)?'다음 적용 선택':rejected.has(row.id)?'제외 표시':'검수 대기';tr.querySelector('.review-status').className='review-status badge '+(selected.has(row.id)?'active':rejected.has(row.id)?'excluded':'pending');tr.querySelector('.runtime-status').textContent=active.has(row.id)?'현재 적용 중':'현재 미적용';tr.querySelector('textarea').value=notes[row.id]||'';tr.classList.toggle('rejected',rejected.has(row.id));
+ const matches=(row.spoken+' '+row.id+' 테이크 '+String(row.takeNumber).padStart(2,'0')).toLowerCase().includes(query)&&(filter==='all'||category(row)===filter)&&(status==='all'||status==='selected'&&selected.has(row.id)||status==='pending'&&!selected.has(row.id)&&!rejected.has(row.id)&&!meta.priorApproved||status==='rejected'&&rejected.has(row.id)||status==='active'&&active.has(row.id));tr.hidden=!matches;if(matches)visible++;
+ }el('count').textContent=visible+'개 표시';
+}
+async function play(row){for(const tr of trById.values())tr.classList.remove('playing');trById.get(row.id).classList.add('playing');el('now').textContent=row.spoken+' · 테이크 '+row.takeNumber;player.src='../../data/reviewed_radio/'+row.audio;try{await player.play()}catch{tell('재생하지 못했습니다. 다시 눌러주세요.',true)}}
+for(const row of entries){
+ const meta=catalog.metadata[row.id],tr=document.createElement('tr');tr.dataset.id=row.id;tr.dataset.key=row.eventKey;tr.dataset.take=row.takeNumber;tr.dataset.category=category(row);
+ const selectCell=document.createElement('td'),checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.setAttribute('aria-label',row.spoken+' 테이크 '+row.takeNumber+' 사용');checkbox.disabled=front.has(row.id);checkbox.onchange=()=>{if(checkbox.checked){if(entries.filter(item=>item.eventKey===row.eventKey&&selected.has(item.id)).length>=5){checkbox.checked=false;tell('이 안내는 이미 5개입니다. 바꿀 테이크의 체크를 먼저 해제하세요.',true);return}selected.add(row.id);rejected.delete(row.id)}else selected.delete(row.id);enforceFront();persist();refresh()};selectCell.append(checkbox);if(front.has(row.id)){const locked=document.createElement('div');locked.className='detail';locked.textContent='유지';selectCell.append(locked)}
+ const phraseCell=document.createElement('td'),phrase=document.createElement('div'),detail=document.createElement('div');phrase.className='phrase';phrase.textContent=row.spoken+' · 테이크 '+String(row.takeNumber).padStart(2,'0');detail.className='detail';detail.textContent=row.reviewedVoice+' · '+row.id;phraseCell.append(phrase,detail);
+ const measured=boot.analysis?.measurements?.[row.id];const duration=document.createElement('div');duration.className='detail';duration.textContent=`재생 ${row.duration.toFixed(3)}초`+(measured?.sha256===row.sha256?` · 발화 ${measured.voicedTime.toFixed(3)}초`:'');phraseCell.append(duration);
+ if(measured?.sha256===row.sha256){const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg'),line=document.createElementNS(ns,'polyline');svg.setAttribute('viewBox','0 0 160 32');svg.setAttribute('width','160');svg.setAttribute('height','32');svg.setAttribute('role','img');svg.setAttribute('aria-label','발화 위치별 강약 파형');const points=measured.envelope.map((value,index)=>`${(index/(measured.envelope.length-1)*160).toFixed(2)},${(30-value*28).toFixed(2)}`).join(' ');line.setAttribute('points',points);line.setAttribute('fill','none');line.setAttribute('stroke','#8acdc1');line.setAttribute('stroke-width','1.5');svg.append(line);phraseCell.append(svg)}
+ const sourceCell=document.createElement('td'),source=document.createElement('div'),kind=document.createElement('div'),review=document.createElement('span'),runtime=document.createElement('span');source.textContent=categories[category(row)];kind.className='detail';kind.textContent=meta.kind==='tempo'?'속도 파생 · 기준 '+meta.rootId:'합성 원본 · '+meta.rootId;review.className='review-status badge';runtime.className='runtime-status badge';sourceCell.append(source,kind,review,runtime);
+ const playCell=document.createElement('td'),controls=document.createElement('div'),listen=document.createElement('button'),compare=document.createElement('button'),exclude=document.createElement('button');controls.className='controls';listen.textContent='듣기';listen.onclick=()=>play(row);compare.textContent='기준 듣기';const reference=entries.find(item=>item.eventKey===row.eventKey&&catalog.metadata[item.id].priorApproved&&catalog.metadata[item.id].kind!=='tempo');compare.disabled=!reference;compare.onclick=()=>play(reference);exclude.textContent='제외';exclude.className='reject';exclude.disabled=front.has(row.id);exclude.onclick=()=>{selected.delete(row.id);rejected.add(row.id);persist();refresh()};controls.append(listen,compare,exclude);playCell.append(controls);
+ const noteCell=document.createElement('td'),note=document.createElement('textarea');note.maxLength=2000;note.setAttribute('aria-label',row.spoken+' 테이크 '+row.takeNumber+' 메모');note.oninput=()=>{if(note.value)notes[row.id]=note.value;else delete notes[row.id];persist()};noteCell.append(note);tr.append(selectCell,phraseCell,sourceCell,playCell,noteCell);el('rows').append(tr);trById.set(row.id,tr);
+}
+selected=new Set(approvedIds);enforceFront();
+let restored=false;try{const draft=localStorage.getItem(storageKey);if(draft){useSelection(JSON.parse(draft));restored=true}}catch(error){tell(error.message,true)}
+if(!restored&&state.previousSelection){try{useSelection(state.previousSelection);if(diversity)tell('파형·발화 시간으로 선별한 현재 목록을 불러왔습니다.')}catch(error){tell(error.message,true)}}
+if(diversity){el('state-filter').value='active';el('approved').hidden=true;el('state-filter').querySelector('option[value=all]').textContent='보관 후보까지 모두 보기'}
+el('approved').onclick=()=>{selected=new Set(approvedIds);rejected.clear();enforceFront();persist();refresh();tell('기존 승인본을 다음 적용에 선택했습니다. 새 후보는 직접 들어보고 추가하세요.')};
+el('current').onclick=()=>{selected=new Set(state.activeIds);rejected.clear();enforceFront();persist();refresh();tell('현재 적용된 목록을 다음 적용으로 불러왔습니다. 이 동작은 청취 완료를 뜻하지 않습니다.')};
+el('export').onclick=()=>{const blob=new Blob([JSON.stringify(selection(),null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='짧은무전-선택-2026-11-14.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);tell('선택과 메모를 내보냈습니다. 원본 음원은 변경하지 않습니다.')};
+el('import').onchange=async event=>{try{const file=event.target.files[0];if(!file)return;if(file.size>262144)throw Error('선택 파일이 너무 큽니다.');useSelection(JSON.parse(await file.text()));persist();refresh();tell('선택과 메모를 불러왔습니다. 저장 전까지 실사용 목록은 바뀌지 않습니다.')}catch(error){tell(error.message,true)}finally{event.target.value=''}};
+for(const id of ['query','category','state-filter'])el(id).addEventListener(id==='query'?'input':'change',refresh);
+el('apply').disabled=!boot.server;el('save-help').textContent=boot.server?'저장 후 앱 재시작 시 반영됩니다.':'파일로 연 페이지에서는 선택을 내보낼 수 있습니다. 로컬 검수실을 열면 여기서 저장할 수 있습니다.';
+el('apply').onclick=async()=>{const gaps=missing();if(gaps.length){tell('각 안내에서 하나 이상 선택해 주세요: '+gaps.join(' / '),true);return}el('apply').disabled=true;try{const response=await fetch('/api/apply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(selection())}),result=await response.json();if(!response.ok)throw Error(result.error||'저장하지 못했습니다.');state=await fetch('/api/state').then(value=>value.json());persist();refresh();tell(result.message)}catch(error){tell(error.message,true)}finally{el('apply').disabled=false}};
+refresh();
+window.shortRadioReview={selection,missing,state:()=>state};
+</script></body></html>

@@ -112,6 +112,9 @@
 !/scripts/make_release_assets.py
 !/scripts/make_short_radio.py
 !/scripts/test_make_short_radio.py
+!/scripts/review_short_radio.py
+!/scripts/short-radio-review.html
+!/scripts/open_short_radio_review.bat
 !/scripts/python_runtime.json
 !/scripts/prepare_lmu_bridge.py
 !/scripts/test_prepare_lmu_bridge.py

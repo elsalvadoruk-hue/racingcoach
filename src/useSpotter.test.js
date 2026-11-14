@@ -308,6 +308,35 @@ const radioEvent = (key, extra = {}) => ({ id: `run:${key}`, serial: 1, key, tex
 const radioFrame = (events, quiet = true, extra = {}) => frame(1, null, { serial: 0,
   radio: { connected: true, run_id: 'run', events, quiet }, ...extra });
 
+test('a hung routine render cannot occupy the lap preparation slot', async () => {
+  const recordDelivery = jest.fn();
+  const { result, unmount } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));
+  await enable(result);
+  global.fetch = jest.fn(url => url.includes('position/render') ? new Promise(() => {})
+    : Promise.resolve({ ok: true, json: async () => ({ event: {}, audio_base64: 'lap-audio' }) }));
+  const routine = radioEvent('position'), lap = radioEvent('lap_time', { immediate: true, expires_in_ms: 2000 });
+  send(sockets[0], radioFrame([routine]));
+  await act(async () => {});
+  send(sockets[0], radioFrame([routine, lap]));
+  await act(async () => {});
+  expect(audio.play).toHaveBeenCalledWith('lap-audio', 'audio/mpeg', expect.objectContaining({ startDeadline: expect.any(Number), priority: 1 }));
+  const started = recordDelivery.mock.calls.find(([row, status]) => row.event_id === lap.id && status === 'started');
+  expect(started[0].waiting.preparation).toMatchObject({ status: 'ready', requests: 1 });
+  unmount();
+});
+
+test('reviewed overlap takes cycle independently of the old wording variant count', async () => {
+  manifest.clips.left = { reviewed: true, variants: [0,1,2].map(i => ({ text: 'left', audio_base64: `take${i}`, reviewed: true })) };
+  const { result, unmount } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  for (let serial = 1; serial <= 4; serial += 1) {
+    send(sockets[0], frame(2, null, { serial, events: [{ serial, key:'left', variant: serial % 2, state:2, run_id:'run', expires_in_ms:500 }] }));
+    await act(async () => {});
+  }
+  expect(audio.play.mock.calls.map(([clip]) => clip)).toEqual(['take0','take1','take2','take0']);
+  unmount();
+});
+
 test.each(['overlap', 'close_battle', 'coach_busy', 'audio_busy', 'render_busy'])('lap expiry records %s without changing safety or the start deadline', async reason => {
   jest.useFakeTimers();
   const recordDelivery = jest.fn();
@@ -334,7 +363,7 @@ test.each(['overlap', 'close_battle', 'coach_busy', 'audio_busy', 'render_busy']
   const row = recordDelivery.mock.calls.find(([data,status]) => data.event_id === event.id && status === 'expired');
   expect(row).toBeDefined();
   expect(row[0].waiting.scope).toBe('QUEUE_OBSERVATIONS');
-  expect(row[0].waiting.reasons[reason]).toBeGreaterThan(0);
+  expect(row[0].waiting.reasons[reason === 'render_busy' ? 'preparing_audio' : reason]).toBeGreaterThan(0);
   expect(row[0].waiting.elapsed_ms).toBeLessThanOrEqual(2000);
   expect(audio.play).not.toHaveBeenCalled();
   expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/ack'))).toHaveLength(0);

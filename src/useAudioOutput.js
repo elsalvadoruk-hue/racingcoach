@@ -27,10 +27,11 @@ export const OUTPUT_GRACE_MS = 2000;
 export const AUDIO_START_TIMEOUT_MS = 5000;
 export const AUDIO_STALL_TIMEOUT_MS = 5000;
 const disposePlayer = part => {
-  part.onended = part.onerror = part.onplaying = part.onloadedmetadata = null;
+  part.onended = part.onerror = part.onplaying = part.onloadedmetadata = part.onloadeddata = part.oncanplay = null;
   part._effect?.release(false); part._effect = null;
   // Release the browser's decoder and media resource between calls and sentence parts.
   part.removeAttribute?.('src'); part.load?.();
+  if (part._blobUrl) { URL.revokeObjectURL(part._blobUrl); part._blobUrl = null; }
 };
 const MISSING_OUTPUT_MESSAGE = '선택한 출력장치를 사용할 수 없어 임시로 Windows 기본 장치로 재생합니다. 저장된 선택은 유지하며 같은 장치가 연결되면 다음 안내부터 돌아갑니다.';
 const PLAYBACK_KEY = 'iracing.voice.playback';
@@ -77,6 +78,26 @@ const askDevicePermission = async () => {
 // A clip joined on the server from cut pieces comes as a whole data URL (a WAV between MP3 sentences).
 const clipSource = (clip, mime) => (String(clip).startsWith('data:') ? clip : `data:${mime};base64,${clip}`);
 
+const clipPlayer = (clip, mime, useBlob) => {
+  let source = clipSource(clip, mime), blobUrl;
+  const match = /^data:([^;,]+)(?:;[^,]*)?;base64,(.*)$/s.exec(source);
+  const type = match?.[1] || mime;
+  const payload = match?.[2];
+  const bytes = payload ? Math.max(0, Math.floor(payload.length * 3 / 4) - (payload.match(/=+$/)?.[0].length || 0)) : 0;
+  if (useBlob && payload && typeof URL.createObjectURL === 'function') {
+    try {
+      const raw = atob(payload), buffer = Uint8Array.from(raw, value => value.charCodeAt(0));
+      blobUrl = URL.createObjectURL(new Blob([buffer], { type })); source = blobUrl;
+    } catch { /* Keep the normal media error path if the payload cannot be converted. */ }
+  }
+  const part = new Audio(source);
+  part._blobUrl = blobUrl;
+  part._source = { source_kind: blobUrl ? 'blob' : 'data',
+    source_mime: ['audio/mpeg', 'audio/wav', 'audio/ogg'].includes(type) ? type : 'other',
+    source_bytes: Math.min(16777216, bytes) };
+  return part;
+};
+
 export default function useAudioOutput() {
   const host = useAudioHost();
   const hostRef = useRef(host); hostRef.current = host;
@@ -87,7 +108,7 @@ export default function useAudioOutput() {
   const [devices, setDevices] = useState([]);
   const [message, setMessage] = useState(() => (storedOutput(selectedGame) === COMMUNICATIONS ? COMMUNICATIONS_MESSAGE : ''));
   const [failureMessage, setFailureMessage] = useState('');
-  const health = useRef({ failures: 0, plainUntil: 0, recoveredAt: -Infinity });
+  const health = useRef({ failures: 0, plainUntil: 0, blobUntil: 0, recoveredAt: -Infinity });
   const [playback, setPlayback, appliedPlayback] = useGameSettings(savedPlayback, storePlayback);
   const [isPlaying, setIsPlaying] = useState(false);
   const playbackSettings = useRef(appliedPlayback); playbackSettings.current = appliedPlayback;
@@ -274,9 +295,10 @@ export default function useAudioOutput() {
       || (player.current && ((!interrupt) || (priority > 0 && priority <= player.current._priority && !nearerPitBox) || (priority === 0 && player.current._priority > 0)))) return false;
     stop('preempted'); setMessage('');
     const plain = Date.now() < health.current.plainUntil;
+    const useBlob = Date.now() < health.current.blobUntil;
     // A list is one call of several whole sentences: they play back to back and nothing slips in between.
     const rest = Array.isArray(encoded) ? encoded.slice(1) : [];
-    const current = new Audio(clipSource(Array.isArray(encoded) ? encoded[0] : encoded, mime));
+    const current = clipPlayer(Array.isArray(encoded) ? encoded[0] : encoded, mime, useBlob);
     current._priority = priority;
     current._pitBoxDistance = pitBoxDistance;
     current._routineReport = priority === 0 && routineReport;
@@ -303,6 +325,8 @@ export default function useAudioOutput() {
         paused: typeof part.paused === 'boolean' ? part.paused : null,
         effect_attached: !!part._effect, context_state: radioEffect.contextState(),
         recovery_plain: plain, start_failures: health.current.failures,
+        ...part._source, metadata_received: !!part._metadataReceived,
+        data_received: !!part._dataReceived, can_play: !!part._canPlay,
         ...times,
         ...(['completed', 'cancelled', 'failed', 'interrupted'].includes(value) ? { ended_at: Date.now() / 1000 } : {}),
       }));
@@ -318,6 +342,9 @@ export default function useAudioOutput() {
     };
     const startFailed = () => {
       health.current.failures = Math.min(255, health.current.failures + 1);
+      // A new media resource avoids reusing the data-URL loading path seen
+      // stuck at HAVE_NOTHING. Retry budgets and the saved output stay intact.
+      health.current.blobUntil = Date.now() + 30000;
       setFailureMessage(health.current.failures < 2
         ? '음성 재생을 시작하지 못했습니다. 다음 안내에서 다시 시도합니다.'
         : '음성 재생 시작이 연속 실패했습니다. 임시로 효과 없이 다시 시도합니다. 계속 조용하면 “테스트 소리”를 누르거나 앱을 다시 실행하세요.');
@@ -416,7 +443,7 @@ export default function useAudioOutput() {
         part._effect = null;
         if (!rest.length) { finish('completed'); stop(); return; }
         part.pause(); disposePlayer(part);
-        const next = new Audio(clipSource(rest.shift(), mime));
+        const next = clipPlayer(rest.shift(), mime, useBlob);
         next._priority = priority; next._finish = finish; next._stop = current._stop;
         next._pitBoxDistance = pitBoxDistance; next._routineReport = current._routineReport;
         partIndex += 1; partStarted = false; lastProgress = Date.now(); lastPosition = 0;
@@ -441,6 +468,9 @@ export default function useAudioOutput() {
         start();
     };
     const chain = (part) => {
+      part.onloadedmetadata = () => { part._metadataReceived = true; metadataReady?.(); };
+      part.onloadeddata = () => { part._dataReceived = true; };
+      part.oncanplay = () => { part._canPlay = true; };
       part.onended = () => follow(part);
       part.onerror = () => {
         // Failing after it was heard is the output going away under it (a device taken or reset), not the clip:
@@ -476,7 +506,6 @@ export default function useAudioOutput() {
           await new Promise((resolve) => {
             const timer = setTimeout(resolve, 1500);
             metadataReady = () => { clearTimeout(timer); resolve(); };
-            current.onloadedmetadata = metadataReady;
           });
         }
         if (!mounted.current || player.current !== current || terminal) return false;

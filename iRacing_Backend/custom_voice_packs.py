@@ -25,6 +25,11 @@ class CustomVoicePacks:
     def __init__(self,root,builtin_root=None):
         self.root=Path(root);self.builtin_root=Path(builtin_root) if builtin_root is not None else None
         self.lock=threading.RLock();self.selections={};self.loaded={};self.installation=InstallProgress()
+        from reviewed_radio import ReviewedRadio
+        self.reviewed=ReviewedRadio((self.builtin_root or self.root).parent/'reviewed_radio')
+    def _reviewed_voice(self,role):
+        key=self.selections.get(role)
+        return BUILTIN_PACKS[key][1] if self.is_builtin(key) else None
     @property
     def selected(self):return next(iter(self.selections.values()),None)
     @property
@@ -181,10 +186,14 @@ class CustomVoicePacks:
         return key,self.loaded[key][1].get((role,text)) if key else None
     def has(self,role,text):
         with self.lock:
+            voice=self._reviewed_voice(role)
+            if voice and self.reviewed.has(role,voice,text):return True
             key,row=self._row(role,text)
             return bool(row and (self._folder(key)/row['audio']).is_file())
     def audio(self,role,text):
         with self.lock:
+            voice=self._reviewed_voice(role)
+            if voice and self.reviewed.has(role,voice,text):return self.reviewed.audio(role,voice,text)
             key,row=self._row(role,text)
             if not row:raise MissingCustomAudio('커스텀팩에 없는 문장입니다. 이 안내는 생략합니다.')
             data=(self._folder(key)/row['audio']).read_bytes();check_audio(row,data)
@@ -209,7 +218,9 @@ class CustomVoicePacks:
                 except OSError:return None
                 if len(data)>=100:return {'text':text,'audio_base64':base64.b64encode(data).decode('ascii')}
             for key,texts in VARIANTS.items():
-                choices=[{'text':t,'audio_base64':self.audio('spotter',t)} for t in texts if self.has('spotter',t)]
+                voice=self._reviewed_voice('spotter')
+                choices=self.reviewed.choices('spotter',voice,key) if voice else []
+                if not choices:choices=[{'text':t,'audio_base64':self.audio('spotter',t)} for t in texts if self.has('spotter',t)]
                 if not choices and default:
                     for text in texts:
                         choice=prepared_default(text)

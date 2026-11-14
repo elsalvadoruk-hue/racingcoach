@@ -74,7 +74,8 @@ class RaceEndTests(unittest.TestCase):
 class QueueWaitTests(unittest.TestCase):
     def waiting(self):
         return dict(scope='QUEUE_OBSERVATIONS', observations=2, elapsed_ms=1900.,
-                    reasons={'overlap':1,'audio_busy':1}, last_reason='audio_busy')
+                    reasons={'overlap':1,'audio_busy':1}, last_reason='audio_busy',
+                    preparation=dict(requests=1,requested_ms=25.,response_ms=90.,status='ready'))
 
     def test_strict_bounded_nonidentifying_schema(self):
         cls = voice_coach.RadioQueueDiagnostics
@@ -82,7 +83,10 @@ class QueueWaitTests(unittest.TestCase):
         for patch in ({'scope':'ORIGINAL_SDK_DECISION'}, {'device_id':'private'},
                       {'observations':True}, {'observations':65536}, {'elapsed_ms':float('nan')},
                       {'elapsed_ms':120001}, {'last_reason':'private'},
-                      {'reasons':{'overlap':True}}, {'reasons':{'private':1}}):
+                      {'reasons':{'overlap':True}}, {'reasons':{'private':1}},
+                      {'preparation':dict(requests=256,requested_ms=0,status='ready')},
+                      {'preparation':dict(requests=1,requested_ms=0,status='headset')},
+                      {'preparation':dict(requests=1,requested_ms=0,status='ready',device_id='private')}):
             with self.subTest(patch=patch), self.assertRaises(ValidationError):
                 cls(**{**self.waiting(),**patch})
 

@@ -16,6 +16,29 @@ const originalMedia = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices')
 const originalSink = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'setSinkId');
 let media, players;
 
+test('a stalled data source switches to a fresh Blob on the next attempt and releases it on stop', async () => {
+  jest.useFakeTimers();
+  const create = URL.createObjectURL, revoke = URL.revokeObjectURL;
+  URL.createObjectURL = jest.fn(() => 'blob:isolated-radio');
+  URL.revokeObjectURL = jest.fn();
+  const { result, unmount } = renderHook(useAudioOutput);
+  global.Audio.mockImplementationOnce(src => {
+    const part = { src, pause: jest.fn(), play: jest.fn(() => new Promise(() => {})),
+      setSinkId: jest.fn(async () => {}), readyState: 0, networkState: 2, paused: false };
+    players.push(part); return part;
+  });
+  const diagnostics = createRadioAttempt('lmu'), status = jest.fn();
+  let pending;
+  await act(async () => { pending = result.current.play('QUJDRA==', 'audio/wav', { diagnostics, onStatus: status }); });
+  await act(async () => { jest.advanceTimersByTime(AUDIO_START_TIMEOUT_MS); await pending; });
+  await act(async () => result.current.play('QUJDRA==', 'audio/wav', { diagnostics, onStatus: status }));
+  expect(players[1].src).toBe('blob:isolated-radio');
+  expect(status.mock.calls.at(-1)[2]).toMatchObject({ source_kind: 'blob', source_mime: 'audio/wav', source_bytes: 4 });
+  act(() => result.current.stop());
+  expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+  unmount(); URL.createObjectURL = create; URL.revokeObjectURL = revoke;
+});
+
 test('repeated native start failures recover once, keep warning until success and preserve output preference', async () => {
   jest.useFakeTimers();
   localStorage.setItem(storageKey, 'headset');
@@ -356,9 +379,10 @@ test.each(['coach', 'spotter'])('answers from %s and replay retain the speaker c
   expect(players[0].volume).toBe(.45);
   fireEvent.click(screen.getByRole('button', { name: '답변 다시 듣기' }));
   await waitFor(() => expect(players[1]?.play).toHaveBeenCalled());
-  // Delivery reports and the live status poll can arrive while local audio starts.
+  // Delivery reports and independent status/tire polls can arrive while local audio starts.
   const contentRequests = () => fetchMock.mock.calls.filter(([url, options = {}]) =>
     !url.endsWith('/radio-delivery') &&
+    !url.includes('/api/tire-overlay?') &&
     !(url.endsWith('/api/live-coach/status') && (options.method || 'GET').toUpperCase() === 'GET'));
   const requests = contentRequests().length;
   fireEvent.click(screen.getByRole('button', { name: '테스트 소리' }));

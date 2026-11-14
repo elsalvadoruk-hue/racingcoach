@@ -70,6 +70,12 @@ class RadioPlaybackDiagnostics(BaseModel):
     context_state: Literal['unavailable', 'suspended', 'running', 'closed', 'interrupted'] | None = None
     recovery_plain: bool | None = Field(default=None, strict=True)
     start_failures: int | None = Field(default=None, ge=0, le=255, strict=True)
+    source_kind: Literal['data', 'blob'] | None = None
+    source_mime: Literal['audio/mpeg', 'audio/wav', 'audio/ogg', 'other'] | None = None
+    source_bytes: int | None = Field(default=None, ge=0, le=16777216, strict=True)
+    metadata_received: bool | None = Field(default=None, strict=True)
+    data_received: bool | None = Field(default=None, strict=True)
+    can_play: bool | None = Field(default=None, strict=True)
     routing_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
     metadata_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
     effect_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
@@ -86,10 +92,19 @@ RadioWaitReason = Literal['radio_disconnected', 'overlap', 'stale_frame', 'proce
     'audio_unavailable', 'playback_declined']
 
 
+class RadioPreparationDiagnostics(BaseModel):
+    model_config = {'extra': 'forbid'}
+    requests: int = Field(ge=1, le=255, strict=True)
+    requested_ms: float = Field(ge=0, le=120000, allow_inf_nan=False)
+    response_ms: float | None = Field(default=None, ge=0, le=120000, allow_inf_nan=False)
+    status: Literal['requested', 'ready', 'deferred', 'unavailable', 'error', 'timeout', 'cancelled']
+
+
 class RadioQueueDiagnostics(BaseModel):
     """Bounded browser queue observations; no device/account identifiers."""
     model_config = {'extra': 'forbid'}
     scope: Literal['QUEUE_OBSERVATIONS']
+    preparation: RadioPreparationDiagnostics | None = None
     observations: int = Field(ge=1, le=65535, strict=True)
     elapsed_ms: float = Field(ge=0, le=120000, allow_inf_nan=False)
     reasons: dict[RadioWaitReason, Annotated[int, Field(ge=1, le=65535, strict=True)]] = Field(min_length=1, max_length=21)

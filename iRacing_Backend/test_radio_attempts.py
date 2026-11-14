@@ -27,7 +27,8 @@ class RadioAttemptTests(unittest.TestCase):
                        {'game': 'other'}, {'duration_s': float('inf')},
                        {'ready_state': 5}, {'network_state': True}, {'media_error': 0},
                        {'paused': 'false'}, {'effect_attached': 1}, {'context_state': 'USB headset'},
-                       {'recovery_plain': 'true'}, {'start_failures': 256}):
+                       {'recovery_plain': 'true'}, {'start_failures': 256}, {'source_kind': 'C:/private'},
+                       {'source_mime': 'headset'}, {'source_bytes': 16777217}, {'can_play':'true'}):
             with self.subTest(fields=fields), self.assertRaises(ValidationError):
                 voice_coach.RadioPlaybackDiagnostics(**{**base, **fields})
 
@@ -44,7 +45,8 @@ class RadioAttemptTests(unittest.TestCase):
             events = [dict(event_id='same-event', run_id='synthetic-run', key='yellow', status='failed',
                            reason='playback_start_timeout', playback=self.attempt(ready_state=0, network_state=2,
                                paused=True, effect_attached=True, context_state='suspended', recovery_plain=False,
-                               start_failures=2, media_error=None), diagnostics_dropped=3),
+                               start_failures=2, media_error=None, source_kind='blob', source_mime='audio/wav', source_bytes=48044,
+                               metadata_received=False, data_received=False, can_play=False), diagnostics_dropped=3),
                       dict(event_id='same-event', run_id='synthetic-run', key='yellow', status='started',
                            playback={**self.attempt(), 'attempt_id': 'radio-random:2', 'stage': 'playing', 'started': True}),
                       dict(event_id='same-event', run_id='synthetic-run', key='yellow', status='completed',
@@ -57,6 +59,8 @@ class RadioAttemptTests(unittest.TestCase):
             self.assertEqual(radio[0]['playback']['stage'], 'routing')
             self.assertFalse(radio[0]['playback']['started'])
             self.assertEqual(radio[0]['playback']['start_failures'], 2)
+            self.assertEqual(radio[0]['playback']['source_bytes'], 48044)
+            self.assertEqual(radio[0]['playback']['source_kind'], 'blob')
             self.assertEqual(radio[0]['playback']['context_state'], 'suspended')
             self.assertTrue(radio[0]['playback']['paused'])
             self.assertEqual(radio[0]['diagnostics_dropped'], 3)
