@@ -1,6 +1,6 @@
 {
   "name": "iracing-tuner",
-  "version": "2.5.5",
+  "version": "2.5.6",
   "private": true,
   "jest": {
     "moduleNameMapper": {

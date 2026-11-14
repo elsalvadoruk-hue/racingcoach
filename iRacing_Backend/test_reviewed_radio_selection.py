@@ -163,6 +163,25 @@ class SelectionTests(unittest.TestCase):
         self.store.apply(self.selection)
         self.assertEqual(self.store.state()['previousSelection'].get('userApprovedIds', []), [])
 
+    def test_downloaded_defaults_work_without_overwriting_local_selection(self):
+        catalog=self.store.directory/'review-catalog.json'
+        catalog.rename(self.store.directory/'review-catalog.default.json')
+        initial={**self.selection,'userApprovedIds':list(self.selection['selectedIds'])}
+        default=self.store.directory/'review-selection.default.json'
+        default.write_bytes(json_bytes(initial));before=default.read_bytes()
+        self.assertEqual(self.store.state()['previousSelection']['userApprovedIds'],initial['userApprovedIds'])
+        self.store.apply(self.selection)
+        self.assertEqual(default.read_bytes(),before)
+        self.assertEqual(self.store.state()['previousSelection']['userApprovedIds'],initial['userApprovedIds'])
+
+    def test_existing_local_catalog_and_notes_take_priority_over_download_defaults(self):
+        self.store.apply(self.selection)
+        for name in ('review-catalog.default.json','review-selection.default.json'):
+            (self.store.directory/name).write_bytes(b'invalid unused download default')
+        state=self.store.state()
+        self.assertEqual(state['previousSelection']['notes'],self.selection['notes'])
+        self.assertEqual(len(state['catalog']['manifest']['entries']),6)
+
     def test_catalog_changed_wording_or_bad_digest_is_rejected(self):
         path = self.store.directory / 'review-catalog.json'
         catalog = self.store.catalog()

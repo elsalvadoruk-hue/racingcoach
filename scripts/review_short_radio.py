@@ -15,6 +15,8 @@ from reviewed_radio_selection import ShortRadioSelection
 def render(store, server=False):
     template = (ROOT / 'scripts/short-radio-review.html').read_text(encoding='utf-8')
     analysis_path = store._path('diversity-analysis.json')
+    if not analysis_path.exists():
+        analysis_path = store._path('diversity-analysis.default.json')
     analysis = json.loads(analysis_path.read_bytes()) if analysis_path.exists() else None
     value = json.dumps({'server': server, 'state': store.state(), 'analysis': analysis}, ensure_ascii=False).replace('<', '\\u003c')
     return template.replace('__REVIEW_BOOTSTRAP__', value).encode('utf-8')

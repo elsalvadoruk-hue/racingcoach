@@ -44,7 +44,10 @@ class ShortRadioSelection:
         return path
 
     def catalog(self):
-        catalog = json.loads(self._path('review-catalog.json').read_text(encoding='utf-8'))
+        path = self._path('review-catalog.json')
+        if not path.exists():
+            path = self._path('review-catalog.default.json')
+        catalog = json.loads(path.read_text(encoding='utf-8'))
         if catalog.get('format') != CATALOG_FORMAT or catalog.get('schemaVersion') != 1:
             raise ValueError('지원하지 않는 검수 목록입니다.')
         signature = sha(json_bytes({key: value for key, value in catalog.items() if key != 'sha256'}))
@@ -82,6 +85,8 @@ class ShortRadioSelection:
                 raise ValueError('실사용 목록이 검수 목록과 달라졌습니다. 새 목록부터 확인하세요.')
             previous = None
             path = self._path('review-selection.json')
+            if not path.exists():
+                path = self._path('review-selection.default.json')
             if path.exists():
                 previous = json.loads(path.read_text(encoding='utf-8'))
                 if (previous.get('catalogSha256') != catalog['sha256']
