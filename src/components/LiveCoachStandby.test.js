@@ -26,6 +26,39 @@ beforeEach(() => {
 });
 afterEach(() => { global.fetch = originalFetch; global.WebSocket = originalSocket; jest.useRealTimers(); });
 
+test('three failed automatic attempts stay undelivered across toggles; confirmed recovery permits only one extra attempt', async () => {
+  jest.useFakeTimers();
+  let recovery = 0;
+  output.recoveryGeneration = () => recovery;
+  output.play.mockImplementation(async (_audio, _mime, options) => {
+    if (!options.valid()) return false;
+    options.onStatus('failed', 'playback_start_timeout'); return false;
+  });
+  const fallback = global.fetch;
+  const report = { priority: 3, audio_base64: 'failed-report', note: { id: 'failed-note', reply: '보고',
+    context: { report_key: 'fuel_critical', snapshot: { run_id: 'test' } } } };
+  global.fetch = jest.fn(async (url, ...args) => url.endsWith('/reports')
+    ? { ok: true, json: async () => ({ pit_wall: {}, report }) } : fallback(url, ...args));
+  const view = render(<LiveCoach apiBase="http://test" visible />);
+  fireEvent.click(screen.getByRole('button', { name: '자동 보고 시작' }));
+  for (let i = 0; i < 60; i += 1) await act(async () => jest.advanceTimersByTime(2000));
+  expect(output.play).toHaveBeenCalledTimes(3);
+  expect(global.fetch.mock.calls.at(-1)).toBeDefined();
+  expect(global.fetch.mock.calls.filter(([url]) => url.endsWith('/reports')).at(-1)[1].body).toContain('failed-note');
+  fireEvent.click(screen.getByRole('button', { name: '자동 보고 중지' }));
+  fireEvent.click(screen.getByRole('button', { name: '자동 보고 시작' }));
+  await act(async () => jest.advanceTimersByTime(2000));
+  expect(output.play).toHaveBeenCalledTimes(3);
+  recovery += 1;
+  await act(async () => jest.advanceTimersByTime(2000));
+  expect(output.play).toHaveBeenCalledTimes(4);
+  recovery += 1;
+  for (let i = 0; i < 20; i += 1) await act(async () => jest.advanceTimersByTime(2000));
+  expect(output.play).toHaveBeenCalledTimes(4);
+  expect(global.fetch.mock.calls.some(([url]) => url.endsWith('/reports/failed-note/ack'))).toBe(false);
+  view.unmount();
+});
+
 test('failed report starts back off without acknowledgement, then a completed retry delivers once', async () => {
   jest.useFakeTimers();
   const fallback = global.fetch;

@@ -138,6 +138,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const stopSpeaking = audioOutput.stopNormal || audioOutput.stop;
   const blocked = useRef(null), busyAudio = useRef(null), reportResumes = useRef(new Map());
   const reportFailures = useRef(new Map());
+  const recoveryGeneration = useRef(null); recoveryGeneration.current = audioOutput.recoveryGeneration;
   blocked.current = audioOutput.isPriorityBlocked; busyAudio.current = audioOutput.audioBusy;
   const recorder = useRef(null), microphoneEpoch = useRef(0), state = useRef({ phase: 'idle', armed: false });
   const spotter = useSpotter(apiBase, audioOutput, { busy: phase !== 'idle', specialists: wallEnabled && appliedWall.level !== 'off', level: appliedWall.level, wallAlerts: appliedWall.alerts, recordDelivery });
@@ -271,16 +272,24 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
       lastPoll = Date.now();
       const epoch = reportEpoch.current;
       try {
-        const response = await request('/reports', wallOptions.current);
+        const recovered = recoveryGeneration.current?.() || 0;
+        const deferred = [...reportFailures.current.values()].filter(item => Date.now() < item.next
+          || (item.count >= 3 && (item.count >= 4 || recovered <= item.recovery)));
+        const response = await request('/reports', { ...wallOptions.current,
+          deferred_report_ids: deferred.map(item => String(item.id)) });
         if (stopped || !mounted.current || epoch !== reportEpoch.current) return;
         setWallView(response.pit_wall);
         if (!response.report || state.current.phase !== 'idle' || playing.current || isPriorityBlocked?.()) return;
         const { note, warning } = response.report;
-        const attemptKey = `${epoch}:${note.context?.snapshot?.run_id || ''}:${note.id}`;
-        if (Date.now() < (reportFailures.current.get(attemptKey)?.next || 0)) return;
+        const attemptKey = `${activeGame}:${note.context?.snapshot?.run_id || ''}:${note.id}`;
+        const previousFailure = reportFailures.current.get(attemptKey);
+        if (previousFailure && (Date.now() < previousFailure.next
+          || (previousFailure.count >= 3 && (previousFailure.count >= 4 || recovered <= previousFailure.recovery)))) return;
         const failedAttempt = () => {
-          const count = Math.min(5, (reportFailures.current.get(attemptKey)?.count || 0) + 1);
-          reportFailures.current.set(attemptKey, { count, next: Date.now() + Math.min(30000, 5000 * 2 ** (count - 1)) });
+          const count = Math.min(4, (reportFailures.current.get(attemptKey)?.count || 0) + 1);
+          reportFailures.current.set(attemptKey, { id: note.id, count,
+            recovery: recoveryGeneration.current?.() || 0, next: Date.now() + Math.min(30000, 5000 * 2 ** (count - 1)) });
+          if (count >= 3) setError('자동 보고 음성 재생이 반복 실패해 이 보고서의 자동 재시도를 멈췄습니다. 내용은 대화 기록에서 확인하고 “테스트 소리”로 출력을 확인하세요.');
           if (reportFailures.current.size > 32) reportFailures.current.delete(reportFailures.current.keys().next().value);
         };
         const reportAllowed = () => voiceEventAllowed({ key: note.context?.report_key || '',

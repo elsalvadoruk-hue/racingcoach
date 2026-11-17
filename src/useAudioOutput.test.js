@@ -6,6 +6,7 @@ import { RESUMABLE } from './voiceAudio';
 import LiveCoach from './components/LiveCoach';
 import * as radioEffect from './radioEffect';
 import { createRadioAttempt } from './lib/radioDiagnostics';
+import * as decodeProbe from './audioDecodeProbe';
 
 const storageKey = 'iracing.voice.outputDevice';
 const headset = { kind: 'audiooutput', deviceId: 'headset', label: 'USB Headset' };
@@ -15,6 +16,77 @@ const originalFetch = global.fetch;
 const originalMedia = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
 const originalSink = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'setSinkId');
 let media, players;
+
+test('explicit recovery reload reapplies the captured speed after load resets it', async () => {
+  jest.useFakeTimers();
+  const { result, unmount } = renderHook(useAudioOutput);
+  act(() => result.current.changePitwallRate(1.35));
+  global.Audio.mockImplementationOnce(src => {
+    const part = { src, pause: jest.fn(), play: jest.fn(() => new Promise(() => {})), setSinkId: jest.fn(async () => {}) };
+    players.push(part); return part;
+  });
+  let pending;
+  await act(async () => { pending = result.current.play('hung'); });
+  await act(async () => { jest.advanceTimersByTime(AUDIO_START_TIMEOUT_MS); await pending; });
+  global.Audio.mockImplementationOnce(src => {
+    const part = { src, pause: jest.fn(), setSinkId: jest.fn(async () => {}),
+      load: jest.fn(() => { part.playbackRate = 1; }), play: jest.fn(async () => {}) };
+    players.push(part); return part;
+  });
+  await act(async () => result.current.play('fresh'));
+  expect(players[1].load).toHaveBeenCalled();
+  expect(players[1].playbackRate).toBe(1.35);
+  expect(players[1].preservesPitch).toBe(true);
+  unmount();
+});
+
+test('silent decode diagnostics are rate limited and identify the failed attempt without retaining payloads', async () => {
+  jest.useFakeTimers();
+  const probe = jest.spyOn(decodeProbe, 'probeAudioDecode').mockResolvedValue('decoded');
+  const { result, unmount } = renderHook(useAudioOutput);
+  const status = jest.fn(), attempt = createRadioAttempt('lmu');
+  for (let i = 0; i < 2; i += 1) {
+    global.Audio.mockImplementationOnce(src => {
+      const part = { src, pause: jest.fn(), play: jest.fn(() => new Promise(() => {})), setSinkId: jest.fn(async () => {}) };
+      players.push(part); return part;
+    });
+    let pending;
+    await act(async () => { pending = result.current.play('QUJDRA==', 'audio/wav', { diagnostics: attempt, onStatus: status }); });
+    await act(async () => { jest.advanceTimersByTime(AUDIO_START_TIMEOUT_MS); await pending; });
+  }
+  expect(probe).toHaveBeenCalledTimes(1);
+  expect(status.mock.calls.at(-1)[2]).toMatchObject({ decode_probe: 'decoded', decode_probe_attempt_id: attempt.attempt_id });
+  expect(Object.keys(status.mock.calls.at(-1)[2]).some(k => /payload|base64|device_id/.test(k))).toBe(false);
+  await act(async () => result.current.play('healthy', 'audio/wav', { diagnostics: createRadioAttempt('lmu'), onStatus: status }));
+  act(() => players.at(-1).onplaying());
+  act(() => players.at(-1).onended());
+  expect(status.mock.calls.at(-1)[2]).toMatchObject({ decode_probe: 'decoded', decode_probe_attempt_id: attempt.attempt_id });
+  unmount(); probe.mockRestore();
+});
+
+test('only actual playing after a failure confirms recovery; stale callbacks cannot confirm it', async () => {
+  jest.useFakeTimers();
+  const { result, unmount } = renderHook(useAudioOutput);
+  global.Audio.mockImplementationOnce(src => {
+    const part = { src, pause: jest.fn(), play: jest.fn(() => new Promise(() => {})), setSinkId: jest.fn(async () => {}) };
+    players.push(part); return part;
+  });
+  let pending;
+  await act(async () => { pending = result.current.play('hung'); });
+  await act(async () => { jest.advanceTimersByTime(AUDIO_START_TIMEOUT_MS); await pending; });
+  await act(async () => result.current.play('ready'));
+  expect(result.current.recoveryGeneration()).toBe(0);
+  const late = players.at(-1).onplaying;
+  act(() => result.current.stop());
+  act(() => late());
+  expect(result.current.recoveryGeneration()).toBe(0);
+  await act(async () => result.current.play('ready-again'));
+  act(() => players.at(-1).onplaying());
+  expect(result.current.recoveryGeneration()).toBe(1);
+  act(() => players.at(-1).onplaying());
+  expect(result.current.recoveryGeneration()).toBe(1);
+  unmount();
+});
 
 test('a stalled data source switches to a fresh Blob on the next attempt and releases it on stop', async () => {
   jest.useFakeTimers();

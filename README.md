@@ -25,7 +25,7 @@
 
 ## 설치와 첫 실행
 
-**[처음 설치용 ZIP 바로 받기 (2.5.6)](https://github.com/elsalvadoruk-hue/racingcoach/releases/download/v2.5.6/racingcoach-setup-2.5.6.zip)**
+**[처음 설치용 ZIP 바로 받기 (2.5.7)](https://github.com/elsalvadoruk-hue/racingcoach/releases/download/v2.5.7/racingcoach-setup-2.5.7.zip)**
 
 1. 처음 설치용 ZIP을 받아 **새 폴더에 압축을 모두 풉니다.** 다른 버전은 [최신 Releases](https://github.com/elsalvadoruk-hue/racingcoach/releases/latest)에서 `racingcoach-setup-*.zip`을 선택하세요.
 2. `설치.bat`을 한 번 실행한 뒤 `실행.bat`으로 앱을 켭니다. 최초 설치에는 인터넷이 필요합니다.
@@ -49,6 +49,8 @@
 2.5.6에는 사용자 승인한 **짧은 무전 20종·98개**를 적용했습니다. 같은 짧은 문장의 발화·속도 차이를 사용하며 안내별 5개, “앞에 다른 클래스 차량”은 테이크 2·4·5만 사용합니다. 오른쪽 클리어는 2·6·9·14·17입니다. Fenrir·Charon의 **짧은 무전** 선택에만 적용되며 기본 음성과 숫자·랩타임 음성은 기존 음원을 사용합니다.
 
 [로컬 청취·선택 도구](scripts/open_short_radio_review.bat)에서 파형·발화 시간과 함께 듣고 선택·메모를 저장할 수 있습니다. 무전 재생 시작 실패 시 로딩 방식 전환, 랩타임 별도 준비, LMU 시계 종료 뒤 완주거리 계산도 보완했습니다. 앱 업데이트를 적용한 뒤 **설정 → 업데이트 → 빠진 음성 받기**를 실행하고, 다운로드가 끝나면 앱과 검은 실행창을 완전히 닫고 실행.bat으로 다시 여세요. [선택·메모 사용법](manual/radio-timing-recovery.md#짧은-무전-청취선택-도구)을 참고하세요.
+
+2.5.7은 음원 해독 비교와 재로딩 진단, 자동 보고 실패 3회 제한, 준비된 수리·손상 안내 우선 전달을 추가했습니다. 기존 음원과 출력 설정은 유지하며 새 음성 다운로드는 필요 없습니다. 앱의 업데이트를 적용하면 사용할 수 있습니다. 직접 소스를 사용한다면 앱과 검은 실행창을 완전히 닫고 실행.bat으로 다시 여세요. 실제 Windows 출력장치에서 발생한 무음 원인은 아직 확정하지 않았습니다.
 
 ## 지원 게임
 

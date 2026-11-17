@@ -49,6 +49,32 @@ const setup = async () => {
   return utils;
 };
 
+test.each(['mandatory_repair', 'optional_repair'])('cold repair uses its loaded %s warning and retains exact visible time', async key => {
+  const repair = { ...event, key: 'repair_check', text: '수리 2062초', spoken_text: '필수 수리는 2062초입니다.' };
+  const fallback = global.fetch;
+  global.fetch = jest.fn(async (url, ...args) => url.endsWith('/render')
+    ? { ok: true, json: async () => ({ event: repair, audio_fallback_key: key,
+      audio_parts: ['cached-detail'], spoken_text: '준비된 설명', dropped_parts: 1 }) }
+    : url.endsWith('/prepare') ? { ok: true, json: async () => ({ clips: {
+      test: { audio_base64: 'test' }, [key]: { audio_base64: 'warning', text: '수리 경고' } } }) }
+      : fallback(url, ...args));
+  const utils = renderHook(() => {
+    const audio = useAudioOutput();
+    const spotter = useSpotter('http://test', audio, { recordDelivery: delivery });
+    return { audio, spotter };
+  }, { wrapper });
+  await act(async () => utils.result.current.spotter.toggle());
+  const message = frame(true); message.radio.events = [repair];
+  await act(async () => send(sockets[0], message));
+  expect(players[0].src).toContain('warning');
+  expect(utils.result.current.spotter.view.last_text).toBe('수리 2062초');
+  expect(delivery.mock.calls.find(([, status]) => status === 'started')[0]).toMatchObject({ text: '수리 경고 준비된 설명', dropped_parts: 1 });
+  act(() => players[0].onended());
+  await act(async () => {});
+  expect(players[1].src).toContain('cached-detail');
+  utils.unmount();
+});
+
 test.each(['disconnect frame', 'socket closed'])('connection notice lets an already started result finish: %s', async mode => {
   const utils = await setup();
   expect(delivery.mock.calls.some(([e, s]) => e.key === 'race_result' && s === 'started')).toBe(true);

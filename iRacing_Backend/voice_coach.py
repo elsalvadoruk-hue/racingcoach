@@ -76,6 +76,8 @@ class RadioPlaybackDiagnostics(BaseModel):
     metadata_received: bool | None = Field(default=None, strict=True)
     data_received: bool | None = Field(default=None, strict=True)
     can_play: bool | None = Field(default=None, strict=True)
+    decode_probe: Literal['pending', 'decoded', 'source_failed', 'both_failed', 'timeout', 'unavailable', 'oversize'] | None = None
+    decode_probe_attempt_id: str | None = Field(default=None, min_length=1, max_length=100, pattern=r'^[A-Za-z0-9:._-]+$')
     routing_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
     metadata_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
     effect_at: float | None = Field(default=None, ge=0, le=4102444800, allow_inf_nan=False)
@@ -302,6 +304,7 @@ class NoteEdit(BaseModel):
 
 
 class ReportRequest(BaseModel):
+    deferred_report_ids: list[Annotated[str, Field(max_length=128, pattern=r'^[A-Za-z0-9:_-]+$')]] = Field(default_factory=list, max_length=32)
     alerts: dict[str, bool] | None = Field(default=None, max_length=80)
     level: str = Field(default='important', pattern='^(off|important|all)$')
     reserve_laps: float = Field(default=.5, ge=0, le=3, allow_inf_nan=False)
@@ -805,6 +808,18 @@ class VoiceCoach:
                 dropped += 1
         return parts, dropped
 
+    def available_reports(self, candidates, payload, run_id):
+        """A client can defer delivery without marking the decision as heard."""
+        excluded = set(payload.deferred_report_ids)
+        if not excluded:
+            return candidates
+        # Entries are immutable after preparation. Snapshot the list without
+        # taking self.lock under live.lock (acknowledgement takes them in reverse).
+        deferred = [p['decision'] for p in tuple(self.prepared_reports) if p['run_id'] == run_id
+                    and str(p['response']['note']['id']) in excluded]
+        return [c for c in candidates if not any(c['key'] == d['key'] and c['token'] == d['token']
+                                                and c['text'] == d['text'] for d in deferred)]
+
     async def report(self, payload):
         options = {'reserve_laps': payload.reserve_laps, 'pit_loss_s': payload.pit_loss_s, 'fuel_save_mode': payload.fuel_save_mode}
         selection_level = 'all' if payload.alerts is not None and payload.level != 'off' else payload.level
@@ -835,6 +850,7 @@ class VoiceCoach:
                     owned = ('yellow', 'finish', 'class_traffic') if payload.alerts is None and self.live.radio.traffic_enabled else ('yellow', 'finish')
                     candidates = [c for c in candidates if c['key'] not in owned]
                 candidates = reports_enabled(candidates, payload.alerts)
+                candidates = self.available_reports(candidates, payload, snapshot['run_id'])
                 if payload.speak:
                     candidates = [c for c in candidates if self.prepared_report_ready(c)]
                 report = self.live.pit_wall.select(candidates, snapshot, selection_level, cached_audio=True)
@@ -904,6 +920,7 @@ class VoiceCoach:
                     owned = ('yellow', 'finish', 'class_traffic') if payload.alerts is None and self.live.radio.traffic_enabled else ('yellow', 'finish')
                     current = [c for c in current if c['key'] not in owned]
                 current = reports_enabled(current, payload.alerts)
+                current = self.available_reports(current, payload, latest['snapshot']['run_id'])
                 if payload.speak:
                     current = [c for c in current if self.prepared_report_ready(c)]
                 selected = self.live.pit_wall.select(current, latest['snapshot'], selection_level, cached_audio=True)
@@ -1150,6 +1167,39 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             event = coach.live.radio.get(identifier, coach.live.clock())
         if event is None:
             return {'event': None}
+        if event.get('key') in ('repair_check', 'damage_check'):
+            # Read only complete prepared sentences. A cold numeric detail must
+            # neither hold the cloud lock nor trigger automatic synthesis.
+            sentences = event.get('speech_parts') or [event.get('speech_text')]
+            parts, spoken, dropped, fallback = [], [], 0, None
+            for index, sentence in enumerate(sentences):
+                try:
+                    if not sentence or not coach.fixed_audio.cached(event['engineer'], sentence):
+                        raise FileNotFoundError()
+                    parts.append(await asyncio.to_thread(coach.fixed_audio.read_prepared, event['engineer'], sentence))
+                    spoken.append(sentence)
+                except (OSError, ValueError):
+                    dropped += 1
+                    if index == 0 and event['key'] == 'repair_check':
+                        # These two finite templates come from repair_parts.
+                        # The already loaded spotter library owns their generic warnings.
+                        if sentence and sentence.startswith(('필수 수리는 ', '필수 수리에 ')):
+                            fallback = 'mandatory_repair'
+                        elif sentence and sentence.startswith(('선택 수리는 ', '선택 수리에 ')):
+                            fallback = 'optional_repair'
+                        else:
+                            return {'event': None, 'missing_prepared_audio': True}
+            with coach.live.lock:
+                current = coach.live.radio.get(identifier, coach.live.clock())
+            if current is None:
+                return {'event': None}
+            if not parts and not fallback:
+                return {'event': None, 'missing_prepared_audio': True}
+            return {'event': {k:v for k,v in current.items() if k != 'condition'},
+                    'audio_parts': parts, 'audio_base64': parts[0] if parts else None,
+                    'audio_fallback_key': fallback, 'spoken_text': ' '.join(spoken),
+                    'audio_mime': 'audio/mpeg', 'dropped_parts': dropped,
+                    'prepared_detail_omitted': bool(dropped)}
         # A cached mandatory sentence can play immediately during a cloud question.
         on_disk, cached_only = coach.radio_audio_mode(event)
         prepared_only = event.get('immediate') or event.get('prepared_only')

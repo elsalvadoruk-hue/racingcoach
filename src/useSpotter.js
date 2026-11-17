@@ -90,7 +90,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const waiting = snapshotRadioWait(event.queueWait);
     output.current.recordDelivery?.({ event_id: event.id, run_id: event.run_id || '', key: event.key,
       backend_version: event.backend_version || null,
-      engineer: event.engineer || 'spotter', text: event.spoken_text || event.text || '', session_time: radio.session_time,
+      engineer: event.engineer || 'spotter', text: rendered.current.get(event.id)?.spokenText ?? event.spoken_text ?? event.text ?? '', session_time: radio.session_time,
       lap_number: radio.lap_number, distance_pct: radio.distance_pct,
       ...(playback ? { playback } : {}),
       ...(waiting ? { waiting } : {}),
@@ -450,7 +450,17 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         // Only retained whole sentences count toward the multipart playback rate.
         audio = result.audio_parts?.length ? result.audio_parts : result.audio_base64; mime = result.audio_mime || 'audio/mpeg';
         droppedParts = result.dropped_parts;
-        if (audio) rendered.current.set(event.id, { audio, mime, droppedParts });
+        let spokenText = result.spoken_text;
+        if (['mandatory_repair', 'optional_repair'].includes(result.audio_fallback_key)) {
+          const clip = clips.current?.[result.audio_fallback_key];
+          if (!clip?.audio_base64) {
+            logEvent(event, 'cancelled', 'missing_prepared_audio', droppedParts, preparation());
+            heard.current.add(event.id); setError(MISSING_SPOTTER_AUDIO); return;
+          }
+          audio = [clip.audio_base64, ...(result.audio_parts || [])];
+          spokenText = [clip.text, result.spoken_text].filter(Boolean).join(' ');
+        }
+        if (audio) rendered.current.set(event.id, { audio, mime, droppedParts, spokenText });
       }
       if (!valid()) return;
       if (event.priority < 2 && (output.current.busy || !quietFor(event))) {
@@ -520,7 +530,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       if (silent) logEvent(event, 'muted', 'volume_or_mute', droppedParts);
       if (heard.current.size > 256) heard.current.delete(heard.current.values().next().value);
       lastCall.current = Date.now();
-      setView((v) => ({ ...v, last_text: text, last_spoken_text: event.spoken_text || text, last_engineer: event.engineer }));
+      setView((v) => ({ ...v, last_text: text, last_spoken_text: rendered.current.get(event.id)?.spokenText ?? event.spoken_text ?? text, last_engineer: event.engineer }));
       if (silent) acknowledge();
     } catch (failure) {
       if (valid()) {
