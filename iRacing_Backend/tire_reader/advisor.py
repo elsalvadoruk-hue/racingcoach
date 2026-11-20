@@ -3,6 +3,9 @@ from collections import deque
 import time
 import uuid
 from .snapshot import TireSnapshot, WHEELS
+from race_call_audio import CALLS
+
+POST_PIT = {key: row[2] for key, row in CALLS.items() if row[0] == 'race_tire_push'}
 
 LABELS = dict(zip(WHEELS, ('왼쪽 앞', '오른쪽 앞', '왼쪽 뒤', '오른쪽 뒤')))
 STATE_MAX_AGE_S = 5  # newest agreeing reading
@@ -44,6 +47,7 @@ class TireAdvisor:
         self.performance = TirePerformance()
         # Advice calls live outside reset(): the garage is not an active cockpit.
         self.advice_event, self.advice_sent = None, set()
+        self.post_delivered = deque(maxlen=32)
         self.reset()
 
     def offer(self, key, token, *, garage, game='iracing'):
@@ -79,6 +83,9 @@ class TireAdvisor:
         self.coaching = TireCoaching()
         self.performance.reset()
         self.performance_sent = None
+        self.post_pit = self.pit_entered_at = None
+        self.post_sent = set()
+        self.post_enabled = False
 
     def observe(self, data, *, enabled, context=None, analyze=False):
         now = self.clock()
@@ -101,6 +108,8 @@ class TireAdvisor:
             return
         self.coaching.observe(snapshot, context)
         self.performance.observe(snapshot, context)
+        self.post_enabled = bool(context and context.get('post_pit_voice', True))
+        self._track_replacement(snapshot)
         self._track_warmup(snapshot)
         if not enabled:
             self.pending=None
@@ -130,19 +139,24 @@ class TireAdvisor:
         if self.was_warm and all(s == 'cold' for s in temps):
             candidates.append('temperature_cold')
         learned_ok = self.performance.view.get('status') == 'ready' and self.performance_sent != self.performance.token
-        if learned_ok or not self.ok_sent and all(self.state(field, w, now) == 'ok'
-                                   for field in ('pressure', 'temperature') for w in WHEELS):
+        post_call = self._post_call(now)
+        if post_call and post_call not in self.post_sent:
+            candidates.append(post_call)
+        if not (self.post_enabled and self.post_pit) and (learned_ok or not self.ok_sent and all(self.state(field, w, now) == 'ok'
+                                   for field in ('pressure', 'temperature') for w in WHEELS)):
             candidates.append('tires_ok')
         if self.coaching.candidate:
             candidates.append(self.coaching.candidate)
         for key in candidates:
             family = 'thermal_coaching' if key in ('trend_front','trend_rear','input_front','input_rear') else key
             previous = self.sent.get(family)
-            if previous and (now - previous[0] < 180 or snapshot.lap is None or
+            if key not in POST_PIT and previous and (now - previous[0] < 180 or snapshot.lap is None or
                              previous[1] is None or snapshot.lap - previous[1] < 3):
                 continue
-            self.pending = dict(id=uuid.uuid4().hex, key=key, text=PHRASES[key],
+            self.pending = dict(id=uuid.uuid4().hex, key=key, text=POST_PIT.get(key) or PHRASES[key],
                 family=family, created_at=now, expires_at=now + 12, game=snapshot.game, engineer='coach', priority=0)
+            if key in POST_PIT:
+                self.pending.update(token=self.post_pit, post_pit=True, expires_at=now+2)
             if key == 'tires_ok' and learned_ok:
                 self.pending.update(basis='learned_performance',token=self.performance.token)
             break
@@ -170,6 +184,8 @@ class TireAdvisor:
 
     def applicable(self, event, now):
         key = event['key']
+        if key in POST_PIT:
+            return event.get('token') == self.post_pit and key == self._post_call(now) and key not in self.post_sent
         if key in ('trend_front','trend_rear','input_front','input_rear','temperature_recovered'):
             return bool(self.latest and 0 <= now-self.latest.observed_at < 2.5 and self.coaching.candidate == key)
         if key == 'temperature_cold':
@@ -183,6 +199,54 @@ class TireAdvisor:
         if state == 'low' and self.warming(wheel, now):
             return False
         return self.state(field, wheel, now) == state
+
+    def _track_replacement(self, s):
+        if s.on_pit_road is True:
+            if not self.on_pit_road:
+                self.pit_entered_at = s.t
+                self.post_pit = None
+                self.post_sent.clear()
+            return
+        stop = s.pit_snapshot or {}
+        stamp = stop.get('t')
+        if s.game != 'iracing' or s.on_pit_road is not False or s.t is None or stamp is None:
+            return
+        if self.pit_entered_at is not None and stamp < self.pit_entered_at:
+            return
+        fitted = [w for w,v in (stop.get('tire_changed') or {}).items() if v is True]
+        token = (s.session_key,s.car,stop.get('stop'),stamp)
+        if self.post_pit and self.post_pit != token:
+            self.post_pit = None
+        # The cockpit display may disappear in the stall. A fresh native
+        # change receipt and matching fitted lap also establish the new set.
+        fresh_fit = 0 <= s.t-stamp <= 90 and any(s.installed_lap.get(w) is not None
+                    and s.lap is not None and 0<=s.lap-s.installed_lap[w]<=1 for w in fitted)
+        observed = self.pit_entered_at is not None and self.pit_entered_at <= stamp <= s.t
+        if fitted and (fresh_fit or observed) and self.post_pit != token:
+            self.post_pit = token
+            self.post_sent = {key for stop_id,key in self.post_delivered if stop_id==token}
+
+    def _post_call(self, now):
+        s, performance = self.latest, self.performance
+        if (not self.post_enabled or not self.post_pit or not s or s.session_type != 'Race'
+                or not self.quiet(now) or s.t is None or 'tire_push' in self.post_sent):
+            return None
+        row = performance.previous or {}
+        flags = row.get('session_flags')
+        if row.get('session_state')!=4 or flags is None or int(flags) & 0xFC119 or row.get('car_left_right') not in (0,1):
+            return None
+        view = performance.view
+        if view.get('status') == 'ready':
+            if view.get('mode') == 'pressure_only':
+                return 'tire_press_ready'
+            last_corner = performance.last_good_at
+            if (last_corner is not None and last_corner >= self.post_pit[-1]
+                    and 0 <= s.t - last_corner <= 20):
+                return 'tire_push'
+        if (view.get('mode') == 'combined' and view.get('status') == 'partial' and view.get('front')
+                and all(self.state('temperature', w, now) == 'cold' for w in ('RL','RR'))):
+            return 'tire_rear_wait'
+        return None
 
     def _track_warmup(self, snapshot):
         if snapshot.on_pit_road is True:
@@ -222,6 +286,9 @@ class TireAdvisor:
         self.sent[event.get('family',event['key'])] = now, self.latest.lap
         self.coaching.ack(event['key'])
         self.ok_sent |= event['key'] == 'tires_ok'
+        if event['key'] in POST_PIT:
+            self.post_sent.add(event['key'])
+            self.post_delivered.append((event['token'],event['key']))
         if event.get('basis') == 'learned_performance':
             self.performance_sent = event['token']
         self.pending = None

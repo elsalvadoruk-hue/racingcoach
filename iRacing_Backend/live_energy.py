@@ -33,6 +33,7 @@ class EnergyWatch:
         self.lap = None
         self.stint = 0
         self.counted = 0
+        self.last_counted_at = None
         self.current = None
         self.current_at = None
         self.last_valid_pct = self.last_valid_at = None
@@ -71,6 +72,7 @@ class EnergyWatch:
                     and sample.get('on_pit_road') is False and use >= MIN_USE_PCT):
                 self.history.append(round(use, 3))
                 self.counted += 1
+                self.last_counted_at = at
             previous = None
         if previous is None:
             distance = _number(sample.get('distance_pct'))

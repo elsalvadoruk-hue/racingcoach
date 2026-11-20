@@ -94,7 +94,8 @@ class DeferredReportTests(unittest.TestCase):
             self.assertEqual(RadioPlaybackDiagnostics(**fields, decode_probe=result).model_dump()['decode_probe'], result)
         with self.assertRaises(ValidationError):
             RadioPlaybackDiagnostics(**fields, decode_probe='private error text')
-        playback = {**fields, 'decode_probe': 'decoded', 'decode_probe_attempt_id': 'a:0'}
+        playback = {**fields, 'decode_probe': 'decoded', 'decode_probe_attempt_id': 'a:0',
+                    'output_test': 'no_progress', 'output_test_at': 9., 'output_test_route': 'selected'}
         event = RadioDeliveryEvent(event_id='run:1', run_id='run', key='repair_check', status='failed', playback=playback).model_dump()
         with tempfile.TemporaryDirectory() as folder:
             store = VoiceNoteStore(Path(folder) / 'voice.sqlite3')
@@ -104,3 +105,5 @@ class DeferredReportTests(unittest.TestCase):
                 recorded = json.loads(archive.read('radio.jsonl'))['playback']
                 self.assertEqual(recorded['decode_probe'], 'decoded')
                 self.assertEqual(recorded['decode_probe_attempt_id'], 'a:0')
+                self.assertEqual((recorded['output_test'], recorded['output_test_at'], recorded['output_test_route']),
+                                 ('no_progress', 9., 'selected'))

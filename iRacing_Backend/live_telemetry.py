@@ -81,6 +81,7 @@ CHANNELS = {
     'tc_setting': 'dcTractionControl', 'on_track': 'IsOnTrack', 'on_pit_road': 'OnPitRoad',
     'is_replay': 'IsReplayPlaying', 'track_temp_c': 'TrackTempCrew',
     'air_temp_c': 'AirTemp', 'incidents': 'PlayerCarMyIncidentCount',
+    'incident_severity': 'PlayerIncidents',
     'car_left_right': 'CarLeftRight',
     'session_state': 'SessionState', 'session_flags': 'SessionFlags',
     'session_time_remaining_s': 'SessionTimeRemain', 'session_laps_remaining': 'SessionLapsRemainEx',
@@ -102,6 +103,7 @@ CHANNELS = {
     'lmu_last_impact_et': 'LmuLastImpactET', 'lmu_last_impact_magnitude': 'LmuLastImpactMagnitude',
     'lmu_lap_invalidated': 'LmuLapInvalidated', 'lmu_count_lap_flag': 'LmuCountLapFlag',
     'lmu_track_limits_steps': 'LmuTrackLimitsSteps', 'lmu_wheels': 'LmuWheels',
+    'lmu_track_limits_steps_per_penalty': 'LmuTrackLimitsStepsPerPenalty',
     'lmu_wheel_sample_time': 'LmuWheelSampleTime',
     'lmu_scoring_sample_time': 'LmuScoringSampleTime', 'lmu_telemetry_sample_time': 'LmuTelemetrySampleTime',
     'lmu_scoring_held': 'LmuScoringHeld',
@@ -148,6 +150,10 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.oval_procedures = OvalProcedures()
         self.alongside = AlongsideSpeed()     # how fast the car beside us passes (iRacing lap positions)
         self.radio = RaceRadio()
+        from race_plan import RacePlan
+        self.race_plan = RacePlan()
+        self.plan_options = {}
+        self.radio.plan_valid = lambda item, now: self.race_plan.valid(*item, now, self.radio.latest)
         self.pit_wall.traffic = self.radio.traffic
         self.pit_wall.shared_traffic = True
         self.corners = LiveCornerCoach()
@@ -230,9 +236,11 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.flush_race_timing(run_id)
         return self.traffic_log.flush_wait()
 
-    def radio_delivery(self, identifier, status, *, dropped_parts=0):
+    def radio_delivery(self, identifier, status, *, dropped_parts=0, session_time=None):
         with self.lock:
-            receipt = self.radio.delivery(identifier, status, dropped_parts=dropped_parts)
+            receipt = self.radio.delivery(identifier, status, dropped_parts=dropped_parts, session_time=session_time)
+            if receipt and 'plan_token' in receipt:
+                self.race_plan.delivered(receipt['key'],receipt['plan_token'],self.clock())
             if receipt and receipt.get('brief'):
                 commit = dict(receipt['brief'])
                 average = commit.pop('stint_average', None)
@@ -265,6 +273,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.pit_wall.reset()
                 self.spotter.reset()
                 self.radio.reset()
+                self.race_plan = type(self.race_plan)()
                 self.corners.reset()
                 self.driving_learning.reset()
                 self.controls.reset()
@@ -328,6 +337,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.formation_archive.submit(self.identity, now)
             self.race_result.ingest(sample, self.radio.metadata, self.run_id, now)
             self._coach_corners(identity, sample, now)
+            self.race_plan.ingest(self, sample, race, now)
             try:
                 expected = (self.drill.plan or {}).get('identity')
                 actual = {'car': str(identity.get('car_path') or identity.get('car_name') or ''),
@@ -500,6 +510,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self.spotter.reset()
             self.alongside.reset()
             self.radio.reset(keep_run=True)
+            self.race_plan.reset_motion()
             self.drill.stop(reason)
             self.practice.reset(reason)
             self.overlay_laps.reset()
@@ -606,6 +617,9 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                     sample.update(read_pacing(sdk, names, player_idx))
                 setup_key=(self.game,identity.get('car_path'),identity.get('subsession_id'),sample.get('session_num'))
                 if setup_key!=getattr(self,'_setup_cache_key',None) or self.clock()-getattr(self,'_setup_read_at',-1e9)>=1:
+                    from race_ibt_costs import profile_key
+                    driver = next((d for d in drivers.get('Drivers',[]) if d.get('CarIdx')==drivers.get('DriverCarIdx')), {})
+                    self.race_profile_key = profile_key(identity,driver.get('UserID')) if self.game=='iracing' else None
                     try:setup=sdk['CarSetup'] or {}
                     except (KeyError,TypeError):setup={}
                     self._setup_values=session_setup_values(setup) if self.game=='iracing' else {}

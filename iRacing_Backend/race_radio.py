@@ -92,6 +92,8 @@ RACE_START_CALLS = frozenset(('one_to_green', 'start_ready', 'start_set', 'race_
 
 TRAFFIC_REARM_S = 4.       # a car that was called is called again only after it dropped this far back (or got past)
 CLOSE_REARM_S = 1.5
+CLASS_NOTICE_S = 12.  # Generic notices from either crew member about the same car and direction.
+CLASS_CALL_SIDES = {'traffic_faster_behind': 'behind', 'traffic_slower_ahead': 'ahead'}
 LAP_CALL_START_S = 2.      # Start at the line or skip it, including delayed SDK publication.
 POSITION_CALL_S = 40.      # a place is only said while it still holds, so it can wait out a run of corners
 
@@ -134,19 +136,22 @@ class RaceRadio:
     def reset(self, *, keep_run=False):
         retained = ({key: getattr(self, key) for key in
                      ('run_id', 'briefed', 'briefing_delivered', 'position_said', '_position_delivery_serial', '_deliveries',
-                      'result_called', 'result')}
+                      'result_called', 'result', 'finish_issued', 'class_notices')}
                     if keep_run and self.run_id else {})
         briefing_at = self.sent.get('briefing') if retained else None
+        finish_pending = [e for e in self.pending if e['key'] == 'finish'] if retained else []
         self.run_id = None
         self.corner_revision = None
         self.fuel_low_stage = 0
         self.blue_since, self.blue_called = None, False
         self.latest, self.metadata = {}, {}
         self.metadata_at = None
-        self.pending = deque(maxlen=48)
+        self.pending = deque(finish_pending, maxlen=48)
         self.last_sample = None
         self.sent = {}
         self.result = None
+        self.finish_issued = False
+        self.class_notices = {}
         self.control_advice_allowed = False
         self.setup_advice_allowed = False
         self.car_calls = {}
@@ -226,9 +231,10 @@ class RaceRadio:
         if self.qualifying and ((not self.open_qualifying and key.startswith(QUALI_SILENT)) or key in silent_flags
                                 or (priority < 2 and not key.startswith('quali_') and key not in QUALI_KEYS)):
             return
-        if now - self.sent.get(key, -math.inf) < cooldown:
+        cooldown_key = (key, condition[1][0]) if key in CLASS_CALL_SIDES and condition and condition[0] == 'traffic' else key
+        if now - self.sent.get(cooldown_key, -math.inf) < cooldown:
             return
-        self.sent[key] = now
+        self.sent[cooldown_key] = now
         # New lap/position/time messages supersede old queued announcements.
         group = group or key
         self.pending = deque((e for e in self.pending if e['group'] != group), maxlen=48)
@@ -264,7 +270,19 @@ class RaceRadio:
             self.track_delivery(event, position=num(self.latest.get('class_position')) if key != 'briefing' else None)
         return event
 
-    def track_delivery(self, event, *, position=None, brief=None):
+    def class_notice_recent(self, idx, side, t):
+        last = self.class_notices.get((idx, side))
+        return last is not None and t is not None and 0 <= t - last <= CLASS_NOTICE_S
+
+    def remember_class_notice(self, cars, side, t):
+        if t is None:
+            return
+        self.class_notices = {pair: stamp for pair, stamp in self.class_notices.items() if stamp >= t - CLASS_NOTICE_S}
+        for idx in cars:
+            pair = (idx, side)
+            self.class_notices[pair] = max(self.class_notices.get(pair, t), t)
+
+    def track_delivery(self, event, *, position=None, brief=None, plan_token=None, class_notice=None):
         """Bounded receipts survive acknowledgement and a short same-run data gap."""
         if event is None:
             return
@@ -272,10 +290,16 @@ class RaceRadio:
             event['position_value'] = position
         self._deliveries[event['id']] = {'run_id': event['run_id'], 'serial': event['serial'],
                                         'key': event['key'], 'position': num(position), 'brief': brief, 'completed': False}
+        if plan_token is not None:
+            self._deliveries[event['id']]['plan_token'] = plan_token
+        if class_notice:
+            self._deliveries[event['id']]['class_notice'] = class_notice
+            cars, side = class_notice
+            event['class_notice'] = {'cars': list(cars), 'side': side}
         while len(self._deliveries) > 128:
             del self._deliveries[next(iter(self._deliveries))]
 
-    def delivery(self, identifier, status, *, dropped_parts=0):
+    def delivery(self, identifier, status, *, dropped_parts=0, session_time=None):
         receipt = self._deliveries.get(identifier)
         if not receipt or receipt['run_id'] != self.run_id or receipt['completed']:
             return None
@@ -303,6 +327,13 @@ class RaceRadio:
         if status != 'completed' or dropped_parts:
             return None
         receipt['completed'] = True
+        if receipt.get('class_notice'):
+            at = self.latest.get('session_time') if session_time is None else session_time
+            self.remember_class_notice(*receipt['class_notice'], at)
+            if receipt['key'] in CLASS_CALL_SIDES and at is not None and self.latest.get('session_time') is not None:
+                cars, side = receipt['class_notice']
+                if self.class_notice_recent(cars[0], side, self.latest['session_time']):
+                    self.car_calls[(cars[0], receipt['key'])] = self.last_sample
         if receipt['key'] == 'briefing':
             self.briefing_delivered = True
         return receipt
@@ -364,13 +395,19 @@ class RaceRadio:
                 key = car['call_key'] or car.get('close_key')
                 if not key or (car['idx'], key) in self.car_calls:
                     continue
+                side = CLASS_CALL_SIDES.get(key)
+                if side and self.class_notice_recent(car['idx'], side, sample['session_time']):
+                    continue
                 if car['call_key']:
-                    self.emit(key, now, priority=2, ttl=2, condition=('traffic', (car['idx'], key)),
-                              cooldown=30, group='traffic_' + car['side'])
+                    group = f"traffic_{car['side']}_{car['idx']}" if side else 'traffic_' + car['side']
+                    event = self.emit(key, now, priority=2, ttl=2, condition=('traffic', (car['idx'], key)),
+                                      cooldown=30, group=group)
                 else:
-                    self.emit(key, now, priority=2, ttl=2, condition=('close', car['idx']), cooldown=20, group='traffic_behind')
-                if self.pending and self.pending[-1]['key'] == key and self.pending[-1]['at'] == now:
-                    self.pending[-1]['car'] = (car['idx'], key)
+                    event = self.emit(key, now, priority=2, ttl=2, condition=('close', car['idx']), cooldown=20, group='traffic_behind')
+                if event:
+                    event['car'] = (car['idx'], key)
+                    if side:
+                        self.track_delivery(event, class_notice=([car['idx']], side))
             near = {car['idx'] for car in self.traffic.view(now)['nearby']}
             self.car_calls = {k: v for k, v in self.car_calls.items() if k[0] in near}
         # A local yellow still needs the location; a full-course caution or red does not.
@@ -393,8 +430,12 @@ class RaceRadio:
                      (0x800, 'ten_laps', 1), (0x1000, 'five_laps', 1),
                      (0x20000000, 'start_ready', 1), (0x40000000, 'start_set', 2)]
             for bit, key, priority in table:
-                if bit == 0x1 and str(self.metadata.get('session_type', '')).lower() == 'race':
-                    continue    # the leader's chequered flag; ours is the result as we cross the line
+                if key == 'finish':
+                    session = str(self.metadata.get('session_type') or '').strip().lower()
+                    if flags and int(flags) & bit and session and session != 'race' and not self.finish_issued:
+                        event = self.emit(key, now, priority=priority, condition=('flag', bit), cooldown=10)
+                        self.finish_issued = event is not None
+                    continue  # The race uses the driver's own finish crossing.
                 if rising & bit:
                     # Every flag is the sim's own signal, debris included: while it lies there the sim
                     # raises the flag on each approach, and each time it is called (the driver's decision).
@@ -807,6 +848,8 @@ class RaceRadio:
                  condition=('quali_traffic', (sample.get('lap_number'), dict(result))))
 
     def valid(self, event, now):
+        if event.get('key') == 'finish' and str(self.metadata.get('session_type') or '').lower() in ('', 'race'):
+            return False
         if event.get('key') == 'race_result' and (not self.result
                 or str(self.metadata.get('session_type') or '').lower() != 'race'
                 or self.latest.get('finish_status') in (2, 3)
@@ -824,6 +867,8 @@ class RaceRadio:
         if event.get('position_value') is not None and self.current_position() != event['position_value']:
             return False
         kind, value = event.get('condition') or (None, None)
+        if kind == 'race_plan':
+            return getattr(self, 'plan_valid', lambda *_: False)(value, now)
         if kind == 'driving_learning':
             return getattr(self,'driving_valid',lambda token,stamp:False)(value,now)
         if kind == 'control_setting':
@@ -845,6 +890,9 @@ class RaceRadio:
                 abs(current.get(key, 0) - told.get(key, 0)) <= 1.
                 for key in ('front_s', 'rear_s', 'delay_s'))
         if kind == 'traffic':
+            side = CLASS_CALL_SIDES.get(value[1])
+            if side and self.class_notice_recent(value[0], side, s.get('session_time')):
+                return False
             return self.traffic_enabled and any(c['idx'] == value[0] and c['call_key'] == value[1]
                                                for c in self.traffic.view(now)['nearby'])
         if kind == 'wet':

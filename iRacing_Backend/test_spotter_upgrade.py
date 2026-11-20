@@ -178,6 +178,20 @@ class TrafficTests(unittest.TestCase):
         radio.ingest({**sample, 'session_time': 2.1, 'session_flags': 8}, 'run', 2.1)
         self.assertFalse(any(e['key'].startswith('traffic_') for e in radio.view(2.1)['events']))
 
+    def test_another_fast_car_can_warn_immediately_after_the_first_one_finishes(self):
+        radio = RaceRadio()
+        s = dict(session_state=4, session_flags=0, on_track=True, is_replay=False, on_pit_road=False)
+        radio.ingest(dict(s, session_time=1), 'r', 1)
+        car = dict(idx=7, side='behind', gap_estimate_s=1., close=True, call_key='traffic_faster_behind')
+        nearby = [car]
+        radio.traffic.view = lambda now: dict(available=True, nearby=nearby, ahead=None, behind=None)
+        radio.ingest(dict(s, session_time=1.2), 'r', 1.2)
+        first = next(e for e in radio.view(1.2)['events'] if e['key'] == car['call_key'])
+        radio.delivery(first['id'], 'completed', session_time=1.2)
+        nearby.append({**car, 'idx':8})
+        radio.ingest(dict(s, session_time=1.4), 'r', 1.4)
+        self.assertEqual([e['car'][0] for e in radio.view(1.4)['events'] if e['key']==car['call_key']], [8])
+
 
 class PitBoxTests(unittest.TestCase):
     def setUp(self):

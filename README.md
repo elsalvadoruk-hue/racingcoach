@@ -12,6 +12,10 @@
 
 ## 할 수 있는 일
 
+2.5.8에서는 **레이스 피트월 → 연료·발화 설정 → 새 레이스 무전 기본·짧은 음성 듣기**에서 배틀·코스팅·트랙 리밋·피트·타이어·다중 클래스 무전을 비교할 수 있습니다. 주행 중에는 자동 보고를 켜고 레이스 판단 무전에서 원하는 항목을 선택하세요. 앱 업데이트를 적용한 후 **설정 → 업데이트 → 빠진 음성 받기**로 새 무전을 받으세요. [발화 조건과 사용법](manual/radio-timing-recovery.md)
+
+완주 직전 연료가 조금 부족하면 피트월이 절약 가능 여부와 필요한 비율을 안내합니다. 서로 다른 담당자가 같은 차량의 접근을 연달아 알리는 경우도 줄였습니다. 무전이 들리지 않을 때는 **출력장치 → 테스트 소리**에서 해당 경로의 재생 시간이 실제로 흐르는지 확인할 수 있습니다.
+
 | 주행 후 분석 | 주행 중 지원 | 연습과 셋업 |
 | --- | --- | --- |
 | 랩·코너별 시간 차이, 지도·고스트·입력 그래프 | 한국어 스포터·피트월, 기본 / 짧은 무전 개별 선택 | 다음 주행의 연습 과제와 한 항목씩 바꾸는 셋업 A/B |
@@ -25,7 +29,7 @@
 
 ## 설치와 첫 실행
 
-**[처음 설치용 ZIP 바로 받기 (2.5.7)](https://github.com/elsalvadoruk-hue/racingcoach/releases/download/v2.5.7/racingcoach-setup-2.5.7.zip)**
+**[처음 설치용 ZIP 바로 받기 (2.5.8)](https://github.com/elsalvadoruk-hue/racingcoach/releases/download/v2.5.8/racingcoach-setup-2.5.8.zip)**
 
 1. 처음 설치용 ZIP을 받아 **새 폴더에 압축을 모두 풉니다.** 다른 버전은 [최신 Releases](https://github.com/elsalvadoruk-hue/racingcoach/releases/latest)에서 `racingcoach-setup-*.zip`을 선택하세요.
 2. `설치.bat`을 한 번 실행한 뒤 `실행.bat`으로 앱을 켭니다. 최초 설치에는 인터넷이 필요합니다.

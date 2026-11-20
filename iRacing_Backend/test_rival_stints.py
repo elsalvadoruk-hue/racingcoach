@@ -19,6 +19,19 @@ def at_lap(race, laps):
 
 
 class StintTests(unittest.TestCase):
+    def test_reappearing_in_same_stall_is_not_a_stop_and_a_real_entry_counts(self):
+        wall = RaceEngineer()
+        race = at_lap(race_fixture(), 0)
+        car = race['cars'][2]
+        for t, (state, pct, surface, pit) in enumerate([
+                (3, .52, 3, False), (3, .02, 1, True), (4, -1, -1, False), (4, .02, 1, True),
+                (4, -1, -1, False), (4, .02, 1, True), (4, .04, 3, False), (4, .01, 2, True)]):
+            race['state'] = state
+            car.update(distance_pct=pct, track_surface=surface, on_pit_road=pit)
+            wall.ingest(race, 'r', t)
+            self.assertEqual(wall.stint(car)[1], int(t == 7))
+        self.assertEqual([p['at'] for p in wall.pit_events], [7])
+
     def test_stints_are_counted_from_the_start_or_from_the_first_stop_seen(self):
         wall = RaceEngineer()
         start = at_lap(race_fixture(), 0)

@@ -8,6 +8,16 @@ beforeEach(() => {
 });
 afterEach(() => { jest.useRealTimers(); jest.restoreAllMocks(); });
 
+test('a completed class approach immediately reaches the other channel', async () => {
+  const { result } = renderHook(() => useRadioDiagnostics('http://synthetic'));
+  act(() => result.current({ event_id: 'car', key: 'traffic_faster_behind' }, 'interrupted'));
+  act(() => result.current({ event_id: 'train', key: 'catch_train', dropped_parts: 1 }, 'completed'));
+  expect(fetch).not.toHaveBeenCalled();
+  await act(async () => result.current({ event_id: 'car', key: 'traffic_faster_behind' }, 'completed'));
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(fetch.mock.calls[0][1].body).events.at(-1).status).toBe('completed');
+});
+
 test('bounded queue loss is visible in subsequent diagnostics while completed truth survives', async () => {
   const { result, unmount } = renderHook(() => useRadioDiagnostics('http://synthetic'));
   act(() => {

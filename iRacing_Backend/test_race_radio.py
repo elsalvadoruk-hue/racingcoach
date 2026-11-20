@@ -89,6 +89,22 @@ class RaceRadioTests(unittest.TestCase):
         result = next(e for e in self.events() if e['key'] == 'race_result')
         self.assertEqual(result['priority'], 2)                # said through braking, not after it
 
+    def test_practice_finish_survives_gaps_and_new_sessions_rearm(self):
+        self.meta['session_type'] = ''
+        self.tick(session_flags=1)
+        self.assertNotIn('finish', self.keys())
+        self.meta['session_type'] = 'Practice'
+        self.tick()
+        initial = next(e for e in self.events() if e['key'] == 'finish')
+        self.tick(.6)
+        self.assertEqual([e['id'] for e in self.events() if e['key'] == 'finish'], [initial['id']])
+        self.radio.ack(initial['id'], self.now)
+        self.tick(15, session_flags=9)
+        self.assertIn('yellow', self.keys())
+        self.assertNotIn('finish', self.keys())
+        self.tick(run='next', session_flags=1)
+        self.assertIn('finish', self.keys())
+
     def test_caution_is_not_duplicated_as_local_yellow(self):
         self.tick(session_flags=0xC108)
         self.assertEqual(self.keys(), ['caution'])

@@ -218,6 +218,12 @@ iRacing 기본 위치(문서\\iRacing\\telemetry)의 주행 파일은 자동으�
 """
 
 
+def is_race_audio(name: str) -> bool:
+    path = Path(name.replace('\\', '/').lower())
+    return path.parts[:2] in (('public', 'race-radio'), ('build', 'race-radio')) and path.suffix in (
+        '.mp3', '.wav', '.ogg', '.opus', '.m4a', '.flac')
+
+
 def copy_tree(source: Path, target: Path, skip=lambda path: False) -> int:
     count = 0
     for path in source.rglob("*"):
@@ -363,7 +369,7 @@ def main() -> int:
             shutil.copy2(ROOT / name, out / name)
     for name in ROOT_FOLDERS:
         print(f"{name}/ 복사 중...", flush=True)
-        copy_tree(ROOT / name, out / name)
+        copy_tree(ROOT / name, out / name, skip=lambda path: is_race_audio(path.relative_to(ROOT).as_posix()))
     copy_backend(ROOT, out)
     (out / "scripts").mkdir()
     for name in SCRIPTS:
@@ -381,7 +387,8 @@ def main() -> int:
         for name, folder in (("radio_audio", source / "radio_audio"), ("spotter_audio", app_settings.spotter_audio_dir())):
             if folder.is_dir():
                 print(f"{name} 복사 중...", flush=True)
-                clips += copy_tree(folder, data / name, skip=lambda path: path.suffix.lower() != ".mp3")
+                clips += copy_tree(folder, data / name, skip=lambda path: path.suffix.lower() != ".mp3"
+                                  or (name == "radio_audio" and path.relative_to(folder).parts[0] == "race-radio"))
     import make_patch
     (out / "처음 실행.txt").write_text(FIRST_RUN.replace("{version}", make_patch.version_of(out)), encoding="utf-8-sig")
 

@@ -3,13 +3,14 @@ import { createRadioAttempt } from './lib/radioDiagnostics';
 
 // Shares the persistent audio owner with questions, spotter and pit wall. The
 // native tire window and the pit-wall page do not have to be visible/enabled.
-export default function useTireVoice(apiBase, game, output, { busy = false, recordDelivery } = {}, fetcher = fetch) {
-  const live = useRef({}); live.current = { output, busy, recordDelivery };
+export default function useTireVoice(apiBase, game, output, { busy = false, recordDelivery, postPit = true } = {}, fetcher = fetch) {
+  const live = useRef({}); live.current = { output, busy, recordDelivery, postPit };
   useEffect(() => {
     let active = true, timer, flight, generation = 0, view = null, observed = 0;
     const handled = new Set();
     const url = path => `${apiBase}/api/tire-overlay${path}?game=${game}`;
     const valid = event => active && !live.current.output.standby && !live.current.busy
+      && (!event.post_pit || live.current.postPit)
       && view?.voice_enabled && view?.running && view?.voice_event?.id === event.id && view.voice_event.quiet
       && Date.now() - observed < 1800 && Date.now() < event.localExpires
       && !live.current.output.muted && live.current.output.volume > 0
@@ -45,6 +46,7 @@ export default function useTireVoice(apiBase, game, output, { busy = false, reco
         await live.current.output.play(clip.audio_base64, clip.audio_mime || 'audio/mpeg', {
           signal: controller.signal, channel: 'pitwall', priority: 0, interrupt: false,
           diagnostics, valid: () => valid(event), workloadValid: () => valid(event),
+          ...(event.post_pit ? { startDeadline: event.localExpires } : {}),
           onStatus: (status, reason, playback) => {
             if (status === 'started' && active) fetcher(url(`/voice/${encodeURIComponent(event.id)}/ack`), { method: 'POST' }).catch(() => {});
             live.current.recordDelivery?.({ event_id: event.id, run_id: clip.event.run_id || `tire-${game}`, key: `tire_${event.key}`,

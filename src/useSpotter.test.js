@@ -1,5 +1,6 @@
 import React from 'react';
 import { GameContext } from './lib/gameContext';
+import { createClassApproaches } from './lib/classApproaches';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import useSpotter from './useSpotter';
 // Radio timing tests isolate the independently tested installation-list request.
@@ -307,6 +308,37 @@ const radioEvent = (key, extra = {}) => ({ id: `run:${key}`, serial: 1, key, tex
   engineer: 'spotter', priority: 1, run_id: 'run', cached: false, expires_in_ms: 15000, ...extra });
 const radioFrame = (events, quiet = true, extra = {}) => frame(1, null, { serial: 0,
   radio: { connected: true, run_id: 'run', events, quiet }, ...extra });
+
+test('a pit wall completion blocks a prepared generic call before the server frame arrives', async () => {
+  const receipts = createClassApproaches();
+  const { result } = renderHook(() => useSpotter('http://test', audio, { classApproaches: receipts }));
+  await enable(result);
+  const notice = {cars:[5], side:'behind'};
+  const event = radioEvent('traffic_faster_behind', {priority:2, cached:true, audio_key:'test', class_notice:notice});
+  await act(async () => send(sockets[0], radioFrame([event])));
+  const options = audio.play.mock.calls.at(-1)[2];
+  expect(options.valid()).toBe(true);
+  receipts.remember('run', notice);
+  expect(options.valid()).toBe(false);
+  expect(receipts.heard('run', {cars:[9], side:'behind'})).toBe(false);
+  expect(receipts.heard('other run', notice)).toBe(false);
+});
+
+test('pit wall alone plays the selected race plan and leaves spotter and drill sounds off', async () => {
+  const alerts = { race_pack: true };
+  const { result, unmount } = renderHook(() => useSpotter('http://test', audio,
+    { specialists: true, racePlanEnabled: true, wallAlerts: alerts }));
+  expect(result.current.enabled).toBe(false);
+  global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ event: {}, audio_base64: 'battle-audio' }) }));
+  const plan = radioEvent('pack_fight', { group: 'race_plan', engineer: 'race', expires_in_ms: 2000 });
+  await act(async () => send(sockets[0], radioFrame([radioEvent('green'), plan], true,
+    { drill: { serial: 5, events: [] } })));
+  expect(audio.play).toHaveBeenCalledWith('battle-audio', 'audio/mpeg',
+    expect.objectContaining({ channel: 'pitwall', startDeadline: expect.any(Number) }));
+  expect(global.fetch.mock.calls.some(([url]) => url.includes('green'))).toBe(false);
+  expect(playBeep).not.toHaveBeenCalled();
+  unmount();
+});
 
 test('a hung routine render cannot occupy the lap preparation slot', async () => {
   const recordDelivery = jest.fn();

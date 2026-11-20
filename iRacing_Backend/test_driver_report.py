@@ -348,9 +348,9 @@ class DriverReportTests(unittest.TestCase):
 
     def test_real_official_store_enriches_career_without_writes_during_read(self):
         from driver_results import DriverResultsStore, extract_recording_results
-        from test_driver_results import telemetry, STAMP
+        from test_driver_results import telemetry
         official_store = DriverResultsStore(history_path=self.path)
-        official_store.record_batch(extract_recording_results(telemetry(), 'a'*64, recorded_at=STAMP))
+        official_store.record_batch(extract_recording_results(telemetry(), 'a'*64, recorded_at=datetime.now(timezone.utc)))
         before = (official_store.path.read_bytes(), official_store.path.stat().st_mtime_ns)
         report = read_driver_report('iracing', 30, store=self.store)
         self.assertEqual(report['career']['wins']['value'], 1)

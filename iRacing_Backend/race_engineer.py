@@ -266,6 +266,7 @@ class RaceEngineer:
                 at, previous_left = self.lmu_countdown
                 self.lmu_clock_expired = (continuous and previous_left <= session_time - at <= 3)
                 self.lmu_countdown = None
+        previous_race_at = self.race_at
         self.race = race
         self.race_at = session_time
         # Standalone pit-wall users collect the same history. LiveTelemetry shares
@@ -320,8 +321,6 @@ class RaceEngineer:
                     tainted = False
                 elif completed != old_lap:
                     tainted = False
-                if car.get('on_pit_road') is True and prev.get('on_pit_road') is False:
-                    self.pit_events.append({'idx': idx, 'at': session_time, 'name': car['name']})
                 if completed is not None and old_lap is not None and completed < old_lap:
                     self.paces.pop(idx, None)
                     self.pending_laps.pop(idx, None)
@@ -339,12 +338,24 @@ class RaceEngineer:
             if stint is None:
                 fresh = completed is not None and completed <= 0
                 self.stints[idx] = {'since': 0 if fresh else None, 'stops': 0 if fresh else None}
-            elif prev:
-                if car.get('on_pit_road') is True and prev.get('on_pit_road') is False and stint['stops'] is not None:
-                    stint['stops'] += 1
-                if car.get('on_pit_road') is False and prev.get('on_pit_road') is True and completed is not None:
-                    stint['since'] = completed
-            self.previous[idx] = {**car, '_observed_at': session_time}
+            stint = self.stints[idx]
+            pct = numeric(car.get('distance_pct'))
+            pit = car.get('on_pit_road')
+            visible = (type(pit) is bool and pct is not None and 0 <= pct <= 1
+                       and car.get('track_surface') != -1)
+            if visible:
+                was_pit = stint.get('in_pit')
+                # A fresh, visible track sample must immediately precede the pit entry.
+                continuous_pit = (prev and prev.get('_pit_visible') and prev['_observed_at'] == previous_race_at
+                                  and 0 < session_time - previous_race_at <= 3)
+                if pit and was_pit is False and race.get('state') in (4, 5) and continuous_pit:
+                    self.pit_events.append({'idx': idx, 'at': session_time, 'name': car.get('name')})
+                    if stint['stops'] is not None:
+                        stint['stops'] += 1
+                elif not pit and was_pit is True and completed is not None and completed >= 0:
+                    stint['since'] = completed if continuous_pit else None
+                stint['in_pit'] = pit
+            self.previous[idx] = {**car, '_observed_at': session_time, '_pit_visible': visible}
 
     # A stint cannot be stretched by more than this through lifting; beyond it only a stop helps.
     SAVE_LIMIT_PCT = 10
@@ -387,6 +398,28 @@ class RaceEngineer:
             return None, None
         laps = completed - record['since'] if record['since'] is not None and completed is not None else None
         return (max(0, int(laps)) if laps is not None else None), record['stops']
+
+    def finish_save_percent(self, view, snapshot, feedback=()):
+        """A conditional no-stop choice near the flag, using fuel to the finish without reserve."""
+        distance = positive(view.get('remaining_laps'))
+        pct = positive(view.get('fuel_save_pct'))
+        if (not distance or distance > 2.2 or not pct or pct > self.SAVE_LIMIT_PCT
+                or view.get('fuel_save_mode') != 'finish' or not view.get('fuel_save_feasible')
+                or (view.get('fuel_observed_laps') or 0) < 2 or view.get('finish_may_extend')
+                or (view.get('fuel_finish_shortfall_l') or 0) <= .1
+                or view.get('mandatory_stops_remaining') or view.get('planned_stop_before_finish')
+                or (view.get('game') == 'lmu' and view.get('energy_laps') is None)
+                or (view.get('energy_laps') is not None and view['energy_laps'] < distance)
+                or (view.get('energy_finish_shortfall_pct') or 0) > .1
+                or int(snapshot.get('engine_warnings') or 0) & 0x2):
+            return None
+        lap = numeric(snapshot.get('lap_number'))
+        recent = [f for f in feedback if lap is not None and f.get('lap') in (lap-2, lap-1)
+                  and f.get('mode') == 'finish' and positive(f.get('target_l')) and positive(f.get('use_l'))
+                  and f['use_l'] > f['target_l'] + .03]
+        if len({f['lap'] for f in recent}) == 2:
+            return None
+        return math.ceil(pct)
 
     def view(self, snapshot, fuel_use=None, fuel_laps=0, reserve_laps=.5, pit_loss_s=None, fuel_save_mode='finish'):
         race = self.race
@@ -649,6 +682,10 @@ class RaceEngineer:
         available, fuel_add = view['fuel_laps'], view['fuel_to_add_l']
         short = (view.get('fuel_finish_shortfall_l') or 0) > .1
         pct, lap = numeric(snapshot.get('distance_pct')), snapshot.get('lap_number')
+        save_percent = self.finish_save_percent(view, snapshot, context.get('fuel_feedback') or ())
+        if save_percent is not None and (audio_ready := context.get('finish_save_audio_ready')):
+            if not audio_ready(save_percent):
+                save_percent = None
         amount = view.get('fuel_next_stop_longer_l') or view.get('fuel_next_stop_l')
         # The full-tank setting is a maximum addition; the simulator stops at tank
         # capacity. A partial last stop is an addition, never a tank-total target.
@@ -662,7 +699,16 @@ class RaceEngineer:
             # Box on the lap after which a further full lap is no longer covered. One call
             # early in that lap and one before the pit entry, however long the lap is.
             past_line = available - (1 - pct) if pct is not None and 0 <= pct <= 1 else available - 1
-            if past_line < self.BOX_MARGIN_LAPS + 1:
+            if save_percent is not None:
+                from race_call_audio import CALLS as race_calls
+                key = f'finish_save_{save_percent}'
+                words = race_calls[key][2]
+                deficit = view['fuel_finish_shortfall_l']
+                add('fuel_short', 'strategy', f'완주까지 예상 부족분 {deficit:.2f}리터. {words}',
+                    2, token=key, cooldown=1800)
+                reports[-1].update(speech_key=None, speech_text=words, spoken_text=words,
+                                   finish_save_pct=save_percent, race_short_text=race_calls[key][3], prepared_only=True)
+            elif past_line < self.BOX_MARGIN_LAPS + 1:
                 late = pct is not None and pct >= .75
                 # Said so that it cannot be taken for "pit now" at the start of the lap.
                 add('fuel_critical', 'strategy', f'현재 소비량 기준 연료가 약 {available:.1f}랩분 남았습니다. 이번 랩에 피트로 들어오세요.', 3,
@@ -671,12 +717,12 @@ class RaceEngineer:
                     reports[-1]['text'] += f' 급유 설정은 추가 {litres}리터입니다.' + (' 탱크 한도까지 채우는 최대 설정입니다.' if view.get('fuel_next_stop_full') else '')
                     reports[-1]['fuel_plan_token'] = str(litres)
                     reports[-1]['prepared_only'] = True
-            elif short and view.get('fuel_save_feasible'):
+            elif short and view.get('fuel_save_feasible') and (view.get('remaining_laps') or 0) > 2.2:
                 # Close enough to the finish that lifting could replace a stop: worth one call per stint.
                 add('fuel_short', 'strategy', fuel_advice(view, brief=True), 2, cooldown=1800,
                     short_text=f'완주 연료 약 {view["fuel_finish_shortfall_l"]:.1f}리터 부족합니다.',
                     phrase=('fuel_short_by', {'short': math.ceil(view['fuel_finish_shortfall_l'])}))
-            if short:
+            if short and save_percent is None:
                 # A stop is needed: count it down from the measured fuel, then check what will go in.
                 pace = view.get('pace_s')
                 if 3.5 < available <= 5.5 and (not pace or available * pace <= 900):
@@ -734,11 +780,12 @@ class RaceEngineer:
                     short_text=f'같은 클래스 뒤차 페이스가 약 {advantage:.1f}초 빠릅니다.')
             if any(e['idx'] == car['idx'] and 0 <= snapshot['session_time'] - e['at'] <= 20 for e in self.pit_events):
                 add(f'pit_{side}', 'race', f'같은 클래스 {label}의 피트 진입이 감지됐습니다.', 1, token=str(car['idx']))
-        for car in view.get('other_class_traffic', [])[:1]:
+        for car in view.get('other_class_traffic', []):
             label = '앞' if car['side'] == 'ahead' else '뒤'
             text = f'다른 클래스 차량이 {label}에 있습니다. 거리 환산 약 {car["gap_estimate_s"]:.1f}초입니다.'
-            add('class_traffic', 'race', text, token=str(car['idx']), cooldown=120,
+            add('class_traffic', 'race', text, token=f"{car['idx']}:{car['side']}", cooldown=120,
                 short_text=f'다른 클래스 차량이 {label}에 있습니다.', speech_key='class_traffic_' + car['side'])
+            reports[-1]['class_notice'] = (car['idx'], car['side'])
         # The counted race distance tipped by a lap and stayed there: late in the race that changes the fuel.
         total, now = view.get('finish_total_laps'), snapshot['session_time']
         if total is None:
@@ -798,6 +845,10 @@ class RaceEngineer:
                 add('coach_reminder', 'coach', priority=1, token=f'{feeling}:{round(pct, 2)}', cooldown=300,
                     speech_key=call if call in CALLS else 'coach_' + feeling.lower())
                 break
+        plan = view.get('race_plan') or {}
+        stamp, now = numeric(plan.get('evaluated_at')), numeric(snapshot.get('session_time'))
+        if stamp is not None and now is not None and 0<=now-stamp<2:
+            reports = [r for r in reports if r['key'] not in plan.get('superseded',())]
         return sorted(reports, key=lambda r: -r['priority'])
 
     def _own_final_lap(self, view, snapshot):
@@ -879,7 +930,11 @@ class RaceEngineer:
                     report = {**report, 'text': report['short_text']}
                 else:
                     continue
-            last = self.reported.get(report['key'])
+            history_key = (report['key'], report['token']) if report.get('class_notice') else report['key']
+            last = self.reported.get(history_key)
+            if (last and report.get('finish_save_pct') and last.get('finish_save_pct')
+                    and now - last['at'] < report['cooldown'] and report['finish_save_pct'] < last['finish_save_pct'] + 3):
+                continue
             if last and (now - last['at'] < report['cooldown'] and last['token'] == report['token']):
                 continue
             return report
@@ -894,6 +949,10 @@ class RaceEngineer:
             self.reported['pit_fuel_plan'] = {'at': session_time, 'token': report['fuel_plan_token']}
         self.spoken[report['key']] = self.spoken.get(report['key'], 0) + 1
         self.reported[report['key']] = {'at': session_time, 'token': report['token']}
+        if report.get('class_notice'):
+            self.reported[report['key'], report['token']] = self.reported[report['key']]
+        if report.get('finish_save_pct'):
+            self.reported[report['key']]['finish_save_pct'] = report['finish_save_pct']
 
 
 def tank_capacity(info):

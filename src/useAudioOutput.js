@@ -109,6 +109,8 @@ export default function useAudioOutput() {
   const [devices, setDevices] = useState([]);
   const [message, setMessage] = useState(() => (storedOutput(selectedGame) === COMMUNICATIONS ? COMMUNICATIONS_MESSAGE : ''));
   const [failureMessage, setFailureMessage] = useState('');
+  const [testMessage, setTestMessage] = useState('');
+  const lastOutputTest = useRef(null);
   const health = useRef({ failures: 0, plainUntil: 0, blobUntil: 0, recoveredAt: -Infinity });
   const recovery = useRef({ generation: 0, needed: false, probeAt: -Infinity, probe: undefined, serial: 0 });
   const recoveryGeneration = useCallback(() => recovery.current.generation, []);
@@ -159,6 +161,7 @@ export default function useAudioOutput() {
     playbackSettings.current = next;
     if (player.current) {
       player.current.volume = Math.min(1, next.volume); player.current.muted = next.muted;
+      if (next.muted || next.volume === 0) player.current._silenced = true;
       player.current._effect?.update?.(next);
       if (next.volume > 1 && !player.current._effect?.boosted) setMessage('현재 음성은 100%로 재생됩니다. 증폭은 다음 안내부터 적용되며 최신 Chrome 또는 Edge가 필요합니다.');
     }
@@ -282,12 +285,13 @@ export default function useAudioOutput() {
   }, [selectedGame]);
   useEffect(() => {
     unavailableOutput.current = ''; clearTimeout(removalTimer.current); removalTimer.current = null;
+    lastOutputTest.current = null; setTestMessage('');
   }, [activeGame]);
   const changeOutput = useCallback((id) => {
-    saveOutput(id); setMessage('');
+    saveOutput(id); setMessage(''); lastOutputTest.current = null; setTestMessage('');
     if (selectedGame === activeGame) { stop('output_changed'); radioEffect.warm(effectSettings.current, id); }
   }, [stop, saveOutput, selectedGame, activeGame]);
-  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, diagnostics, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall', startDeadline, signal, pitBoxDistance, routineReport = false } = {}) => {
+  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, diagnostics, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall', startDeadline, signal, pitBoxDistance, routineReport = false, outputTest = false, confirmAudible = false } = {}) => {
     // Multipart calls use their own absolute rate, never a multiplier of the role's rate.
     // Capture it once so every sentence keeps the same speed until this call ends.
     const multipart = Array.isArray(encoded) && encoded.length > 1;
@@ -297,13 +301,18 @@ export default function useAudioOutput() {
     const nearerPitBox = priority === 2 && player.current?._priority === 2 && Number.isFinite(pitBoxDistance)
       && pitBoxDistance > 0 && pitBoxDistance < player.current._pitBoxDistance;
     if (signal?.aborted || !valid() || (priority < 3 && priorityGate.current)
-      || (player.current && ((!interrupt) || (priority > 0 && priority <= player.current._priority && !nearerPitBox) || (priority === 0 && player.current._priority > 0)))) return false;
+      || (player.current && ((!interrupt) || (priority > 0 && priority <= player.current._priority && !nearerPitBox) || (priority === 0 && player.current._priority > 0)))) {
+      if (outputTest) setTestMessage('무전이 끝나면 테스트 소리를 다시 눌러주세요.');
+      return false;
+    }
     stop('preempted'); setMessage('');
+    setTestMessage(outputTest ? '테스트 소리의 재생 진행을 확인하고 있습니다.' : '');
     const plain = Date.now() < health.current.plainUntil;
     const useBlob = Date.now() < health.current.blobUntil;
     // A list is one call of several whole sentences: they play back to back and nothing slips in between.
     const rest = Array.isArray(encoded) ? encoded.slice(1) : [];
     const current = clipPlayer(Array.isArray(encoded) ? encoded[0] : encoded, mime, useBlob);
+    current._silenced = playbackSettings.current.muted || playbackSettings.current.volume === 0;
     current._priority = priority;
     current._pitBoxDistance = pitBoxDistance;
     current._routineReport = priority === 0 && routineReport;
@@ -311,6 +320,7 @@ export default function useAudioOutput() {
     let stage = 'routing', stageAt = Date.now(), began = false, startedLogged = false, partIndex = 0;
     let partStarted = false, lastProgress = Date.now(), lastPosition = 0;
     const times = { routing_at: stageAt / 1000 };
+    const outputRoute = () => !supported ? 'unsupported' : sinkId ? 'selected' : unavailableOutput.current ? 'fallback' : 'default';
     let activePart = current;
     const setStage = value => {
       if (stage !== value) { stage = value; stageAt = Date.now(); }
@@ -321,7 +331,8 @@ export default function useAudioOutput() {
       const part = activePart;
       onStatus?.(value, reason, radioDiagnostic(diagnostics, stage, began, {
         stage_elapsed_ms: Math.max(0, Date.now() - stageAt), part_index: partIndex,
-        output_route: !supported ? 'unsupported' : sinkId ? 'selected' : unavailableOutput.current ? 'fallback' : 'default',
+        output_route: outputRoute(),
+        ...lastOutputTest.current,
         media_time_s: Number.isFinite(part.currentTime) ? part.currentTime : null,
         duration_s: Number.isFinite(part.duration) ? part.duration : null,
         ready_state: Number.isInteger(part.readyState) ? part.readyState : null,
@@ -344,6 +355,24 @@ export default function useAudioOutput() {
       if (terminal) return;
       terminal = true;
       clearInterval(monitor); clearTimeout(deadlineTimer); signal?.removeEventListener('abort', abortPending); metadataReady?.(); settle();
+      if (outputTest && mounted.current) {
+        const loaded = current._metadataReceived || current.readyState >= 1;
+        const advanced = current.currentTime > .01 || lastPosition > .01;
+        const outcome = value === 'cancelled' || value === 'interrupted' ? 'interrupted'
+          : stage === 'routing' ? 'routing_failed' : !loaded ? 'no_metadata'
+          : !advanced ? 'no_progress' : value === 'completed' ? 'progressed' : 'stalled';
+        if (outcome !== 'interrupted') {
+          lastOutputTest.current = { output_test: outcome, output_test_at: Date.now() / 1000, output_test_route: outputRoute() };
+        }
+        const routeName = !supported ? '기본 장치' : sinkId ? '선택한 장치' : unavailableOutput.current ? '임시 기본 장치' : '기본 장치';
+        const results = { interrupted: '다른 무전이나 장치 변경으로 테스트가 중단됐습니다.',
+          routing_failed: '출력장치 연결에 실패했습니다.', no_metadata: '테스트 음원 정보를 불러오지 못했습니다.',
+          no_progress: '음원을 불러왔지만 재생 시간이 흐르지 않았습니다.', stalled: '재생 시간이 흐르다가 멈췄습니다.',
+          progressed: '테스트 음원의 재생 시간이 정상적으로 진행됐습니다.' };
+        setTestMessage(routeName + ' · ' + results[outcome]
+          + (outcome === 'progressed' && (current.muted || current.volume === 0) ? ' 현재 음소거 또는 볼륨 0입니다.' : ''));
+        if (outcome === 'progressed') confirmedProgress();
+      }
       // Diagnostics are captured before stop releases the current media element.
       reportStatus(value, reason);
     };
@@ -406,7 +435,7 @@ export default function useAudioOutput() {
       lastProgress = Date.now(); lastPosition = Number(part.currentTime) || 0;
     };
     const confirmedProgress = () => {
-      if (!recovery.current.needed) return;
+      if (!recovery.current.needed || (outputTest && !(current.currentTime > .01 || lastPosition > .01))) return;
       recovery.current.needed = false; recovery.current.generation += 1;
       recovery.current.serial += 1;
       // Keep a finished comparison with its original attempt ID so the next
@@ -437,7 +466,7 @@ export default function useAudioOutput() {
       setMessage('음성 재생이 멈춰 이번 안내를 건너뛰었습니다. 다음 안내에서 출력장치 연결을 다시 확인합니다.');
       const recover = !partStarted && stage === 'play' ? startFailed() : false;
       recovery.current.needed = true;
-      if (stage === 'play' || stage === 'playing') diagnose();
+      if (!outputTest && (stage === 'play' || stage === 'playing')) diagnose();
       finish('failed', reason); if (player.current === part) stop();
       if (recover && !player.current) radioEffect.recover();
     }, 250);
@@ -474,9 +503,14 @@ export default function useAudioOutput() {
     const follow = (part) => {
       if (terminal || player.current !== part || followed.has(part)) return;
         followed.add(part);
+        if (part._silenced) current._silenced = true;
         part._effect?.release(!rest.length);
         part._effect = null;
-        if (!rest.length) { finish('completed'); stop(); return; }
+        if (!rest.length) {
+          if (confirmAudible && current._silenced) finish('muted', 'volume_or_mute');
+          else finish('completed');
+          stop(); return;
+        }
         part.pause(); disposePlayer(part);
         const next = clipPlayer(rest.shift(), mime, useBlob);
         next._priority = priority; next._finish = finish; next._stop = current._stop;
@@ -516,7 +550,7 @@ export default function useAudioOutput() {
           stop('output_error'); return;
         }
         if (active(part)) {
-          recovery.current.needed = true; diagnose();
+          recovery.current.needed = true; if (!outputTest) diagnose();
           finish('failed', 'media_error'); setMessage('음성을 재생하지 못했습니다. 출력장치를 확인하세요.'); stop();
         }
       };
@@ -579,7 +613,7 @@ export default function useAudioOutput() {
     } catch (failure) {
       if (!mounted.current || player.current !== current) return;
       const recover = !began && stage === 'play' && failure.name !== 'NotAllowedError' ? startFailed() : false;
-      if (failure.name !== 'NotAllowedError' && stage === 'play') diagnose();
+      if (!outputTest && failure.name !== 'NotAllowedError' && stage === 'play') diagnose();
       if (failure.name === 'NotAllowedError') setFailureMessage('음성 자동 재생이 차단되었습니다. “답변 다시 듣기” 또는 “테스트 소리”를 눌러주세요.');
       setMessage(failure.name === 'NotAllowedError'
         ? '음성 자동 재생이 차단되었습니다. “답변 다시 듣기” 또는 “테스트 소리”를 눌러주세요.'
@@ -589,7 +623,7 @@ export default function useAudioOutput() {
     }
   }, [supported, stop]);
   return { applied: { ...appliedPlayback, outputId: appliedOutput }, outputId, devices, supported, standby: !host,
-    message: host ? failureMessage || message : STANDBY_MESSAGE, refresh, refreshing, changeOutput, play, stop, stopNormal,
+    message: host ? testMessage || failureMessage || message : STANDBY_MESSAGE, testMessage: host ? testMessage : '', refresh, refreshing, changeOutput, play, stop, stopNormal,
     setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, canStartLap, isPlaying, recoveryGeneration,
     volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, rate: playback.rate, changeRate,
     spotterRate: playback.spotterRate, changeSpotterRate, pitwallRate: playback.pitwallRate, changePitwallRate, effect, changeEffect };

@@ -16,6 +16,7 @@ import VoiceAlertSettings from './VoiceAlertSettings';
 import RoleVoiceSelect from './RoleVoiceSelect';
 import VoiceLengthSelect from './VoiceLengthSelect';
 import FuelStrategy from './FuelStrategy';
+import { API_BASE } from '../analysis/analysisClient';
 
 export const ENGINEERS = {
   coach: { label: '주행 코치', voice: 'Algenib', style: 'border-primary/30 bg-primary/10 text-primary', description: '코너 느낌과 다음 주행 행동' },
@@ -28,6 +29,7 @@ export function readPitPreferences(storageKey = PIT_WALL_KEY, game = 'iracing') 
   try {
     const saved = JSON.parse(readGameItem(storageKey, game));
     return { alerts: readAlerts('pitwall', game, saved || {}), level: saved?.level === 'all' ? 'all' : 'important',
+      plan_run: saved?.plan_run ?? null, pit_lap: saved?.pit_lap ?? null, minimum_stops: saved?.minimum_stops ?? null,
       fuel_save_mode: ['off', 'finish', 'reserve'].includes(saved?.fuel_save_mode) ? saved.fuel_save_mode : 'finish',
       reserve_laps: typeof saved?.reserve_laps === 'number' && saved.reserve_laps >= 0 && saved.reserve_laps <= 3 ? saved.reserve_laps : .5,
       pit_loss_s: typeof saved?.pit_loss_s === 'number' && saved.pit_loss_s > 0 && saved.pit_loss_s <= 600 ? saved.pit_loss_s : null,
@@ -39,9 +41,19 @@ export function readPitPreferences(storageKey = PIT_WALL_KEY, game = 'iracing') 
 export function PitWallSettings({ preferences, onChange, view, provider = 'iRacing', capabilities = {} }) {
   const lmu = provider === 'LMU';
   const unavailable = key => capabilities[key] === false;
+  const run = view?.race_plan?.run_id;
+  const sameRun = !!run && preferences.plan_run === run;
+  function changePlan(key, raw, min, max) {
+    const value = raw === '' ? null : Number(raw);
+    if (value !== null && (!Number.isInteger(value) || value < min || value > max)) return;
+    onChange({ pit_lap: sameRun ? preferences.pit_lap : null, minimum_stops: sameRun ? preferences.minimum_stops : null,
+      plan_run: run, [key]: value });
+  }
   return (
     <FieldSet><FieldLegend>보고와 연료 전략</FieldLegend>
       <FieldGroup className="coach-live-fields">
+        <Field><FieldLabel htmlFor="race-plan-lap">예정 피트 진입 랩</FieldLabel><Input id="race-plan-lap" type="number" min="1" max="2000" placeholder="자동" disabled={!run} value={(sameRun && preferences.pit_lap) || ''} onChange={e => changePlan('pit_lap', e.target.value, 1, 2000)} /></Field>
+        <Field><FieldLabel htmlFor="race-plan-stops">경기 전체 의무 정차 횟수</FieldLabel><Input id="race-plan-stops" type="number" min="0" max="20" placeholder="규칙 미확인" disabled={!run} value={sameRun ? preferences.minimum_stops ?? '' : ''} onChange={e => changePlan('minimum_stops', e.target.value, 0, 20)} /></Field>
         <Field><FieldLabel htmlFor="wall-fuel-mode">연료 절약 목표</FieldLabel><NativeSelect id="wall-fuel-mode" disabled={unavailable('fuel_strategy') || unavailable('finish_prediction')} aria-label="연료 절약 목표" value={preferences.fuel_save_mode || 'finish'} onChange={e => onChange({ fuel_save_mode: e.target.value })}><option value="finish">무급유 완주</option><option value="reserve">무급유 완주 + 안전 여유</option><option value="off">절약 피드백 끄기</option></NativeSelect></Field>
         <Field><FieldLabel htmlFor="wall-reserve">완주 여유 연료 · 랩</FieldLabel><Input id="wall-reserve" disabled={unavailable('fuel_strategy')} aria-label="완주 여유 연료 랩" type="number" min="0" max="3" step="0.1" value={preferences.reserve_laps} onChange={e => { const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n) && n >= 0 && n <= 3) onChange({ reserve_laps: n }); }} /></Field>
         <Field><FieldLabel htmlFor="wall-pit-loss">예상 피트 총손실 · 초</FieldLabel><Input id="wall-pit-loss" disabled={unavailable('pit_strategy')} aria-label="예상 피트 총손실 초" type="number" min="1" max="600" step="1" placeholder={view?.pit_loss_auto_s != null ? `자동 ${Math.round(view.pit_loss_auto_s)}초` : '진입 + 작업 + 복귀'} value={preferences.pit_loss_s ?? ''} onChange={e => { const n = Number(e.target.value); if (e.target.value === '') onChange({ pit_loss_s: null }); else if (Number.isFinite(n) && n > 0 && n <= 600) onChange({ pit_loss_s: n }); }} /></Field>
@@ -50,6 +62,7 @@ export function PitWallSettings({ preferences, onChange, view, provider = 'iRaci
         <Field><FieldLabel htmlFor="wall-hold">제동·조향 앞에서 말 시작 보류</FieldLabel><NativeSelect id="wall-hold" disabled={unavailable('speech_policy')} aria-label="제동 조향 앞에서 말 시작 보류" value={preferences.hold_enabled === false ? 'off' : 'on'} onChange={e => onChange({ hold_enabled: e.target.value === 'on' })}><option value="on">켜기</option><option value="off">끄기 · 언제든 말함</option></NativeSelect></Field>
         <Field><FieldLabel htmlFor="wall-hold-lead">보류 시작 · 제동·조향 몇 초 전</FieldLabel><Input id="wall-hold-lead" aria-label="보류 시작 초" type="number" min="0" max="5" step="0.1" disabled={unavailable('speech_policy') || unavailable('speech_learning') || preferences.hold_enabled === false} value={preferences.hold_lead_s ?? 1} onChange={e => { const n = Number(e.target.value); if (e.target.value !== '' && Number.isFinite(n) && n >= 0 && n <= 5) onChange({ hold_lead_s: n }); }} /></Field>
       </FieldGroup>
+      <a className="text-sm underline" href={`${API_BASE}/api/live-coach/race-radio/index.html`} target="_blank" rel="noreferrer">새 레이스 무전 기본·짧은 음성 듣기</a>
       {lmu && <p className="mt-3 text-xs text-muted-foreground">회색 설정은 아직 연결되지 않은 기능입니다. LMU는 현재 조작 부담으로 발화 시점을 판단하며 제동 지점 예측은 하지 않습니다.</p>}
       {!lmu && <p className="mt-3 text-xs leading-relaxed text-muted-foreground">켜면 제동·조향 중이거나 설정한 초 안에 제동·조향이 다가올 때 새 안내를 시작하지 않습니다. 이미 말하고 있는 안내는 끊지 않습니다. 좌우 차량·깃발 같은 급한 호출은 이 설정과 관계없이 바로 나옵니다. 다가오는 제동 지점은 깨끗한 랩 2개를 달린 뒤부터 알 수 있습니다.</p>}
     </FieldSet>

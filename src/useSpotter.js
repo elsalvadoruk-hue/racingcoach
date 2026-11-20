@@ -39,9 +39,9 @@ const overlapClip = (clips, key, audioKey, variant, chooseReviewed) => {
 // The existing bumper threshold is .7s. Include the car ahead as well as behind.
 const closeBattle = frame => Boolean(frame.occupied) || (frame.radio?.traffic?.nearby || []).some(car => car.close === true
   || (typeof car.gap_estimate_s === 'number' && car.gap_estimate_s >= 0 && car.gap_estimate_s <= .7));
-export default function useSpotter(apiBase, audioOutput, { busy = false, specialists = true, level = 'all', wallAlerts: requestedWallAlerts, recordDelivery } = {}) {
+export default function useSpotter(apiBase, audioOutput, { busy = false, specialists = true, racePlanEnabled = false, level = 'all', wallAlerts: requestedWallAlerts, recordDelivery, classApproaches } = {}) {
   const wallAlerts = useMemo(() => !requestedWallAlerts || specialists ? requestedWallAlerts
-    : Object.fromEntries(Object.keys(requestedWallAlerts).map(key => [key, false])), [requestedWallAlerts, specialists]);
+    : Object.fromEntries(Object.keys(requestedWallAlerts).map(key => [key, key === 'race_tire_push' && requestedWallAlerts[key]])), [requestedWallAlerts, specialists]);
   const { selectedGame, activeGame } = useGame();
   const { play, setPriorityGate, cancelPriority, audioBusy } = audioOutput;
   const { muted, volume, outputId } = audioOutput.applied || audioOutput;
@@ -51,6 +51,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const mutedRef = useRef(muted); mutedRef.current = Boolean(muted);
   const [enabled, setEnabled] = useState(false);
   const [preparing, setPreparing] = useState(false);
+  const planOnly = !enabled && !preparing && racePlanEnabled && specialists;
   const [view, setView] = useState(null);
   const [error, setError] = useState('');
   const [storedSettings, setSettings, storedApplied] = useGameSettings(savedSettings, storeSettings);
@@ -81,7 +82,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
   const state = useRef({ active: false }), lastFrame = useRef(0), release = useRef(null);
   const standby = Boolean(audioOutput.standby);
   const output = useRef(null);
-  output.current = { play, muted, volume, busy, specialists, audioBusy, canStartLap: audioOutput.canStartLap, level, wallAlerts, recordDelivery, standby, activeGame };
+  output.current = { play, muted, volume, busy, specialists, racePlanEnabled, audioBusy, canStartLap: audioOutput.canStartLap, level, wallAlerts, recordDelivery, classApproaches, standby, activeGame };
   const alertRevision = useRef(0);
   const rendered = useRef(new Map()), lastView = useRef(0);
   const logEvent = useCallback((event, status, reason = '', droppedParts, playback) => {
@@ -142,7 +143,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       }
     }
     if (applied.current.alerts?.overlap === false) { cancelPriority?.(3); setPriorityGate?.(false); }
-    if (!wallChanged || !enabled || readyGame !== activeGame) return;
+    if (!wallChanged || !(enabled || planOnly) || readyGame !== activeGame) return;
     let cancelled = false;
     fetch(`${apiBase}/api/live-coach/spotter/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...applied.current, wall_alerts: wallAlerts }) })
@@ -366,6 +367,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       && !processing.current.has(event.id) && Date.now() < event.local_expires
       && Date.now() >= (playbackFailures.current.get(event.id)?.retryAt || 0)
       && voiceEventAllowed(event, applied.current.alerts, settings.wallAlerts)
+      && (event.group === 'race_plan' || !settings.classApproaches?.heard(event.run_id, event.class_notice))
       && (!event.immediate || !closeBattle(current))
       // The corner drill's warm-up voice is part of a drill the driver started: always played.
       && (settings.wallAlerts || event.key?.startsWith('drill_') || settings.level === 'all' || !['pace_detail', 'incident_coaching', 'corner_focus', 'straight_brief'].includes(event.key))
@@ -382,6 +384,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const ticket = epoch.current;
     const revision = alertRevision.current;
     const valid = () => mounted.current && !output.current.standby && ticket === epoch.current && state.current.radio?.connected
+      && (event.group === 'race_plan' || !output.current.classApproaches?.heard(event.run_id, event.class_notice))
+      && (event.group !== 'race_plan' || output.current.racePlanEnabled)
       && revision === alertRevision.current && voiceEventAllowed(event, applied.current.alerts, output.current.wallAlerts)
       && state.current.radio.run_id === event.run_id && !occupied(state.current, applied.current.alerts)
       && (!event.immediate || !closeBattle(state.current))
@@ -475,6 +479,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       observeRadioWait(event.queueWait, 'playback_pending');
       const started = silent || await output.current.play(audio, mime, {
         diagnostics,
+        confirmAudible: event.group === 'race_plan' || Boolean(event.class_notice),
         signal: pending.controller.signal,
         pitBoxDistance: /^pit_box_\d+$/.test(event.key) ? Number(event.key.slice(8)) : undefined,
         channel: event.engineer === 'spotter' ? 'spotter' : 'pitwall',
@@ -482,7 +487,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         rate: event.key === 'formation_brief' ? DEFAULT_RATE : undefined,
         priority: event.priority, interrupt: event.priority >= 2 || Boolean(event.immediate && output.current.canStartLap?.()),
         valid: () => valid() && (event.priority >= 2 || quietFor(event)),
-        startDeadline: event.immediate ? event.local_expires : undefined,
+        startDeadline: event.immediate || event.group === 'race_plan' ? event.local_expires : undefined,
         workloadValid: event.immediate ? undefined : event.key.startsWith('pit_box_') || event.key.startsWith('traffic_') ? valid : event.priority < 2 ? () => workloadFor(event) && !occupied(state.current, applied.current.alerts)
           && Date.now() - lastFrame.current < 600 : undefined,
         // Expiry alone never cuts a started sentence. A newer pit distance can
@@ -490,6 +495,9 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         onStatus: (status, reason, playback) => {
           // The queue owner emits one terminal row, carrying the actual attempt evidence.
           if (pending.cancelled) { pending.playback = playback; return; }
+          if (status === 'completed' && !droppedParts && !output.current.muted && output.current.volume > 0) {
+            output.current.classApproaches?.remember(event.run_id, event.class_notice);
+          }
           logEvent(event, status, reason, droppedParts, playback);
           if (status === 'started') {
             began = true; pendingPlayback.current.delete(event.id); playbackFailures.current.delete(event.id);
@@ -513,7 +521,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
               acknowledge();
             }
           }
-          if (!began || !['completed', 'interrupted', 'failed'].includes(status)) return;
+          if (!began || !['completed', 'interrupted', 'failed', 'muted'].includes(status)) return;
           const resumes = resumed.current.get(event.id) || 0;
           if (!event.immediate && status === 'interrupted' && RESUMABLE.includes(reason) && resumes < MAX_RESUMES) {
             // Cut off by a more urgent call or by the driving: keep it pending on the server
@@ -544,7 +552,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     }
   }, [apiBase, logEvent, chooseReviewed]);
   useEffect(() => {
-    if (!enabled || readyGame !== activeGame) return undefined;
+    if (!(enabled || planOnly) || readyGame !== activeGame) return undefined;
     let socket, retry, stopped = false;
     const ticket = epoch.current;
     let serverOffset = null;
@@ -563,7 +571,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       clearTimeout(release.current); cancelPriority?.(3); setPriorityGate?.(false);
       if (!stopped) {
         setView({ active: false, state_label: '스포터 연결 대기' });
-        if (wasActive) announce('unavailable', () => !stopped && ticket === epoch.current && !state.current.active);
+        if (enabled && wasActive) announce('unavailable', () => !stopped && ticket === epoch.current && !state.current.active);
       }
     };
     const connect = () => {
@@ -575,6 +583,10 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         let frame;
         try { frame = JSON.parse(data); } catch { return; }
         if (!['ready', 'spotter'].includes(frame.type)) return;
+        const radioEvents = (frame.radio?.events || []).filter(e =>
+          e.group === 'race_plan' ? output.current.racePlanEnabled : enabled);
+        if (frame.radio) frame = { ...frame, radio: { ...frame.radio, events: radioEvents } };
+        if (planOnly) frame = { ...frame, events: [], drill: null, banter_shadow: [], oval_shadow: [] };
         const now = Date.now();
         if (typeof frame.sent_at === 'number') {
           const offset = now - frame.sent_at * 1000;
@@ -652,6 +664,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
           release.current = setTimeout(() => { if (!occupied(state.current, applied.current.alerts)) setPriorityGate?.(false); }, 700);
         } else setPriorityGate?.(false);
         pumpRadio();
+        if (planOnly) return;
         if (frame.drill) {
           if (drillSerial != null && frame.drill.serial > drillSerial) {
             for (const event of frame.drill.events || []) {
@@ -694,7 +707,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       else pumpOverlap();
     }, 100);
     return () => { stopped = true; cancelRender('connection_closed'); overlapPending.current = null; clearTimeout(retry); clearTimeout(release.current); clearInterval(watchdog); socket?.close(); cancelPriority?.(); };
-  }, [enabled, readyGame, activeGame, apiBase, announce, cancelPriority, setPriorityGate, pumpRadio, pumpOverlap, logEvent, cancelRender]);
+  }, [enabled, planOnly, readyGame, activeGame, apiBase, announce, cancelPriority, setPriorityGate, pumpRadio, pumpOverlap, logEvent, cancelRender]);
   const test = () => {
     if (!state.current.occupied) announce('test', () => !state.current.occupied);
   };

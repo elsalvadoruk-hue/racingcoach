@@ -208,6 +208,9 @@ class RadioAudioCache:
 
     def cached(self, role, text):
         if self.custom_packs is not None and self.custom_packs.has(role,text):return True
+        from race_call_audio import BY_WORDING, prepared_file
+        if (role, text) in BY_WORDING:
+            return prepared_file(role, text, self.custom_packs, self.directory) is not None
         import number_splice
         if number_splice.spliceable(text):
             return self.pieces().on_disk(role, text)
@@ -224,6 +227,12 @@ class RadioAudioCache:
         """Read an existing whole-sentence clip; never repair or synthesize it."""
         if self.custom_packs is not None and self.custom_packs.has(role,text):
             return self.custom_packs.audio(role,text)
+        from race_call_audio import BY_WORDING, prepared_file
+        if (role, text) in BY_WORDING:
+            prepared = prepared_file(role, text, self.custom_packs, self.directory)
+            if prepared is None:
+                raise FileNotFoundError('선택한 무전 음원이 없습니다.')
+            return 'data:audio/ogg;codecs=opus;base64,' + base64.b64encode(prepared.read_bytes()).decode('ascii')
         import number_splice
         if number_splice.spliceable(text):
             if getattr(self,'_prepared_pieces',None) is None:self._prepared_pieces=number_splice.Pieces(_PreparedSpeech(),self.directory/'pieces')
@@ -234,7 +243,8 @@ class RadioAudioCache:
 
     def phrase(self, role, text):
         """One whole call as a single clip, synthesized once per voice and wording."""
-        if self.custom_packs is not None and self.custom_packs.has_selection(role):
+        from race_call_audio import BY_WORDING
+        if (role, text) in BY_WORDING or self.custom_packs is not None and self.custom_packs.has_selection(role):
             return self.read_prepared(role,text)
         import number_splice
         if number_splice.spliceable(text):

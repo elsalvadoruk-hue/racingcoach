@@ -159,6 +159,7 @@ class TirePerformance:
         self.hold_since = None
         self.axle_since = [None,None]
         self.input_ok = False
+        self.last_good_at = None
         self.mode = 'combined'
         self.view = {'status': 'learning', 'reason': reason, 'front': False, 'rear': False,
                      'passes': 0, 'corners': 0, 'laps': 0, 'ranges': {}, 'pressure_ranges': {}, 'mode':self.mode}
@@ -229,6 +230,7 @@ class TirePerformance:
         self._evaluate(s)
 
     def _invalidate(self, reason):
+        self.last_good_at = None
         self.hold_since = None
         self.axle_since = [None,None]
         self.input_ok = False
@@ -334,6 +336,13 @@ class TirePerformance:
             temps=values[:4],pressures=values[4:],track=conditions[0],air=conditions[1],fuel=conditions[2],
             age=a['lap']-min(installed))
         if valid_record(record) and not any((r['run'],r['lap'],r['corner']) == (record['run'],record['lap'],record['corner']) for r in self.records):
+            references = [r for r in self._references(s) if r['corner'] == record['corner']
+                          and r['brake'] >= .1 and r['decel_g'] > .1 and abs(r['fuel']-record['fuel']) <= 6]
+            self.last_good_at = None
+            if (record['brake'] >= .1 and len(references) >= 2
+                    and record['decel_g'] >= .9 * median(r['decel_g'] for r in references)
+                    and self._good([record], references)):
+                self.last_good_at = a['end']
             self.records.append(record)
             if self.store:
                 self.store.submit(self.records)

@@ -173,6 +173,12 @@ class RuntimeAssetTests(unittest.TestCase):
         (self.root/'package.json').write_text('{"version":"2.0.3"}')
         (self.root/'build').mkdir()
         (self.root/'build/index.html').write_text('<html>')
+        for prefix in ('public', 'build'):
+            review = self.root / prefix / 'race-radio'
+            review.mkdir(parents=True)
+            (review/'index.html').write_text('<html>')
+            (review/'stale.MP3').write_bytes(b'stale preview')
+            (review/'candidate.ogg').write_bytes(b'separate voice clip')
         (self.root/'runtime').mkdir()
         (self.root/'runtime/local.exe').write_bytes(b'never update this')
         for args in (('init','-q'), ('add','.'), ('-c','user.name=test','-c','user.email=test@example.com','commit','-qm','fixture')):
@@ -183,7 +189,10 @@ class RuntimeAssetTests(unittest.TestCase):
         with zipfile.ZipFile(self.root/'out/racingcoach-app-2.0.3.zip') as app:
             self.assertFalse(any('/runtime/' in n.lower() for n in app.namelist()))
             app_names = app.namelist()
+            self.assertEqual(sum(n.endswith('/race-radio/index.html') for n in app_names), 2)
+            self.assertFalse(any(n.lower().endswith(('.mp3', '.ogg')) for n in app_names))
         with zipfile.ZipFile(setup) as packed:
+            self.assertFalse(any(n.lower().endswith(('.mp3', '.ogg')) for n in packed.namelist()))
             for name in self.names:
                 self.assertEqual(packed.read('racingcoach-2.0.3/runtime/'+name), b'x')
             self.assertTrue(set(app_names) <= set(packed.namelist()))

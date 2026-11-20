@@ -81,7 +81,11 @@ class EnduranceFuelTests(unittest.TestCase):
         # After the stop: 4 laps on 53 litres is a 4 percent saving, which the driver can act on.
         heard = self.stint(24, 53., 4)
         self.assertEqual([key for key, _, _ in heard][:1], ['fuel_short'])
-        self.assertEqual(sum(key == 'fuel_short' for key, _, _ in heard), 1)
+        shortages = [text for key, _, text in heard if key == 'fuel_short']
+        self.assertEqual(len(shortages), 2)
+        self.assertIn('리터 부족', shortages[0])
+        self.assertIn('팔 퍼센트', shortages[1])  # Fuel saving has risen from 4% to 8%. Say the new target once.
+        self.assertTrue(any(key == 'fuel_critical' for key, _, _ in heard))  # Keeping the original pace eventually requires a stop.
         self.assertIn('절약', fuel_advice(self.wall.view(self.at(24, 0., 53.), USE, 3)))
 
     def test_the_pit_call_adds_where_the_stop_puts_the_car_as_a_second_sentence(self):

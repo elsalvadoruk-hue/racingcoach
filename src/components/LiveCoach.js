@@ -1,4 +1,5 @@
 import VoiceVolumeSlider from './VoiceVolumeSlider';
+import { createClassApproaches } from '../lib/classApproaches';
 import DrivingLearning from './DrivingLearning';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
@@ -127,7 +128,9 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const audioOutput = useAudioOutput();
   const standbyRef = useRef(false); standbyRef.current = Boolean(audioOutput.standby);
   const recordDelivery = useRadioDiagnostics(apiBase);
-  useTireVoice(apiBase, activeGame, audioOutput, { busy: phase !== 'idle', recordDelivery });
+  const [classApproaches] = useState(createClassApproaches);
+  useTireVoice(apiBase, activeGame, audioOutput, { busy: phase !== 'idle', recordDelivery,
+    postPit: appliedWall.alerts?.race_tire_push !== false });
   const deliveryEvent = useCallback((note, spokenText) => ({ event_id: String(note.id), run_id: note.context?.snapshot?.run_id || '',
     backend_version: note.context?.backend_version || null,
     key: note.context?.report_key || 'answer', engineer: note.context?.engineer || 'coach', text: spokenText || note.reply || '',
@@ -141,7 +144,9 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const recoveryGeneration = useRef(null); recoveryGeneration.current = audioOutput.recoveryGeneration;
   blocked.current = audioOutput.isPriorityBlocked; busyAudio.current = audioOutput.audioBusy;
   const recorder = useRef(null), microphoneEpoch = useRef(0), state = useRef({ phase: 'idle', armed: false });
-  const spotter = useSpotter(apiBase, audioOutput, { busy: phase !== 'idle', specialists: wallEnabled && appliedWall.level !== 'off', level: appliedWall.level, wallAlerts: appliedWall.alerts, recordDelivery });
+  const spotter = useSpotter(apiBase, audioOutput, { busy: phase !== 'idle', specialists: wallEnabled && appliedWall.level !== 'off',
+    racePlanEnabled: wallEnabled && speak && !appliedAudio.muted && appliedAudio.volume > 0,
+    level: appliedWall.level, wallAlerts: appliedWall.alerts, recordDelivery, classApproaches });
   useEffect(() => { if (spotter.enabled) setWallEnabled(true); }, [spotter.enabled]);
   const turn = useRef(null), stopRequested = useRef(false), timeout = useRef(null);
   const mounted = useRef(true), options = useRef({ mode, speak }), saved = useRef(onSaved);
@@ -175,7 +180,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
       samples[i] = .15 * fade * Math.sin(2 * Math.PI * 440 * i / rate);
     }
     stopSpeaking();   // the driver's own button replaces an answer that is still playing
-    play(encodeWav([samples], rate), 'audio/wav');
+    play(encodeWav([samples], rate), 'audio/wav', { outputTest: true });
   };
   // Same value as ANSWER_PRIORITY in useAudioOutput (kept here because tests replace that module).
   const ANSWER = 4;
@@ -300,7 +305,11 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
         if (warning) setError(warning);
         saved.current?.(note);
         const mime = response.report.audio_mime || 'audio/mpeg';
-        if (audio && wallOptions.current.speak) {
+        const reportRun = note.context?.snapshot?.run_id;
+        const notice = response.report.class_notice;
+        const playingAudio = Boolean(audio && wallOptions.current.speak);
+        if (playingAudio) {
+          if (classApproaches.heard(reportRun, notice)) return;
           lastMime.current = mime; lastChannel.current = 'pitwall'; setLastAudio(audio);
           const urgent = response.report.priority >= 3;
           const reportCurrent = () => {
@@ -322,11 +331,13 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
           const finished = new Promise((resolve) => { finish = resolve; });
           const started = await play(audio, mime, {
             diagnostics: createRadioAttempt(activeGame, epoch),
+            confirmAudible: Boolean(notice),
             priority: urgent ? 3 : 0, routineReport: !urgent,
             valid: () => !stopped && mounted.current && epoch === reportEpoch.current && reportAllowed()
-              && (urgent ? reportCurrent() : workloadValid()),
+              && !classApproaches.heard(reportRun, notice) && (urgent ? reportCurrent() : workloadValid()),
             workloadValid: urgent ? undefined : workloadValid,
             onStatus: (status, reason, playback) => {
+              if (status === 'completed') classApproaches.remember(reportRun, notice);
               recordDelivery({ ...deliveryEvent(note, response.report.spoken_text), ...(playback ? { playback } : {}) }, status, reason);
               if (status !== 'started') { terminal = { status, reason }; finish(terminal); }
             },
@@ -354,7 +365,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
           reportResumes.current.delete(call);
           reportFailures.current.delete(attemptKey);
         } else recordDelivery(deliveryEvent(note), 'muted', 'text_only');
-        const delivered = await request(`/reports/${note.id}/ack`, {});
+        const delivered = await request(`/reports/${note.id}/ack`, { audio_completed: playingAudio });
         if (!stopped && mounted.current && delivered.note) setNotes((current) => current.map((n) => n.id === note.id ? delivered.note : n));
       } catch (failure) { if (!stopped && wallOptions.current.level !== 'off') setError(errorMessage(failure)); }
       finally { running = false; }
@@ -362,7 +373,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     reportPoll.current = poll;
     poll(); const timer = setInterval(poll, 2000);
     return () => { stopped = true; reportPoll.current = null; clearInterval(timer); };
-  }, [visible, wallEnabled, activeGame, request, play, isPriorityBlocked, recordDelivery, deliveryEvent]);
+  }, [visible, wallEnabled, activeGame, request, play, isPriorityBlocked, recordDelivery, deliveryEvent, classApproaches]);
   useEffect(() => {
     if (!armed && !wallEnabled) return undefined;
     let socket, retry, stopped = false;

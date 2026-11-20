@@ -301,7 +301,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "2.5.7"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "2.5.8"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -3729,6 +3729,8 @@ live_telemetry = LiveTelemetry(sdk_factory=default_game_sdk if os.name == 'nt' e
                                result_observer=_driver_result_capture.submit)
 from driving_learning import DrivingHistory
 live_telemetry.driving_learning.history = DrivingHistory(os.getenv('IRACING_DRIVING_HISTORY_PATH') or MEMORY_DB_PATH.parent / 'driving-learning.json')
+from race_ibt_costs import IbtCornerCosts
+live_telemetry.race_ibt_costs = IbtCornerCosts(app_settings.data_dir() / 'race-ibt-costs.json')
 # Pit facts learned from driven stops live beside the database (seeded by scripts/learn_pit_history.py).
 live_telemetry.pit_knowledge = PitKnowledge(os.getenv("IRACING_PIT_KNOWLEDGE_PATH") or MEMORY_DB_PATH.parent / "pit-knowledge.json")
 live_telemetry.race_history = RaceHistory(os.getenv("IRACING_RACE_HISTORY_PATH") or MEMORY_DB_PATH.parent / "race-history.json")
@@ -4397,7 +4399,7 @@ restart_requested = threading.Event()
 
 def voice_folders() -> dict[str, Path]:
     """Where the packed voice paths live in this installation, as the coach and spotter look them up."""
-    return {"data/radio_audio/": Path(os.getenv("IRACING_RADIO_AUDIO_DIR") or MEMORY_DB_PATH.parent / "radio_audio"),
+    return {"data/radio_audio/": voice_coach.fixed_audio.directory,
             "data/spotter_audio/": Path(os.getenv("IRACING_SPOTTER_AUDIO_DIR") or app_settings.spotter_audio_dir()),
             "data/short_radio/": voice_coach.custom_packs.builtin_root,
             "data/reviewed_radio/": voice_coach.custom_packs.reviewed.directory}

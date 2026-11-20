@@ -5,6 +5,7 @@ import math
 from overlay_session import session_panel
 from live_pit import COLD_TYRE_S, stall_estimate, tyre_advice
 from live_wheels import wheel_view
+from race_engineer import numeric
 logger=logging.getLogger('iRacingLive')
 
 
@@ -158,7 +159,15 @@ class LiveViews:
         if pit_loss_s is None and facts.get('pit_loss_auto_s'):
             view = self.pit_wall.view(snapshot, fuel_use, fuel_laps, reserve_laps, facts['pit_loss_auto_s'], fuel_save_mode)
         energy = self.energy.view(view, now=snapshot.get('session_time')) if self.game == 'lmu' else {}
+        options = self.plan_options if self.plan_options.get('run') == self.run_id else {}
+        target = options.get('pit_lap')
+        mandatory = max(options.get('mandatory') or 0, numeric(self.pit_wall.race.get('mandatory_pit_stops')) or 0)
+        planned_distance = self.race_plan.distance_to_planned_stop(target, snapshot.get('lap_number'),
+                                                                   snapshot.get('distance_pct'), view.get('remaining_laps'))
         return {**view, **facts, **energy, 'game': self.game,
+                'mandatory_stops_remaining': max(0, mandatory - self.race_plan.confirmed_stops),
+                'planned_stop_before_finish': planned_distance is not None,
+                'race_plan': {**self.race_plan.view, 'run_id': self.run_id},
                 'pit_loss_source': 'INPUT' if pit_loss_s else 'AUTO' if facts.get('pit_loss_auto_s') else None}
 
     def _pit_facts(self, view, snapshot):

@@ -20,7 +20,7 @@ def live_context(live, snapshot):
         if snapshot.t is None or abs(last['session_time']-snapshot.t)>1.5:return None
         # Only numeric/boolean driving channels, never opponents or driver names.
         keys=('session_time','lap_number','distance_pct','speed_mps','steering_rad','steering_lock_ratio',
-              'yaw_rate','brake','throttle','incidents','session_flags','car_left_right',
+              'yaw_rate','brake','throttle','incidents','session_flags','session_state','workload_in_s','car_left_right',
               'on_track','on_pit_road','is_replay','abs_active','abs_setting','tc_setting','brake_bias',
               'lat_accel_mps2','long_accel_mps2','vert_accel_mps2')
         rows=[{k:r.get(k) for k in keys} for r in islice(reversed(live.samples),96)
@@ -29,7 +29,9 @@ def live_context(live, snapshot):
         corners=[{k:d[k] for k in ('entry_pct','exit_pct')} for d in list(definitions)[:64]
                  if isinstance(d,dict) and all(finite(d.get(k)) is not None for k in ('entry_pct','exit_pct'))
                  and 0<=d['entry_pct']<d['exit_pct']<=1]
-        return {'run':run,'samples':list(reversed(rows)),'corners':corners}
+        alerts = getattr(getattr(live,'radio',None),'wall_alerts',{})
+        return {'run':run,'samples':list(reversed(rows)),'corners':corners,
+                'post_pit_voice':alerts.get('race_tire_push') is not False}
     finally:live.lock.release()
 
 

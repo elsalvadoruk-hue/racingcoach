@@ -322,6 +322,20 @@
   ],
   "pitwall": [
     {
+      "id": "race_plan",
+      "title": "레이스 판단 무전",
+      "items": [
+        {"id":"race_pack","label":"앞 두 대 배틀","description":"접근 중인 두 차의 간격과 순서 교환, 감속을 확인","example":"앞에 두 대 배틀 중.","keys":["pack_close","pack_fight","pack_slow"]},
+        {"id":"race_coast","label":"코스팅과 급유 시간","description":"완주까지 절약량과 시간 이득을 비교하고 리프트 지점을 안내","example":"다음 코너, 액셀 반 초 일찍 놓기.","keys":["coast_*","save_stop","save_fill","fuel_secured","normal_pace"]},
+        {"id":"race_limits","label":"반복 이탈과 트랙 리밋","description":"짧은 라인의 기록, 이탈 및 페널티 이력을 다음 진입 전에 안내","example":"다음 코너는 자주 벗어나니까 살짝 여유 두고.","keys":["cut_*"]},
+        {"id":"race_rejoin","label":"복귀 교통과 피트 랩","description":"이번 랩과 다음 랩의 피트 출구부터 첫 제동까지 예상 간격 비교","example":"이번 랩 피트. 다음 랩엔 나올 때 붐빌 듯.","keys":["stay_for_gap","pit_now_gap"]},
+        {"id":"race_pit_target","label":"예정 피트까지 연료","description":"남은 연료와 실측 절약량으로 예정 진입 랩을 재평가","example":"예정 랩까지 연료 부족. 피트 앞당기기.","keys":["plan_fuel_*"]},
+        {"id":"race_energy_plan","label":"예정 피트까지 가상 에너지","description":"계획한 정차까지 남은 연료와 가상 에너지를 함께 평가","example":"가상 에너지 아끼면 예정대로 피트.","keys":["energy_early","energy_save_plan","plan_both_*"],"games":["lmu"]},
+        {"id":"race_tire_push","label":"교체 후 타이어 준비","description":"타이어 음성을 켜면 빠르게 돌았던 코너의 온도·압력과 현재 제동·탈출을 확인한 뒤 푸시 안내","example":"타이어 데워짐. 이제 푸시.","keys":["tire_push","tire_rear_wait","tire_press_ready"],"games":["iracing"]},
+        {"id":"race_catch_zone","label":"빠른 클래스와 만날 구간","description":"반복 측정된 속도와 접근 범위가 한 구간에 모일 때","example":"빠른 클래스 두 대, 두 번째 코너에서 붙을 듯.","keys":["catch_straight","catch_corner","catch_train","catch_another"]}
+      ]
+    },
+    {
       "id": "setup",
       "title": "차량 설정 추천",
       "items": [
@@ -407,10 +421,10 @@
         {
           "id": "fuel_short",
           "label": "완주 연료 부족",
-          "description": "현재 소비량으로 완주 연료가 부족할 때",
-          "example": "완주 연료가 부족합니다. 절약이 필요합니다.",
+          "description": "현재 소비량으로 완주 연료가 부족할 때, 막판에 절약으로 갈 수 있으면 필요한 비율을 안내",
+          "example": "완주하려면 연료를 약 육 퍼센트 아껴야 합니다.",
           "keys": [
-            "fuel_short"
+            "fuel_short", "finish_save_*"
           ]
         },
         {

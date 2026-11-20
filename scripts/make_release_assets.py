@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -54,7 +55,7 @@ def make_app(root: Path, out: Path, allow_dirty: bool = False) -> Path:
                            capture_output=True, text=True, encoding="utf-8", check=True).stdout.strip()
     if dirty and not allow_dirty:
         raise ValueError("커밋하지 않은 변경이 있습니다. 릴리스 태그와 같은 내용이 되도록 커밋한 뒤 만드세요.")
-    from make_share_copy import bundled_bridge_files, tire_reader_files
+    from make_share_copy import bundled_bridge_files, is_race_audio, tire_reader_files
     bridges = bundled_bridge_files(root) + tire_reader_files(root)
     committed = git_files(root)
     missing = sorted(set(bridges) - set(committed))
@@ -62,7 +63,7 @@ def make_app(root: Path, out: Path, allow_dirty: bool = False) -> Path:
         raise ValueError("LMU 사전 빌드·타이어 오버레이 파일을 먼저 Git에 추가하세요: " + ", ".join(missing))
     names = [name for name in committed if not name.replace('\\', '/').lower().startswith('runtime/')] + sorted(path.relative_to(root).as_posix() for path in (root / "build").rglob("*") if path.is_file())
     target = out / app_update.APP_ASSET.format(version=version)
-    names = sorted(set(names))
+    names = sorted({name for name in names if not is_race_audio(name)})
     out.mkdir(parents=True, exist_ok=True)
     partial = target.with_name(target.name + ".part")
     with zipfile.ZipFile(partial, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
@@ -278,7 +279,8 @@ def main() -> int:
         else:
             import app_settings
             app_settings.apply_environment()
-            folders = {"data/radio_audio/": app_settings.data_dir() / "radio_audio", "data/spotter_audio/": app_settings.spotter_audio_dir(),
+            folders = {"data/radio_audio/": Path(os.getenv("IRACING_RADIO_AUDIO_DIR") or app_settings.data_dir() / "radio_audio"),
+                       "data/spotter_audio/": app_settings.spotter_audio_dir(),
                        "data/short_radio/": app_settings.data_dir() / "short_radio",
                        "data/reviewed_radio/": app_settings.data_dir() / "reviewed_radio"}
             read = lambda path: next(Path(folder) / path[len(prefix):] for prefix, folder in folders.items()

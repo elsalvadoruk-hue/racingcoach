@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react';
 import packageInfo from '../package.json';
 
+const needsImmediateReceipt = ({ key, status, dropped_parts: dropped }) =>
+  (status === 'started' && key?.startsWith('control_'))
+  || (status === 'completed' && !dropped && (key === 'traffic_faster_behind' || key === 'traffic_slower_ahead' || key?.startsWith('catch_')));
+
 // Batched independently from the audio path; no recordings or credentials.
 export default function useRadioDiagnostics(apiBase) {
   const queue = useRef([]);
@@ -8,11 +12,11 @@ export default function useRadioDiagnostics(apiBase) {
   const shadowQueue = useRef([]);
   const ovalQueue = useRef([]);
   const notifyShadow = useRef(null);
-  const notifyStarted = useRef(null);
+  const notifyReceipt = useRef(null);
   const record = useCallback((event, status, reason = '') => {
     queue.current.push({ ...event, frontend_version: packageInfo.version, status, reason, at: Date.now() / 1000 });
     if (queue.current.length > 512) { queue.current.shift(); dropped.current += 1; }
-    if (status === 'started' && event.key?.startsWith('control_')) notifyStarted.current?.();
+    if (needsImmediateReceipt({ ...event, status })) notifyReceipt.current?.();
   }, []);
   const observeBanter = useCallback((observation) => {
     shadowQueue.current.push(observation);
@@ -35,7 +39,7 @@ export default function useRadioDiagnostics(apiBase) {
       if (events.length) events[0] = { ...events[0], diagnostics_dropped: dropped.current };
       const banter = shadowQueue.current.splice(0, 16);
       const oval = ovalQueue.current.splice(0, 16);
-      if (events.some(event => event.status === 'started' && event.key?.startsWith('control_'))) urgent = false;
+      urgent = queue.current.some(needsImmediateReceipt);
       let succeeded = false;
       try {
         const response = await fetch(`${apiBase}/api/live-coach/radio-delivery`, {
@@ -55,12 +59,12 @@ export default function useRadioDiagnostics(apiBase) {
         if (succeeded && (urgent || shadowQueue.current.length || ovalQueue.current.length)) flush();
       }
     };
-    notifyStarted.current = () => { urgent = true; flush(); };
+    notifyReceipt.current = () => { urgent = true; flush(); };
     notifyShadow.current = () => flush();
     const timer = setInterval(() => flush(), 1000);
     const leaving = () => flush(true);
     window.addEventListener('pagehide', leaving);
-    return () => { notifyStarted.current = null; notifyShadow.current = null; clearInterval(timer); window.removeEventListener('pagehide', leaving); flush(true); };
+    return () => { notifyReceipt.current = null; notifyShadow.current = null; clearInterval(timer); window.removeEventListener('pagehide', leaving); flush(true); };
   }, [apiBase]);
   return record;
 }

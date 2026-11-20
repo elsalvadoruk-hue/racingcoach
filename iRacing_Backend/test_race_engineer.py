@@ -151,6 +151,36 @@ class RaceTests(unittest.TestCase):
 
 
 class PitWallIntegrationTests(unittest.TestCase):
+    def test_class_traffic_shares_only_heard_car_and_direction_across_both_channels(self):
+        radio = self.live.radio
+        radio.run_id = self.live.run_id
+        decision = dict(key='class_traffic', token='5', class_notice=(5, 'behind'), priority=2,
+                        cooldown=120, engineer='race', text='뒤에 다른 클래스 차량이 있습니다.',
+                        speech_key='class_traffic_behind')
+        # A text-only ACK releases the report without silencing the spotter.
+        with patch.object(self.live.pit_wall, 'candidates', return_value=[decision]):
+            report = asyncio.run(self.coach.report(ReportRequest(speak=False)))['report']
+            self.coach.acknowledge_report(report['note']['id'])
+            self.assertFalse(radio.class_notice_recent(5, 'behind', 100))
+            self.live.pit_wall.reported.clear()
+            self.live.pit_wall.last_report = -100
+            report = asyncio.run(self.coach.report(ReportRequest()))['report']
+            self.assertTrue(report['audio_base64'])
+            self.coach.acknowledge_report(report['note']['id'], audio_completed=True)
+            self.assertTrue(radio.class_notice_recent(5, 'behind', 102))
+            self.assertFalse(radio.class_notice_recent(5, 'ahead', 102))
+            self.assertFalse(radio.class_notice_recent(6, 'behind', 102))
+
+        event = radio.emit('catch_train', 101, '두 대 접근')
+        radio.track_delivery(event, class_notice=((5, 6), 'behind'))
+        for outcome, dropped in [('interrupted', 0), ('muted', 0), ('completed', 1)]:
+            radio.delivery(event['id'], outcome, dropped_parts=dropped, session_time=111)
+            self.assertFalse(radio.class_notice_recent(6, 'behind', 111))
+        radio.delivery(event['id'], 'completed', session_time=111)
+        candidates = [{**decision, 'class_notice': (idx, 'behind')} for idx in (5, 6, 7)]
+        self.assertEqual(self.coach.available_reports(candidates, ReportRequest(), radio.run_id, 122), candidates[2:])
+        self.assertEqual(self.coach.available_reports(candidates, ReportRequest(), radio.run_id, 124), candidates)
+
     def test_prepared_report_cache_is_bounded_and_does_not_cross_runs(self):
         decision = dict(key='last_lap', token='lap-4', text='마지막 랩입니다.',
                         engineer='race', priority=3, cooldown=1000)

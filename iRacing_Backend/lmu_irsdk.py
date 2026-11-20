@@ -486,6 +486,7 @@ class LmuIrsdk:
             'LmuLastImpactET': s.get('last_impact_et'), 'LmuLastImpactMagnitude': s.get('last_impact_magnitude'),
             'LmuLapInvalidated': s.get('lap_invalidated'), 'LmuCountLapFlag': s.get('count_lap_flag'),
             'LmuTrackLimitsSteps': s.get('track_limits_steps'),
+            'LmuTrackLimitsStepsPerPenalty': s.get('track_limits_steps_per_penalty'),
             'LmuWheels': s.get('wheels'), 'LmuWheelSampleTime': telemetry_et if s.get('wheels') else None,
             'LmuScoringSampleTime': scoring_et, 'LmuTelemetrySampleTime': telemetry_et,
             'LmuScoringHeld': s.get('scoring_held', False),

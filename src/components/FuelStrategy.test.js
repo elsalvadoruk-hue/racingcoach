@@ -7,6 +7,12 @@ const view = { fuel_l: 31.903, fuel_l_per_lap: 3.339, fuel_observed_laps: 1, rem
   fuel_finish_shortfall_l: 1.39, fuel_goal_save_pct: 4.2, fuel_save_target_l_per_lap: 3.2,
   fuel_to_add_l: 3.06, stops_needed: 1 };
 
+test('compares observed path lengths through the same corner for a 1x and a penalty', () => {
+  const observed_line = { one_x_shorter_m: [5, 7], penalty_shorter_m: [14, 14], one_x_gain_s: .23 };
+  render(<FuelStrategy view={{ ...view, race_plan: { track_limit: { label: 'T6', observed_line } } }} />);
+  expect(screen.getByText(/정상 라인보다 주행 거리가 5~7m.*1x.*0.23초 이득.*14m.*페널티/)).toBeVisible();
+});
+
 test('a single observed lap explains saving and refuelling as alternatives with different reserve goals', () => {
   render(<FuelStrategy view={view} />);
   expect(screen.getByText(/관측 1랩 · 3.339 L\/랩/)).toBeVisible();

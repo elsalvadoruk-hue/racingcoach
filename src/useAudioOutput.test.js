@@ -17,6 +17,47 @@ const originalMedia = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices')
 const originalSink = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'setSinkId');
 let media, players;
 
+test('muting part of a class notice keeps it out of the shared heard history', async () => {
+  const { result } = renderHook(useAudioOutput);
+  const onStatus = jest.fn();
+  await act(async () => result.current.play('car', 'audio/mpeg', { confirmAudible:true, onStatus }));
+  act(() => result.current.toggleMute());
+  act(() => result.current.toggleMute());
+  act(() => players.at(-1).onended());
+  expect(onStatus).toHaveBeenCalledWith('muted', 'volume_or_mute');
+});
+
+test.each([
+  [0, 0, 'no_metadata', '음원 정보를'],
+  [2, 0, 'no_progress', '흐르지 않았습니다'],
+  [2, .58, 'progressed', '정상적으로 진행'],
+])('the manual tone distinguishes metadata %i and actual time %f', async (readyState, time, expected, label) => {
+  const { result, unmount } = renderHook(useAudioOutput);
+  act(() => result.current.changeOutput('headset'));
+  await act(async () => result.current.play('tone', 'audio/wav', { outputTest: true }));
+  const player = players.at(-1);
+  expect(player.setSinkId).toHaveBeenCalledWith('headset');
+  act(() => {
+    Object.assign(player, { readyState, currentTime: time });
+    player.onended();
+  });
+  expect(result.current.message).toContain(label);
+  const onStatus = jest.fn();
+  await act(async () => result.current.play('regular', 'audio/mpeg', { diagnostics: createRadioAttempt('iracing'), onStatus }));
+  act(() => players.at(-1).onended());
+  expect(onStatus).toHaveBeenCalledWith('completed', '', expect.objectContaining({
+    output_test: expected, output_test_route: 'selected', output_test_at: expect.any(Number) }));
+  unmount();
+});
+
+test('manual output test reports a routing failure before inspecting the media', async () => {
+  const { result } = renderHook(useAudioOutput);
+  act(() => result.current.changeOutput('headset'));
+  global.Audio.mockImplementationOnce(() => ({ pause: jest.fn(), setSinkId: jest.fn().mockRejectedValue(new Error('unavailable')) }));
+  await act(async () => result.current.play('tone', 'audio/wav', { outputTest: true }));
+  expect(result.current.message).toContain('출력장치 연결에 실패');
+});
+
 test('explicit recovery reload reapplies the captured speed after load resets it', async () => {
   jest.useFakeTimers();
   const { result, unmount } = renderHook(useAudioOutput);
