@@ -1,6 +1,6 @@
 import unittest
 from live_telemetry import LiveTelemetry
-from race_braking import ABS_KEY, BIAS_KEY, BIAS_STEP, WET_CHECK, bias_ticks, voice_catalog
+from race_braking import ABS_KEY, BIAS_KEY, BIAS_STEP, DRY_ABS, WET_CHECK, bias_ticks, voice_catalog
 
 
 class RaceBrakingTests(unittest.TestCase):
@@ -10,6 +10,7 @@ class RaceBrakingTests(unittest.TestCase):
         self.addCleanup(self.live.driving_learning.close)
         self.live.driving_audio_ready=lambda _:True
         self.car=dict(game='iracing',car_path='bmwm4gt3',track_id='1')
+        self.rule = ''
         self.definition=dict(id='C1',call='9번 코너',entry_pct=1020/3000,apex_pct=1095/3000,exit_pct=1160/3000)
         self.live.corners.lookup=lambda _:[self.definition]
         self.base=dict(on_track=True,is_replay=False,on_pit_road=False,session_num=0,session_state=4,session_flags=0,
@@ -20,7 +21,7 @@ class RaceBrakingTests(unittest.TestCase):
     def feed(self,s,wet_ids=(1,)):
         self.t+=.05
         s={**self.base,**s,'session_time':self.t}
-        race=dict(session_type='Race',sample_time=self.t,track_length_m=3000,wet_compounds=list(wet_ids),
+        race=dict(session_type='Race',sample_time=self.t,track_length_m=3000,wet_compounds=list(wet_ids),car_rule_set=self.rule,
                   player_idx=0,cars=[dict(idx=0,track_surface=s['track_surface'],on_pit_road=s['on_pit_road'],
                                          lap_completed=s['lap_number']-1,distance_pct=s['distance_pct'],class_est_lap_s=61.)])
         self.live.ingest(self.car,s,race)
@@ -63,6 +64,32 @@ class RaceBrakingTests(unittest.TestCase):
         self.live.radio.configure_alerts(pitwall={'abs':False})
         self.assertIsNone(self.live.radio.get(event['id'],self.t))
         self.assertIsNone(self.pit(31,abs_setting=8))
+
+    def test_documented_dry_abs_bands_reach_the_pit_reminder(self):
+        bands = {
+            (1, 6): ('amvantageevogt3','audir8lmsevo2gt3','bmwm4gt3','chevyvettez06rgt3',
+                     'lamborghinievogt3','porsche992rgt3'),
+            (2, 7): ('acuransxevo22gt3','ferrari296gt3','fordmustanggt3','mclaren720sgt3'),
+            (7, 11): ('mercedesamgevogt3',),
+        }
+        for (low, high), cars in bands.items():
+            for car in cars:
+                with self.subTest(car=car):
+                    self.car['car_path'] = car
+                    self.assertEqual(DRY_ABS[car], range(low, high+1))
+                    self.assertEqual(self.pit(30.2, abs_setting=high)['text'], WET_CHECK)
+                    self.assertIsNone(self.pit(.1, abs_setting=high+1))
+        self.assertIsNone(self.pit(31, abs_setting=6))  # unclassified AMG position
+
+    def test_rules_disabling_abs_veto_a_dry_map_on_wets(self):
+        self.car['car_path'] = 'mercedesamgevogt3'
+        for rule in ('NOABS', 'NOABSTC'):
+            self.rule = rule
+            self.assertIsNone(self.pit(31, abs_setting=9))
+        self.rule = 'NOTC'
+        self.assertEqual(self.pit(30.2, abs_setting=9)['text'], WET_CHECK)
+        self.assertIsNone(bias_ticks('mercedesamgevogt3', 50.25))
+        self.assertIsNone(bias_ticks('porsche992rgt3', 49.515144348))
 
     def test_wet_map_waits_for_a_clear_learned_straight_and_withdraws_in_traffic(self):
         radio=self.live.radio

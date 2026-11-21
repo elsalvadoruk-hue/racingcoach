@@ -23,6 +23,7 @@ class WheelspinTests(unittest.TestCase):
         self.live.driving_audio_ready = lambda _:True
         self.car = dict(game='iracing',car_path='bmwm4gt3',track_id='123')
         self.session = 'Race'
+        self.rule = ''
 
     def drive(self, change=lambda s,n,i:None, *, until=4):
         seen=[]
@@ -41,7 +42,7 @@ class WheelspinTests(unittest.TestCase):
                    RR_wheel_speed=44. if power else 40.,tire_compound=0,track_temp_c=23.,track_wetness=1,
                    setup_fixed=False,tc_setting=3 if n==1 and i<55 else 2,incidents=0)
             change(s,n,i)
-            race=dict(player_idx=0,sample_time=self.t,session_type=self.session,track_length_m=2400,
+            race=dict(player_idx=0,sample_time=self.t,session_type=self.session,track_length_m=2400,car_rule_set=self.rule,
                       cars=[dict(idx=0,track_surface=3,on_pit_road=False,distance_pct=p,lap_completed=n-1,
                                  class_est_lap_s=60.)]) if tick%10==0 or tick==1 else None
             if race and s.get('car_ahead_m')==80.:
@@ -127,6 +128,29 @@ class WheelspinTests(unittest.TestCase):
                 self.car['car_path']=car
                 event=self.drive(lambda s,n,i:s.update(setup_fixed=fixed,tc_setting=first if n==1 and i<55 else normal))
                 self.assertEqual(event['text'],'9번 코너. '+SYMPTOM)
+
+    def test_new_gt3_models_offer_only_a_stronger_observed_map(self):
+        for car in ('acuransxevo22gt3', 'amvantageevogt3', 'audir8lmsevo2gt3', 'chevyvettez06rgt3',
+                    'ferrari296gt3', 'fordmustanggt3', 'lamborghinievogt3', 'mercedesamgevogt3', 'porsche992rgt3'):
+            with self.subTest(car=car):
+                self.setUp()
+                self.car['car_path'] = car
+                current = 4 if car == 'mercedesamgevogt3' else 2
+                event = self.drive(lambda s,n,i: s.update(tc_setting=3 if n==1 and i<55 else current))
+                self.assertEqual(event['text'], '9번 코너. '+trial(3))
+
+    def test_duplicate_off_unrecorded_and_disabled_maps_only_report_measured_slip(self):
+        for car, current, seen, rule in (
+                ('lamborghinievogt3', 10, 11, ''), ('lamborghinievogt3', 11, 12, ''),
+                ('mercedesamgevogt3', 2, 1, ''), ('mercedesamgevogt3', 11, 12, ''),
+                ('porsche992rgt3', 0, 1, ''), ('ferrari296gt3', 2, 3, 'NOTC'),
+                ('audir8lmsevo2gt3', 2, 3, 'NOABSTC')):
+            with self.subTest(car=car, current=current, rule=rule):
+                self.setUp()
+                self.car['car_path'] = car
+                self.rule = rule
+                event = self.drive(lambda s,n,i: s.update(tc_setting=seen if n==1 and i<55 else current))
+                self.assertEqual(event['text'], '9번 코너. '+SYMPTOM)
 
     def test_missing_corner_recording_unknown_location_game_and_session(self):
         for reason in ('missing_audio','unnamed','other_car','lmu','practice'):

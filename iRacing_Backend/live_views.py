@@ -10,6 +10,11 @@ logger=logging.getLogger('iRacingLive')
 
 
 class LiveViews:
+    def _controls_view(self):
+        view = self.controls.view()
+        view['advice'] = [a for a in view['advice'] if self.radio.control_available(a.get('control'))]
+        return view
+
     def prepare_overlay(self, identity, sample, length):
         """Session metadata only; garage/spectator pedals never enter driving buffers."""
         with self.lock:
@@ -135,7 +140,7 @@ class LiveViews:
                     'wheel_observation': wheel_view(latest, self.game),
                     'corner_coach': self.corners.view(),
                     'driving_learning': self.driving_learning.view(),
-                    'controls': self.controls.view(),
+                    'controls': self._controls_view(),
                     'control_recommendation': self.corner_controls.view() or self.control_recommendations.view(),
                     'setup_controls': self.setup_advisor.view(latest),
                     'radio': {'briefing': self.radio.briefing(), 'capabilities': self.radio.capabilities(),

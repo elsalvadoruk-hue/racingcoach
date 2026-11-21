@@ -8,6 +8,7 @@ from radio_policy import report_window
 from radio_audio import CALLS, speech_fields
 from spotter_context import estimated_gap_s, TrafficApproach
 import radio_phrases
+from setup_capabilities import GT3
 from voice_alerts import category
 
 # LMU virtual energy calls. The unit (0-1 fraction, lmu_irsdk.virtual_energy_pct) was checked
@@ -118,6 +119,7 @@ def read_race(sdk, names, session_num):
     data.update(game=getattr(sdk, 'game', 'iracing'), session_type=session.get('SessionType'), total_laps=limit_value(session.get('SessionLaps')),
                 player_idx=info.get('DriverCarIdx'), tank_capacity_l=tank_capacity(info))
     weekend = metadata('WeekendInfo')
+    data['car_rule_set'] = ''
     options = weekend.get('WeekendOptions') or metadata('WeekendOptions')
     data['incident_limit'] = limit_value(options.get('IncidentLimit')) if isinstance(options, dict) else None
     tires = [t for t in (info.get('DriverTires') or []) if isinstance(t, dict)]
@@ -137,6 +139,8 @@ def read_race(sdk, names, session_num):
         idx = driver.get('CarIdx')
         if not isinstance(idx, int) or idx < 0 or driver.get('IsSpectator'):
             continue
+        if idx == data['player_idx'] and data['game'] == 'iracing' and driver.get('CarPath') in GT3:
+            data['car_rule_set'] = str(weekend.get('AltAssetTag') or '').strip().upper()
         car = {'idx': idx, 'name': driver.get('UserName') or f'차량 {idx}', 'number': driver.get('CarNumber'), 'class_id': driver.get('CarClassID'),
                'is_pace_car': bool(driver.get('CarIsPaceCar')),
                'is_ai': bool(driver.get('CarIsAI')),

@@ -143,6 +143,15 @@ class RaceTests(unittest.TestCase):
         self.assertIsNone(result['cars'][0]['last_lap_s'])
         self.assertIsNone(result['cars'][0]['on_pit_road'])
 
+    def test_sporting_rules_read_from_weekend_asset_tag(self):
+        weekend = {'AltAssetTag': 'NoAbsTc', 'DCRuleSet': 'None'}
+        driver = {'CarIdx': 0, 'CarPath': 'mercedesamgevogt3'}
+        sdk = {'WeekendInfo': weekend, 'DriverInfo': {'DriverCarIdx': 0, 'Drivers': [driver]}}
+        self.assertEqual(read_race(sdk, [], 0)['car_rule_set'], 'NOABSTC')
+        driver['CarPath'] = 'unknown'
+        self.assertEqual(read_race(sdk, [], 0)['car_rule_set'], '')
+        self.assertEqual(read_race({}, [], 0)['car_rule_set'], '')
+
     def test_each_driver_brings_a_rating_and_the_pace_car_none(self):
         sdk = {'DriverInfo': {'DriverCarIdx': 1, 'Drivers': [
             {'CarIdx': 0, 'CarIsPaceCar': 1, 'IRating': 0}, {'CarIdx': 1, 'CarClassID': 10, 'IRating': 2412},

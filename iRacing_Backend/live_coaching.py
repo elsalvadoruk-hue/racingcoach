@@ -67,6 +67,8 @@ class LiveCoaching:
             named_corners = any(d.get('call') for d in self.corners.definitions)
             self.radio.control_advice_allowed=not named_corners and len(self.controls.laps)>=LAPS_NEEDED
             dispatch = self.control_recommendations
+            if dispatch.active and not self.radio.control_available(dispatch.active.get('control')):
+                dispatch.active = None
             capabilities = dispatch.capabilities(sample)
             dispatch.observe(sample, now, {e['id'] for e in self.radio.pending
                                           if e['expires_at'] > now and e['run_id'] == self.run_id})

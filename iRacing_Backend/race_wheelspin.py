@@ -7,9 +7,22 @@ from live_corners import call_seconds
 from radio_policy import quiet_window
 
 
-# Increasing intervention, excluding the OFF position. Fitted tires can restrict
-# these ranges further. A trial also requires a measured setting on this tire.
-MAPS = {'bmwm4gt3': range(1, 10), 'mclaren720sgt3': range(2, 13)}
+# Ordered by increasing intervention. See the per-car manuals in 피트월-설정추천과-경기결과.md.
+# These are candidate positions only. The next position must also have been used on this tire.
+MAPS = {
+    'acuransxevo22gt3': range(2, 13),
+    'amvantageevogt3': range(1, 12),
+    'audir8lmsevo2gt3': range(1, 12),
+    'bmwm4gt3': range(1, 10),
+    'chevyvettez06rgt3': range(1, 12),
+    'ferrari296gt3': range(2, 13),
+    'fordmustanggt3': range(2, 13),
+    'lamborghinievogt3': range(1, 11),  # 11 duplicates 10, 12 is OFF.
+    'mclaren720sgt3': range(2, 13),
+    'mercedesamgevogt3': range(11, 0, -1),
+    'porsche992rgt3': range(1, 13),  # Positive through our last recording, not a physical upper limit.
+}
+TRIAL_LEVELS = range(2, 13)
 KEY = 'control_tc_wheelspin'
 SYMPTOM = '가속 때 뒷바퀴가 자꾸 헛돕니다.'
 
@@ -23,7 +36,7 @@ def trial(level, crossed_line=False):
 def voice_catalog():
     # Other confirmed corner names may have a corresponding custom recording.
     return ([f'{n}번 코너.' for n in range(1, 31)] + ['YOKOHAMA-S.', SYMPTOM]
-            + [trial(n,crossed) for crossed in (False,True) for n in range(2, 13)])
+            + [trial(n,crossed) for crossed in (False,True) for n in TRIAL_LEVELS])
 
 
 class RaceWheelspin:
@@ -131,7 +144,9 @@ class RaceWheelspin:
                  and not int(s['session_flags']) & 0xC119 and not impaired(s)
                  and speed is not None and speed>15 and compound is not None and compound>=0
                  and wet is not None and wet>0 and temp is not None and level is not None and level>=0 and level.is_integer())
-        verified = level if clean and s.get('setup_fixed') is False and level in MAPS[car] else None
+        positions = MAPS[car]
+        adjustable = s.get('setup_fixed') is False and radio.control_available('tc')
+        verified = level if clean and adjustable and level in positions else None
         if gap or verified != self.map_value:
             self.map_value, self.map_since = verified, t
         if verified is not None and t-self.map_since>=1:
@@ -176,7 +191,9 @@ class RaceWheelspin:
                 continue
             crossed = lap>n
             has_next = crossed or not (int(s['session_flags']) & 2 or s.get('session_laps_remaining') in (0,1))
-            target = int(level+1) if has_next and verified is not None and level+1 in self.observed[compound] else None
+            target = int(verified) + positions.step if verified is not None and has_next else None
+            if target not in TRIAL_LEVELS or target not in positions or target not in self.observed[compound]:
+                target = None
             action = trial(target,crossed) if target is not None else SYMPTOM
             parts = [row['call']+'.', action]
             if target is not None and (not self._window(s,now,radio,' '.join(parts)) or not ready(action)):
@@ -207,6 +224,7 @@ class RaceWheelspin:
         offer = self.offers.get(key)
         return (offer is not None and offer['row']['key'][1]==n and now<offer['until']
                 and (target is None or s.get('setup_fixed') is False and s.get('lap_number')==spoken_lap
+                     and radio.control_available('tc')
                      and (spoken_lap>n or not (int(s.get('session_flags') or 0)&2 or s.get('session_laps_remaining') in (0,1))))
                 and self._window(s,now,radio,text))
 

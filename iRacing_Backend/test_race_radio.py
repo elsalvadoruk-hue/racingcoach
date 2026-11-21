@@ -42,6 +42,23 @@ class RaceRadioTests(unittest.TestCase):
     def keys(self):
         return [e['key'] for e in self.events()]
 
+    def test_gt3_rules_filter_corner_and_general_adjustments_before_delivery(self):
+        self.tick(tc_setting=4)
+        self.radio.control_advice_allowed = True
+        event = self.radio.emit('control_tc_more', self.now, 'TC', group='control_advice',
+                                condition=('control_setting', ('tc', 4)), cooldown=0)
+        self.assertIsNotNone(self.radio.get(event['id'], self.now))
+        self.meta['car_rule_set'] = 'NOTC'
+        self.tick()
+        self.assertFalse(self.radio.allows('control_tc_more'))
+        self.assertTrue(self.radio.allows('control_abs_more'))
+        self.assertIsNone(self.radio.get(event['id'], self.now))
+        self.meta['car_rule_set'] = 'NOABSTC'
+        self.tick()
+        self.assertFalse(self.radio.allows('control_abs_more'))
+        self.assertTrue(self.radio.allows('control_tc_wheelspin'))
+        self.assertTrue(self.radio.allows('control_bias_forward'))
+
     def test_basic_flags_and_personal_penalty_without_inventing_reason(self):
         self.tick(session_flags=0x10000 | 0x20 | 0x8)
         self.assertEqual(set(self.keys()), {'black', 'yellow'})       # blue only once it has stayed up

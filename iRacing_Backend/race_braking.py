@@ -10,7 +10,19 @@ from radio_policy import quiet_window
 
 # Bias increments are percentage points. ABS bands exclude the car's OFF position.
 BIAS_STEP = {'bmwm4gt3': 25, 'mclaren720sgt3': 20}  # hundredths of a point
-DRY_ABS = {'bmwm4gt3': range(1, 7), 'mclaren720sgt3': range(2, 8)}
+DRY_ABS = {
+    'acuransxevo22gt3': range(2, 8),
+    'amvantageevogt3': range(1, 7),
+    'audir8lmsevo2gt3': range(1, 7),
+    'bmwm4gt3': range(1, 7),
+    'chevyvettez06rgt3': range(1, 7),
+    'ferrari296gt3': range(2, 8),
+    'fordmustanggt3': range(2, 8),
+    'lamborghinievogt3': range(1, 7),
+    'mclaren720sgt3': range(2, 8),
+    'mercedesamgevogt3': range(7, 12),  # 1–5 wet, 6 unspecified, 12 OFF.
+    'porsche992rgt3': range(1, 7),
+}
 WET_CHECK = '웨트 ABS 맵 확인.'
 ABS_KEY = 'control_abs_wet_map'
 BIAS_KEY = 'control_bias_corner'
@@ -216,6 +228,7 @@ class WetAbsReminder:
         tire = finite(s.get('tire_compound'))
         mismatch = (car in DRY_ABS and str(radio.metadata.get('session_type') or '').lower()=='race' and not radio.result
                     and s.get('on_track') is True and s.get('is_replay') is False and s.get('session_state')==4
+                    and radio.control_available('abs')
                     and s.get('setup_fixed') is False and tire is not None and tire>=0 and
                     tire in (radio.metadata.get('wet_compounds') or ()) and s.get('track_wetness') in (4,5,6,7)
                     and level in DRY_ABS[car])
@@ -257,6 +270,7 @@ class WetAbsReminder:
 
     def valid(self,s,radio,now):
         if (self.episode is None or self.mode is None or self.last!=s.get('session_time')
+                or not radio.control_available('abs')
                 or self.last-self.stable<30 or self.last-self.window_since<1):
             return False
         if self.mode=='pit':

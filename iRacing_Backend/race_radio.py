@@ -199,7 +199,17 @@ class RaceRadio:
         # Remove the whole old composition, including in-flight render sources. Re-enabling cannot revive it.
         self.pending = deque((e for e in self.pending if not changed.intersection(e.get('alert_categories') or [category(e['key'])])), maxlen=48)
 
+    def control_available(self, control):
+        rule = self.metadata.get('car_rule_set')
+        if control == 'tc':
+            return rule not in ('NOTC', 'NOABSTC')
+        if control == 'abs':
+            return rule not in ('NOABS', 'NOABSTC')
+        return True
+
     def allows(self, key):
+        if key in ('control_tc_more', 'control_abs_more') and not self.control_available(key.split('_')[1]):
+            return False
         return allowed(category(key), self.alerts, self.wall_alerts)
 
     def _race_start_allowed(self):
@@ -895,6 +905,8 @@ class RaceRadio:
             return getattr(self,'corner_bias_valid',lambda *_:False)(value, now)
         if kind == 'control_setting':
             from control_recommendations import FIELDS
+            if not self.control_available(value[0]):
+                return False
             field=(value[2] if len(value)>2 else None) or FIELDS.get(value[0])
             recommendation = event.get('control_recommendation', {})
             if recommendation.get('timing') == 'pit' and not self.pit_trial_due(s):
