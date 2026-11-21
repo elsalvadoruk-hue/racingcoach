@@ -15,6 +15,7 @@ so tests and one-off scripts can still point somewhere else.
 import json
 import os
 from pathlib import Path
+import threading
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = Path(__file__).resolve().parent
@@ -22,7 +23,8 @@ LOCATION_FILE = ROOT / 'data-location.txt'
 SETTINGS_NAME, KEY_NAME, TOKEN_NAME = 'settings.json', 'gcp-key.json', 'garage61_api_token.txt'
 # What the screen may change. Secrets (the key, the token) are files of their own and are never read back.
 DEFAULTS = {'telemetry_dirs': [], 'gcp_project_id': '', 'gcp_location': 'global', 'speech_region': 'us',
-            'garage61_selection_mode': 'MATCHED'}
+            'garage61_selection_mode': 'MATCHED', 'recording_memory_saver': True}
+_SAVE_LOCK = threading.Lock()
 
 
 def data_dir():
@@ -55,6 +57,8 @@ def load():
     if isinstance(saved, dict):
         if saved.get('garage61_selection_mode') in ('MATCHED', 'FASTEST'):
             result['garage61_selection_mode'] = saved['garage61_selection_mode']
+        if type(saved.get('recording_memory_saver')) is bool:
+            result['recording_memory_saver'] = saved['recording_memory_saver']
         folders = saved.get('telemetry_dirs')
         if isinstance(folders, list):
             result['telemetry_dirs'] = [str(item).strip() for item in folders if isinstance(item, str) and item.strip()][:12]
@@ -66,16 +70,17 @@ def load():
 
 def save(values):
     """Store the settings the screen sent; unknown names are dropped. Returns what was stored."""
-    current = load()
-    for name in DEFAULTS:
-        if name in values and values[name] is not None:
-            current[name] = values[name]
-    folder = data_dir()
-    folder.mkdir(parents=True, exist_ok=True)
-    temporary = folder / (SETTINGS_NAME + '.tmp')
-    temporary.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding='utf-8')
-    temporary.replace(folder / SETTINGS_NAME)
-    return load()
+    with _SAVE_LOCK:
+        current = load()
+        for name in DEFAULTS:
+            if name in values and values[name] is not None:
+                current[name] = values[name]
+        folder = data_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        temporary = folder / (SETTINGS_NAME + '.tmp')
+        temporary.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding='utf-8')
+        temporary.replace(folder / SETTINGS_NAME)
+        return load()
 
 
 def key_path():

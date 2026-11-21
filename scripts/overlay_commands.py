@@ -14,6 +14,20 @@ else:
 # Keep receipt jitter below a quarter of the 30 Hz telemetry interval. Live
 # packets paint on receipt instead of waiting for a second animation timer.
 COMMAND_POLL_INTERVAL_MS = 8
+COMPARISON_FIELDS = ('offset', 'brake', 'throttle', 'break', 'steering_deg')
+
+
+def merge_display_patch(previous, changes):
+    changes = dict(changes)
+    if 'point_patch' in changes:
+        drop, new = changes.pop('point_patch')
+        changes['points'] = previous['points'][drop:] + new
+    if 'comparison_rows' in changes:
+        changes['comparison'] = {
+            key: [dict(zip(COMPARISON_FIELDS, row)) for row in rows]
+            for key, rows in changes.pop('comparison_rows').items()
+        }
+    return {**previous, **changes}
 
 
 class OverlayCommands:
@@ -47,6 +61,10 @@ class OverlayCommands:
                 action, values = command.get("action"), command.get("values", {})
                 if action == 'display':
                     self.display(values)
+                elif action == 'display_patch':
+                    if self.display_mode != 'live' or not self.hud_visible or not self.live_view:
+                        raise ValueError('Live display baseline missing')
+                    self.display(merge_display_patch(self.live_view, values))
                 elif action == 'studio':
                     self.studio_config = values['config']
                     self.studio_session = values['session']

@@ -27,7 +27,7 @@ def analysis_state_summary(state):
 @asynccontextmanager
 async def managed_lifespan(live, overlay, warm_references, tire_overlay=None):
     live.start()
-    overlay.start_monitor(live.overlay_state)
+    overlay.start_monitor(live.overlay_state, lambda detail=False: live.overlay_state(detail=detail, graph=False))
     # Reference checks remain in the background; first analysis never waits.
     threading.Thread(target=warm_references, name="garage61-check", daemon=True).start()
     try:

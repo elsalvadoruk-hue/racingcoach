@@ -413,15 +413,18 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
     QUALI_BRIEFS = ('corner', 'delta', 'theoretical')   # existing lap coaching in both kinds; open traffic has a separate measured advisor
 
 
-    def spotter_status(self, after=0):
+    def spotter_status(self, after=0, *, should_publish=None):
         # The fast event path does not copy the 180-second coaching buffer.
         with self.lock:
-            view = self.spotter.view(self.clock(), after, connected=self.state == 'CONNECTED')
+            now = self.clock()
+            view = self.spotter.view(now, after, connected=self.state == 'CONNECTED')
+            if should_publish is not None and not should_publish(view):
+                return None
             view['game'] = self.game if self.state == 'CONNECTED' else None
-            view['radio'] = self.radio.view(self.clock()) if self.state == 'CONNECTED' else {'connected': False, 'events': [], 'history': [], 'capabilities': {}}
+            view['radio'] = self.radio.view(now) if self.state == 'CONNECTED' else {'connected': False, 'events': [], 'history': [], 'capabilities': {}}
             view['settings'] = self.spotter_settings()
-            view['banter_shadow'] = self.banter.view(self.clock()) if self.state == 'CONNECTED' else []
-            view['oval_shadow'] = self.oval_procedures.view(self.clock()) if self.state == 'CONNECTED' else []
+            view['banter_shadow'] = self.banter.view(now) if self.state == 'CONNECTED' else []
+            view['oval_shadow'] = self.oval_procedures.view(now) if self.state == 'CONNECTED' else []
             # Only the beeps travel on the fast path; the attempts table is read with /drill.
             view['drill'] = {'active': self.drill.plan is not None, 'serial': self.drill.serial, 'events': self.drill.events[-6:]}
             return view

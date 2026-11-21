@@ -10,8 +10,8 @@ import LmuSettingsPanel from './LmuSettingsPanel';
 import LmuComingSoon from './LmuComingSoon';
 import LmuHistoryPanel from './LmuHistoryPanel';
 import { AudioPreferences } from './RuntimePreview';
-import { UserManual } from '../components/HelpGuide';
-import { LMU_SECTIONS } from '../components/helpLmu';
+import ManualWorkspace from '../components/ManualWorkspace';
+import PerformanceSettings from '../components/PerformanceSettings';
 import SessionLogExport from '../components/SessionLogExport';
 import { GameSettingsNotice } from '../lib/gameContext';
 
@@ -78,12 +78,11 @@ function LmuWorkspaceOverview({ workspace, onChooseSource, onNavigate, analysisW
   const title = { settings: '설정', guide: 'LMU 사용 가이드' }[workspace];
   return <section className="wide-workspace" aria-label={`LMU ${title}`}>
     <div className="wide-heading"><div><h2>{title}</h2><p>LMU 기록 파일 분석과 실시간 음성 코치 설정입니다.</p></div>{onChooseSource && <Button variant="outline" onClick={onChooseSource}>주행 선택</Button>}</div>
-    {workspace === 'guide' && <UserManual sections={LMU_SECTIONS} heading="LMU 사용법"
-      intro="iRacing과 다른 점은 1장, 처음 연결은 2장, 주행 중 음성은 6~10장, 폴더와 게임별 설정은 15장을 보세요."
-      emptyHint="주행 분석이 없어도 매뉴얼을 읽을 수 있습니다. 기능을 사용하려면 LMU DuckDB 주행 파일을 선택하세요."
+    {workspace === 'guide' && <ManualWorkspace game="lmu"
       hasAnalysis={!!analysisWorkspace.analysis} onNavigate={onNavigate} />}
     {workspace === 'settings' && <>
       <GameSettingsNotice />
+      <Card><CardHeader><CardTitle>성능</CardTitle></CardHeader><CardContent><PerformanceSettings apiBase={API_BASE} /></CardContent></Card>
       <LmuBridgePanel />
       <LmuSettingsPanel onChooseSource={onChooseSource} />
       {runtime?.supported !== false && <AudioPreferences runtime={runtime} />}

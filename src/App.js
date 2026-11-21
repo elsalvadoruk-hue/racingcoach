@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAnalysisWorkspace } from './analysis/useAnalysisWorkspace';
 import { API_BASE } from './analysis/analysisClient';
 import { SessionModeChangeDialog } from './analysis/WorkspaceUi';
@@ -6,6 +6,7 @@ import CornerLab from './desktop/CornerLab';
 import { DesktopRuntimeProvider } from './desktop/RuntimePreview';
 import './desktop/lab.css';
 import { HelpLayer } from './components/HelpGuide';
+import { loadManual, manualOnOpen } from './components/manualLoading';
 import UpdateCenter from './components/UpdateCenter';
 import { selectGame } from './desktop/sessionData';
 import { useLmuWorkspace } from './analysis/useLmuWorkspace';
@@ -26,6 +27,9 @@ export default function App() {
     document.documentElement.dataset.game = next;
     setGame(next);
   };
+  useEffect(() => {
+    if (!manualOnOpen()) loadManual(game).catch(() => { /* The guide retries when opened. */ });
+  }, [game]);
   return <GameContext.Provider value={{ selectedGame: game, liveGame, activeGame: liveGame ?? game, setLiveGame }}>
     {game === 'lmu' ? <LmuApp onGameChange={changeGame} /> : <IracingApp onGameChange={changeGame} />}
   </GameContext.Provider>;

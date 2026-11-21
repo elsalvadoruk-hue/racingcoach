@@ -11,6 +11,7 @@ import { createRadioAttempt, radioDiagnostic, createRadioWait, observeRadioWait,
 const SETTINGS_KEY = 'iracing.spotter.settings';
 export const RADIO_RENDER_TIMEOUT_MS = 8000;
 const MAX_PLAYBACK_ATTEMPTS = 3;
+const PREPARE_HEADERS = { 'Content-Type': 'application/json', Accept: 'application/json; spotter=compact' };
 const MISSING_SPOTTER_AUDIO = '스포터 음원을 찾지 못했습니다. 스포터를 껐다 켜서 다시 준비해 주세요.';
 export const SPOTTER_VOICES = [['Fenrir', '남성 · 기본'], ['Algieba', '남성'], ['Schedar', '남성'], ['Aoede', '여성']];
 const DEFAULT_SETTINGS = { voice: 'Fenrir', formation_calls: 5, repeat_seconds: 3, clear_delay: .15, traffic_enabled: true, pit_box_enabled: false };
@@ -30,6 +31,31 @@ const savedSettings = game => {
 const storeSettings = (game, value) => writeGameItem(SETTINGS_KEY, game, JSON.stringify(value));
 
 const occupied = (frame, alerts) => frame.occupied && alerts?.overlap !== false;
+
+function restorePreparedClips(manifest) {
+  for (const clip of Object.values(manifest.clips || {})) {
+    if (clip.audio_base64 === undefined && clip.variants?.[0]?.audio_base64) {
+      clip.audio_base64 = clip.variants[0].audio_base64;
+    }
+  }
+  return manifest;
+}
+
+function restoreSpotterFrame(frame, previous) {
+  const radio = frame.radio;
+  if (!Object.hasOwn(frame, 'settings')) frame.settings = previous?.settings;
+  if (!Object.hasOwn(radio, 'traffic')) {
+    if (previous?.radio?.traffic) radio.traffic = previous.radio.traffic;
+  } else if (radio.traffic === null) {
+    delete radio.traffic;
+  } else {
+    const { columns, rows, ...traffic } = radio.traffic;
+    const nearby = rows.map(values => Object.fromEntries(columns.map((key, index) => [key, values[index]])));
+    radio.traffic = { ...traffic, nearby, ahead: nearby.find(car => car.side === 'ahead') ?? null,
+      behind: nearby.find(car => car.side === 'behind') ?? null };
+  }
+  return frame;
+}
 // Optional oval clips never trigger a fetch or synthesis. Older packs keep their side calls.
 const overlapClip = (clips, key, audioKey, variant, chooseReviewed) => {
   const clip = (audioKey && clips?.[audioKey]?.audio_base64 ? clips[audioKey] : clips?.[key]);
@@ -177,8 +203,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     try {
       if (!clips.current || clipsRevision.current !== library.revision) {
         const response = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
-          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...applied.current, wall_alerts: output.current.wallAlerts }) });
-        const manifest = await response.json();
+          headers: PREPARE_HEADERS, body: JSON.stringify({ ...applied.current, wall_alerts: output.current.wallAlerts }) });
+        const manifest = restorePreparedClips(await response.json());
         if (!response.ok) throw new Error(manifest.detail || '스포터 음성 준비 실패');
         if (!manifest.clips?.test?.audio_base64) throw new Error('스포터 음성을 확인하지 못했습니다.');
         if (!mounted.current || ticket !== epoch.current) return;
@@ -208,8 +234,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         await library.trackSelection(async () => {
         if (enabled) {
           const response = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
-            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...next, wall_alerts: output.current.wallAlerts }) });
-          const manifest = await response.json();
+            headers: PREPARE_HEADERS, body: JSON.stringify({ ...next, wall_alerts: output.current.wallAlerts }) });
+          const manifest = restorePreparedClips(await response.json());
           if (!response.ok || !manifest.clips?.test?.audio_base64) throw new Error(manifest.detail || '이 목소리의 스포터 음성을 준비하지 못했습니다.');
           if (!mounted.current || ticket !== epoch.current) return;
           clips.current = manifest.clips;
@@ -251,8 +277,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         if (!mounted.current || ticket !== epoch.current) return;
         if (enabled) {
           const prepared = await fetch(`${apiBase}/api/live-coach/spotter/prepare`, { method: 'POST',
-            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...applied.current, wall_alerts: output.current.wallAlerts }) });
-          const manifest = await prepared.json();
+            headers: PREPARE_HEADERS, body: JSON.stringify({ ...applied.current, wall_alerts: output.current.wallAlerts }) });
+          const manifest = restorePreparedClips(await prepared.json());
           if (!prepared.ok || !manifest.clips?.test?.audio_base64) throw new Error('스포터 음성을 확인하지 못했습니다.');
           if (!mounted.current || ticket !== epoch.current) return;
           clips.current = manifest.clips;
@@ -579,12 +605,22 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     const connect = () => {
       const url = new URL(`${apiBase}/api/live-coach/spotter/events`);
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      url.searchParams.set('compact', '1');
+      let compact = false, previousFrame = null;
       socket = new WebSocket(url.href); lastFrame.current = Date.now(); serverOffset = null; lastSerial = -1;
       socket.onmessage = ({ data }) => {
         if (stopped || ticket !== epoch.current) return;
         let frame;
         try { frame = JSON.parse(data); } catch { return; }
         if (!['ready', 'spotter'].includes(frame.type)) return;
+        if (frame.type === 'ready') {
+          compact = frame.compact === true;
+          previousFrame = null;
+        }
+        if (compact) {
+          frame = restoreSpotterFrame(frame, previousFrame);
+          previousFrame = frame;
+        }
         const radioEvents = (frame.radio?.events || []).filter(e =>
           e.group === 'race_plan' ? output.current.racePlanEnabled : enabled || (planOnly && e.group === 'control_advice'));
         if (frame.radio) frame = { ...frame, radio: { ...frame.radio, events: radioEvents } };

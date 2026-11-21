@@ -301,7 +301,7 @@ try:
     MEMORY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 except OSError as exc:
     logger.warning("Could not create the data folder: %s", exc)
-APP_VERSION = "2.5.10"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
+APP_VERSION = "2.5.11"   # the first version made to be shared was 1.0.0 (2026-10-12); earlier numbers were internal
 
 
 def _configured_external_reference_dir() -> Path:
@@ -1107,7 +1107,15 @@ class TelemetryRepository(_TelemetryRepository):
         super().__init__(max_files, reader_factory=recording_reader)
 
 
+RECORDING_CACHE_BUDGET_BYTES = 512 * 1024**2
 repository = TelemetryRepository()
+
+
+def apply_recording_memory_saver(enabled: bool) -> None:
+    repository.set_byte_budget(RECORDING_CACHE_BUDGET_BYTES if enabled else None)
+
+
+apply_recording_memory_saver(app_settings.load()["recording_memory_saver"])
 
 _FILE_VISIBILITY_LOCK = threading.RLock()
 _FILE_VISIBILITY_CACHE: OrderedDict[tuple[str, int, int], dict[str, Any]] = OrderedDict()
@@ -4181,6 +4189,8 @@ async def load_analysis(request: AnalyzeRequest, *, update_current_analysis: boo
             result["voice_review"] = {"notes": [], "pending": [], "error": "대화 기록 연결을 완료하지 못했습니다. 기록은 유지됩니다."}
         result = await add_ai_briefing(result, request)
         if update_current_analysis:
+            if parsed_telemetry is None:
+                repository.select(telemetry)
             shared_sync_state["last_analysis_time"] = time.time()
             shared_sync_state["analysis_result"] = result
             shared_sync_state["file_signature"] = telemetry.signature
@@ -4205,6 +4215,7 @@ def _reload_settings() -> None:
     """Take the saved settings into the running app: folders, project, key and the clients built on them."""
     global TELEMETRY_DIRS, ai_client
     app_settings.apply_environment(force=True)
+    apply_recording_memory_saver(app_settings.load()["recording_memory_saver"])
     TELEMETRY_DIRS = _configured_telemetry_dirs()
     ai_client = _connect_ai()
     voice_coach.ai_client = ai_client
@@ -4380,6 +4391,7 @@ _handlers = register_settings_routes(app, SettingsRoutesServices(
     app_settings_view=lambda *args, **kwargs: app_settings_view(*args, **kwargs),
     get_voice_note_store=lambda: voice_note_store,
     get_session_log_extras=lambda defer=False: session_log_extras(defer),
+    apply_recording_memory_saver=apply_recording_memory_saver,
 ))
 get_app_settings = _handlers.get_app_settings
 put_app_settings = _handlers.put_app_settings

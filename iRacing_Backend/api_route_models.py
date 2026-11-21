@@ -11,6 +11,10 @@ class AppSettingsBody(BaseModel):
     speech_region: Optional[str] = Field(default=None, max_length=20)
 
 
+class PerformanceSettingsBody(BaseModel):
+    recording_memory_saver: bool = Field(strict=True)
+
+
 class SecretBody(BaseModel):
     value: str = Field(min_length=1, max_length=20000)
 

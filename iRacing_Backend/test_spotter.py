@@ -275,14 +275,28 @@ class SpotterAudioTests(unittest.TestCase):
         app = FastAPI()
         register_voice_routes(app, coach, None, None, None, None)
         with TestClient(app) as client:
-            self.assertEqual(client.post('/api/live-coach/spotter/prepare').status_code, 200)
+            url = '/api/live-coach/spotter/prepare'
+            legacy = client.post(url)
+            self.assertEqual(legacy.status_code, 200)
             self.speech.synthesize.reset_mock()
-            self.assertEqual(client.post('/api/live-coach/spotter/prepare').status_code, 200)
+            compact = client.post(url, headers={'Accept': 'application/json; spotter=compact'})
+            self.assertEqual(compact.status_code, 200)
+            self.assertLess(len(compact.content), len(legacy.content))
+            restored = compact.json()
+            for clip in restored['clips'].values():
+                if 'audio_base64' not in clip:
+                    clip['audio_base64'] = clip['variants'][0]['audio_base64']
+            self.assertEqual(restored, legacy.json())
             with client.websocket_connect('/api/live-coach/spotter/events') as socket:
                 ready = socket.receive_json()
                 self.assertEqual(ready['type'], 'ready')
                 self.assertFalse(ready['active'])
                 self.assertEqual(socket.receive_json()['type'], 'spotter')
+            with client.websocket_connect('/api/live-coach/spotter/events?compact=1') as socket:
+                self.assertTrue(socket.receive_json()['compact'])
+                frame = socket.receive_json()
+                self.assertNotIn('settings', frame)
+                self.assertEqual(frame['radio']['events'], [])
             self.speech.synthesize.assert_not_called()
             self.assertEqual(store.list(), [])
 

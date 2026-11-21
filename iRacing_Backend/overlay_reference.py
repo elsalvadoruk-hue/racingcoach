@@ -362,7 +362,7 @@ class OverlayReference:
         active = driving(view) and (view.get('snapshot') or {}).get('on_pit_road') is False
         if driving(view) and (view.get('snapshot') or {}).get('on_pit_road') is True:
             status = {**status, 'state': 'PIT', 'message': '피트로드 · 기준 준비 중' if reference is None else '피트로드 · 기준 준비됨'}
-        return {**view, 'reference_status': status,
+        return {**view, 'reference_status': status, '_aligned_reference': reference,
                 'diagnostics': self.diagnostics.build(reference, view),
                 'card_window': reference_clearance(reference, view) if reference and active else None,
                 'comparison': reference.window(view) if reference and active else None,

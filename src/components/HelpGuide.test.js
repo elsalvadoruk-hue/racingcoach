@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { HelpHint, HelpLayer, UserManual } from './HelpGuide';
+import { HelpHint, HelpLayer } from './HelpGuide';
+import UserManual from './IracingManual';
 
 beforeEach(() => {
   jest.spyOn(Element.prototype, 'getClientRects').mockReturnValue([{ width: 28, height: 28 }]);

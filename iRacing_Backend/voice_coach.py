@@ -47,6 +47,39 @@ VOCABULARY = ['언더스티어', '오버스티어', '브레이크 바이어스',
 logger = logging.getLogger('iRacingVoiceCoach')
 DEFAULT_TTS_VOICE = 'ko-KR-Chirp3-HD-Algenib'
 NO_THINKING_MODELS = ('gemini-2.5-flash', 'gemini-3.5-flash')
+COMPACT_SPOTTER_AUDIO = 'application/json; spotter=compact'
+
+
+def compact_spotter_audio(manifest):
+    clips = {}
+    for key, clip in manifest['clips'].items():
+        first = (clip.get('variants') or [None])[0]
+        # Keep legacy overrides and optional single-file calls.
+        if first and first.get('audio_base64') and first['audio_base64'] == clip.get('audio_base64'):
+            clip = {name: value for name, value in clip.items() if name != 'audio_base64'}
+        clips[key] = clip
+    return {**manifest, 'clips': clips}
+
+
+def compact_spotter_frame(view, previous=None):
+    frame = dict(view)
+    if previous is not None and previous['settings'] == frame['settings']:
+        del frame['settings']
+    radio = frame['radio'] = dict(view['radio'])
+    traffic = radio.pop('traffic', None)
+    old_traffic = previous['radio'].get('traffic') if previous is not None else None
+    if previous is None or traffic is not old_traffic:
+        if traffic is None:
+            radio['traffic'] = None
+        else:
+            # Ahead/behind are the first sorted rows on each side and are
+            # derived again by the browser. Shared columns avoid repeated keys.
+            rows = traffic['nearby']
+            columns = tuple(rows[0]) if rows else ()
+            radio['traffic'] = {key: value for key, value in traffic.items() if key not in ('ahead', 'behind', 'nearby')}
+            radio['traffic']['columns'] = columns
+            radio['traffic']['rows'] = [[row[key] for key in columns] for row in rows]
+    return frame
 
 
 class RadioPlaybackDiagnostics(BaseModel):
@@ -1176,7 +1209,7 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
         with coach.lock:coach.pending_report=None
 
     @router.post('/spotter/prepare')
-    async def prepare_spotter(payload: SpotterOptions | None = None):
+    async def prepare_spotter(request: Request, payload: SpotterOptions | None = None):
         async with coach.cloud_lock:
             if payload is not None:
                 try:await asyncio.to_thread(select_custom_pack,payload)
@@ -1185,8 +1218,10 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
                 coach.live.configure_spotter(payload.model_dump())
             try:
                 if coach.custom_packs.has_selection('spotter'):
-                    return await asyncio.to_thread(coach.custom_packs.spotter,spotter_audio)
-                return await asyncio.to_thread(spotter_audio.prepare)
+                    manifest = await asyncio.to_thread(coach.custom_packs.spotter, spotter_audio)
+                else:
+                    manifest = await asyncio.to_thread(spotter_audio.prepare)
+                return compact_spotter_audio(manifest) if request.headers.get('accept') == COMPACT_SPOTTER_AUDIO else manifest
             except Exception as exc:
                 raise HTTPException(status_code=422, detail=service_error(exc)) from exc
 
@@ -1322,15 +1357,30 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
         view = coach.live.spotter_status()
         serial = view['serial']
         sent_at, signature = time.monotonic(), None
+        compact = socket.query_params.get('compact') == '1'
+        previous = None
+
+        def should_publish(state):
+            nonlocal serial, signature
+            serial = state['serial']
+            current = (state['active'], state['raw_state'], state['state'], state['run_id'])
+            if current != signature or state['events'] or time.monotonic() - sent_at >= .1:
+                signature = current
+                return True
+            return False
+
         try:
+            if compact:
+                previous = view
+                view = {**compact_spotter_frame(view), 'compact': True}
             await socket.send_json({'type': 'ready', **view, 'events': [], 'backend_version': backend_version})
             while True:
-                view = coach.live.spotter_status(after=serial)
-                serial = view['serial']
-                current = (view['active'], view['raw_state'], view['state'], view['run_id'])
-                if current != signature or view['events'] or time.monotonic() - sent_at >= .1:
+                view = coach.live.spotter_status(after=serial, should_publish=should_publish)
+                if view is not None:
+                    if compact:
+                        previous, view = view, compact_spotter_frame(view, previous)
                     await socket.send_json({'type': 'spotter', **view, 'backend_version': backend_version})
-                    sent_at, signature = time.monotonic(), current
+                    sent_at = time.monotonic()
                 await asyncio.sleep(.02)
         except (WebSocketDisconnect, RuntimeError, OSError):
             pass

@@ -122,7 +122,7 @@ test('only explicit enable prepares clips and starts a dedicated websocket witho
   await enable(result);
   expect(global.fetch).toHaveBeenCalledWith('http://test/api/live-coach/spotter/prepare', expect.objectContaining({ method: 'POST',
     body: JSON.stringify(result.current.settings) }));
-  expect(global.WebSocket).toHaveBeenCalledWith('ws://test/api/live-coach/spotter/events');
+  expect(global.WebSocket).toHaveBeenCalledWith('ws://test/api/live-coach/spotter/events?compact=1');
   expect(result.current.voice).toBe('Fenrir');
   send(sockets[0], frame(2, 'left'));
   expect(audio.setPriorityGate).toHaveBeenCalledWith(true);
@@ -362,7 +362,9 @@ test('pit wall alone plays the selected race plan and leaves spotter and drill s
   unmount();
 });
 
-test.each(['control_tc_more', 'setup_rear_arb_pit'])('pit wall alone delivers the selected %s recommendation during a clear window', async key => {
+test.each([
+  ['control_tc_more', false], ['setup_rear_arb_pit', false], ['control_tc_more', true],
+])('pit wall alone delivers the selected %s recommendation during a clear window (compact=%s)', async (key, compact) => {
   const { result } = renderHook(() => useSpotter('http://test', audio, {
     specialists: true, racePlanEnabled: true, wallAlerts: { tc: true, arb: true },
   }));
@@ -371,10 +373,18 @@ test.each(['control_tc_more', 'setup_rear_arb_pit'])('pit wall alone delivers th
   const event = radioEvent(key, { group: 'control_advice', engineer: 'coach' });
   const cars = { nearby: [{ close: true }] };
   const busy = radioFrame([event]);
-  busy.radio.traffic = cars;
+  if (compact) {
+    const ready = { ...radioFrame([]), type: 'ready', compact: true };
+    ready.radio.traffic = { columns: ['side', 'gap_estimate_s'], rows: [['ahead', .5]] };
+    send(sockets[0], ready);
+  } else {
+    busy.radio.traffic = cars;
+  }
   await act(async () => send(sockets[0], busy));
   expect(audio.play).not.toHaveBeenCalled();
-  await act(async () => send(sockets[0], radioFrame([event, radioEvent('green')])));
+  const clear = radioFrame([event, radioEvent('green')]);
+  if (compact) clear.radio.traffic = { columns: [], rows: [] };
+  await act(async () => send(sockets[0], clear));
   expect(audio.play).toHaveBeenCalledWith('setting', 'audio/mpeg', expect.objectContaining({
     channel: 'pitwall', confirmAudible: true, startDeadline: expect.any(Number),
   }));

@@ -91,6 +91,16 @@ class SettingsRouteTests(unittest.TestCase):
         with patch.object(app_settings, "BACKEND", _root / "none"):
             api._reload_settings()
 
+    def test_memory_saver_default_persistence_and_legacy_restore(self):
+        url = "/api/settings/performance"
+        self.assertTrue(self.client.get(url).json()["recording_memory_saver"])
+        self.assertEqual(self.client.put(url, json={"recording_memory_saver": "false"}).status_code, 422)
+        self.assertFalse(self.client.put(url, json={"recording_memory_saver": False}).json()["recording_memory_saver"])
+        self.assertIsNone(api.repository.max_bytes)
+        self.assertFalse(app_settings.load()["recording_memory_saver"])
+        self.assertTrue(self.client.put(url, json={"recording_memory_saver": True}).json()["recording_memory_saver"])
+        self.assertEqual(api.repository.max_bytes, api.RECORDING_CACHE_BUDGET_BYTES)
+
     def test_telemetry_folders_are_checked_saved_and_used_at_once(self):
         view = self.client.get("/api/settings").json()
         self.assertEqual((view["data_dir"], view["settings"]["telemetry_dirs"]), (str(_root), []))

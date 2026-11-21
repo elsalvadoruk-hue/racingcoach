@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
 import time
 import numpy as np
 from driving_learning import finite
@@ -217,30 +218,34 @@ def from_telemetry(analyzer, corners):
     run = digest([identity, session])
     setup = digest(telemetry.setup) if telemetry.setup else None
     definitions = windows(corners, analyzer.track_length_m)
+    if not definitions:
+        return [], {}
+    channels = [(key, native[channel]) for key, channel in FRAME_CHANNELS.items() if channel in native]
+    keys = [key for key, _ in channels]
+    session_num = native.get('SessionNum')
+    segment_runs = {}
     rows, rejected = [], {}
     for lap in telemetry.laps:
         if lap.end_idx <= lap.start_idx:
             continue
+        distance = native['LapDistPct'][lap.start_idx:lap.end_idx+1]
+        if not len(distance) or np.any(np.diff(distance) < -.01):
+            continue
+        if session_num is None:
+            rejected['SESSION_ID_MISSING'] = rejected.get('SESSION_ID_MISSING', 0) + len(definitions)
+            continue
+        # SessionNum distinguishes practice and race laps with the same lap number.
+        segment = int(session_num[lap.start_idx])
+        if segment not in segment_runs:
+            segment_runs[segment] = digest([run, segment])
         # Keep sound parts of incident laps; every window validates its own raw safety channels.
         for definition in definitions:
-            distance = native['LapDistPct'][lap.start_idx:lap.end_idx+1]
-            if not len(distance) or np.any(np.diff(distance) < -.01):
-                continue
             lo = max(0, int(np.searchsorted(distance, definition['start_pct'], side='right'))-1)
             hi = min(len(distance)-1, int(np.searchsorted(distance, definition['end_pct'], side='left')))
-            frames = []
-            for index in range(lap.start_idx+lo, lap.start_idx+hi+1):
-                frame = {key: (value.item() if hasattr(value, 'item') else value)
-                         for key, channel in FRAME_CHANNELS.items() if channel in native
-                         for value in [native[channel][index]]}
-                frames.append(frame)
-            # SessionNum is needed to avoid merging practice and race lap numbers.
-            session_num = native.get('SessionNum')
-            segment_run = digest([run,int(session_num[lap.start_idx])]) if session_num is not None else None
-            if segment_run is None:
-                rejected['SESSION_ID_MISSING'] = rejected.get('SESSION_ID_MISSING',0)+1
-                continue
-            row, reason = observation(frames, definition, identity, segment_run, lap.lap_number,
+            indices = slice(lap.start_idx+lo, lap.start_idx+hi+1)
+            columns = [values[indices].tolist() for _, values in channels]
+            frames = [dict(zip(keys, values)) for values in zip(*columns)]
+            row, reason = observation(frames, definition, identity, segment_runs[segment], lap.lap_number,
                                       analyzer.track_length_m, source='IBT', setup=setup)
             if row:
                 rows.append(row)
@@ -253,16 +258,20 @@ def analysis_result(analyzer, corners):
     """Use already parsed arrays once per geometry. No user profile I/O in analysis."""
     from driving_learning import learn
     from driving_service import public_view
-    key = digest([(c.get('id'),c.get('entry_pct'),c.get('apex_pct'),c.get('exit_pct')) for c in corners])
-    cache = getattr(analyzer,'_driving_learning_cache',None)
-    if cache and cache[0] == key:
-        return cache[1]
-    if analyzer.telemetry.metadata.get('game','iracing') != 'iracing':
-        result = {'state':'UNSUPPORTED','observations':0,'eligible':0,'rejections':{'CHANNELS_UNSUPPORTED':1}}
-    else:
-        rows, rejected = from_telemetry(analyzer,corners)
-        result = dict(public_view(learn(rows)), rejections=rejected)
-        result['notes'] = ['주변 차량을 확인할 수 없는 IBT 구간은 확정 추천에서 제외합니다.',
-                           '연속 구간과 개별 코너의 시간 이득은 합산하지 않습니다.']
-    analyzer._driving_learning_cache = (key,result)
-    return result
+    key = digest([analyzer.track_length_m, [(c.get('id'), c.get('entry_pct'), c.get('apex_pct'), c.get('exit_pct'))
+                                           for c in corners]])
+    telemetry = analyzer.telemetry
+    lock = vars(telemetry).setdefault('_driving_learning_lock', threading.Lock())
+    with lock:
+        cache = getattr(telemetry, '_driving_learning_cache', None)
+        if cache and cache[0] == key:
+            return cache[1]
+        if telemetry.metadata.get('game', 'iracing') != 'iracing':
+            result = {'state': 'UNSUPPORTED', 'observations': 0, 'eligible': 0, 'rejections': {'CHANNELS_UNSUPPORTED': 1}}
+        else:
+            rows, rejected = from_telemetry(analyzer, corners)
+            result = dict(public_view(learn(rows)), rejections=rejected)
+            result['notes'] = ['주변 차량을 확인할 수 없는 IBT 구간은 확정 추천에서 제외합니다.',
+                               '연속 구간과 개별 코너의 시간 이득은 합산하지 않습니다.']
+        telemetry._driving_learning_cache = (key, result)
+        return result

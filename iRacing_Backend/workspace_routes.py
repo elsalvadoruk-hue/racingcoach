@@ -65,7 +65,7 @@ def _recording(services, name, *, include_visibility=False):
     return (telemetry, visibility) if include_visibility else telemetry
 
 
-def workspace_comparison(services, telemetry, body):
+def workspace_comparison(services, telemetry, body, *, remember_selection=False):
     request = ComparisonDetailRequest(**body)
     analyzer = services.get_telemetry_analyzer()(telemetry)
     target, reference, _ = analyzer._select_laps(request.target_lap, request.reference_lap)
@@ -86,6 +86,8 @@ def workspace_comparison(services, telemetry, body):
         signals = comparison_controls(controls_api, telemetry, target, None,
             analyzer._lap_grid(target) if target.valid else analyzer._coaching_grid(target),
             services.get_external_reference_repository().load(path) if path is not None else None)
+        if remember_selection:
+            services.get_repository().select(telemetry)
         return {**detail, 'corners': external['corners'], 'targetTime': aggregate.get('target_time_s'),
                 'referenceTime': aggregate.get('reference_time_s'), 'delta': aggregate.get('gap_to_reference_s'),
                 'warnings': external.get('warnings', []), 'aggregate': aggregate, 'controlEvents': signals,
@@ -132,13 +134,17 @@ def workspace_comparison(services, telemetry, body):
         reference_controls = lap_controls(controls_api, reference_telemetry, reference)
         for kind in signals:
             signals[kind]['reference'] = reference_controls[kind]
+    metrics = analyzer._comparison(target, reference, grid, base) if target.valid else {}
+    if remember_selection:
+        recordings = (telemetry, reference_telemetry) if reference_telemetry is not telemetry else (telemetry,)
+        services.get_repository().select(*recordings)
     return {**detail, 'corners': corners, 'targetTime': own_time, 'referenceTime': base_time,
             'delta': own_time - base_time if own_time is not None and base_time is not None else None,
             'reference_filename': reference_telemetry.path.name if reference else None,
             'personalReference': ({'status': 'READY', 'filename': reference_telemetry.path.name, 'lap': reference.lap_number,
                 'lap_time_s': base_time, 'conditions': reference_match,
                 'same_lap': reference_telemetry is telemetry and reference.lap_number == target.lap_number} if reference else body.get('personalReference')),
-            'comparisonMetrics': analyzer._comparison(target, reference, grid, base) if target.valid else {},
+            'comparisonMetrics': metrics,
             'controlEvents': signals}
 
 
@@ -306,7 +312,8 @@ def register_routes(app, services: WorkspaceRoutesServices):
                         raise ValueError('비교할 랩을 찾지 못했습니다.')
                     selection = {**body, 'target_lap': target, 'reference_lap': reference}
                     analysis_progress.stage('comparison')
-                    result = await asyncio.to_thread(workspace_comparison, services, telemetry, selection)
+                    result = await asyncio.to_thread(workspace_comparison, services, telemetry, selection,
+                                                     remember_selection=not body.get('preview', False))
                     result.update(referenceFallback=body.get('referenceFallback'),
                                   reference_selection='AUTO' if automatic else 'MANUAL')
                     target = result.get('target_lap', target)

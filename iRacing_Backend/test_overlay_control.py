@@ -103,6 +103,31 @@ def active(**changes):
 
 
 class VisibilityTests(unittest.TestCase):
+    def test_monitor_requests_full_view_only_when_visible_and_resyncs_on_pit_entry(self):
+        controller = OverlayController()
+        controller._start_child = Mock()
+        controller.command = Mock()
+        first = active()
+        provider = Mock(return_value=first)
+        controller.auto_show = False
+        controller.sync(first, full_view=provider, report=False)
+        provider.assert_not_called()
+        controller.command.assert_not_called()
+        controller.auto_show = True
+        controller.sync(first, full_view=provider, report=False)
+        controller.command.assert_called_once()
+        self.assertEqual(controller.command.call_args.args[0], 'display')
+        second = active()
+        second['points'] = [{'session_time': 1.}]
+        provider.return_value = second
+        controller.sync(second, full_view=provider, report=False)
+        self.assertEqual(controller.command.call_args.args[0], 'display_patch')
+        self.assertEqual(controller.command.call_args.args[1]['point_patch'], [0, second['points']])
+        pit = active(on_pit_road=True)
+        provider.return_value = pit
+        controller.sync(pit, full_view=provider, report=False)
+        self.assertEqual(controller.command.call_args.args[0], 'display')
+
     def test_monitor_counts_processing_time_inside_frame_interval(self):
         controller = OverlayController()
         now, waits, frames = [0.], [], []

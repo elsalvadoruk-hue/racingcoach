@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Literal, Optional
 import logging
+import threading
 from fastapi import HTTPException
 from pathlib import Path
 from fastapi import Query
@@ -11,7 +12,7 @@ from fastapi.responses import Response
 import app_settings
 import re
 import session_log
-from api_route_models import AppSettingsBody, SecretBody, SessionLogAuto, SessionLogSend
+from api_route_models import AppSettingsBody, PerformanceSettingsBody, SecretBody, SessionLogAuto, SessionLogSend
 import session_log_auto
 
 logger = logging.getLogger("iRacingSetupTuner")
@@ -25,9 +26,23 @@ class SettingsRoutesServices:
     app_settings_view: Callable[..., Any]
     get_voice_note_store: Callable[..., Any]
     get_session_log_extras: Callable[..., Any] = lambda defer=False: ()
+    apply_recording_memory_saver: Callable[[bool], None] = lambda enabled: None
 
 
 def register_routes(app, services: SettingsRoutesServices):
+    performance_lock = threading.Lock()
+
+    @app.get("/api/settings/performance")
+    def get_performance():
+        return {"recording_memory_saver": app_settings.load()["recording_memory_saver"]}
+
+    @app.put("/api/settings/performance")
+    def put_performance(body: PerformanceSettingsBody):
+        with performance_lock:
+            enabled = app_settings.save(body.model_dump())["recording_memory_saver"]
+            services.apply_recording_memory_saver(enabled)
+        return {"recording_memory_saver": enabled}
+
     @app.get("/api/settings")
     def get_app_settings():
         return services.app_settings_view()

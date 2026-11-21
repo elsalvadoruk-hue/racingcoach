@@ -55,7 +55,7 @@ test('a disconnected backend exposes its failure and leaves the app usable', asy
   expect((await screen.findAllByText('Backend unavailable for test')).length).toBeGreaterThan(0);
   expect(screen.getByRole('heading', { name: 'iRacing 주행 코치' })).toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '사용 가이드', exact: true }));
-  expect(screen.getByRole('article', { name: '사용 매뉴얼' })).toBeVisible();
+  expect(await screen.findByRole('article', { name: '사용 매뉴얼' })).toBeVisible();
   expect(screen.getByRole('heading', { name: '5. 변경 전 A → 변경 후 B 실험하기' })).toBeVisible();
   expect(screen.getByRole('button', { name: '증상 입력 화면 열기' })).toBeDisabled();
   fireEvent.click(screen.getByRole('button', { name: '설정', exact: true }));
@@ -68,7 +68,7 @@ test('manual opens with an empty telemetry folder and can return to the starting
   fireEvent.click(screen.getByRole('button', { name: '주행 분석', exact: true }));
   await screen.findByRole('heading', { name: '분석할 주행을 선택하세요.' });
   fireEvent.click(screen.getByRole('button', { name: '처음 사용 가이드 열기' }));
-  expect(screen.getByRole('navigation', { name: '매뉴얼 목차' })).toBeVisible();
+  expect(await screen.findByRole('navigation', { name: '매뉴얼 목차' })).toBeVisible();
   expect(screen.queryByRole('heading', { name: '분석할 주행을 선택하세요.' })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '주행 분석', exact: true }));
   expect(screen.getByRole('heading', { name: '분석할 주행을 선택하세요.' })).toBeVisible();

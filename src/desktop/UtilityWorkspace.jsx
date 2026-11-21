@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { UserManual } from '../components/HelpGuide';
+import ManualWorkspace from '../components/ManualWorkspace';
+import PerformanceSettings from '../components/PerformanceSettings';
 import AppSettings from '../components/AppSettings';
 import SessionLogExport from '../components/SessionLogExport';
 import RadioAudioPrepare from '../components/RadioAudioPrepare';
@@ -54,7 +55,7 @@ export default function UtilityWorkspace({ workspace, runtime, onNavigate, analy
   if (workspace === 'live') return <VoicePreview runtime={runtime} onSettings={() => onNavigate('settings')} />;
   return <section className="utility-workspace" aria-label={workspaceLabels[workspace]}>
     <div className="utility-heading"><div><div className="eyebrow">WORKSPACE / {workspace.toUpperCase()}</div><h1>{workspaceLabels[workspace]}</h1><p>기록과 세부 설정은 이 영역 안에서 스크롤할 수 있습니다.</p></div></div>
-    {workspace === 'guide' ? <UserManual hasAnalysis={!!analysis} onNavigate={navigate} /> : workspace === 'history' ? <>
+    {workspace === 'guide' ? <ManualWorkspace game="iracing" hasAnalysis={!!analysis} onNavigate={navigate} /> : workspace === 'history' ? <>
       <ExistingPanel title="셋업 실험 이력"><TrialHistory history={w.trialHistory || []} /></ExistingPanel>
       {analysis?.memory && <ExistingPanel id="personalization" title="개인 주행 특성과 학습"><PersonalizationPanel memory={analysis.memory} /></ExistingPanel>}
       {w.memoryStatus ? <ExistingPanel id="memory-history" title="개인 주행 기록"><LongTermMemoryPanel memoryStatus={w.memoryStatus} sessions={w.memorySessions || []} currentMemory={analysis?.memory} /></ExistingPanel>
@@ -68,6 +69,7 @@ export default function UtilityWorkspace({ workspace, runtime, onNavigate, analy
       <ExistingPanel title="세션 로그"><SessionLogExport apiBase={apiBase} /></ExistingPanel>
     </> : <>
       <GameSettingsNotice />
+      <ExistingPanel title="성능"><PerformanceSettings apiBase={apiBase} /></ExistingPanel>
       <ExistingPanel title="화면 도움말"><Field orientation="horizontal"><FieldLabel htmlFor="desktop-hover-help">마우스 오버 설명</FieldLabel><Switch id="desktop-hover-help" checked={w.hoverHelpEnabled !== false} onCheckedChange={w.toggleHoverHelp} /></Field></ExistingPanel>
       <AudioPreferences runtime={runtime} />
       <ExistingPanel id="overlay-settings" title="오버레이" description="주행 중 자동 표시와 미리보기, 크기·위치·불투명도를 설정합니다."><Button variant="outline" onClick={() => onNavigate('overlay')}>오버레이 설정 열기</Button></ExistingPanel>

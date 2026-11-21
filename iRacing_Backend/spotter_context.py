@@ -68,6 +68,7 @@ class TrafficApproach:
         self.updated_at = None
         self.source_at = None
         self.available = False
+        self._traffic_view = None
 
     def ingest(self, race, now):
         if self.updated_at == now:
@@ -187,13 +188,18 @@ class TrafficApproach:
 
     def view(self, now):
         fresh = self.updated_at is not None and 0 <= now - self.updated_at < 2
+        cached = self._traffic_view
+        if cached and cached[0] is self.nearby and cached[1] == fresh:
+            return cached[2]
         nearby = sorted(self.nearby, key=lambda c: c['gap_estimate_s']) if fresh else []
-        return {'available': self.available and fresh,
+        view = {'available': self.available and fresh,
                 'source_time': self.source_at,
                 'preparation_reason': ('STALE_OR_MISSING_POSITIONS' if not self.available or not fresh else
                                        'PASSAGE_HISTORY_WARMUP' if not nearby else None),
                 'ahead': next((c for c in nearby if c['side'] == 'ahead'), None),
                 'behind': next((c for c in nearby if c['side'] == 'behind'), None), 'nearby': nearby}
+        self._traffic_view = self.nearby, fresh, view
+        return view
 
 
 def traffic_context(race, at):

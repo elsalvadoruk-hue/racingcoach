@@ -37,7 +37,7 @@ class LiveViews:
                 self.overlay_preparation['view']['race_result']=self.race_result.view()
                 self.overlay_preparation['view']['run_id']=self.run_id
 
-    def overlay_state(self):
+    def overlay_state(self, *, detail=True, graph=True):
         """Read-only HUD view using existing timing/engineer measurements; no audio or store access."""
         with self.lock:
             now = self.clock()
@@ -58,22 +58,35 @@ class LiveViews:
                     'workload_in_s', 'corner_in_s',
                     'pit_sv_fuel', 'pit_sv_flags', 'incidents',
                     'lmu_parts_detached', 'lmu_overheating', 'lmu_warning_sample_time')
+            kind = self.radio.metadata.get('session_type') or latest.get('session_type')
+            race = self.pit_wall.view(latest, max(self.fuel_history) if self.fuel_history else None,
+                                      len(self.fuel_history), **self.race_options) if detail and str(kind or '').lower() == 'race' else None
+            panel = session_panel(kind, latest, self.lap_sectors.delta(), race)
+            practice = self.practice.view(latest, self.drill, self.run_id) if panel['kind'] in ('PRACTICE', 'LIVE') else None
+            zones = getattr(self.corners, 'definitions', [])
+            summary = {'connected': True, 'run_id': self.run_id, 'identity': dict(self.identity),
+                       'race_result': self.race_result.view(), 'practice': practice, 'session': panel,
+                       '_corner_count': len(zones), 'track_length_m': self.radio.metadata.get('track_length_m'),
+                       'snapshot': {key: latest.get(key) for key in keys}}
+            if not detail or not graph:
+                return summary
             points = []
+            previous = getattr(self, '_overlay_points', {})
+            projected = {}
             for point in reversed(self.samples):
                 if point['wall_time'] < now-16:
                     break
                 if point.get('on_track') is not True or point.get('is_replay') is not False:
                     break
-                points.append({key: point.get(key) for key in
-                               ('session_time', 'brake', 'throttle', 'distance_pct', 'lap_number', 'on_pit_road', 'steering_rad')})
-            kind = self.radio.metadata.get('session_type') or latest.get('session_type')
-            race = self.pit_wall.view(latest, max(self.fuel_history) if self.fuel_history else None,
-                                      len(self.fuel_history), **self.race_options) if str(kind or '').lower() == 'race' else None
-            panel = session_panel(kind, latest, self.lap_sectors.delta(), race)
-            practice = self.practice.view(latest, self.drill, self.run_id) if panel['kind'] in ('PRACTICE', 'LIVE') else None
-            return {'connected': True, 'run_id': self.run_id, 'identity': dict(self.identity),
+                pair = previous.get(id(point))
+                if pair is None:
+                    pair = point, {key: point.get(key) for key in ('session_time', 'brake', 'throttle',
+                                          'distance_pct', 'lap_number', 'on_pit_road', 'steering_rad')}
+                projected[id(point)] = pair
+                points.append(pair[1])
+            self._overlay_points = projected
+            return {**summary,
                     'formation': self._formation_view(latest),
-                    'race_result': self.race_result.view(),
                     'wheel_observation': wheel_view(latest, self.game),
                     'damage_observation': self.damage.overlay_view(latest),
                     'control_recommendation': self.corner_controls.view() or self.control_recommendations.view(),
@@ -81,16 +94,14 @@ class LiveViews:
                     # this process so slow laps can fill a distance-aligned graph.
                     # Only the selected graph window goes over the native pipe.
                     '_history': tuple(self.samples),
-                    'practice': practice, 'session': panel,
                     'session_events': self.overlay_laps.view(latest),
                     'session_race': ({key: race.get(key) for key in ('active', 'fuel_laps', 'remaining_laps',
                                      'fuel_finish_shortfall_l', 'fuel_next_stop_l', 'ahead')} if race else None),
                     'corner_zones': [{'entry_pct': row['entry_pct'], 'exit_pct': row['exit_pct']}
-                                     for row in getattr(self.corners, 'definitions', [])],
+                                     for row in zones],
                     'corner_pass': dict(self.corners.last_measurement) if self.corners.last_measurement else None,
                     'corner_observation': dict(self.corners.last_observation) if self.corners.last_observation else None,
-                    'track_length_m': self.radio.metadata.get('track_length_m'),
-                    'snapshot': {key: latest.get(key) for key in keys}, 'points': points[::-1]}
+                    'points': points[::-1]}
 
     def _formation_view(self, sample):
         from formation_text import build_formation

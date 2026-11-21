@@ -26,6 +26,32 @@ ROOT = Path(__file__).resolve().parents[1]
 # The SDK reader produces live samples at 30 Hz.  Keeping the HUD transport at
 # that cadence prevents the graph from advancing in visible 100 ms steps.
 OVERLAY_UPDATE_INTERVAL_S = 1 / 30
+COMPARISON_FIELDS = ('offset', 'brake', 'throttle', 'break', 'steering_deg')
+
+
+def display_patch(previous, current):
+    """Retain the overlapping raw trace; aligned offsets remain exact each frame."""
+    patch = {key: value for key, value in current.items()
+             if key not in ('points', 'comparison') and previous[key] != value}
+    old, new = previous['points'], current['points']
+    if old is not new:
+        drop = next((idx for idx, row in enumerate(old) if new and row == new[0]), len(old))
+        kept = len(old)-drop
+        if kept <= len(new) and old[drop:] == new[:kept]:
+            if drop or kept != len(new):
+                patch['point_patch'] = [drop, new[kept:]]
+        else:
+            patch['points'] = new
+    comparison = current['comparison']
+    if previous['comparison'] != comparison:
+        if comparison is None:
+            patch['comparison'] = None
+        else:
+            patch['comparison_rows'] = {
+                key: [[row[field] for field in COMPARISON_FIELDS] for row in rows]
+                for key, rows in comparison.items()
+            }
+    return patch
 
 
 class OverlayController:
@@ -54,6 +80,9 @@ class OverlayController:
         self.dashboard = CoachingDashboard()
         self.presentation = CoachingPresentation()
         self.preview_session = 'practice'
+        self.monitor_summary = None
+        self.monitor_provider = None
+        self.display_baseline = None
 
     def _target(self, identity):
         game = identity.get('game') or ('iracing' if car_key(identity) else self.selected_game)
@@ -98,7 +127,10 @@ class OverlayController:
         path = settings_path(legacy.parent, game, key)
         return PreferencesStore(path, [settings_path(legacy.parent, game), legacy])
 
-    def status(self):
+    def status(self, *, refresh=False):
+        latest = self.latest
+        if refresh and self.monitor_summary is not None and not self.suspended and '_history' not in latest:
+            latest = self.monitor_summary(detail=True)
         with self.condition:
             running = self.process is not None and self.process.poll() is None
             store = self.store()
@@ -115,11 +147,11 @@ class OverlayController:
                     "driving": not self.suspended and driving(self.latest), "suspended": self.suspended,
                     "visible": bool(running and self.current and self.current.get('visible')),
                     "reference": self.reference.status() if self.reference else None,
-                    "practice": self.latest.get('practice'), "session": self.latest.get('session'),
+                    "practice": latest.get('practice'), "session": latest.get('session'),
                     "content_readiness": {
                         "connected": self.latest.get('connected') is True,
                         "corner_count": len(self.latest['corner_zones'])
-                        if isinstance(self.latest.get('corner_zones'), list) else None},
+                        if isinstance(self.latest.get('corner_zones'), list) else self.latest.get('_corner_count')},
                     "studio": self.content(), "preview_session": self.preview_session,
                     "diagnostics_version": 1,
                     "automatic_version": 1,
@@ -135,7 +167,7 @@ class OverlayController:
         return self.studio
 
     def studio_status(self):
-        return {**self.status(), 'game_default': self.studio_store().load('game')}
+        return {**self.status(refresh=True), 'game_default': self.studio_store().load('game')}
 
     def save_studio(self, config, scope, target):
         with self.operation_lock:
@@ -190,6 +222,7 @@ class OverlayController:
             with self.condition:
                 if self.process is not None and self.process.poll() is None:
                     return self.status()
+                self.display_baseline = None
                 self.current, self.error, self.replies = None, None, {}
                 executable = Path(sys.executable).with_name("pythonw.exe")
                 command = [str(executable if executable.exists() else sys.executable),
@@ -221,6 +254,7 @@ class OverlayController:
             self._start_child()
             self.command('studio', {'config': self.content(), 'session': self.preview_session})
             self.command('display', {'mode': 'preview', 'visible': True})
+            self.display_baseline = None
             self.preview = True
             return self.status()
 
@@ -229,14 +263,14 @@ class OverlayController:
             self.preview = False
             if not (self.enabled() and driving(self.latest)):
                 return self.stop()
-            return self.sync(self.latest)
+            return self.sync(self.latest, full_view=self.monitor_provider)
 
     def set_visibility(self, enabled):
         with self.operation_lock:
             # This preference must never save uncommitted appearance edits.
             self.visibility_store().save(enabled)
             self.auto_show = enabled
-            return self.sync(self.latest)
+            return self.sync(self.latest, full_view=self.monitor_provider)
 
     def delete_car_settings(self):
         with self.operation_lock:
@@ -246,17 +280,20 @@ class OverlayController:
             self.store().path.unlink(missing_ok=True)
             return self.status()
 
-    def sync(self, view):
+    def sync(self, view, *, full_view=None, report=True):
         with self.operation_lock:
             if self.suspended:
                 self.latest = {'connected': False, 'snapshot': None, 'points': []}
                 self.cards.reset()
-                return self.status()
+                return self.status() if report else None
             self.latest = view
             running = self.process is not None and self.process.poll() is None
             if self.preview and not running:
                 self.preview = False
             self._select_target(view.get('identity') or {})
+            if full_view and self.enabled() and driving(view) and not self.preview:
+                self.latest = view = full_view()
+                self._select_target(view.get('identity') or {})
             config = self.content()
             view = {**view, 'reference_source': config['source'], 'graph_options': config['graph']}
             running = self.process is not None and self.process.poll() is None
@@ -265,7 +302,7 @@ class OverlayController:
                 self.reference.observe(view, self.enabled() and preparing(view) and not self.preview)
             if self.preview:
                 self.cards.reset()
-                return self.status()
+                return self.status() if report else None
             if show:
                 if self.reference:
                     view = self.reference.enrich(view)
@@ -276,7 +313,7 @@ class OverlayController:
                     selected_session = dashboard['session'] if dashboard['session'] != 'formation' else 'race'
                 dashboard['presentation'] = self.presentation.build(view, dashboard, config, selected_session)
                 self._start_child()
-                self.command('display', {'mode': 'live', 'visible': True,
+                packet = {'mode': 'live', 'visible': True,
                                         'run_id': view.get('run_id'), 'snapshot': view.get('snapshot'),
                                         'studio': config, 'studio_session': selected_session,
                                         'dashboard': dashboard,
@@ -288,14 +325,25 @@ class OverlayController:
                                         'card': card,
                                         'race_result': view.get('race_result'),
                                         'control_recommendation': view.get('control_recommendation'),
-                                        'comparison': view.get('comparison')})
+                                        'comparison': view.get('comparison')}
+                scope = (view.get('run_id'), self.settings_target, config, selected_session,
+                         (view.get('snapshot') or {}).get('on_pit_road'),
+                         view.get('_aligned_reference'), view.get('comparison') is not None)
+                baseline, self.display_baseline = self.display_baseline, None
+                if not report and baseline is not None and baseline[0] == scope:
+                    self.command('display_patch', display_patch(baseline[1], packet))
+                else:
+                    self.command('display', packet)
+                if not report:
+                    self.display_baseline = scope, packet
             else:
+                self.display_baseline = None
                 self.cards.reset()
                 self.dashboard.reset()
                 self.presentation.reset()
                 if running and self.current and self.current.get('visible'):
                     self.command('display', {'mode': 'live', 'visible': False})
-            return self.status()
+            return self.status(refresh=bool(full_view)) if report else None
 
     def set_suspended(self, enabled):
         """Pause this controller and close only its owned HUD, preserving preferences."""
@@ -307,16 +355,21 @@ class OverlayController:
                 return self.stop()
             return self.status()
 
-    def start_monitor(self, provider):
+    def start_monitor(self, provider, summary=None):
         if self.monitor and self.monitor.is_alive():
             return
         self.monitor_stop.clear()
+        self.monitor_summary = summary
+        self.monitor_provider = provider if summary else None
 
         def watch():
             while not self.monitor_stop.is_set():
                 started = monotonic()
                 try:
-                    self.sync(provider())
+                    if summary:
+                        self.sync(summary(), full_view=provider, report=False)
+                    else:
+                        self.sync(provider())
                 except Exception:
                     logging.getLogger('iRacingOverlay').exception('Overlay update failed')
                     self.monitor_stop.wait(1)
@@ -381,6 +434,7 @@ class OverlayController:
                 self.process = None
                 self.current = None
                 self.preview = False
+                self.display_baseline = None
             return self.status()
 
 
@@ -453,7 +507,7 @@ def routes(controller, prefix="/api/overlay"):
 
     @router.get("")
     def status(game: Literal['iracing', 'lmu'] = 'iracing'):
-        return call(game, controller.status)
+        return call(game, lambda: controller.status(refresh=True))
 
     @router.get('/studio')
     def studio_status(game: Literal['iracing', 'lmu'] = 'iracing'):
