@@ -4,7 +4,7 @@ import math
 import os
 import statistics
 import re
-from radio_policy import report_window
+from radio_policy import information_fits, report_speech_budget, report_window
 from radio_audio import CALLS, speech_fields
 from spotter_context import estimated_gap_s, TrafficApproach
 import radio_phrases
@@ -240,6 +240,7 @@ class RaceEngineer:
         self.gap_history = {}
         self.spoken = {}
         self.finish_seen = None
+        self.extended_fill = None
         self.race_at = None
         self.lmu_countdown = None
         self.lmu_clock_expired = False
@@ -278,6 +279,8 @@ class RaceEngineer:
         if not getattr(self, 'shared_traffic', False):
             self.traffic.ingest(self.race, session_time)
         own = next((c for c in self.race.get('cars', []) if c['idx'] == self.race.get('player_idx')), None)
+        if own and own.get('on_pit_road') is True:
+            self.extended_fill = None
         old_own = self.previous.get(own['idx']) if own else None
         crossed = (own and old_own and numeric(own.get('lap_completed')) is not None
                    and own['lap_completed'] == (numeric(old_own.get('lap_completed')) or 0) + 1
@@ -659,6 +662,42 @@ class RaceEngineer:
                 'own_stint_laps': self.stint(own)[0] if own else None, 'own_stops': self.stint(own)[1] if own else None,
                 'estimate_notice': '간격은 랩 진행 거리와 페이스로 환산한 추정입니다. 복귀 순위는 상대 피트·추월·교통 변화를 포함하지 않습니다.'}
 
+    def _pit_fuel_litres(self, view, snapshot):
+        base = positive(view.get('fuel_next_stop_l'))
+        longer = positive(view.get('fuel_next_stop_longer_l'))
+        amount = longer or base
+        full = view.get('fuel_next_stop_full')
+        target = math.ceil((positive(view.get('tank_capacity_l')) if full else None) or amount) if amount else None
+        lap, pct = numeric(snapshot.get('lap_number')), numeric(snapshot.get('distance_pct'))
+        if (full or not base or snapshot.get('on_pit_road') or lap is None or pct is None or not 0 <= pct <= 1
+                or not 0 < (view.get('fuel_laps') or 0) <= 2.5 or (view.get('fuel_finish_shortfall_l') or 0) <= .1):
+            self.extended_fill = None
+            return target
+
+        progress = lap + pct
+        scope = (snapshot.get('run_id'), view.get('own_stops'), view.get('finish_total_laps'),
+                 view.get('reserve_laps'), view.get('tank_capacity_l'))
+        plan = self.extended_fill
+        if plan and (plan['scope'] != scope or progress < plan['progress'] or abs(base-plan['base']) >= 1):
+            plan = self.extended_fill = None
+        if longer:
+            # Keep a one-litre rounding dip from reversing the last extension forecast.
+            if plan and target == plan['target'] - 1:
+                target = plan['target']
+            self.extended_fill = dict(scope=scope, base=base, target=target, progress=progress, lower_since=None)
+        elif plan:
+            if plan['lower_since'] is None:
+                plan['lower_since'] = progress
+            plan['progress'] = progress
+            if progress - plan['lower_since'] < 1:
+                target = max(target, plan['target'])
+            else:
+                self.extended_fill = None
+        capacity, fuel = positive(view.get('tank_capacity_l')), numeric(snapshot.get('fuel_l'))
+        if capacity is not None and fuel is not None:
+            target = min(target, math.ceil(max(0, capacity-fuel)))
+        return target
+
     def candidates(self, view, snapshot, context, notes=()):
         if not view['active']:
             return []
@@ -690,10 +729,9 @@ class RaceEngineer:
         if save_percent is not None and (audio_ready := context.get('finish_save_audio_ready')):
             if not audio_ready(save_percent):
                 save_percent = None
-        amount = view.get('fuel_next_stop_longer_l') or view.get('fuel_next_stop_l')
         # The full-tank setting is a maximum addition; the simulator stops at tank
         # capacity. A partial last stop is an addition, never a tank-total target.
-        litres = math.ceil(view.get('tank_capacity_l') or amount) if amount and view.get('fuel_next_stop_full') else math.ceil(amount) if amount else None
+        litres = self._pit_fuel_litres(view, snapshot)
         fuel_phrase = 'pit_fuel_full' if view.get('fuel_next_stop_full') else 'pit_fuel_add'
         fuel_part = [(fuel_phrase, {'liters': litres})] if litres and litres >= 1 else []
         # Fuel is only talked about when it asks for a decision, and never while the car is being fuelled.
@@ -753,7 +791,7 @@ class RaceEngineer:
                 if plan and available <= 2.5:
                     add('tyre_plan', 'strategy', priority=2, cooldown=900, token=str(view.get('tyre_decision')), phrase=plan[0], also=plan[1:])
                 planned, flags = numeric(snapshot.get('pit_sv_fuel')), numeric(snapshot.get('pit_sv_flags'))
-                needed = view.get('fuel_next_stop_l')
+                needed = litres if self.extended_fill is not None else view.get('fuel_next_stop_l')
                 if available <= 2.5 and planned is not None and flags is not None and needed is not None:
                     planned = planned if int(flags) & 0x10 else 0.
                     if needed - planned > 1:
@@ -916,7 +954,7 @@ class RaceEngineer:
             add('ve_lap', 'strategy', cooldown=600, token=str(counted),
                 phrase=('ve_lap', {'ve': last}), also=[('ve_target', {'ve_target': target})])
 
-    def select(self, candidates, snapshot, level, cached_audio=False):
+    def select(self, candidates, snapshot, level, cached_audio=False, *, fit_audio=False):
         now = snapshot['session_time']
         if level == 'off':
             return None
@@ -925,6 +963,8 @@ class RaceEngineer:
             if now - self.last_report < (5 if report['priority'] == 3 else 20):
                 continue
             if level == 'important' and report['priority'] < 2:
+                continue
+            if fit_audio and not information_fits(snapshot, report_speech_budget(report)):
                 continue
             if cached_audio:
                 if report['priority'] < 3 and not report_window(snapshot, report.get('spoken_text') or report['text'], brief=True):
@@ -1009,7 +1049,8 @@ def damage_answer(snapshot):
     flags = numeric(snapshot.get('session_flags'))
     parts = []
     if flags is not None and int(flags) & 0x100000 or warnings is not None and int(warnings) & 0x80:
-        parts.append('필수 수리 필요 신호가 켜져 있습니다. 게임 지시에 따라 피트를 준비하세요.')
+        parts.append('필수 수리가 필요합니다.' if snapshot.get('on_pit_road') is True
+                     else '필수 수리 필요 신호가 켜져 있습니다. 게임 지시에 따라 피트를 준비하세요.')
     elif warnings is not None and int(warnings) & 0x100:
         parts.append('선택 수리 필요 신호가 켜져 있습니다. 손상 부위와 성능 저하 정도는 이 신호로 알 수 없습니다.')
     elif warnings is not None and flags is not None:

@@ -309,6 +309,28 @@ const radioEvent = (key, extra = {}) => ({ id: `run:${key}`, serial: 1, key, tex
 const radioFrame = (events, quiet = true, extra = {}) => frame(1, null, { serial: 0,
   radio: { connected: true, run_id: 'run', events, quiet }, ...extra });
 
+test('a routine rank waits for enough road and rechecks at audio start', async () => {
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ event: {}, audio_base64: 'rank' }) }));
+  const rank = radioEvent('position', { speech_required_s: 3 });
+  const sendWithLead = async (lead) => {
+    const next = radioFrame([rank]);
+    next.radio.workload_in_s = lead;
+    next.radio.speech_hold_s = 1;
+    await act(async () => send(sockets[0], next));
+  };
+  await sendWithLead(1.91);
+  expect(audio.play).not.toHaveBeenCalled();
+  await sendWithLead(6);
+  await waitFor(() => expect(audio.play).toHaveBeenCalledWith('rank', 'audio/mpeg',
+    expect.objectContaining({ startDeadline: expect.any(Number) })));
+  const options = audio.play.mock.calls.at(-1)[2];
+  expect(options.valid()).toBe(true);
+  await sendWithLead(2);
+  expect(options.valid()).toBe(false);
+});
+
 test('a pit wall completion blocks a prepared generic call before the server frame arrives', async () => {
   const receipts = createClassApproaches();
   const { result } = renderHook(() => useSpotter('http://test', audio, { classApproaches: receipts }));

@@ -42,6 +42,64 @@ class RaceRadioTests(unittest.TestCase):
     def keys(self):
         return [e['key'] for e in self.events()]
 
+    def test_black_survives_short_gap_and_rearms_on_observed_clear(self):
+        self.tick(session_flags=0x10000)
+        first = next(e for e in self.events() if e['key'] == 'black')
+        self.radio.reset(keep_run=True)
+        self.tick(advance=2)
+        self.assertIn(first['id'], [e['id'] for e in self.events()])
+        self.radio.delivery(first['id'], 'completed')
+        self.radio.ack(first['id'], self.now)
+        self.tick(advance=2)
+        self.assertNotIn('black', self.keys())
+        self.tick(session_flags=0)
+        self.tick(session_flags=0x10000)
+        self.assertIn('black', self.keys())
+
+    def test_old_position_cannot_reappear_when_the_same_rank_returns(self):
+        self.tick(class_position=6)
+        self.wait(5.2)
+        first = next(e for e in self.events() if e['key'] == 'position')
+        self.tick(class_position=5)
+        self.tick(class_position=6)
+        self.assertIsNone(self.radio.get(first['id'], self.now))
+        self.wait(16)
+        self.assertTrue(any(e['key']=='position' and e['id']!=first['id'] for e in self.events()))
+
+    def test_unheard_black_retries_on_reconnect_and_new_run_can_report(self):
+        self.tick(session_flags=0x10000)
+        first = next(e for e in self.events() if e['key']=='black')
+        self.radio.delivery(first['id'], 'failed')
+        self.radio.ack(first['id'], self.now)
+        self.tick(advance=1)
+        second = next(e for e in self.events() if e['key']=='black')
+        self.assertNotEqual(first['id'],second['id'])
+        self.radio.delivery(second['id'], 'completed')
+        self.tick(run='new')
+        self.assertIn('black', self.keys())
+
+    def test_unheard_rank_can_be_confirmed_again_after_missing_scoring(self):
+        self.tick(class_position=6)
+        self.wait(5.2)
+        first = next(e for e in self.events() if e['key']=='position')
+        self.tick(class_position=None)
+        self.tick(class_position=6)
+        self.assertIsNone(self.radio.get(first['id'],self.now))
+        self.wait(16)
+        self.assertIn('position',self.keys())
+
+    def test_repair_in_pit_uses_existing_neutral_recording(self):
+        self.tick(session_flags=0x100000, on_pit_road=True)
+        repair = next(e for e in self.events() if e['key'] == 'repair')
+        self.assertEqual((repair['variant'], repair['text']), (1, STATIC_CALLS['repair'][1]))
+
+    def test_track_repair_waiting_on_pit_entry_changes_to_neutral(self):
+        self.tick(session_flags=0x100000)
+        first = next(e for e in self.events() if e['key']=='repair')
+        self.assertEqual(first['variant'],0)
+        self.tick(on_pit_road=True)
+        self.assertEqual(self.radio.get(first['id'],self.now)['text'],STATIC_CALLS['repair'][1])
+
     def test_gt3_rules_filter_corner_and_general_adjustments_before_delivery(self):
         self.tick(tc_setting=4)
         self.radio.control_advice_allowed = True
@@ -127,6 +185,44 @@ class RaceRadioTests(unittest.TestCase):
         self.assertEqual(self.keys(), ['caution'])
         self.tick(session_flags=0xC108)
         self.assertEqual(self.keys(), ['caution'])
+
+    def test_pending_yellow_does_not_survive_full_course_caution_or_reappear(self):
+        self.tick(session_flags=0x108)
+        local = next(e for e in self.events() if e['key']=='yellow')
+        self.tick(session_flags=0xC108)
+        self.assertEqual(self.keys(), ['caution'])
+        self.tick(session_flags=0x108)
+        self.assertIsNone(self.radio.get(local['id'],self.now))
+        self.tick(session_flags=0)
+        self.wait(30)
+        self.tick(session_flags=0x108)
+        self.assertIn('yellow', self.keys())
+
+    def test_each_observed_debris_rising_edge_can_issue_a_call(self):
+        self.tick(session_flags=0x40)
+        first = next(e for e in self.events() if e['key']=='debris')
+        self.tick(session_flags=0)
+        self.tick(session_flags=0x40)
+        second = next(e for e in self.events() if e['key']=='debris')
+        self.assertNotEqual(first['id'],second['id'])
+
+    def test_last_minute_call_expires_at_ten_seconds_and_on_clock_extension(self):
+        self.tick(session_time_remaining_s=61.)
+        self.tick(session_time_remaining_s=59.9)
+        one = next(e for e in self.events() if e['key']=='time_60')
+        self.assertAlmostEqual(one['expires_in_ms'],10000)
+        self.tick(session_time_remaining_s=54.)
+        self.assertIsNotNone(self.radio.get(one['id'],self.now))
+        self.tick(session_time_remaining_s=49.)
+        self.assertIsNone(self.radio.get(one['id'],self.now))
+        self.tick(session_time_remaining_s=59.)
+        self.assertIsNone(self.radio.get(one['id'],self.now))
+        self.tick(session_time_remaining_s=121.)
+        self.tick(session_time_remaining_s=119.9)
+        two = next(e for e in self.events() if e['key']=='time_120')
+        self.tick(session_time_remaining_s=142.)
+        self.tick(session_time_remaining_s=118.)
+        self.assertIsNone(self.radio.get(two['id'],self.now))
 
     def test_finish_reuses_spotter_clip_while_provisional_rank_can_change(self):
         self.tick(session_flags=0x1)

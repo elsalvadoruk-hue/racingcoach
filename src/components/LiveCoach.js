@@ -12,7 +12,7 @@ import { Textarea } from './ui/textarea';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Mic, MicOff, Radio, Route, Square, Volume2, VolumeX } from 'lucide-react';
 import { HelpHint } from './HelpGuide';
-import { encodeWav, VoiceRecorder, RESUMABLE, MAX_RESUMES, DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX } from '../voiceAudio';
+import { encodeWav, VoiceRecorder, RESUMABLE, MAX_RESUMES, DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX, informationFits } from '../voiceAudio';
 import useAudioOutput from '../useAudioOutput';
 import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import PitWall, { ENGINEERS, PIT_WALL_KEY, readPitPreferences } from './PitWall';
@@ -322,6 +322,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
             const current = driving.current;
             if (!current) return true;
             if (wallOptions.current.hold_enabled === false) return true;
+            if (!informationFits(current, response.report.speech_required_s)) return false;
             if (current.quiet != null) return response.report.brief ? (current.brief_quiet ?? current.quiet) : current.quiet;
             return current.on_pit_road === true || (current.speed_mps != null && current.speed_mps < 2)
               || (current.brake != null && current.brake < .05 && current.steering_rad != null

@@ -2,6 +2,12 @@ export function speechFits(windowSeconds, text) {
   return windowSeconds == null || windowSeconds >= Math.max(2, [...(text || '').replace(/\s/g, '')].length / 4.5 + 1);
 }
 
+export function informationFits(sample, required) {
+  const ahead = sample?.workload_in_s;
+  return !Number.isFinite(required) || !Number.isFinite(ahead) || sample?.speech_hold_s < 0
+    || sample?.on_pit_road === true || ahead >= required;
+}
+
 export function encodeWav(chunks, sampleRate, targetRate = 16000) {
   const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
   const input = new Float32Array(total);

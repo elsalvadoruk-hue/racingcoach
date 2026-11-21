@@ -32,6 +32,8 @@ class Packs(unittest.TestCase):
         with self.assertRaises((ValueError,FileNotFoundError)):cache.phrase('spotter','없는 숫자 8.2초')
         speech.synthesize.assert_not_called();self.assertFalse(cache.cached('race','없는 문장'))
         prepared=self.manager.spotter();self.assertEqual(set(prepared['clips']),set(VARIANTS))
+        # A pack containing only the pit-entry wording cannot use that clip in the stall.
+        self.assertEqual(prepared['clips']['repair']['variants'][1], prepared['clips']['mandatory_repair']['variants'][0])
     def test_partial_can_select_but_missing_default_spotter_has_actionable_error(self):
         info=self.manager.install(self.pack(False));self.assertTrue(info['canSelect'])
         self.manager.select(info['key'])

@@ -34,7 +34,7 @@ from race_engineer import ROLES, role_voice, choose_role, measured_answer, damag
 from spotter import SpotterAudio
 from radio_audio import CALLS as FIXED_CALLS, RadioAudioCache, fixed_catalog, spoken_form, texts as fixed_texts
 import radio_phrases
-from radio_policy import HOLD_DEFAULT_S
+from radio_policy import HOLD_DEFAULT_S, report_speech_budget
 from instant_answers import instant_answer
 from radio_phrases import ACKS
 from live_controls import control_answer
@@ -94,7 +94,7 @@ class RadioPlaybackDiagnostics(BaseModel):
 
 RadioWaitReason = Literal['radio_disconnected', 'overlap', 'stale_frame', 'processing',
     'playback_pending', 'preparing_audio', 'retry_backoff', 'alerts_disabled', 'close_battle',
-    'level_filtered', 'specialists_disabled', 'coach_busy', 'audio_busy', 'workload',
+    'level_filtered', 'specialists_disabled', 'coach_busy', 'audio_busy', 'workload', 'short_window',
     'call_spacing', 'render_busy', 'queue_priority', 'eligible', 'render_deferred',
     'audio_unavailable', 'playback_declined']
 
@@ -555,7 +555,8 @@ class VoiceCoach:
                 if flags & 0x10000:
                     parts.append('블랙 플래그가 표시됐습니다. 패널티 유형과 이행 시간은 현재 채널로 확인되지 않으므로 게임에 표시된 지시를 그대로 따라야 합니다.')
                 if flags & 0x100000:
-                    parts.append('레드 닷이 표시됐습니다. 피트 진입과 필수 수리를 준비하세요.')
+                    parts.append('레드 닷입니다. 차량 수리 지시 확인.' if snapshot.get('on_pit_road') is True
+                                 else '레드 닷이 표시됐습니다. 피트 진입과 필수 수리를 준비하세요.')
                 for key, label in [('pit_repair_left_s', '필수 수리'), ('pit_optional_repair_left_s', '선택 수리')]:
                     seconds = number(snapshot.get(key))
                     if snapshot.get('on_pit_road') and seconds is not None and seconds >= 0:
@@ -876,7 +877,7 @@ class VoiceCoach:
                 candidates = self.available_reports(candidates, payload, snapshot['run_id'], snapshot['session_time'])
                 if payload.speak:
                     candidates = [c for c in candidates if self.prepared_report_ready(c)]
-                report = self.live.pit_wall.select(candidates, snapshot, selection_level, cached_audio=True)
+                report = self.live.pit_wall.select(candidates, snapshot, selection_level, cached_audio=True, fit_audio=payload.speak)
             if not report:
                 with self.lock:
                     self.pending_report = None
@@ -951,7 +952,7 @@ class VoiceCoach:
                 current = self.available_reports(current, payload, latest['snapshot']['run_id'], latest['snapshot']['session_time'])
                 if payload.speak:
                     current = [c for c in current if self.prepared_report_ready(c)]
-                selected = self.live.pit_wall.select(current, latest['snapshot'], selection_level, cached_audio=True)
+                selected = self.live.pit_wall.select(current, latest['snapshot'], selection_level, cached_audio=True, fit_audio=payload.speak)
                 if not selected or selected['key'] != report['key'] or selected['token'] != report['token'] or selected['text'] != report['text'] or selected.get('speech_key') != report.get('speech_key'):
                     return result
             report = audible
@@ -968,6 +969,8 @@ class VoiceCoach:
             if selected.get('class_notice'):
                 car, side = selected['class_notice']
                 response['class_notice'] = {'cars': [car], 'side': side}
+            if payload.speak and (required := report_speech_budget(report)) is not None:
+                response['speech_required_s'] = required
             with self.lock:
                 self.pending_report = {'run_id': snapshot['run_id'], 'at': snapshot['session_time'],
                     'decision': selected, 'response': response, 'speak': payload.speak, 'options': options, 'alerts': payload.alerts,

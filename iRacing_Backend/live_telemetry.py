@@ -348,6 +348,15 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             else:
                 self.spotter.ingest(sample, self.run_id, now)
             self.radio.ingest(sample, self.run_id, now, race)
+            self.radio.control_trials.observe(self.run_id, identity, self.radio.metadata.get('session_type'), now)
+            if race is not None:
+                log = self.radio.control_trials
+                for control in ('tc','abs'):
+                    if log.eligible[control]:
+                        if not self.radio.control_available(control):
+                            log.mark(control, 'session_rules', 'restricted_by_rules')
+                        if sample.get('setup_fixed') is True:
+                            log.mark(control, 'setup', 'fixed_setup_observed')
             self.formation_records.ingest(sample, self.run_id, self.game, list(self.radio.laps))
             formation_context = self.formation_context.ingest(self.radio.metadata, self.run_id)
             if formation_context.get('official_grid') and not self.radio.metadata.get('official_grid'):

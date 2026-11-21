@@ -61,7 +61,7 @@ class LiveCoaching:
             car = identity.get('car_path') if identity.get('game')=='iracing' else None
             racing = str(self.radio.metadata.get('session_type') or '').lower()=='race'
             corner_controls.ingest(self.corners, sample, context, getattr(self.controls, 'countersteer', None),
-                                   car if racing else None,self.radio.metadata.get('track_length_m'))
+                                   car if racing else None,self.radio.metadata.get('track_length_m'),self.radio.control_trials)
             self.setup_advisor.ingest(identity,sample)
             self.radio.setup_advice_allowed=len(self.setup_advisor.laps)>=3 and sample.get('setup_fixed') is False
             named_corners = any(d.get('call') for d in self.corners.definitions)

@@ -242,6 +242,7 @@ class WetAbsReminder:
             self.stable=t
             self.window_since=None
         self.last,self.level=t,level
+        radio.control_trials.mark('abs', (episode,self.stable), 'wet_dry_map_observed')
         speed = finite(s.get('speed_mps'))
         green = (s.get('session_flags') is not None and not int(s['session_flags'])&0xC119
                  and s.get('tow_time_s')==0)
@@ -255,15 +256,29 @@ class WetAbsReminder:
         if self.mode!=mode or self.window_since is None:
             self.window_since=t
         self.mode=mode
-        if (occupied or self.announced or self.attempts>=3 or now<self.next_try or not self.valid(s,radio,now)
-                or not radio.allows(ABS_KEY)):
+        if self.announced or self.attempts>=3 or now<self.next_try or t-self.stable<30:
             return
+        opportunity = (self.episode, self.stable)
+        log = radio.control_trials
+        log.mark('abs', opportunity, 'evidence')
+        if not radio.allows(ABS_KEY):
+            log.mark('abs', opportunity, 'disabled')
+            return
+        if occupied or not self.valid(s,radio,now):
+            log.mark('abs', opportunity, 'occupied' if occupied else 'no_window')
+            return
+        log.mark('abs', opportunity, 'candidate')
         self.next_try=now+1
-        if not ready(WET_CHECK) or any(e['group']=='control_advice' and radio.valid(e,now) for e in radio.pending):
+        if not ready(WET_CHECK):
+            log.mark('abs', opportunity, 'audio_missing')
+            return
+        if any(e['group']=='control_advice' and radio.valid(e,now) for e in radio.pending):
+            log.mark('abs', opportunity, 'occupied')
             return
         event=radio.emit(ABS_KEY,now,WET_CHECK,role='coach',ttl=3,cooldown=0,group='control_advice',
                          condition=('wet_abs',(episode,level,mode)),speech_text=WET_CHECK,prepared_only=True)
         if event:
+            log.mark('abs', event['id'], 'queued')
             self.event=event['id']
             self.attempts+=1
             self.next_try=now+15

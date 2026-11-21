@@ -227,6 +227,12 @@ class CustomVoicePacks:
                         if choice:choices.append(choice)
                 if not choices:raise MissingCustomAudio('스포터 기본 음성을 먼저 준비하세요. 준비되지 않은 상황: '+key)
                 clips[key]={**choices[0],'variants':choices}
+            # Custom packs may supply only the first repair wording. The second
+            # slot is used in the pit and must never fall back to "prepare to pit".
+            repair = clips['repair']['variants']
+            if len(repair) == 1:
+                neutral = repair[0] if repair[0]['text']==VARIANTS['repair'][1] else prepared_default(VARIANTS['repair'][1])
+                repair.append(neutral or clips['mandatory_repair']['variants'][0])
             for key,text in OPTIONAL_CLIPS.items():
                 choice=({'text':text,'audio_base64':self.audio('spotter',text)} if self.has('spotter',text)
                         else prepared_default(text))

@@ -35,6 +35,7 @@ class VoiceNoteStore:
 
     def __init__(self, path):
         self.path = Path(path)
+        self.flush_control_trials = None
         self.available = True
         self.revision = 0
         try:
@@ -152,18 +153,24 @@ class VoiceNoteStore:
                     found[row['id']] = json.loads(row['recent_json']) if row['recent_json'] else []
         return found
 
-    def record_session_health(self, run_id, identity, event):
+    def record_session_health(self, run_id, identity, event, *, control_trials=None):
         from session_health import MAX_RUNS, MAX_SAMPLES
         with self.connect(timeout=.1) as db:
+            db.execute('BEGIN IMMEDIATE')
             old = db.execute('SELECT * FROM session_health WHERE run_id=?', (run_id,)).fetchone()
             health = json.loads(old['health_json']) if old else {'format': 'racingcoach-session-health', 'format_version': 1,
                 'poll_seconds': 2, 'heartbeat_seconds': 30, 'samples': [], 'dropped_samples': 0}
-            health['samples'].append(event)
+            if control_trials is not None:
+                started, ended, health['control_trials'] = control_trials
+            else:
+                started = ended = event['at']
+                health['samples'].append(event)
             health['dropped_samples'] += max(0, len(health['samples']) - MAX_SAMPLES)
             health['samples'] = health['samples'][-MAX_SAMPLES:]
             identity = {**(json.loads(old['identity_json']) if old else {}), **identity}
-            started = min(old['started_at'], event['at']) if old else event['at']
-            ended = max(old['updated_at'], event['at']) if old else event['at']
+            if old:
+                started = min(old['started_at'], started)
+                ended = max(old['updated_at'], ended)
             db.execute('INSERT OR REPLACE INTO session_health VALUES(?,?,?,?,?)',
                        (run_id, started, ended, json.dumps(identity, ensure_ascii=False, allow_nan=False),
                         json.dumps(health, ensure_ascii=False, allow_nan=False)))

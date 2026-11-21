@@ -55,7 +55,7 @@ class CornerControls:
         self.bias_heard = set()
         self.bias_receipts = {}
 
-    def ingest(self, corners, s, context, counter, bias_car=None, length=None):
+    def ingest(self, corners, s, context, counter, bias_car=None, length=None, diagnostics=None):
         driving = s.get('on_track') is True and s.get('is_replay') is False and s.get('on_pit_road') is False
         if corners.revision != self.revision or not driving:
             if self.revision != corners.revision or self.rows or self.pass_data or self.card or self.braking.samples:
@@ -72,7 +72,9 @@ class CornerControls:
             self.finished = completed
             if completed and self.pass_data and self.pass_data['key'] == (completed['id'], completed['lap']):
                 self._sample(self.pass_data, s, context, counter)
-                self._finish(completed, self._speed_at(previous, s, completed['exit_at']))
+                row = self._finish(completed, self._speed_at(previous, s, completed['exit_at']))
+                if diagnostics is not None and row and row.get('braking'):
+                    diagnostics.mark('brake_bias', (completed['id'],completed['lap']), 'measured_pass')
             self.pass_data = None
         active = corners.active
         if not active or not active.get('call') and bias_car not in BIAS_STEP:
@@ -184,6 +186,7 @@ class CornerControls:
             row['braking'] = self.braking.measure(corner,self.track_length,self.bias_car)
         self.rows[key].append(row)
         self.cached.pop(key, None)
+        return row
 
     def _recommend(self, definition, s, practice, allows):
         key = definition['id']
@@ -285,7 +288,10 @@ class CornerControls:
             return
         target_ticks = None
         if session=='race' and self.bias_car in BIAS_STEP and radio.allows(BIAS_KEY):
+            radio.control_trials.mark('brake_bias', (key,target_lap), 'evaluated')
             target_ticks=bias_target(self.rows.get(key,()),self.bias_car,s,conditions(s),self._mechanical(s))
+            if target_ticks is not None:
+                radio.control_trials.mark('brake_bias', (key,target_lap), 'evidence')
         choice = (('brake_bias',target_ticks/100,None) if target_ticks is not None else
                   self._recommend(next_corner, s, practice, radio.allows) if name else None)
         if not choice:
@@ -315,6 +321,8 @@ class CornerControls:
             reason = '한 설정만 다른 비교에서 구간 시간이 반복해서 줄었고 탈출 속도와 조향 안정성을 확인했습니다.'
         needed = call_seconds(text)
         if not needed + CALL_LEAD_S <= end <= needed + CALL_EARLY_S or not radio.control_window(s, text, now):
+            if target_ticks is not None:
+                radio.control_trials.mark('brake_bias', (key,target_lap), 'no_window')
             return
         self.card = dict(id=f'corner/{key}/{target_lap}', corner=key, lap=target_lap, call=name,
                          text=text, reason=reason, control=control, initial=s[FIELDS[control]], target=target,
@@ -323,6 +331,7 @@ class CornerControls:
         self.shown[key] = target_lap
         if target_ticks is not None:
             self.card['bias_parts']=parts
+            radio.control_trials.mark('brake_bias', (key,target_lap), 'candidate')
         if action:
             self.tried.add((key, control))
 
@@ -341,25 +350,34 @@ class CornerControls:
 
     def speak_bias(self,s,radio,now,ready,occupied):
         c=self.card
-        if (not c or 'bias_parts' not in c or c.get('queued') or occupied
+        if (not c or 'bias_parts' not in c or c.get('queued')
                 or now < c.get('next_audio_check', 0)):
             return
+        opportunity = (c['corner'], c['lap'])
+        log = radio.control_trials
         token=(c['id'],c['initial'],c['target'],self.revision)
         case=(c['corner'],c['initial'],c['target'])
-        if (case in self.bias_heard or not radio.allows(BIAS_KEY) or not self.bias_valid(token,s,radio,now)
-                or any(e['group']=='control_advice' and radio.valid(e,now) for e in radio.pending)):
+        if case in self.bias_heard or not radio.allows(BIAS_KEY):
+            return
+        if occupied or any(e['group']=='control_advice' and radio.valid(e,now) for e in radio.pending):
+            log.mark('brake_bias', opportunity, 'occupied')
+            return
+        if not self.bias_valid(token,s,radio,now):
+            log.mark('brake_bias', opportunity, 'no_window')
             return
         parts=list(c['bias_parts'])
         c['next_audio_check'] = now + .5
         if not ready(parts[0]):
             parts[0]='다음 코너.'
         if not all(ready(p) for p in parts):
+            log.mark('brake_bias', opportunity, 'audio_missing')
             return
         text=' '.join(parts)
         event=radio.emit('control_bias_corner',now,c['text'],role='coach',ttl=min(3,c['expires_at']-now),
                          cooldown=0,group='control_advice',condition=('corner_bias',token),
                          speech_text=text,speech_parts=parts,prepared_only=True)
         if event:
+            log.mark('brake_bias', event['id'], 'queued')
             c['queued']=True
             if len(self.bias_receipts)>=48:
                 del self.bias_receipts[next(iter(self.bias_receipts))]

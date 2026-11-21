@@ -90,7 +90,7 @@ class RaceWheelspin:
         elif t-row['start'] >= .30:
             row['spin'] = True
 
-    def _finish(self, obs, now):
+    def _finish(self, obs, now, diagnostics):
         row = self.current
         self.current = None
         if not (obs and row and row['key'] == (obs['id'], obs['lap']) and row['clean'] and row['measured']
@@ -101,6 +101,9 @@ class RaceWheelspin:
         if history and history[-1]['key'][1] >= lap:
             return
         history.append(row)
+        diagnostics.mark('tc', row['key'], 'measured_pass')
+        if row['spin']:
+            diagnostics.mark('tc', row['key'], 'wheelspin_pass')
         if (key not in self.reported and row['spin'] and len(history)==3
                 and [x['key'][1] for x in history] == [lap-2,lap-1,lap]
                 and sum(x['spin'] for x in history)>=2
@@ -162,7 +165,7 @@ class RaceWheelspin:
         if obs is not self.finished:
             self.finished = obs
             if clean and not gap and separated:
-                self._finish(obs, now)
+                self._finish(obs, now, radio.control_trials)
             else:
                 self.current = None
         if corners.active and corners.active.get('call'):
@@ -177,37 +180,59 @@ class RaceWheelspin:
         for key, offer in list(self.offers.items()):
             row = offer['row']
             n = row['key'][1]
+            opportunity = row['key']
+            log = radio.control_trials
+            log.mark('tc', opportunity, 'evidence')
             if (not clean or now>=offer['until'] or signature!=row['stamp'] or abs(temp-row['temp'])>3
                     or lap not in (n,n+1) or lap>n and pct>=offer['entry']
                     or not any(d['id']==key and d.get('call')==row['call'] for d in corners.definitions)):
                 del self.offers[key]
                 continue
-            if offer['queued'] or occupied or now<offer['next_check'] or not self._window(s, now, radio, ''):
+            if offer['queued'] or now<offer['next_check']:
+                continue
+            if occupied or not self._window(s, now, radio, ''):
+                log.mark('tc', opportunity, 'occupied' if occupied else 'no_window')
                 continue
             offer['next_check'] = now+.25
             if not radio.allows(KEY):
+                log.mark('tc', opportunity, 'disabled')
                 continue
             if self.sent_laps and (lap-self.sent_laps[-1]<2 or sum(lap-x<10 for x in self.sent_laps)>=2):
+                log.mark('tc', opportunity, 'cooldown')
                 continue
             crossed = lap>n
             has_next = crossed or not (int(s['session_flags']) & 2 or s.get('session_laps_remaining') in (0,1))
             target = int(verified) + positions.step if verified is not None and has_next else None
-            if target not in TRIAL_LEVELS or target not in positions or target not in self.observed[compound]:
+            if target not in TRIAL_LEVELS or target not in positions:
+                log.mark('tc', opportunity, 'map_unavailable')
                 target = None
+            elif target not in self.observed[compound]:
+                log.mark('tc', opportunity, 'map_unobserved')
+                target = None
+            log.mark('tc', opportunity, 'candidate')
             action = trial(target,crossed) if target is not None else SYMPTOM
             parts = [row['call']+'.', action]
-            if target is not None and (not self._window(s,now,radio,' '.join(parts)) or not ready(action)):
-                parts[1], target = SYMPTOM, None
+            if target is not None:
+                fits = self._window(s,now,radio,' '.join(parts))
+                if not fits or not ready(action):
+                    log.mark('tc', opportunity, 'no_window' if not fits else 'audio_missing')
+                    parts[1], target = SYMPTOM, None
             text = ' '.join(parts)
-            if not self._window(s,now,radio,text) or not all(ready(part) for part in parts):
+            if not self._window(s,now,radio,text):
+                log.mark('tc', opportunity, 'no_window')
+                continue
+            if not all(ready(part) for part in parts):
+                log.mark('tc', opportunity, 'audio_missing')
                 continue
             if any(e['group']=='control_advice' and radio.valid(e,now) for e in radio.pending):
+                log.mark('tc', opportunity, 'occupied')
                 continue
             token = (key,n,lap,target)
             event = radio.emit(KEY, now, text, role='coach', ttl=min(3,offer['until']-now), cooldown=0,
                                group='control_advice', condition=('wheelspin',token), speech_text=text,
                                speech_parts=parts, prepared_only=True)
             if event:
+                log.mark('tc', event['id'], 'queued_trial' if target is not None else 'queued_symptom')
                 offer['queued'] = True
                 if len(self.receipts)>=48:
                     del self.receipts[next(iter(self.receipts))]

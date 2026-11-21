@@ -41,6 +41,8 @@ class RaceBrakingTests(unittest.TestCase):
         self.assertIsNone(self.pit(29.95))
         event=self.pit(.2)
         self.assertEqual((event['key'],event['speech_text'],event['alert_categories']),(ABS_KEY,WET_CHECK,['pitwall.abs']))
+        self.assertEqual(self.live.radio.control_trials.counts['abs']['evidence'], 1)
+        self.assertEqual(self.live.radio.control_trials.counts['abs']['queued'], 1)
         self.live.radio_delivery(event['id'],'started')
         self.assertIsNone(self.pit(.05,abs_setting=7))
         self.assertIsNone(self.live.radio.get(event['id'],self.t))
@@ -142,6 +144,8 @@ class RaceBrakingTests(unittest.TestCase):
         self.assertIsNotNone(event)
         self.assertEqual(event['speech_parts'],['다음 9번 코너.','바이어스 50.75퍼센트.'])
         self.assertEqual(event['text'],'다음 9번 코너. 바이어스 50.75퍼센트.')
+        counts = self.live.radio.control_trials.counts['brake_bias']
+        self.assertEqual([counts[k] for k in ('evidence','candidate','queued')], [1,1,1])
         self.assertEqual(event['alert_categories'],['pitwall.bbal'])
         self.assertEqual(self.live.samples[-1]['lap_number'],5)
         sample=self.live.samples[-1].copy()

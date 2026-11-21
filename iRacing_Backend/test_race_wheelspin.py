@@ -92,6 +92,8 @@ class WheelspinTests(unittest.TestCase):
         self.assertEqual(event['text'],'9번 코너. '+SYMPTOM)
         self.live.radio_delivery(event['id'],'started')
         self.live.radio_delivery(event['id'],'completed')
+        counts = self.live.radio.control_trials.counts['tc']
+        self.assertEqual([counts[k] for k in ('evidence','candidate','map_unobserved','queued_symptom')], [1,1,1,1])
         self.assertEqual(list(self.live.wheelspin.sent_laps),[3])
         self.assertIn('C1',self.live.wheelspin.reported)
 

@@ -15,12 +15,12 @@ export function radioDiagnostic(attempt, stage, started = false, details = {}) {
 // Counts describe observed queue gates, not time spent or original SDK decisions.
 const WAIT_REASONS = new Set(['radio_disconnected', 'overlap', 'stale_frame', 'processing',
   'playback_pending', 'preparing_audio', 'retry_backoff', 'alerts_disabled', 'close_battle',
-  'level_filtered', 'specialists_disabled', 'coach_busy', 'audio_busy', 'workload',
+  'level_filtered', 'specialists_disabled', 'coach_busy', 'audio_busy', 'workload', 'short_window',
   'call_spacing', 'render_busy', 'queue_priority', 'eligible', 'render_deferred',
   'audio_unavailable', 'playback_declined']);
 
-export function createRadioWait(key, now) {
-  return ['lap_time', 'personal_best'].includes(key)
+export function createRadioWait(key, now, speechRequired) {
+  return ['lap_time', 'personal_best'].includes(key) || Number.isFinite(speechRequired)
     ? { first: now, observations: 0, elapsed_ms: 0, reasons: {}, last_reason: null } : undefined;
 }
 

@@ -79,6 +79,25 @@ class SpeechTimingTests(unittest.TestCase):
         self.assertEqual(model.view(sample(315, 4, .15, brake=.5))['workload_in_s'], 0.)
         self.assertIsNone(TrackSpeechWindows().view(sample(315, 4, .15))['workload_in_s'])
 
+    def test_automatic_audio_waits_for_a_complete_phrase_when_braking_distance_is_known(self):
+        wall = RaceEngineer()
+        text = '지금 뒤에서 접근 중인 차량의 주행 페이스가 최근 두 랩 동안 빨라졌습니다.'
+        report = dict(key='approach', engineer='race', priority=2, cooldown=120, token='car',
+                      text=text, spoken_text=text)
+        close = sample(100, workload_in_s=1.56)
+        def selected(s, **opts):
+            return wall.select([report], s, 'all', cached_audio=True, **opts)
+        self.assertIsNone(selected(close, fit_audio=True))
+        self.assertIsNotNone(selected(close, fit_audio=False))
+        self.assertIsNotNone(selected({**close,'workload_in_s':15.}, fit_audio=True))
+        self.assertIsNotNone(selected({**close,'workload_in_s':None}, fit_audio=True))
+        self.assertIsNotNone(selected({**close,'speech_hold_s':-1.}, fit_audio=True))
+        report['key'] = 'pit_fuel_plan'
+        self.assertIsNotNone(selected(close, fit_audio=True))
+        report['key'] = 'approach'
+        report['priority'] = 3
+        self.assertIsNotNone(selected({**close,'brake':.8}, fit_audio=True))
+
     def test_session_change_resets_learned_layout(self):
         live = LiveTelemetry(clock=lambda: 1)
         live.ingest({'track_id': '1', 'car_id': '2'}, sample())

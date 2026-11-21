@@ -26,6 +26,18 @@ def context(run=RUN, **extra):
 
 
 class SessionLogTests(unittest.TestCase):
+    def test_timeout_links_only_later_progress_or_output_test_on_same_route(self):
+        def row(status, t, attempt, route='default', **p):
+            return dict(key='yellow', status=status, at=t, reason='playback_start_timeout' if status=='failed' else '',
+                        playback=dict(owner_generation='page:1', attempt_id=attempt, output_route=route, **p))
+        events=[row('failed',10,'a'), row('completed',12,'b','selected',media_time_s=1),
+                row('completed',13,'c',media_time_s=0,output_test_at=8,output_test='progressed',output_test_route='default'),
+                row('completed',20,'d',media_time_s=1,output_test_at=15,output_test='stalled',output_test_route='default'),
+                row('failed',21,'e')]
+        session_log.link_timeout_followups(events)
+        self.assertEqual(events[0]['timeout_followup'], dict(media_progress_at=20, attempt_id='d',output_test_at=15,output_test='stalled'))
+        self.assertEqual(events[-1]['timeout_followup'], {})
+
     def test_small_health_extra_returns_before_optional_detail_uses_remaining_budget(self):
         import random
         rng = random.Random(47)

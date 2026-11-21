@@ -8,6 +8,7 @@ from spotter_context import TrafficApproach, PitBoxGuide, HazardWatch, progress
 from radio_audio import speech_fields
 import radio_phrases
 import radio_variations
+from session_health import ControlTrialDiagnostics
 from qualifying_traffic import QualifyingTraffic, is_open_qualifying
 from race_result import result_position
 from voice_alerts import category, clean, allowed, event_allowed
@@ -94,8 +95,12 @@ TRAFFIC_REARM_S = 4.       # a car that was called is called again only after it
 CLOSE_REARM_S = 1.5
 CLASS_NOTICE_S = 12.  # Generic notices from either crew member about the same car and direction.
 CLASS_CALL_SIDES = {'traffic_faster_behind': 'behind', 'traffic_slower_ahead': 'ahead'}
+LOCAL_YELLOW = 0x108
+FULL_COURSE_CAUTION = 0xC000
+INFORMATION_CALLS = frozenset(('position', 'quali_result', 'quali_p1', 'consistent', 'pace_detail', 'incident_coaching'))
 LAP_CALL_START_S = 2.      # Start at the line or skip it, including delayed SDK publication.
 POSITION_CALL_S = 40.      # a place is only said while it still holds, so it can wait out a run of corners
+BLACK_CALL_S = 18.         # A longer gap can conceal a clear and a new penalty.
 
 
 
@@ -129,6 +134,7 @@ class RaceRadio:
         self.qualifying = False
         self.serial = 0
         self.variant_counts = {}
+        self.control_trials = ControlTrialDiagnostics()
         self.spoken_counts = {}
         self.pit_trial_due = lambda sample: True
         self.history = deque(maxlen=20)
@@ -137,21 +143,24 @@ class RaceRadio:
     def reset(self, *, keep_run=False):
         retained = ({key: getattr(self, key) for key in
                      ('run_id', 'briefed', 'briefing_delivered', 'position_said', '_position_delivery_serial', '_deliveries',
-                      'result_called', 'result', 'finish_issued', 'class_notices')}
+                      'result_called', 'result', 'finish_issued', 'class_notices',
+                      'black_event', 'black_completed', 'black_seen_at')}
                     if keep_run and self.run_id else {})
         briefing_at = self.sent.get('briefing') if retained else None
-        finish_pending = [e for e in self.pending if e['key'] == 'finish'] if retained else []
+        flag_pending = [e for e in self.pending if e['key'] in ('finish','black')] if retained else []
         self.run_id = None
         self.corner_revision = None
         self.fuel_low_stage = 0
         self.blue_since, self.blue_called = None, False
         self.latest, self.metadata = {}, {}
         self.metadata_at = None
-        self.pending = deque(finish_pending, maxlen=48)
+        self.pending = deque(flag_pending, maxlen=48)
         self.last_sample = None
         self.sent = {}
         self.result = None
         self.finish_issued = False
+        self.black_event = self.black_seen_at = None
+        self.black_completed = False
         self.class_notices = {}
         self.control_advice_allowed = False
         self.setup_advice_allowed = False
@@ -255,6 +264,8 @@ class RaceRadio:
         variants = STATIC_CALLS.get(key)
         variants = variants or (text if isinstance(text, (tuple, list)) else None)
         variant = count % len(variants) if variants else 0
+        if key == 'repair' and self.latest.get('on_pit_road') is True:
+            variant = 1  # The cached second recording only asks for the repair instruction.
         if key not in STATIC_CALLS:
             speech_key = speech_key or ('time_remaining' if key.startswith('time_') else 'laps_remaining' if key.startswith('laps_') else key)
         speech = speech_fields(speech_key, count)
@@ -277,6 +288,8 @@ class RaceRadio:
         if prepared_only:
             self.pending[-1]['prepared_only'] = True
         event = self.pending[-1]
+        if priority < 2 and (key in INFORMATION_CALLS or key.startswith(('time_', 'laps_'))):
+            event['speech_required_s'] = round(speech_seconds(event['spoken_text'] or event['text']) + .5, 3)
         if key in ('position', 'briefing') or (part_categories is not None and category('position') in names):
             self.track_delivery(event, position=num(self.latest.get('class_position')) if key != 'briefing' else None)
         return event
@@ -311,6 +324,8 @@ class RaceRadio:
             del self._deliveries[next(iter(self._deliveries))]
 
     def delivery(self, identifier, status, *, dropped_parts=0, session_time=None):
+        if identifier == self.black_event and status == 'completed' and not dropped_parts:
+            self.black_completed = True
         receipt = self._deliveries.get(identifier)
         if not receipt or receipt['run_id'] != self.run_id or receipt['completed']:
             return None
@@ -433,14 +448,33 @@ class RaceRadio:
                       cooldown=15, group='hazard')
         flags, old_flags = num(sample.get('session_flags')), num(previous.get('session_flags'))
         self._blue_flag(sample, now)
+        if sample.get('on_pit_road') is True and previous.get('on_pit_road') is not True:
+            for event in self.pending:
+                if event['key'] == 'repair':
+                    event.update(variant=1, text=STATIC_CALLS['repair'][1])
         if flags is not None:
             rising = int(flags) & ~int(old_flags or 0)
+            # A waiting local warning belongs to the current flag episode.
+            # End it at the first observed clear or on transition to a full-course caution.
+            if flags != old_flags:
+                ended = set()
+                if not int(flags) & LOCAL_YELLOW or int(flags) & FULL_COURSE_CAUTION:
+                    ended.add('yellow')
+                if not int(flags) & 0x40:
+                    ended.add('debris')
+                if not int(flags) & FULL_COURSE_CAUTION:
+                    ended.add('caution')
+                if ended and any(e['key'] in ended for e in self.pending):
+                    self.pending = deque((e for e in self.pending if e['key'] not in ended), maxlen=48)
             table = [(0x1, 'finish', 2), (0x2, 'white', 2), (0x10, 'red', 2),
                      (0x40, 'debris', 2), (0x10000, 'black', 2), (0x20000, 'dq', 2),
                      (0x100000, 'repair', 2), (0x200, 'one_to_green', 1),
                      (0x800, 'ten_laps', 1), (0x1000, 'five_laps', 1),
                      (0x20000000, 'start_ready', 1), (0x40000000, 'start_set', 2)]
             for bit, key, priority in table:
+                if key == 'black':
+                    self._black_flag(bool(int(flags) & bit), old_flags, now)
+                    continue
                 if key == 'finish':
                     session = str(self.metadata.get('session_type') or '').strip().lower()
                     if flags and int(flags) & bit and session and session != 'race' and not self.finish_issued:
@@ -450,9 +484,9 @@ class RaceRadio:
                 if rising & bit:
                     # Every flag is the sim's own signal, debris included: while it lies there the sim
                     # raises the flag on each approach, and each time it is called (the driver's decision).
-                    self.emit(key, now, priority=priority, condition=('flag', bit), cooldown=10)
-            caution_mask = 0xC000
-            yellow_mask = 0x108
+                    self.emit(key, now, priority=priority, condition=('flag', bit), cooldown=0 if key=='debris' else 10)
+            caution_mask = FULL_COURSE_CAUTION
+            yellow_mask = LOCAL_YELLOW
             if int(flags) & caution_mask and not int(old_flags or 0) & caution_mask:
                 self.emit('caution', now, priority=2, condition=('flag', caution_mask))
             elif int(flags) & yellow_mask and not int(old_flags or 0) & (yellow_mask | caution_mask):
@@ -491,10 +525,18 @@ class RaceRadio:
                 self.say('no_repair', now, role='race', condition=('racing', None), cooldown=120, ttl=12)
         remaining = num(sample.get('session_time_remaining_s'))
         old_remaining = num(previous.get('session_time_remaining_s'))
+        if remaining is not None:
+            timer = next((e for e in self.pending if e['group']=='time_remaining'), None)
+            if timer and (timer['condition'] or (None,))[0]=='time_left':
+                threshold, tolerance = timer['condition'][1]
+                if not threshold - tolerance <= remaining <= threshold:
+                    self.pending.remove(timer)
         if state == 4 and remaining is not None and old_remaining is not None:
             for threshold in (600, 300, 120, 60):
                 if old_remaining > threshold >= remaining:
-                    self.emit(f'time_{threshold}', now, f'경기 시간 약 {threshold // 60}분 남았습니다. 종료 후 마지막 랩은 게임 지시를 확인하세요.', condition=('racing', None), group='time_remaining', cooldown=3600,
+                    tolerance = 10 if threshold <= 120 else 18
+                    self.emit(f'time_{threshold}', now, f'경기 시간 약 {threshold // 60}분 남았습니다. 종료 후 마지막 랩은 게임 지시를 확인하세요.',
+                              ttl=tolerance, condition=('time_left', (threshold, tolerance)), group='time_remaining', cooldown=3600,
                               speech_text=self.wording('time_left', min=threshold // 60))
         laps_left = num(sample.get('session_laps_remaining'))
         old_laps = num(previous.get('session_laps_remaining'))
@@ -742,6 +784,27 @@ class RaceRadio:
                 if recent and incidents - min(recent) >= 4:
                     self.emit('incident_coaching', now, '최근 완주랩 사이에 인시던트가 늘었습니다. 원인은 아직 확인되지 않았습니다. 다음 랩은 평소보다 여유를 두고 달리고, 주행 후 문제 구간을 함께 확인하겠습니다.', role='coach', delay=6, cooldown=180, condition=('racing', None))
 
+    def _black_flag(self, active, old_flags, now):
+        if not active:
+            if self.black_event is not None:
+                self.pending = deque((e for e in self.pending if e['id'] != self.black_event), maxlen=48)
+            self.black_event = self.black_seen_at = None
+            self.black_completed = False
+            return
+        # Across a short data gap keep an outstanding call and its playback receipt.
+        # After the normal flag lifetime an unobserved clear/new penalty is possible.
+        first = self.black_seen_at is None
+        expired_gap = not first and now - self.black_seen_at >= BLACK_CALL_S
+        self.black_seen_at = now
+        if expired_gap:
+            self.black_completed = False
+        if self.black_completed or (not first and not expired_gap and old_flags is not None and int(old_flags) & 0x10000):
+            return
+        if any(e['id'] == self.black_event and now < e['expires_at'] for e in self.pending):
+            return
+        event = self.emit('black', now, priority=2, condition=('flag', 0x10000), cooldown=0, ttl=BLACK_CALL_S)
+        self.black_event = event['id'] if event else None
+
     def _position(self, s, now):
         if str(self.metadata.get('session_type') or '').strip().lower() != 'race':
             self.position_candidate = self.position_since = None
@@ -750,6 +813,11 @@ class RaceRadio:
                 self.pending = deque((e for e in self.pending if e['key'] != 'position'), maxlen=48)
             return
         position = self.current_position()
+        if position != self.position_candidate and any(e['key'] == 'position' for e in self.pending):
+            self.pending = deque((e for e in self.pending if e['key'] != 'position'), maxlen=48)
+            # A missing score invalidates the old call but leaves an unheard
+            # change to be reconsidered after a new stable scoring interval.
+            self.position_changed = True
         if s.get('session_state') != 4 or position is None or position <= 0:
             self.position_candidate = self.position_since = None
             return
@@ -961,6 +1029,9 @@ class RaceRadio:
         if kind == 'pre_race': return s.get('session_state') in (1, 2, 3)
         if kind == 'formation': return s.get('session_state') == 3 and s.get('on_pit_road') is False
         if kind == 'racing': return s.get('session_state') == 4
+        if kind == 'time_left':
+            remaining = num(s.get('session_time_remaining_s'))
+            return s.get('session_state') == 4 and remaining is not None and value[0] - value[1] <= remaining <= value[0]
         if kind == 'lap': return s.get('lap_completed') == value
         if kind == 'position': return (str(self.metadata.get('session_type') or '').strip().lower() == 'race'
                                        and self.current_position() == value and s.get('session_state') == 4)
@@ -972,11 +1043,12 @@ class RaceRadio:
 
     def view(self, now):
         events = [{k: v for k, v in e.items() if k != 'condition'} | {'expires_in_ms': round((e['expires_at'] - now) * 1000)}
-                  for e in self.pending if self.valid(e, now)]
+                  for e in self.pending if self.valid(e, now) and not (e['key'] == 'black' and self.black_completed)]
         # On the formation lap the driver weaves and brakes to warm the car, and has time to listen.
         calm = self.latest.get('session_state') == 3
         return {'events': events, 'quiet': calm or speech_ok(self.latest), 'brief_quiet': calm or speech_ok(self.latest, brief=True), 'serial': self.serial, 'run_id': self.run_id,
                 'speech_window_s': self.latest.get('speech_window_s'), 'speech_learned_laps': self.latest.get('speech_learned_laps', 0),
+                'workload_in_s': self.latest.get('workload_in_s'), 'speech_hold_s': self.latest.get('speech_hold_s'),
                 'session_time': self.latest.get('session_time'), 'lap_number': self.latest.get('lap_number'), 'distance_pct': self.latest.get('distance_pct'),
                 'connected': self.last_sample is not None and 0 <= now - self.last_sample < .5,
                 'history': list(self.history), 'capabilities': self.capabilities(),

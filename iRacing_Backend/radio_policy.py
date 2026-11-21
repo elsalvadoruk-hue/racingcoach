@@ -49,6 +49,26 @@ def report_window(sample, text=None, brief=False):
     return speech_ok(sample, brief)
 
 
+ACTION_REPORTS = frozenset(('last_lap', 'pit_soon', 'pit_two', 'pit_fuel_plan', 'pit_fuel_check',
+                            'tyre_plan', 've_save', 've_need_stop'))
+
+
+def report_speech_budget(report):
+    if report['priority'] >= 3 or report['key'] in ACTION_REPORTS or report.get('finish_save_pct'):
+        return None
+    return round(speech_seconds(report.get('spoken_text') or report['text']) + .5, 3)
+
+
+def information_fits(sample, required):
+    """Reserve the whole sentence when the driver has a learned braking point ahead."""
+    lead = sample.get('workload_in_s')
+    hold = sample.get('speech_hold_s')
+    return (required is None or sample.get('on_pit_road') is True
+            or type(lead) not in (float, int) or not math.isfinite(lead)
+            or (type(hold) in (float, int) and hold < 0)
+            or lead >= required)
+
+
 class TrackSpeechWindows:
     """Learn this car/layout's repeatable low-workload stretches, in memory only."""
     BINS = 200

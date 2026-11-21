@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useGame, useGameSettings } from './lib/gameContext';
 import { readGameItem, writeGameItem } from './lib/gameStorage';
-import { RESUMABLE, MAX_RESUMES, DEFAULT_RATE } from './voiceAudio';
+import { RESUMABLE, MAX_RESUMES, DEFAULT_RATE, informationFits } from './voiceAudio';
 import { eventSound, playBeep } from './drillBeeps';
 import useVoiceLibrary, { cleanVoiceSettings, voiceSelections } from './lib/voiceLibrary';
 import { readAlerts, voiceEventAllowed } from './lib/voiceAlerts';
@@ -333,7 +333,8 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
     if (settings.standby) return;
     const workloadFor = (e) => e.brief ? (state.current.radio?.brief_quiet ?? state.current.radio?.quiet) : state.current.radio?.quiet;
     // The server applies the driver's hold (no start while braking/steering or shortly before it).
-    const quietFor = (e) => e.immediate || workloadFor(e);
+    const fits = (e) => informationFits(state.current.radio, e.speech_required_s);
+    const quietFor = (e) => e.immediate || (workloadFor(e) && fits(e));
     // Reuse each queue entry's bounded summary across fresh frames. No additional
     // state updates, timers, delivery rows or requests are made for observations.
     const observeQueue = (selected, globalReason) => {
@@ -352,7 +353,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
           else if (!settings.wallAlerts && !settings.specialists && e.engineer !== 'spotter' && !e.key?.startsWith('drill_')) reason = 'specialists_disabled';
           else if (e.priority < 2 && settings.busy) reason = 'coach_busy';
           else if (e.priority < 2 && settings.audioBusy?.() && !(e.immediate && settings.canStartLap?.())) reason = 'audio_busy';
-          else if (e.priority < 2 && (e.cached || rendered.current.has(e.id)) && !quietFor(e)) reason = 'workload';
+          else if (e.priority < 2 && (e.cached || rendered.current.has(e.id)) && !quietFor(e)) reason = fits(e) ? 'workload' : 'short_window';
           else if (e.priority < 2 && !e.immediate && now - lastCall.current <= 1200) reason = 'call_spacing';
           else if (!e.cached && (e.immediate ? lapRendering : rendering).current) reason = 'render_busy';
           else reason = selected?.id === e.id ? 'eligible' : 'queue_priority';
@@ -488,7 +489,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         rate: event.key === 'formation_brief' ? DEFAULT_RATE : undefined,
         priority: event.priority, interrupt: event.priority >= 2 || Boolean(event.immediate && output.current.canStartLap?.()),
         valid: () => valid() && (event.priority >= 2 || quietFor(event)),
-        startDeadline: needsClearTraffic(event) || event.group === 'race_plan' ? event.local_expires : undefined,
+        startDeadline: event.local_expires,
         workloadValid: event.immediate ? undefined : event.key.startsWith('pit_box_') || event.key.startsWith('traffic_') ? valid : event.priority < 2 ? () => workloadFor(event) && !occupied(state.current, applied.current.alerts)
           && Date.now() - lastFrame.current < 600 : undefined,
         // Expiry alone never cuts a started sentence. A newer pit distance can
@@ -641,7 +642,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         const nextQueue = new Map((frame.radio?.events || []).map((event) => [event.id, { ...event,
           backend_version: event.backend_version || frame.backend_version || null,
           queueWait: radioQueue.current.get(event.id)?.run_id === event.run_id
-            ? radioQueue.current.get(event.id).queueWait : createRadioWait(event.key, now),
+            ? radioQueue.current.get(event.id).queueWait : createRadioWait(event.key, now, event.speech_required_s),
           local_expires: Math.min(radioQueue.current.get(event.id)?.local_expires ?? Infinity,
             now + Math.min(120000, event.expires_in_ms) - (typeof frame.sent_at === 'number' ? Math.max(0, now - frame.sent_at * 1000 - serverOffset) : 0)) }]));
         for (const slot of [rendering, lapRendering]) {

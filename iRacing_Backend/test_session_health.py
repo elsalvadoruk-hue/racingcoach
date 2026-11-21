@@ -69,6 +69,47 @@ class HealthTests(unittest.TestCase):
         health = json.loads(zipfile.ZipFile(io.BytesIO(data)).read('session-health.json'))
         self.assertEqual(health['samples'][-1]['state'], 'STALE')
 
+    def test_control_reasons_survive_run_switch_and_export_without_radio(self):
+        from session_health import SessionHealthRecorder, ControlTrialDiagnostics
+        live = self.live()
+        log = live.radio.control_trials = ControlTrialDiagnostics()
+        identity = {**live.identity, 'game':'iracing', 'car_path':'bmwm4gt3'}
+        log.observe('quiet-run', identity, 'Race', 100.)
+        for _ in range(20):
+            log.mark('tc', ('corner',3), 'no_window')
+        log.observe('next-run', live.identity, 'Practice', 105.)
+        recorder = SessionHealthRecorder(live, self.store, 'test', clock=lambda:106.)
+        recorder.run_once()
+        _, data = session_log.export(self.store, 'quiet-run', 'test')
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            summary = json.loads(archive.read('session-health.json'))['control_trials']
+        self.assertEqual(summary['counts']['tc']['no_window'], 1)
+        self.assertTrue(summary['eligible']['tc'])
+        _, later = session_log.export(self.store, 'next-run','test')
+        with zipfile.ZipFile(io.BytesIO(later)) as archive:
+            following = json.loads(archive.read('session-health.json'))['control_trials']
+        self.assertFalse(following['eligible']['tc'])
+        self.assertNotIn('no_window',following['counts']['tc'])
+        self.assertNotIn('PRIVATE', str(summary))
+
+    def test_export_flushes_latest_counts_and_counts_full_deliveries_by_event(self):
+        from session_health import SessionHealthRecorder, ControlTrialDiagnostics
+        live = self.live()
+        log = live.radio.control_trials = ControlTrialDiagnostics()
+        identity = {**live.identity,'game':'iracing','car_path':'bmwm4gt3'}
+        log.observe(live.run_id,identity,'Race',100.)
+        recorder = SessionHealthRecorder(live,self.store,'test',clock=lambda:100.)
+        self.store.flush_control_trials = recorder.flush_control_trials
+        log.mark('tc', 'first', 'queued_trial')
+        for eid, status, missing in [('a','started',0),('a','completed',0),('a','completed',0),('b','completed',1)]:
+            self.store.record_radio([dict(run_id=live.run_id,event_id=eid,key='control_tc_wheelspin',
+                                          status=status,dropped_parts=missing)])
+        _,data = session_log.export(self.store,live.run_id,'test')
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            summary = json.loads(z.read('session-health.json'))['control_trials']
+        self.assertTrue(all(summary['eligible'].values()))
+        self.assertEqual(summary['counts']['tc'], dict(queued_trial=1, started=1, completed=1))
+
     def test_failed_write_can_retry_and_does_not_break_live_collection(self):
         from session_health import SessionHealthRecorder
         recorder = SessionHealthRecorder(self.live(), self.store, '2.3.1', clock=lambda: 100.)

@@ -27,6 +27,8 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from bisect import bisect_right
+from collections import defaultdict
 from dataclasses import dataclass, field
 import logging
 from itertools import islice
@@ -194,6 +196,37 @@ def _collection_versions(radio):
     return result
 
 
+def link_timeout_followups(radio):
+    """Link only observed progress, on the same page generation and output-route category."""
+    failed = [e for e in radio if e.get('status')=='failed' and e.get('reason')=='playback_start_timeout']
+    if not failed:
+        return
+    progress, tests = defaultdict(list), defaultdict(set)
+    for e in radio:
+        p = e.get('playback') or {}
+        owner = p.get('owner_generation')
+        if not owner:
+            continue
+        route, at = p.get('output_route'), e.get('at')
+        if (route and p.get('attempt_id') and isinstance(at,(int,float)) and (p.get('media_time_s') or 0) > .01
+                and e.get('status') in ('started','interrupted','completed')):
+            progress[owner,route].append((at,p['attempt_id']))
+        if p.get('output_test_route') and p.get('output_test') and isinstance(p.get('output_test_at'),(int,float)):
+            tests[owner,p['output_test_route']].add((p['output_test_at'],p['output_test']))
+    outcomes = [{key:sorted(items) for key,items in data.items()} for data in (progress,tests)]
+    for e in failed:
+        p = e.get('playback') or {}
+        key, at = (p.get('owner_generation'),p.get('output_route')), e.get('at')
+        if not all(key) or not isinstance(at,(float,int)):
+            continue
+        follow = e['timeout_followup'] = {}
+        for data, time_key, value_key in zip(outcomes, ('media_progress_at','output_test_at'), ('attempt_id','output_test')):
+            items = data.get(key, ())
+            i = bisect_right(items,at,key=lambda item:item[0])
+            if i<len(items):
+                follow[time_key],follow[value_key]=items[i]
+
+
 def export(store, run_id, app_version, include_questions=False, extras=(), limit=None):
     """(file name, zip bytes) for one session, or None when that session left nothing.
 
@@ -201,6 +234,8 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
     Extra or None. With ``limit``, extra groups are left out in EXTRA_ORDER until the file fits;
     the manifest says what was left out and why. A Deferred from an extra is passed on.
     """
+    if flush := getattr(store, 'flush_control_trials', None):
+        flush()
     with store.connect() as db:
         rows = db.execute('SELECT created_at, event_json FROM radio_delivery WHERE run_id=? ORDER BY id', (run_id,)).fetchall()
         health_rows = _health_rows(db, run_id, 1)
@@ -216,6 +251,7 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
         notes = db.execute('SELECT created_at, text, reply, source, reply_source, service_error, context_json FROM voice_notes '
                            'WHERE created_at BETWEEN ? AND ? ORDER BY created_at', (started - 120, ended + 120)).fetchall()
     radio = [scrub({**json.loads(row['event_json']), 'recorded_at': row['created_at']}) for row in rows]
+    link_timeout_followups(radio)
     if not include_questions:
         # The answer to a microphone question is played like any call; its words stay out with the question.
         radio = [{**event, 'text': None} if event.get('key') == 'answer' else event for event in radio]
@@ -272,6 +308,14 @@ def export(store, run_id, app_version, include_questions=False, extras=(), limit
     made = []
     if health is not None:
         document = scrub({**json.loads(health['health_json']), 'identity': json.loads(health['identity_json'])})
+        if 'control_trials' in document:
+            keys = {'tc':'control_tc_wheelspin', 'abs':'control_abs_wet_map', 'brake_bias':'control_bias_corner'}
+            for control, key in keys.items():
+                calls = [e for e in radio if e.get('key')==key and e.get('event_id')]
+                counts = document['control_trials']['counts'][control]
+                for status in ('started','completed'):
+                    counts[status] = len({e['event_id'] for e in calls if e.get('status')==status
+                                          and (status!='completed' or not e.get('dropped_parts'))})
         made.append(Extra('session_health', {'session-health.json': json.dumps(document, ensure_ascii=False).encode('utf-8')},
                           {'samples': len(document['samples']), 'dropped_samples': document['dropped_samples']}))
     if banter:

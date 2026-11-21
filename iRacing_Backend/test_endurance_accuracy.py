@@ -34,6 +34,23 @@ def race(**values):
 
 
 class EnduranceFuelTests(unittest.TestCase):
+    def test_extension_target_survives_brief_drop_but_releases_after_one_lap(self):
+        wall = RaceEngineer()
+        def target(lap, pct, base, longer=None, stops=0):
+            v = view(fuel_next_stop_l=base, fuel_next_stop_longer_l=longer, own_stops=stops)
+            s = sample(session_time=lap*100+pct*100, lap_number=lap, distance_pct=pct)
+            r = next(r for r in wall.candidates(v,s,{}) if r['key']=='pit_fuel_plan')
+            return int(r['token'])
+        self.assertEqual(target(13,.01,33.52,37.13),38)
+        self.assertEqual(target(13,.05,33.53),38)
+        self.assertEqual(target(14,.01,33.48),38)
+        self.assertEqual(target(14,.44,33.34,36.96),38)
+        self.assertEqual(target(14,.78,33.45,37.06),38)
+        self.assertEqual(target(15,.05,33.5),38)
+        self.assertEqual(target(16,.06,33.5),34)
+        self.assertEqual(target(16,.1,33.6,39.01),40)
+        self.assertEqual(target(16,.2,20.4,stops=1),21)
+
     def test_urgent_box_includes_numeric_addition_in_same_delivery(self):
         wall = RaceEngineer()
         report = wall.select(wall.candidates(view(), sample(), {}), sample(), 'all', cached_audio=True)
