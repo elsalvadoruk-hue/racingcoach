@@ -760,6 +760,8 @@ class VoiceCoach:
         """
         item = selected_race_event(item, getattr(self, 'custom_packs', None))
         cache, role = self.fixed_audio, item.get('engineer')
+        if item.get('key') in ('control_tc_wheelspin','control_bias_corner','control_abs_wet_map'):
+            return all(self.live.driving_audio_ready(part) for part in item.get('speech_parts') or [item['speech_text']])
         if item.get('prepared_only') and item.get('key','').startswith('learned_') and item.get('speech_text'):
             # Voice selection can change while an observed recommendation is queued.
             return self.live.driving_audio_ready(item['speech_text'])
@@ -1276,6 +1278,11 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             try:
                 if event.get('control_recommendation',{}).get('setup'):
                     audio=await asyncio.to_thread(coach.fixed_audio.read_prepared,event['engineer'],event['speech_text'])
+                elif event.get('key') in ('control_tc_wheelspin','control_bias_corner'):
+                    # Both clauses carry meaning. If either file vanished, suppress the whole call.
+                    parts = [await asyncio.to_thread(coach.fixed_audio.read_prepared, event['engineer'], part)
+                             for part in event['speech_parts']]
+                    audio = parts[0]
                 elif event.get('speech_parts'):
                     parts, dropped_parts = await coach.radio_audio_parts(event, cached_only)
                     audio = parts[0]

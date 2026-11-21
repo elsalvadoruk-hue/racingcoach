@@ -7,7 +7,7 @@ Pressure trials can only suggest increases; legal lower limits are not observed.
 """
 from collections import deque
 from statistics import median
-from live_controls import finite
+from live_controls import finite, pedal_ratio
 from setup_capabilities import profile_for,LABELS
 
 PHRASES={
@@ -46,13 +46,14 @@ class SetupAdvisor:
         changed=values!=self.settings
         if changed:
             self.settings=values;self.laps.clear();self.current=None;self.advice=[]
-        pct,at,speed,brake,throttle,steer,yaw=(finite(s.get(k)) for k in (
-            'distance_pct','session_time','speed_mps','brake','throttle','steering_rad','yaw_rate'))
+        pct,at,speed,steer,yaw=(finite(s.get(k)) for k in (
+            'distance_pct','session_time','speed_mps','steering_rad','yaw_rate'))
+        brake,throttle=pedal_ratio(s.get('brake')),pedal_ratio(s.get('throttle'))
         if steer is None:steer=finite(s.get('steering_lock_ratio'))
         lap=s.get('lap_number')
         valid=(s.get('on_track') is True and s.get('on_pit_road') is False and s.get('is_replay') is False
                and s.get('setup_fixed') is False and None not in (pct,at,speed,brake,throttle)
-               and finite(lap) is not None and 0<=pct<=1 and 0<=brake<=1 and 0<=throttle<=1)
+               and finite(lap) is not None and 0<=pct<=1)
         prev,self.previous=self.previous,({'at':at,'pct':pct,'lap':lap,'incidents':s.get('incidents')} if valid else None)
         if not valid:
             self.current=None;self.laps.clear();self.advice=[]
@@ -61,7 +62,8 @@ class SetupAdvisor:
         dt=at-prev['at']
         clean=(0<dt<=.5 and s.get('incidents')==prev['incidents'] and not int(s.get('session_flags') or 0)&0xC108
                and s.get('car_left_right') not in (2,3,4,5,6) and s.get('track_surface',3)==3
-               and not s.get('engine_warnings') and not s.get('pit_repair_left_s'))
+               # iRacing includes normal rev-limiter activation in EngineWarnings.
+               and not int(s.get('engine_warnings') or 0) & ~0x20 and not s.get('pit_repair_left_s'))
         cross=lap==prev['lap']+1 and prev['pct']>.9 and pct<.1
         clean=clean and ((cross and 0<=1+pct-prev['pct']<=.1) or
                          (lap==prev['lap'] and 0<=pct-prev['pct']<=.1))

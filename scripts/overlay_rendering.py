@@ -272,6 +272,14 @@ class OverlayRendering:
         color='#00f0ff' if bright else '#b7faff'
         self.canvas.create_rectangle(self.x(6),self.y(131),self.x(384),self.y(149),
                                      outline=color if age<4 else '#2d5969',width=1,tags=('footer-notice',))
+        if item.get('timing') == 'corner':
+            text = item['text']
+            size = 12
+            while size > 9 and self.font(size, True).measure(text) > self.x(366):
+                size -= 1
+            self.text(195,146,self.fit_text(text,366,size,True),size=size,color=color,bold=True,
+                      anchor='s',tags=('footer-notice',))
+            return
         when=('예약 완료' if item.get('state')=='reserved' else '다음 피트') if item.get('timing')=='pit' else '주행 중'
         self.text(12,145,when,size=9,color='#96d5df',anchor='sw',tags=('footer-notice',))
         self.text(73,145,item['name'],size=10,bold=True,anchor='sw',tags=('footer-notice',))

@@ -162,6 +162,17 @@ class AdviceTests(unittest.TestCase):
             lap['sites']=[(.2,20.+i*5,.3),(.55,20.+i*5,.3)]
         self.assertFalse(a.view(s)['advice'])
 
+    def test_rev_limiter_on_a_straight_is_not_an_engine_fault(self):
+        from setup_advisor import SetupAdvisor
+        for warning, expected in ((0x20, True), (0x20 | 0x04, False)):
+            with self.subTest(warning=warning):
+                a = SetupAdvisor()
+                for s in samples():
+                    if .8 < s['distance_pct'] < .82:
+                        s['engine_warnings'] = warning
+                    a.ingest(IDENTITY, s)
+                self.assertEqual(a.view(s)['ready'], expected)
+
     def test_other_setup_changes_clear_existing_abs_tc_bias_evidence(self):
         from live_controls import ControlAdvisor
         a=ControlAdvisor();s=next(samples())
@@ -265,7 +276,7 @@ class PressurePolicyTests(unittest.TestCase):
             with self.subTest(fixed=fixed):
                 radio=RaceRadio();radio.run_id='r';radio.last_sample=0.;radio.setup_advice_allowed=True
                 s=dict(on_track=True,is_replay=False,on_pit_road=False,session_state=4,
-                       pressure_lf=150.,setup_fixed=False)
+                       pressure_lf=150.,setup_fixed=False,brake=0.,steering_rad=0.,speed_mps=42.)
                 radio.latest=s
                 item=dict(setup=True,control='pressure_lf',field='pressure_lf',initial=150.,current=150.,
                           target=155.,timing='pit',pending_field='pressure_lf_pending')
@@ -280,6 +291,28 @@ class PressurePolicyTests(unittest.TestCase):
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_pit_trial_waits_for_the_planned_stop_and_rechecks_if_the_driver_moves_it(self):
+        from live_telemetry import LiveTelemetry
+        live = LiveTelemetry(clock=lambda: 10.)
+        sample = dict(next(samples()),lap_number=7,distance_pct=.3,steering_rad=0.,rear_arb=4.)
+        live.ingest(IDENTITY,sample)
+        live.radio.metadata['session_type'] = 'Race'
+        stale_plan = {'run':'previous-run','pit_lap':14}
+        live.plan_options = stale_plan
+        def valid(pit):
+            live._coach_corners(IDENTITY,sample,10.)
+            live.radio.setup_advice_allowed = True
+            event = dict(run_id=live.run_id,not_before=0,expires_at=20,
+                         condition=('control_setting',('rear_arb',4.,'rear_arb')),
+                         control_recommendation={'setup':True,'timing':'pit' if pit else 'live'})
+            return live.radio.valid(event,10.)
+        self.assertTrue(valid(True))
+        live.plan_options = {'run':live.run_id,'pit_lap':8}
+        self.assertTrue(valid(True))
+        live.plan_options['pit_lap'] = 14
+        self.assertFalse(valid(True))
+        self.assertTrue(valid(False))
+
     def test_prepared_voice_waits_for_started_and_raw_slot_change_cancels_card(self):
         from setup_advisor import SetupAdvisor
         from live_telemetry import LiveTelemetry
@@ -316,6 +349,8 @@ class DeliveryTests(unittest.TestCase):
         clock=[0.];live=LiveTelemetry(clock=lambda:clock[0])
         live.speech_hold_s=-1
         for s in samples():
+            if s['distance_pct'] < .18:
+                s.update(steering_rad=0., throttle=1.)
             clock[0]=s['session_time'];live.ingest(IDENTITY,s)
         s={**s,'session_time':s['session_time']+.1,'steering_rad':0.,'throttle':1.}
         clock[0]=s['session_time'];live.ingest(IDENTITY,s)

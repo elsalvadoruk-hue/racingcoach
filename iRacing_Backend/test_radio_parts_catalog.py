@@ -6,12 +6,15 @@ import unittest
 from unittest.mock import patch
 
 import radio_phrases
+from radio_audio import fixed_catalog
 from race_radio import RaceRadio
 from race_engineer import RaceEngineer
 import test_engineer_variation as radio_cases
 import test_straight_brief as straight_cases
 import test_live_formation as formation_cases
 import test_fuel_strategy as fuel_cases
+import test_race_wheelspin as wheelspin_cases
+import test_race_braking as braking_cases
 
 
 class MultipartCatalogTests(unittest.TestCase):
@@ -36,6 +39,8 @@ class MultipartCatalogTests(unittest.TestCase):
             ('live_reporting.py', '_brief_straight', 'straight_brief'),
             ('live_coaching.py', '_track_sectors', 'repair_check'),
             ('live_coaching.py', '_track_sectors', 'damage_check'),
+            ('race_wheelspin.py', 'ingest', 'dynamic'),
+            ('corner_controls.py', 'speak_bias', 'control_bias_corner'),
         }
         # New builders must add an exercised representative below. This inventory
         # also prevents silently missing a new file or a second construction site.
@@ -55,7 +60,7 @@ class MultipartCatalogTests(unittest.TestCase):
                         inventory.add((path.name, function.name, key))
         self.assertEqual(inventory, expected)
         self.assertEqual(assignments, {('race_radio.py', 'emit'), ('race_engineer.py', 'candidates'), ('race_engineer.py', 'add')})
-        catalog = set(radio_phrases.catalog())
+        catalog = set(radio_phrases.catalog()) | set(fixed_catalog())
         found, records, reports = set(), [], []
         emit, candidates = RaceRadio.emit, RaceEngineer.candidates
         def capture(radio, *args, **kwargs):
@@ -65,7 +70,7 @@ class MultipartCatalogTests(unittest.TestCase):
             if kwargs.get('speech_parts') and len(radio.pending) > before:
                 event = radio.pending[-1]
                 source = (Path(caller.f_code.co_filename).name, caller.f_code.co_name,
-                          args[0] if caller.f_code.co_name not in ('_laps', '_results') else 'dynamic')
+                          'dynamic' if caller.f_code.co_name in ('_laps','_results','ingest') else args[0])
                 found.add(source)
                 records.append(event)
             return result
@@ -81,6 +86,8 @@ class MultipartCatalogTests(unittest.TestCase):
             formation_cases.FormationRadioTests('test_a_topic_reaches_the_radio_with_its_sentences_and_is_gone_at_the_green'),
             fuel_cases.EnduranceFuelTests('test_the_pit_call_adds_where_the_stop_puts_the_car_as_a_second_sentence'),
             fuel_cases.EnduranceFuelTests('test_the_tyre_plan_is_its_own_call_near_the_stop'),
+            wheelspin_cases.WheelspinTests('test_trial_render_and_cancellation_through_normal_sampler_and_http'),
+            braking_cases.RaceBrakingTests('test_measured_bias_reaches_radio_only_after_two_independent_click_pairs'),
         ]
         with patch.object(RaceRadio, 'emit', capture), patch.object(RaceEngineer, 'candidates', capture_reports):
             result = unittest.TestResult()

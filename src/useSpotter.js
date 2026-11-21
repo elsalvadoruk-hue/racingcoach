@@ -39,6 +39,7 @@ const overlapClip = (clips, key, audioKey, variant, chooseReviewed) => {
 // The existing bumper threshold is .7s. Include the car ahead as well as behind.
 const closeBattle = frame => Boolean(frame.occupied) || (frame.radio?.traffic?.nearby || []).some(car => car.close === true
   || (typeof car.gap_estimate_s === 'number' && car.gap_estimate_s >= 0 && car.gap_estimate_s <= .7));
+const needsClearTraffic = event => event.immediate || event.group === 'control_advice';
 export default function useSpotter(apiBase, audioOutput, { busy = false, specialists = true, racePlanEnabled = false, level = 'all', wallAlerts: requestedWallAlerts, recordDelivery, classApproaches } = {}) {
   const wallAlerts = useMemo(() => !requestedWallAlerts || specialists ? requestedWallAlerts
     : Object.fromEntries(Object.keys(requestedWallAlerts).map(key => [key, key === 'race_tire_push' && requestedWallAlerts[key]])), [requestedWallAlerts, specialists]);
@@ -345,7 +346,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
             : (e.immediate ? lapRendering : rendering).current?.event.id === e.id ? 'preparing_audio' : 'processing';
           else if (now < (playbackFailures.current.get(e.id)?.retryAt || 0)) reason = 'retry_backoff';
           else if (!voiceEventAllowed(e, applied.current.alerts, settings.wallAlerts)) reason = 'alerts_disabled';
-          else if (e.immediate && closeBattle(current)) reason = 'close_battle';
+          else if (needsClearTraffic(e) && closeBattle(current)) reason = 'close_battle';
           else if (!settings.wallAlerts && !e.key?.startsWith('drill_') && settings.level !== 'all'
             && ['pace_detail', 'incident_coaching', 'corner_focus', 'straight_brief'].includes(e.key)) reason = 'level_filtered';
           else if (!settings.wallAlerts && !settings.specialists && e.engineer !== 'spotter' && !e.key?.startsWith('drill_')) reason = 'specialists_disabled';
@@ -368,7 +369,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       && Date.now() >= (playbackFailures.current.get(event.id)?.retryAt || 0)
       && voiceEventAllowed(event, applied.current.alerts, settings.wallAlerts)
       && (event.group === 'race_plan' || !settings.classApproaches?.heard(event.run_id, event.class_notice))
-      && (!event.immediate || !closeBattle(current))
+      && (!needsClearTraffic(event) || !closeBattle(current))
       // The corner drill's warm-up voice is part of a drill the driver started: always played.
       && (settings.wallAlerts || event.key?.startsWith('drill_') || settings.level === 'all' || !['pace_detail', 'incident_coaching', 'corner_focus', 'straight_brief'].includes(event.key))
       && (settings.wallAlerts || settings.specialists || event.engineer === 'spotter' || event.key?.startsWith('drill_')))
@@ -388,7 +389,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       && (event.group !== 'race_plan' || output.current.racePlanEnabled)
       && revision === alertRevision.current && voiceEventAllowed(event, applied.current.alerts, output.current.wallAlerts)
       && state.current.radio.run_id === event.run_id && !occupied(state.current, applied.current.alerts)
-      && (!event.immediate || !closeBattle(state.current))
+      && (!needsClearTraffic(event) || !closeBattle(state.current))
       && (output.current.wallAlerts || output.current.specialists || event.engineer === 'spotter' || event.key?.startsWith('drill_'))
       && (event.priority >= 2 || !output.current.busy)
       && radioQueue.current.has(event.id) && Date.now() < event.local_expires && Date.now() - lastFrame.current < 600;
@@ -479,7 +480,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
       observeRadioWait(event.queueWait, 'playback_pending');
       const started = silent || await output.current.play(audio, mime, {
         diagnostics,
-        confirmAudible: event.group === 'race_plan' || Boolean(event.class_notice),
+        confirmAudible: event.group === 'race_plan' || event.group === 'control_advice' || Boolean(event.class_notice),
         signal: pending.controller.signal,
         pitBoxDistance: /^pit_box_\d+$/.test(event.key) ? Number(event.key.slice(8)) : undefined,
         channel: event.engineer === 'spotter' ? 'spotter' : 'pitwall',
@@ -487,7 +488,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         rate: event.key === 'formation_brief' ? DEFAULT_RATE : undefined,
         priority: event.priority, interrupt: event.priority >= 2 || Boolean(event.immediate && output.current.canStartLap?.()),
         valid: () => valid() && (event.priority >= 2 || quietFor(event)),
-        startDeadline: event.immediate || event.group === 'race_plan' ? event.local_expires : undefined,
+        startDeadline: needsClearTraffic(event) || event.group === 'race_plan' ? event.local_expires : undefined,
         workloadValid: event.immediate ? undefined : event.key.startsWith('pit_box_') || event.key.startsWith('traffic_') ? valid : event.priority < 2 ? () => workloadFor(event) && !occupied(state.current, applied.current.alerts)
           && Date.now() - lastFrame.current < 600 : undefined,
         // Expiry alone never cuts a started sentence. A newer pit distance can
@@ -584,7 +585,7 @@ export default function useSpotter(apiBase, audioOutput, { busy = false, special
         try { frame = JSON.parse(data); } catch { return; }
         if (!['ready', 'spotter'].includes(frame.type)) return;
         const radioEvents = (frame.radio?.events || []).filter(e =>
-          e.group === 'race_plan' ? output.current.racePlanEnabled : enabled);
+          e.group === 'race_plan' ? output.current.racePlanEnabled : enabled || (planOnly && e.group === 'control_advice'));
         if (frame.radio) frame = { ...frame, radio: { ...frame.radio, events: radioEvents } };
         if (planOnly) frame = { ...frame, events: [], drill: null, banter_shadow: [], oval_shadow: [] };
         const now = Date.now();

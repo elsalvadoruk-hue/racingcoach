@@ -27,6 +27,9 @@ from live_formation import FormationBrief, RaceHistory, history_facts
 from radio_audio import shown_text
 from live_controls import ControlAdvisor
 from control_recommendations import ControlRecommendations
+from corner_controls import CornerControls
+from race_wheelspin import RaceWheelspin
+from race_braking import WetAbsReminder
 from setup_advisor import SetupAdvisor
 from setup_capabilities import read_setup_channels,session_setup_values,fixed_setup
 from race_result import RaceResultTracker
@@ -72,6 +75,7 @@ def session_identity(weekend, driver_info):
 
 
 CHANNELS = {
+    **{f'{w}_wheel_speed': f'{w}speed' for w in ('LF','RF','LR','RR')},
     **{f'{w}_shock': f'{w}shockDefl' for w in ('LF','RF','LR','RR')},
     **{f'{w}_rumble': f'Tire{w}_RumblePitch' for w in ('LF','RF','LR','RR')},
     'session_time': 'SessionTime', 'session_num': 'SessionNum', 'lap_number': 'Lap',
@@ -83,6 +87,7 @@ CHANNELS = {
     'air_temp_c': 'AirTemp', 'incidents': 'PlayerCarMyIncidentCount',
     'incident_severity': 'PlayerIncidents',
     'car_left_right': 'CarLeftRight',
+    'car_ahead_m': 'CarDistAhead', 'car_behind_m': 'CarDistBehind',
     'session_state': 'SessionState', 'session_flags': 'SessionFlags',
     'session_time_remaining_s': 'SessionTimeRemain', 'session_laps_remaining': 'SessionLapsRemainEx',
     'lap_completed': 'LapCompleted', 'lap_last_s': 'LapLastLapTime', 'lap_best_s': 'LapBestLapTime',
@@ -153,6 +158,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         from race_plan import RacePlan
         self.race_plan = RacePlan()
         self.plan_options = {}
+        self.radio.pit_trial_due = self._pit_trial_due
         self.radio.plan_valid = lambda item, now: self.race_plan.valid(*item, now, self.radio.latest)
         self.pit_wall.traffic = self.radio.traffic
         self.pit_wall.shared_traffic = True
@@ -161,6 +167,13 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.driving_audio_ready = lambda text: False
         self.radio.driving_valid = lambda token, now: self.driving_learning.valid(token,now)
         self.controls = ControlAdvisor()
+        self.corner_controls = CornerControls()
+        self.wheelspin = RaceWheelspin()
+        self.wet_abs = WetAbsReminder()
+        self.radio.wet_abs_valid = lambda token,now:self.wet_abs.event_valid(token,self.radio.latest,self.radio,now)
+        self.radio.corner_bias_valid = lambda token,now:self.corner_controls.bias_valid(token,self.radio.latest,self.radio,now)
+        self.radio.wheelspin_valid = lambda token, now, text: self.wheelspin.valid(
+            token, self.radio.latest, now, self.radio, text)
         self.control_recommendations = ControlRecommendations()
         self.setup_advisor = SetupAdvisor()
         self.setup_audio_ready = lambda text:False
@@ -238,6 +251,9 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
 
     def radio_delivery(self, identifier, status, *, dropped_parts=0, session_time=None):
         with self.lock:
+            self.wheelspin.delivery(identifier, status)
+            self.wet_abs.delivery(identifier,status)
+            self.corner_controls.bias_delivery(identifier,status)
             receipt = self.radio.delivery(identifier, status, dropped_parts=dropped_parts, session_time=session_time)
             if receipt and 'plan_token' in receipt:
                 self.race_plan.delivered(receipt['key'],receipt['plan_token'],self.clock())
@@ -277,6 +293,9 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                 self.corners.reset()
                 self.driving_learning.reset()
                 self.controls.reset()
+                self.corner_controls.reset()
+                self.wheelspin = RaceWheelspin()
+                self.wet_abs = WetAbsReminder()
                 self.control_recommendations.reset()
                 self.setup_advisor.reset()
                 self.race_result.reset()
@@ -515,6 +534,9 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
             self.practice.reset(reason)
             self.overlay_laps.reset()
             self.control_recommendations.cancel()
+            self.corner_controls.reset()
+            self.wheelspin.reset_stint()
+            self.wet_abs = WetAbsReminder()
             self.controls.reset()
             self.setup_advisor.reset()
 
@@ -593,6 +615,9 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                                             self.run_id,self.clock())
                     self._race_read_at=self.clock()
                 self.control_recommendations.cancel()
+                self.corner_controls.reset()
+                self.wheelspin.reset_stint()
+                self.wet_abs = WetAbsReminder()
                 self.controls.reset()
                 self.setup_advisor.reset()
                 self.prepare_overlay(identity, sample,

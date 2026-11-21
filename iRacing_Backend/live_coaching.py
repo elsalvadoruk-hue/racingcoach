@@ -3,15 +3,25 @@ from __future__ import annotations
 import logging
 import statistics
 from live_corners import CALL_EARLY_S, call_seconds
+from live_controls import LAPS_NEEDED
 from live_pit import COLD_TYRE_S
 from live_drill import VOICE_KINDS as DRILL_VOICE
 from radio_audio import CALLS as FIXED_CALLS
 from live_damage import damage_parts, repair_parts
-from radio_policy import speech_ok
 logger=logging.getLogger('iRacingLive')
 
 
 class LiveCoaching:
+    def _pit_trial_due(self, sample):
+        if str(self.radio.metadata.get('session_type') or '').lower() != 'race':
+            return True
+        target = self.plan_options.get('pit_lap') if self.plan_options.get('run') == self.run_id else None
+        lap = sample.get('lap_number')
+        if target is None or (lap is not None and target < lap):
+            return not int(sample.get('session_flags') or 0) & 0x2  # white flag
+        distance = self.race_plan.distance_to_planned_stop(target, lap, sample.get('distance_pct'), None)
+        return distance is not None and distance <= 2
+
     def _speak_drill(self, now):
         """The drill's warm-up and finish are said by the coach; its beeps go on the fast path (spotter_status)."""
         for event in self.drill.events:
@@ -47,43 +57,69 @@ class LiveCoaching:
                     self.radio.emit('corner_focus', now, focus['text'], role='coach', ttl=CALL_EARLY_S, cooldown=20, group='corner_focus',
                                     condition=('corner_ahead', (focus['until_pct'], focus['margin_pct'], self.corners.revision)), speech_text=texts[focus['fits']])
             self.controls.ingest(sample)
+            corner_controls = self.corner_controls
+            car = identity.get('car_path') if identity.get('game')=='iracing' else None
+            racing = str(self.radio.metadata.get('session_type') or '').lower()=='race'
+            corner_controls.ingest(self.corners, sample, context, getattr(self.controls, 'countersteer', None),
+                                   car if racing else None,self.radio.metadata.get('track_length_m'))
             self.setup_advisor.ingest(identity,sample)
             self.radio.setup_advice_allowed=len(self.setup_advisor.laps)>=3 and sample.get('setup_fixed') is False
-            controls_view=self.controls.view()
-            self.radio.control_advice_allowed=controls_view.get('ready',False)
+            named_corners = any(d.get('call') for d in self.corners.definitions)
+            self.radio.control_advice_allowed=not named_corners and len(self.controls.laps)>=LAPS_NEEDED
             dispatch = self.control_recommendations
             capabilities = dispatch.capabilities(sample)
             dispatch.observe(sample, now, {e['id'] for e in self.radio.pending
                                           if e['expires_at'] > now and e['run_id'] == self.run_id})
+            corner_controls.update_card(self.corners, sample, now, self.radio.metadata.get('track_length_m'),
+                                        self.radio.metadata.get('session_type'), context, self.radio,
+                                        bool(dispatch.active or dispatch.pending))
+            occupied = bool(dispatch.active or dispatch.pending)
+            self.wet_abs.ingest(car,sample,context,self.radio,now,self.driving_audio_ready,occupied)
+            corner_controls.speak_bias(sample,self.radio,now,self.driving_audio_ready,occupied)
+            self.wheelspin.ingest(identity, self.corners, sample, context, self.radio, now, self.driving_audio_ready,
+                                  occupied=bool(dispatch.active or dispatch.pending or corner_controls.card))
             # Reconsider deferred candidates; enqueue only one and charge its cooldown
             # when the browser confirms that playback really began.
             completed_lap = self.controls.laps[-1]['lap'] if self.controls.laps else None
             if completed_lap != self._control_lap or now-getattr(self, '_control_checked_at', -1e9)>=1:
                 self._control_lap = completed_lap
                 self._control_checked_at=now
+                controls_view=self.controls.view()
+                self.radio.control_advice_allowed=not named_corners and controls_view['ready']
                 setup_view=self.setup_advisor.view(sample)
-                choices=[a for a in controls_view['advice']+setup_view['advice'] if not a.get('call') or self.radio.allows(a['call'])]
-                item=dispatch.choose(choices,sample,capabilities,now)
+                # Mapped tracks use the screen-only, phase-specific cockpit advice.
+                # A queued general audio call must also be withdrawn if a map arrives.
+                general = [] if named_corners else controls_view['advice']
+                choices = [a for a in general + setup_view['advice']
+                           if (not a.get('call') or self.radio.allows(a['call']))
+                           and (a.get('timing') != 'pit' or self._pit_trial_due(sample))]
+                # A new clean lap may disprove an old direction without changing
+                # the current setting. Withdraw that exact event before selection.
+                for event in tuple(self.radio.pending):
+                    if event['group'] != 'control_advice' or 'control_recommendation' not in event:
+                        continue
+                    old = event['control_recommendation']
+                    if not any(a.get('call') == old['call'] and
+                               (not old.get('setup') or a.get('target') == old.get('target'))
+                               for a in choices):
+                        self.radio.pending.remove(event)
+                        dispatch.pending.pop(event['id'], None)
+                special_queued = any(e['group']=='control_advice' and 'control_recommendation' not in e
+                                     and self.radio.valid(e,now) for e in self.radio.pending)
+                item=dispatch.choose(choices,sample,capabilities,now) if not corner_controls.card and not special_queued else None
                 if item:
-                    if item.get('setup'):
-                        if (sample.get('on_pit_road') is not False or sample.get('session_state')!=4
-                                or self.radio.result or self.radio.qualifying or not speech_ok(sample)):
-                            return
-                        if item.get('straight_only'):
-                            from radio_policy import quiet_window
-                            if not quiet_window(sample):return
-                        if not self.setup_audio_ready(item['text']):
+                    if item.get('setup') and not self.setup_audio_ready(item['text']):
+                        if self.radio.control_window(sample, item['text'], now):
                             dispatch.present(item,now)
-                            return
-                        self.radio.control_advice_allowed=True
+                        return
                     before=self.radio.serial
                     field=item.get('field')
                     condition=('control_setting',(item['control'],item.get('initial',item['current']),field))
                     if item.get('setup'):
-                        self.radio.emit(item['call'],now,item['text'],role='coach',ttl=30,cooldown=0,delay=8,
+                        self.radio.emit(item['call'],now,item['text'],role='coach',ttl=30,cooldown=0,
                                         group='control_advice',condition=condition,speech_text=item['text'])
                     else:
-                        self.radio.say(item['call'], now, role='coach', ttl=30, cooldown=0, delay=8, group='control_advice',
+                        self.radio.say(item['call'], now, role='coach', ttl=30, cooldown=0, group='control_advice',
                                        condition=condition)
                     event=next((e for e in self.radio.pending if e['serial']>before and e['group']=='control_advice'),None)
                     if event:

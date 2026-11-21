@@ -340,6 +340,25 @@ test('pit wall alone plays the selected race plan and leaves spotter and drill s
   unmount();
 });
 
+test.each(['control_tc_more', 'setup_rear_arb_pit'])('pit wall alone delivers the selected %s recommendation during a clear window', async key => {
+  const { result } = renderHook(() => useSpotter('http://test', audio, {
+    specialists: true, racePlanEnabled: true, wallAlerts: { tc: true, arb: true },
+  }));
+  expect(result.current.enabled).toBe(false);
+  global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ event: {}, audio_base64: 'setting' }) }));
+  const event = radioEvent(key, { group: 'control_advice', engineer: 'coach' });
+  const cars = { nearby: [{ close: true }] };
+  const busy = radioFrame([event]);
+  busy.radio.traffic = cars;
+  await act(async () => send(sockets[0], busy));
+  expect(audio.play).not.toHaveBeenCalled();
+  await act(async () => send(sockets[0], radioFrame([event, radioEvent('green')])));
+  expect(audio.play).toHaveBeenCalledWith('setting', 'audio/mpeg', expect.objectContaining({
+    channel: 'pitwall', confirmAudible: true, startDeadline: expect.any(Number),
+  }));
+  expect(global.fetch.mock.calls.some(([url]) => url.includes('green'))).toBe(false);
+});
+
 test('a hung routine render cannot occupy the lap preparation slot', async () => {
   const recordDelivery = jest.fn();
   const { result, unmount } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));

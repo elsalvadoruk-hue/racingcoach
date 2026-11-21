@@ -3,7 +3,7 @@ from collections import deque
 import math
 import logging
 import statistics
-from radio_policy import quiet_window, speech_ok
+from radio_policy import quiet_window, speech_ok, speech_seconds
 from spotter_context import TrafficApproach, PitBoxGuide, HazardWatch, progress
 from radio_audio import speech_fields
 import radio_phrases
@@ -130,6 +130,7 @@ class RaceRadio:
         self.serial = 0
         self.variant_counts = {}
         self.spoken_counts = {}
+        self.pit_trial_due = lambda sample: True
         self.history = deque(maxlen=20)
         self.reset()
 
@@ -847,6 +848,21 @@ class RaceRadio:
         self.say('quali_gap_' + status, now, values, ttl=8, cooldown=4, group='quali_traffic',
                  condition=('quali_traffic', (sample.get('lap_number'), dict(result))))
 
+    def control_window(self, sample, text, now):
+        """Start a setting trial on a clear straight before the next braking zone."""
+        ahead = num(sample.get('workload_in_s'))
+        speed = num(sample.get('speed_mps'))
+        return (sample.get('on_track') is True and sample.get('is_replay') is False
+                and sample.get('on_pit_road') is False and sample.get('session_state') == 4
+                and sample.get('track_surface') in (None, 3)
+                and (self.lap_done_at is None or now - self.lap_done_at >= LAP_CALL_START_S)
+                and not self.result and not self.qualifying and not int(sample.get('session_flags') or 0) & 0xC119
+                and sample.get('car_left_right') not in (2, 3, 4, 5, 6)
+                and speed is not None and speed > 2 and quiet_window(sample) and speech_ok(sample)
+                and (ahead is None or ahead >= speech_seconds(text))
+                and not any(car['close'] or car['gap_estimate_s'] <= .7
+                            for car in self.traffic.view(now)['nearby']))
+
     def valid(self, event, now):
         if event.get('key') == 'finish' and str(self.metadata.get('session_type') or '').lower() in ('', 'race'):
             return False
@@ -871,16 +887,21 @@ class RaceRadio:
             return getattr(self, 'plan_valid', lambda *_: False)(value, now)
         if kind == 'driving_learning':
             return getattr(self,'driving_valid',lambda token,stamp:False)(value,now)
+        if kind == 'wheelspin':
+            return getattr(self,'wheelspin_valid',lambda *_:False)(value, now, event['speech_text'])
+        if kind == 'wet_abs':
+            return getattr(self,'wet_abs_valid',lambda *_:False)(value, now)
+        if kind == 'corner_bias':
+            return getattr(self,'corner_bias_valid',lambda *_:False)(value, now)
         if kind == 'control_setting':
             from control_recommendations import FIELDS
             field=(value[2] if len(value)>2 else None) or FIELDS.get(value[0])
-            is_setup=event.get('control_recommendation',{}).get('setup') is True
+            recommendation = event.get('control_recommendation', {})
+            if recommendation.get('timing') == 'pit' and not self.pit_trial_due(s):
+                return False
+            is_setup=recommendation.get('setup') is True
             ready=(self.setup_advice_allowed and s.get('setup_fixed') is False) if is_setup else self.control_advice_allowed
-            if event.get('control_recommendation',{}).get('straight_only'):
-                from radio_policy import quiet_window
-                if not quiet_window(s):return False
-            return (ready and s.get(field) == value[1] and s.get('on_pit_road') is False
-                    and s.get('session_state') == 4 and not self.result)
+            return ready and s.get(field) == value[1] and self.control_window(s, event.get('speech_text'), now)
         if kind == 'quali_traffic':
             if (not self.open_qualifying or not self.traffic_enabled or s.get('lap_number') != value[0]
                     or not self.quali_traffic.current(s, now)):

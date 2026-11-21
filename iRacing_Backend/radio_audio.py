@@ -160,6 +160,21 @@ def spoken_form(text):
     "박스. 박스." left too long a gap, "박스, 박스." did not.
     """
     # Digits before a unit were stretched ("5위" as "오…위", "5랩" as "오…랩"); written out they were not.
+    if match := re.fullmatch(r'(\d{1,2})번 코너\.', text):
+        return sino(int(match[1]))+'번 코너.'
+    if match := re.fullmatch(r'(다음 랩|이번 랩에서) TC (\d{1,2})(번을 시험해 보세요\.|번 써보세요\.)', text):
+        return match[1]+' 티씨 '+sino(int(match[2]))+match[3]
+    if text == 'YOKOHAMA-S.':
+        return '요코하마 에스.'
+    if text == '다음 YOKOHAMA-S.':
+        return '다음 요코하마 에스.'
+    if match := re.fullmatch(r'다음 (\d{1,2})번 코너\.',text):
+        return '다음 '+sino(int(match[1]))+'번 코너.'
+    if text == '웨트 ABS 맵 확인.':
+        return '웨트 에이비에스 맵 확인.'
+    if match := re.fullmatch(r'바이어스 (\d{2})(?:\.(\d{1,2}))?퍼센트\.',text):
+        fraction = ' 점 '+''.join(sino(int(n)) for n in match[2]) if match[2] else ''
+        return '바이어스 '+sino(int(match[1]))+fraction+' 퍼센트.'
     text = re.sub(r'(?<![\d.])(\d+)위', lambda match: sino(int(match[1])) + '위', text)
     text = re.sub(r'(?<![\d.])(\d+)랩(?!분)', lambda match: native(int(match[1])) + '랩', text)
     # Whole litres joined in Hangul ("오리터"). "오 리터" and "5리터" were stretched, "다섯 리터" is not
@@ -182,6 +197,10 @@ def fixed_catalog():
     found.update({('coach', text): None for text in TIRE_PHRASES.values()})
     from driving_phrases import VARIANTS as DRIVING_PHRASES
     found.update({('coach', text): None for choices in DRIVING_PHRASES.values() for text in choices})
+    from race_wheelspin import voice_catalog
+    found.update({('coach', text): None for text in voice_catalog()})
+    from race_braking import voice_catalog as braking_phrases
+    found.update({('coach', text): None for text in braking_phrases()})
     return list(found)
 
 

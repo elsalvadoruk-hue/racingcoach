@@ -39,15 +39,15 @@ test('queued feedback retains the loaded frontend and originating backend versio
   expect(event.backend_version).toBe('2.1.2');
 });
 
-test('setting playback starts notify the HUD immediately while ordinary logs stay batched', async () => {
+test.each(['control_bias_forward','setup_rear_arb_pit'])('%s playback starts notify the HUD immediately while ordinary logs stay batched', async key => {
   const { result } = renderHook(() => useRadioDiagnostics('http://synthetic'));
   act(() => result.current({ event_id: 'lap', key: 'lap_time' }, 'started'));
   expect(fetch).not.toHaveBeenCalled();
-  await act(async () => result.current({ event_id: 'setting', key: 'control_bias_forward' }, 'started'));
+  await act(async () => result.current({ event_id: 'setting', key }, 'started'));
   expect(fetch).toHaveBeenCalledTimes(1);
   const events = JSON.parse(fetch.mock.calls[0][1].body).events;
   expect(events.map(e => e.event_id)).toEqual(['lap', 'setting']);
-  act(() => result.current({ event_id: 'setting', key: 'control_bias_forward' }, 'completed'));
+  act(() => result.current({ event_id: 'setting', key }, 'completed'));
   expect(fetch).toHaveBeenCalledTimes(1);
   await act(async () => jest.advanceTimersByTime(1000));
   expect(fetch).toHaveBeenCalledTimes(2);

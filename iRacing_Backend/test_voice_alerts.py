@@ -81,6 +81,8 @@ class VoiceAlertTests(unittest.TestCase):
         live.radio = self.radio()
         live.radio.configure_alerts(pitwall={'abs': False, 'tc': True})
         live.corners.focus = None
+        live.corners.definitions = []
+        live.corner_controls.card = None
         live.controls.view.return_value = {'ready': True, 'advice': [dict(call='control_abs_more'), dict(call='control_tc_more')]}
         live.setup_advisor.view.return_value = {'advice': []}
         live.controls.laps = []

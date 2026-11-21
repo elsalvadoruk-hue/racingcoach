@@ -71,7 +71,7 @@ class LiveViews:
                     'race_result': self.race_result.view(),
                     'wheel_observation': wheel_view(latest, self.game),
                     'damage_observation': self.damage.overlay_view(latest),
-                    'control_recommendation': self.control_recommendations.view(),
+                    'control_recommendation': self.corner_controls.view() or self.control_recommendations.view(),
                     # Samples are immutable after append. Keep the bounded history in
                     # this process so slow laps can fill a distance-aligned graph.
                     # Only the selected graph window goes over the native pipe.
@@ -136,6 +136,7 @@ class LiveViews:
                     'corner_coach': self.corners.view(),
                     'driving_learning': self.driving_learning.view(),
                     'controls': self.controls.view(),
+                    'control_recommendation': self.corner_controls.view() or self.control_recommendations.view(),
                     'setup_controls': self.setup_advisor.view(latest),
                     'radio': {'briefing': self.radio.briefing(), 'capabilities': self.radio.capabilities(),
                               'pit_speed_limit_kph': self.radio.metadata.get('pit_speed_limit_kph'),

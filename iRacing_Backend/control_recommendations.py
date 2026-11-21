@@ -7,10 +7,23 @@ LABELS={'brake_bias':'BBAL','tc':'TC','abs':'ABS'}
 DIRECTIONS={'forward':'앞쪽으로','more':'개입 늘리기','less':'낮추기','raise':'높이기'}
 
 
+def _measured_bias(value):
+    # The SDK reports single-precision percentages. Preserve off-grid readings.
+    if value is None:
+        return None
+    hundredth=round(value,2)
+    if 0<hundredth<100 and abs(value-hundredth)<=0.000005:
+        return hundredth
+    return value
+
+
 def target_value(item,sample,capabilities):
     cap=capabilities.get(item['control']) or {}
     current=finite(sample.get(FIELDS.get(item['control'],'')))
     low,high,step=(finite(cap.get(k)) for k in ('min','max','step'))
+    if item['control']=='brake_bias':
+        current=_measured_bias(current)
+        low,high=_measured_bias(low),_measured_bias(high)
     direction=cap.get('increase_direction')
     if (current is None or None in (low,high,step) or not low<=current<=high or step<=0
             or cap.get('button_adjustable') is not True): return None
@@ -39,6 +52,7 @@ class ControlRecommendations:
         """
         value=finite(sample.get('brake_bias'))
         if value is not None and 0 < value < 100:
+            value=_measured_bias(value)
             if self.bias_previous is not None and value != self.bias_previous:
                 delta=round(abs(value-self.bias_previous),6)
                 self.bias_deltas=(self.bias_deltas+[delta])[-12:]
