@@ -186,22 +186,26 @@ def spoken_form(text):
     return re.sub(r'쯤 (?=뒤|전|후)', '쯤', text)  # "랩쯤 … 뒤에" paused the same way
 
 
+def fixed_catalog_entries():
+    from radio_phrases import ACKS
+    from setup_advisor import PHRASES
+    from tire_reader.advisor import PHRASES as TIRE_PHRASES
+    from driving_phrases import VARIANTS as DRIVING_PHRASES
+    from race_wheelspin import voice_catalog
+    from race_braking import voice_catalog as braking_phrases, WET_CHECK
+    yield from ((key, CALLS[key][0], text) for key in CALLS for text in texts(key))
+    yield from (('ack', role, text) for role in ('coach', 'race', 'strategy') for text in ACKS)
+    yield from ((key, 'coach', text) for key, text in PHRASES.items())
+    yield from (('tire_' + key, 'coach', text) for key, text in TIRE_PHRASES.items())
+    yield from (('learned_' + key, 'coach', text) for key, choices in DRIVING_PHRASES.items() for text in choices)
+    yield from (('control_tc_more', 'coach', text) for text in voice_catalog())
+    yield from (('control_abs_wet_map' if text == WET_CHECK else 'control_bias_step', 'coach', text)
+                for text in braking_phrases())
+
+
 def fixed_catalog():
     """Every (role, wording) of the fixed calls and the short acknowledgements."""
-    from radio_phrases import ACKS
-    found = {(CALLS[key][0], text): None for key in CALLS for text in texts(key)}
-    found.update({(role, text): None for role in ('coach', 'race', 'strategy') for text in ACKS})
-    from setup_advisor import PHRASES
-    found.update({('coach', text): None for text in PHRASES.values()})
-    from tire_reader.advisor import PHRASES as TIRE_PHRASES
-    found.update({('coach', text): None for text in TIRE_PHRASES.values()})
-    from driving_phrases import VARIANTS as DRIVING_PHRASES
-    found.update({('coach', text): None for choices in DRIVING_PHRASES.values() for text in choices})
-    from race_wheelspin import voice_catalog
-    found.update({('coach', text): None for text in voice_catalog()})
-    from race_braking import voice_catalog as braking_phrases
-    found.update({('coach', text): None for text in braking_phrases()})
-    return list(found)
+    return list(dict.fromkeys((role, text) for _, role, text in fixed_catalog_entries()))
 
 
 class RadioAudioCache:
@@ -227,6 +231,10 @@ class RadioAudioCache:
 
     def cached(self, role, text):
         if self.custom_packs is not None and self.custom_packs.has(role,text):return True
+        from race_strategy_clips import files
+        paths = files(self.directory, role, text, self.custom_packs)
+        if paths:
+            return all(path.is_file() for path in paths)
         from race_call_audio import BY_WORDING, prepared_file
         if (role, text) in BY_WORDING:
             return prepared_file(role, text, self.custom_packs, self.directory) is not None
@@ -246,6 +254,10 @@ class RadioAudioCache:
         """Read an existing whole-sentence clip; never repair or synthesize it."""
         if self.custom_packs is not None and self.custom_packs.has(role,text):
             return self.custom_packs.audio(role,text)
+        from race_strategy_clips import files, read_files
+        paths = files(self.directory, role, text, self.custom_packs)
+        if paths:
+            return read_files(paths)
         from race_call_audio import BY_WORDING, prepared_file
         if (role, text) in BY_WORDING:
             prepared = prepared_file(role, text, self.custom_packs, self.directory)
@@ -263,6 +275,9 @@ class RadioAudioCache:
     def phrase(self, role, text):
         """One whole call as a single clip, synthesized once per voice and wording."""
         from race_call_audio import BY_WORDING
+        from race_strategy_clips import clauses
+        if clauses(role,text):
+            return self.read_prepared(role,text)
         if (role, text) in BY_WORDING or self.custom_packs is not None and self.custom_packs.has_selection(role):
             return self.read_prepared(role,text)
         import number_splice

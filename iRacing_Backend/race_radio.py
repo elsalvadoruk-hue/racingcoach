@@ -10,6 +10,8 @@ import radio_phrases
 import radio_variations
 from session_health import ControlTrialDiagnostics
 from qualifying_traffic import QualifyingTraffic, is_open_qualifying
+from reentry_approach import ReentryApproach
+from fast_class_pass import FastClassPass
 from race_result import result_position
 from voice_alerts import category, clean, allowed, event_allowed
 
@@ -88,10 +90,12 @@ QUALI_SILENT = ('traffic_', 'close_', 'hazard_', 'class_traffic')
 # Flags about other cars or the race start mean nothing on a lone qualifying lap. Green, white and
 # the chequered flag are called; so are the driver's own black flag and repair signal.
 QUALI_SILENT_FLAGS = ('yellow', 'caution', 'blue', 'debris', 'red', 'one_to_green', 'start_ready', 'start_set')
+TIRE_ADVICE = frozenset(('rain_prepare', 'rain_box', 'slick_box'))
 RACE_START_CALLS = frozenset(('one_to_green', 'start_ready', 'start_set', 'race_started'))
 
 
 TRAFFIC_REARM_S = 4.       # a car that was called is called again only after it dropped this far back (or got past)
+TRAFFIC_PACK_GAP_S = 4.   # consecutive fast cars this close form one continuous approach
 CLOSE_REARM_S = 1.5
 CLASS_NOTICE_S = 12.  # Generic notices from either crew member about the same car and direction.
 CLASS_CALL_SIDES = {'traffic_faster_behind': 'behind', 'traffic_slower_ahead': 'ahead'}
@@ -144,19 +148,22 @@ class RaceRadio:
         retained = ({key: getattr(self, key) for key in
                      ('run_id', 'briefed', 'briefing_delivered', 'position_said', '_position_delivery_serial', '_deliveries',
                       'result_called', 'result', 'finish_issued', 'class_notices',
-                      'black_event', 'black_completed', 'black_seen_at')}
+                      'black_event', 'black_completed', 'black_seen_at', 'pit_service_issued',
+                      'rain_event', 'rain_heard')}
                     if keep_run and self.run_id else {})
-        briefing_at = self.sent.get('briefing') if retained else None
-        flag_pending = [e for e in self.pending if e['key'] in ('finish','black')] if retained else []
+        sent = {key: at for key, at in self.sent.items()
+                if key in TIRE_ADVICE or key in ('briefing', 'track_very_wet')} if retained else {}
+        pending = [e for e in self.pending if e['key'] in ('finish', 'black')
+                   or e['group'] in ('pit_service', 'rain_advice')] if retained else []
         self.run_id = None
         self.corner_revision = None
         self.fuel_low_stage = 0
         self.blue_since, self.blue_called = None, False
         self.latest, self.metadata = {}, {}
         self.metadata_at = None
-        self.pending = deque(flag_pending, maxlen=48)
+        self.pending = deque(pending, maxlen=48)
         self.last_sample = None
-        self.sent = {}
+        self.sent = sent
         self.result = None
         self.finish_issued = False
         self.black_event = self.black_seen_at = None
@@ -165,6 +172,7 @@ class RaceRadio:
         self.control_advice_allowed = False
         self.setup_advice_allowed = False
         self.car_calls = {}
+        self.traffic_call_gaps = {}
         self.laps = deque(maxlen=5)
         self.briefed = False
         self.briefing_delivered = False
@@ -188,13 +196,15 @@ class RaceRadio:
         self.result_called = False
         self.damage_check_at = None
         self.wet_level = self.rain_advice = self.temp_reference = None
+        self.rain_event = self.rain_heard = None
+        self.pit_service_issued = set()
         self.dry_laps = deque(maxlen=5)
         self.traffic = TrafficApproach()
+        self.reentry_approach = ReentryApproach()
+        self.fast_class_pass = FastClassPass()
         self.hazard = HazardWatch()
         self.pit_box = PitBoxGuide()
         self.__dict__.update(retained)
-        if briefing_at is not None:
-            self.sent['briefing'] = briefing_at
 
     def configure_alerts(self, spotter=None, pitwall=None):
         old = (self.alerts, self.wall_alerts)
@@ -298,6 +308,27 @@ class RaceRadio:
         last = self.class_notices.get((idx, side))
         return last is not None and t is not None and 0 <= t - last <= CLASS_NOTICE_S
 
+    def traffic_packs(self, nearby):
+        cars = sorted((c for c in nearby if c['side'] == 'behind'
+                       and (c.get('kind') == 'faster_class' or c.get('call_key') == 'traffic_faster_behind')),
+                      key=lambda c: c['gap_estimate_s'])
+        groups = []
+        for car in cars:
+            if not groups or car['gap_estimate_s'] - groups[-1][-1]['gap_estimate_s'] > TRAFFIC_PACK_GAP_S:
+                groups.append([])
+            groups[-1].append(car)
+        packs = {}
+        for group in groups:
+            contacts = tuple(c['idx'] for c in group)
+            heard = any((idx, 'traffic_faster_behind') in self.car_calls for idx in contacts)
+            for car in group:
+                packs[car['idx']] = contacts
+                if heard:
+                    pair = (car['idx'], 'traffic_faster_behind')
+                    self.car_calls[pair] = self.last_sample
+                    self.traffic_call_gaps[pair] = min(self.traffic_call_gaps.get(pair, car['gap_estimate_s']), car['gap_estimate_s'])
+        return packs
+
     def remember_class_notice(self, cars, side, t):
         if t is None:
             return
@@ -306,7 +337,7 @@ class RaceRadio:
             pair = (idx, side)
             self.class_notices[pair] = max(self.class_notices.get(pair, t), t)
 
-    def track_delivery(self, event, *, position=None, brief=None, plan_token=None, class_notice=None):
+    def track_delivery(self, event, *, position=None, brief=None, plan_token=None, class_notice=None, reentry=None):
         """Bounded receipts survive acknowledgement and a short same-run data gap."""
         if event is None:
             return
@@ -316,6 +347,8 @@ class RaceRadio:
                                         'key': event['key'], 'position': num(position), 'brief': brief, 'completed': False}
         if plan_token is not None:
             self._deliveries[event['id']]['plan_token'] = plan_token
+        if reentry is not None:
+            self._deliveries[event['id']]['reentry'] = reentry
         if class_notice:
             self._deliveries[event['id']]['class_notice'] = class_notice
             cars, side = class_notice
@@ -326,9 +359,13 @@ class RaceRadio:
     def delivery(self, identifier, status, *, dropped_parts=0, session_time=None):
         if identifier == self.black_event and status == 'completed' and not dropped_parts:
             self.black_completed = True
+        if self.rain_event and identifier == self.rain_event[0] and status == 'completed' and not dropped_parts:
+            self.rain_heard = self.rain_event[1]
         receipt = self._deliveries.get(identifier)
         if not receipt or receipt['run_id'] != self.run_id or receipt['completed']:
             return None
+        if receipt.get('reentry') and not dropped_parts:
+            self.reentry_approach.delivery(receipt['reentry'], status)
         if (receipt['key'] == 'straight_brief' and not receipt.get('diagnosed')
                 and (status in ('cancelled', 'expired', 'interrupted', 'failed') or dropped_parts)):
             receipt['diagnosed'] = True
@@ -358,8 +395,13 @@ class RaceRadio:
             self.remember_class_notice(*receipt['class_notice'], at)
             if receipt['key'] in CLASS_CALL_SIDES and at is not None and self.latest.get('session_time') is not None:
                 cars, side = receipt['class_notice']
-                if self.class_notice_recent(cars[0], side, self.latest['session_time']):
-                    self.car_calls[(cars[0], receipt['key'])] = self.last_sample
+                gaps = {c['idx']: c['gap_estimate_s'] for c in self.traffic.view(self.last_sample)['nearby']}
+                for idx in cars:
+                    if self.class_notice_recent(idx, side, self.latest['session_time']):
+                        pair = (idx, receipt['key'])
+                        self.car_calls[pair] = self.last_sample
+                        if receipt['key'] == 'traffic_faster_behind' and idx in gaps:
+                            self.traffic_call_gaps[pair] = gaps[idx]
         if receipt['key'] == 'briefing':
             self.briefing_delivered = True
         return receipt
@@ -382,7 +424,7 @@ class RaceRadio:
     def say(self, key, now, values=None, **options):
         """A varied engineer call: one of its wordings with the measured values filled in."""
         built = radio_phrases.build(key, self.variant_counts.get(key, 0), **(values or {}))
-        self.emit(key, now, built['text'], role=options.pop('role', built['engineer']), speech_text=built['text'], **options)
+        return self.emit(key, now, built['text'], role=options.pop('role', built['engineer']), speech_text=built['text'], **options)
 
     def ingest(self, sample, run_id, now, metadata=None):
         if (self.run_id != run_id or self.last_sample is not None and
@@ -397,6 +439,8 @@ class RaceRadio:
             self.quali_traffic.ingest(metadata, sample, now)
         previous = self.latest
         self.latest, self.last_sample = dict(sample), now
+        self.reentry_approach.update(self, sample, metadata, now)
+        self.fast_class_pass.update(self, sample, metadata, now)
         if sample.get('is_replay') is not False or sample.get('on_track') is not True:
             self.pending.clear()
             self.blue_since, self.blue_called = None, False
@@ -413,11 +457,21 @@ class RaceRadio:
             self.traffic.reset()
         self._qualifying_gap(sample, now)
         if self.traffic_enabled:
-            for car in self.traffic.view(now)['nearby']:
+            nearby = self.traffic.view(now)['nearby']
+            for car in nearby:
                 # One call for one approach. It starts again once the car got past or dropped back.
                 for said in [k for k in self.car_calls if k[0] == car['idx']]:
-                    if not said[1].endswith(car['side']) or car['gap_estimate_s'] >= (CLOSE_REARM_S if said[1].startswith('close') else TRAFFIC_REARM_S):
+                    gap = car['gap_estimate_s']
+                    if said in self.traffic_call_gaps:
+                        threshold = self.traffic_call_gaps[said] + TRAFFIC_REARM_S
+                        self.traffic_call_gaps[said] = min(self.traffic_call_gaps[said], gap)
+                    else:
+                        threshold = CLOSE_REARM_S if said[1].startswith('close') else TRAFFIC_REARM_S
+                    if not said[1].endswith(car['side']) or gap >= threshold:
                         del self.car_calls[said]
+                        self.traffic_call_gaps.pop(said, None)
+            packs = self.traffic_packs(nearby)
+            for car in nearby:
                 key = car['call_key'] or car.get('close_key')
                 if not key or (car['idx'], key) in self.car_calls:
                     continue
@@ -425,7 +479,12 @@ class RaceRadio:
                 if side and self.class_notice_recent(car['idx'], side, sample['session_time']):
                     continue
                 if car['call_key']:
-                    group = f"traffic_{car['side']}_{car['idx']}" if side else 'traffic_' + car['side']
+                    contacts = packs.get(car['idx'], (car['idx'],)) if key == 'traffic_faster_behind' else (car['idx'],)
+                    if key == 'traffic_faster_behind' and any(e['key'] == key and
+                            set(contacts).intersection((e.get('class_notice') or {}).get('cars', ()))
+                            and self.valid(e, now) for e in self.pending):
+                        continue
+                    group = f"traffic_{car['side']}_{min(contacts)}" if side else 'traffic_' + car['side']
                     event = self.emit(key, now, priority=2, ttl=2, condition=('traffic', (car['idx'], key)),
                                       cooldown=30, group=group)
                 else:
@@ -433,9 +492,10 @@ class RaceRadio:
                 if event:
                     event['car'] = (car['idx'], key)
                     if side:
-                        self.track_delivery(event, class_notice=([car['idx']], side))
+                        self.track_delivery(event, class_notice=(contacts, side))
             near = {car['idx'] for car in self.traffic.view(now)['nearby']}
             self.car_calls = {k: v for k, v in self.car_calls.items() if k[0] in near}
+            self.traffic_call_gaps = {k: v for k, v in self.traffic_call_gaps.items() if k in self.car_calls}
         # A local yellow still needs the location; a full-course caution or red does not.
         racing = (sample.get('on_pit_road') is False and sample.get('session_state') == 4
                   and not int(sample.get('session_flags') or 0) & 0xC011)
@@ -548,6 +608,11 @@ class RaceRadio:
                         self.emit(f'laps_{count}', now, f'내 차량 기준 {count}랩 남았다는 표시입니다.', condition=('laps_left', count), group='laps_remaining', cooldown=3600,
                                   speech_text=self.wording('laps_left', laps=count))
 
+    def _tire_advice_allowed(self, sample):
+        return (sample.get('on_pit_road') is False and sample.get('session_state') == 4
+                and sample.get('finish_status') not in (1, 2, 3) and not self.result
+                and not int(num(sample.get('session_flags')) or 0) & 1)
+
     def _weather(self, sample, now):
         wet, declared = num(sample.get('track_wetness')), sample.get('declared_wet')
         temp = num(sample.get('track_temp_c'))
@@ -559,6 +624,7 @@ class RaceRadio:
                          {'deg': abs(temp - self.temp_reference)}, cooldown=300, ttl=30, group='track_temp')
                 self.temp_reference = temp
         if wet is None or not 1 <= wet <= 7:  # 1 dry ... 7 extremely wet; 0 is unknown
+            self.rain_advice = None
             return
         old, self.wet_level = self.wet_level, wet
         if old is not None and old <= 2 < wet:
@@ -583,11 +649,20 @@ class RaceRadio:
             # An engineer never says "if you are not on wets". Without the fitted
             # compound only the measured track state is reported.
             advice = 'track_very_wet'
+        if ((self.rain_heard in ('rain_prepare', 'rain_box') and (wet <= 2 or on_wets is True or declared is False))
+                or (self.rain_heard == 'slick_box' and (wet >= 3 or on_wets is False))):
+            self.rain_event = self.rain_heard = None
+        if advice in TIRE_ADVICE and not self._tire_advice_allowed(sample):
+            advice = None
         if advice != self.rain_advice:
             self.rain_advice = advice
-            if advice:
-                self.say(advice, now, priority=2 if advice.startswith('rain_box') else 1, ttl=45,
-                         condition=('rain_advice', advice), cooldown=90, group='rain_advice')
+            # A call pending across a sample gap may be reused only for the same advice.
+            self.pending = deque((e for e in self.pending if e['group'] != 'rain_advice' or e['key'] == advice), maxlen=48)
+            if advice and (advice not in TIRE_ADVICE or advice != self.rain_heard):
+                event = self.say(advice, now, priority=2 if advice == 'rain_box' else 1, ttl=45,
+                                 condition=('rain_advice', advice), cooldown=90, group='rain_advice')
+                if event and advice in TIRE_ADVICE:
+                    self.rain_event = event['id'], advice
 
     def _results(self, sample, previous, now, metadata):
         cars = (metadata or {}).get('cars') or []
@@ -694,6 +769,9 @@ class RaceRadio:
 
     def _pit(self, s, p, now):
         pit, old = s.get('on_pit_road'), p.get('on_pit_road')
+        if pit is False and self.pit_service_issued:
+            self.pit_service_issued.clear()
+            self.pending = deque((e for e in self.pending if e['group'] != 'pit_service'), maxlen=48)
         if pit is True and old is False:
             self.emit('pit_enter', now, priority=2, condition=('pit', True), cooldown=5)
         if pit is False and old is True:
@@ -708,7 +786,12 @@ class RaceRadio:
         if pit is True and status is not None and status != p.get('pit_service_status'):
             key = {1: 'service_start', 2: 'service_done', 100: 'stall_left', 101: 'stall_right',
                    102: 'stall_forward', 103: 'stall_back', 104: 'stall_angle', 105: 'service_unavailable'}.get(int(status))
-            if key:
+            if status in (1, 2):
+                if status not in self.pit_service_issued and 2 not in self.pit_service_issued:
+                    event = self.emit(key, now, priority=2, condition=('service', status), cooldown=0, group='pit_service')
+                    if event:
+                        self.pit_service_issued.add(status)
+            elif key:
                 self.emit(key, now, priority=2, condition=('service', status), cooldown=5)
         tow, old_tow = num(s.get('tow_time_s')), num(p.get('tow_time_s'))
         if tow is not None and tow > 0 and old_tow is not None and old_tow <= 0:
@@ -961,6 +1044,10 @@ class RaceRadio:
         if event.get('position_value') is not None and self.current_position() != event['position_value']:
             return False
         kind, value = event.get('condition') or (None, None)
+        if kind == 'reentry_approach':
+            return self.traffic_enabled and self.reentry_approach.valid(value, now)
+        if kind == 'class_pass':
+            return self.traffic_enabled and self.fast_class_pass.valid(value, now)
         if kind == 'race_plan':
             return getattr(self, 'plan_valid', lambda *_: False)(value, now)
         if kind == 'driving_learning':
@@ -991,6 +1078,8 @@ class RaceRadio:
                 abs(current.get(key, 0) - told.get(key, 0)) <= 1.
                 for key in ('front_s', 'rear_s', 'delay_s'))
         if kind == 'traffic':
+            if value[1] == 'traffic_faster_behind' and (value[0], value[1]) in self.car_calls:
+                return False
             side = CLASS_CALL_SIDES.get(value[1])
             if side and self.class_notice_recent(value[0], side, s.get('session_time')):
                 return False
@@ -999,7 +1088,7 @@ class RaceRadio:
         if kind == 'wet':
             return num(s.get('track_wetness')) is not None and value[0] <= s['track_wetness'] <= value[1]
         if kind == 'rain_advice':
-            return self.rain_advice == value
+            return self.rain_advice == value and (value not in TIRE_ADVICE or self._tire_advice_allowed(s))
         if kind == 'close':
             return self.traffic_enabled and any(c['idx'] == value and c.get('close') for c in self.traffic.view(now)['nearby'])
         if kind == 'straight':
@@ -1043,7 +1132,8 @@ class RaceRadio:
 
     def view(self, now):
         events = [{k: v for k, v in e.items() if k != 'condition'} | {'expires_in_ms': round((e['expires_at'] - now) * 1000)}
-                  for e in self.pending if self.valid(e, now) and not (e['key'] == 'black' and self.black_completed)]
+                  for e in self.pending if self.valid(e, now) and not (e['key'] == 'black' and self.black_completed)
+                  and self.rain_event != (e['id'], self.rain_heard)]
         # On the formation lap the driver weaves and brakes to warm the car, and has time to listen.
         calm = self.latest.get('session_state') == 3
         return {'events': events, 'quiet': calm or speech_ok(self.latest), 'brief_quiet': calm or speech_ok(self.latest, brief=True), 'serial': self.serial, 'run_id': self.run_id,
@@ -1052,7 +1142,8 @@ class RaceRadio:
                 'session_time': self.latest.get('session_time'), 'lap_number': self.latest.get('lap_number'), 'distance_pct': self.latest.get('distance_pct'),
                 'connected': self.last_sample is not None and 0 <= now - self.last_sample < .5,
                 'history': list(self.history), 'capabilities': self.capabilities(),
-                'traffic': self.traffic.view(now), 'hazards': self.hazard.view(now), 'pit_box': {**self.pit_box.view(), 'enabled': self.pit_box_enabled}}
+                'traffic': self.traffic.view(now), 'hazards': self.hazard.view(now), 'pit_box': {**self.pit_box.view(), 'enabled': self.pit_box_enabled},
+                **({'class_pass_observation': self.fast_class_pass.observation} if self.fast_class_pass.observation else {})}
 
     def get(self, identifier, now):
         return next((dict(e) for e in self.pending if e['id'] == identifier and self.valid(e, now)), None)

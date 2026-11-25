@@ -11,6 +11,7 @@ import SpotterPanel from '../components/SpotterPanel';
 import PitWall from '../components/PitWall';
 import { AudioPreferences } from './RuntimePreview';
 import DrivingLearning from '../components/DrivingLearning';
+import RadioButtonSettings from '../components/RadioButtonSettings';
 
 export function VoiceWorkspace({ runtime, onSettings }) {
   const { controls, change, speech, host } = runtime;
@@ -18,7 +19,7 @@ export function VoiceWorkspace({ runtime, onSettings }) {
   const statusText = host.phase === 'sending' ? '인식·저장·답변 중…' : active ? '듣고 있습니다 · 최대 45초'
     : controls.armed ? host.socketReady ? 'F8을 누른 채 말하고 놓으세요.' : 'F8 연결 중 · 화면 녹음 버튼 사용 가능' : '먼저 마이크를 준비하세요.';
   return <section className="voice-preview voice-settings-workspace" aria-label="음성 코치">
-    <div className="utility-heading"><div><div className="eyebrow">VOICE COACH / RADIO SETTINGS</div><h1>음성 코치</h1><p>질문·오디오, 스포터, 피트월을 함께 관리하세요. 답변과 메모는 기록에서 확인합니다.</p></div><div className="flex items-center gap-3"><Badge variant="outline">{host.status?.connected ? '주행 연결됨' : '차량 연결 대기'}</Badge><Button variant="outline" size="sm" onClick={onSettings}><Settings2 data-icon="inline-start" />설치·연결 설정</Button></div></div>
+    <div className="utility-heading"><div><div className="eyebrow">VOICE COACH / RADIO SETTINGS</div><h1>음성 코치</h1><p>질문·오디오, 스포터, 피트월을 함께 관리하세요. 답변과 메모는 기록에서 확인합니다.</p></div><div className="flex items-center gap-3"><Badge variant="outline">{host.status?.connected ? '주행 연결됨' : '차량 연결 대기'}</Badge><RadioButtonSettings apiBase={runtime.apiBase} audio={host.audioOutput} /><Button variant="outline" size="sm" onClick={onSettings}><Settings2 data-icon="inline-start" />설치·연결 설정</Button></div></div>
     <div className="voice-console">
       <div className="voice-column" aria-label="질문과 오디오 설정" tabIndex={0}>
         {speech.available ? <Card className="voice-question"><CardHeader><CardTitle>주행 중 질문</CardTitle><CardDescription>{speech.verified ? 'Google 음성 인식 연결을 확인했습니다.' : 'Google 음성 API가 설정되어 있습니다. 실제 연결은 질문할 때 확인합니다.'}</CardDescription></CardHeader>

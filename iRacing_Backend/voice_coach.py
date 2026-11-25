@@ -29,6 +29,7 @@ from voice_notes import VoiceNoteStore, file_identity, identity_compatible, publ
 from voice_context import (coaching_instructions, fuel_range_question, general_question, lap_review_question, recent_conversation,
                            recent_observations, compact_recent, review_question, columnar, corner_facts)
 from live_corners import corner_answer, lap_answer
+from live_damage import DAMAGE_AUDIO_FALLBACKS
 from race_call_audio import CALLS as RACE_CALLS, RACE_AUDIO_DIR, RECORDINGS, selected_race_event
 from race_engineer import ROLES, role_voice, choose_role, measured_answer, damage_answer
 from spotter import SpotterAudio
@@ -48,6 +49,16 @@ logger = logging.getLogger('iRacingVoiceCoach')
 DEFAULT_TTS_VOICE = 'ko-KR-Chirp3-HD-Algenib'
 NO_THINKING_MODELS = ('gemini-2.5-flash', 'gemini-3.5-flash')
 COMPACT_SPOTTER_AUDIO = 'application/json; spotter=compact'
+
+
+def read_damage_fallback(cache, role, key, wording):
+    try:
+        if cache.cached(role, wording):
+            return cache.read_prepared(role, wording)
+    except (OSError, ValueError):
+        pass
+    payload = (Path(__file__).with_name('radio_fallbacks') / f'{key}.ogg').read_bytes()
+    return 'data:audio/ogg;codecs=opus;base64,' + base64.b64encode(payload).decode('ascii')
 
 
 def compact_spotter_audio(manifest):
@@ -493,13 +504,22 @@ class VoiceCoach:
         from custom_voice_packs import CustomVoicePacks
         self.custom_packs = CustomVoicePacks(self.store.path.parent / 'custom_voice_packs',self.store.path.parent / 'short_radio')
         self.fixed_audio.custom_packs = self.custom_packs
+        self.live.radio.prepared_seconds=self.prepared_race_seconds
         self.live.setup_audio_ready=lambda text:self.fixed_audio.cached('coach',text)
+        self.live.finish_save_audio_ready = self.finish_save_audio_ready
         self.live.driving_audio_ready=lambda text: (
             self.custom_packs.has('coach',text) if self.custom_packs.has_selection('coach')
             else self.fixed_audio.cached('coach',text)
         )
         self._report_notes = (None, [])
         self.audio_preparation = AudioPreparation(RadioAudioCache(self.speech,self.fixed_audio.directory))
+
+    def prepared_race_seconds(self, role, normal, short):
+        from race_strategy_clips import prepared_seconds
+        if self.custom_packs.has_selection(role) and not self.custom_packs.is_builtin(self.custom_packs.selections.get(role)):
+            return None
+        item=selected_race_event({'engineer':role,'speech_text':normal,'race_short_text':short},self.custom_packs)
+        return prepared_seconds(self.fixed_audio.directory,role,item['speech_text'],self.custom_packs)
 
     def report_notes(self):
         # Polled every couple of seconds; reread only after the store changed.
@@ -1035,7 +1055,10 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
     backend_version = getattr(app, 'version', None)
     coach.app_version = backend_version
     router = APIRouter(prefix='/api/live-coach')
+    from radio_buttons import register as register_radio_buttons
     spotter_audio = SpotterAudio(coach.speech, lambda: role_voice('spotter'))
+    buttons = register_radio_buttons(router, coach, spotter_audio)
+    coach.live.button_owns_f8 = buttons.owns_f8
 
     @router.get('/race-radio/index.html')
     def race_radio_preview():
@@ -1260,6 +1283,7 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
             # Read only complete prepared sentences. A cold numeric detail must
             # neither hold the cloud lock nor trigger automatic synthesis.
             sentences = event.get('speech_parts') or [event.get('speech_text')]
+            damage_keys = event.get('damage_part_keys') or ()
             parts, spoken, dropped, fallback = [], [], 0, None
             for index, sentence in enumerate(sentences):
                 try:
@@ -1269,6 +1293,14 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
                     spoken.append(sentence)
                 except (OSError, ValueError):
                     dropped += 1
+                    if index < len(damage_keys) and (wording := DAMAGE_AUDIO_FALLBACKS.get(damage_keys[index])):
+                        try:
+                            replacement = await asyncio.to_thread(read_damage_fallback, coach.fixed_audio,
+                                                                  event['engineer'], damage_keys[index], wording)
+                        except OSError:
+                            continue
+                        parts.append(replacement)
+                        spoken.append(wording)
                     if index == 0 and event['key'] == 'repair_check':
                         # These two finite templates come from repair_parts.
                         # The already loaded spotter library owns their generic warnings.
@@ -1391,7 +1423,7 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
         # Context is retained server-side for /captures; polling only needs key edges.
         live_status['hotkey_events'] = [{k: v for k, v in event.items() if k != 'context'}
                                        for event in live_status['hotkey_events']]
-        return {**live_status, 'speech': coach.speech.status(), 'engineers': {k: {**v, 'voice': coach.custom_packs.loaded[coach.custom_packs.selections[k]][0]['name'] if coach.custom_packs.has_selection(k) else role_voice(k)} for k, v in ROLES.items()},
+        return {**live_status, 'radio_buttons_enabled': any(buttons.maps.values()), 'speech': coach.speech.status(), 'engineers': {k: {**v, 'voice': coach.custom_packs.loaded[coach.custom_packs.selections[k]][0]['name'] if coach.custom_packs.has_selection(k) else role_voice(k)} for k, v in ROLES.items()},
                 'ai_available': coach.ai_client is not None, 'model': coach.model, 'storage_available': coach.store.available}
 
     @router.post('/captures')

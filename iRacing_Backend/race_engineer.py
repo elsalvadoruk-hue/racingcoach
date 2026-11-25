@@ -127,6 +127,7 @@ def read_race(sdk, names, session_num):
     data['wet_compounds'] = [t.get('TireIndex') for t in tires
                              if any(word in str(t.get('TireCompoundType') or '').lower() for word in ('wet', 'rain'))]
     data['track_name'] = weekend.get('TrackDisplayName') or weekend.get('TrackName') or ''
+    data['track_config'] = weekend.get('TrackConfigName') or ''
     data['session_duration_s'] = parse_measure(session.get('SessionTime'), 'seconds')
     data['pit_speed_limit_kph'] = parse_measure(weekend.get('TrackPitSpeedLimit'), 'speed')
     data['track_length_m'] = parse_measure(weekend.get('TrackLength'), 'distance')
@@ -240,7 +241,6 @@ class RaceEngineer:
         self.gap_history = {}
         self.spoken = {}
         self.finish_seen = None
-        self.extended_fill = None
         self.race_at = None
         self.lmu_countdown = None
         self.lmu_clock_expired = False
@@ -279,8 +279,6 @@ class RaceEngineer:
         if not getattr(self, 'shared_traffic', False):
             self.traffic.ingest(self.race, session_time)
         own = next((c for c in self.race.get('cars', []) if c['idx'] == self.race.get('player_idx')), None)
-        if own and own.get('on_pit_road') is True:
-            self.extended_fill = None
         old_own = self.previous.get(own['idx']) if own else None
         crossed = (own and old_own and numeric(own.get('lap_completed')) is not None
                    and own['lap_completed'] == (numeric(old_own.get('lap_completed')) or 0) + 1
@@ -513,6 +511,17 @@ class RaceEngineer:
             if not total and duration and 0 < duration < 86400 and time_left is not None and 0 <= time_left <= duration:
                 fraction = 1 - time_left / duration
             leader = next((c for c in race.get('cars', []) if c.get('position') == 1), None)
+            if (race.get('game') == 'iracing' and leader and progress(leader) is not None
+                    and self.race_at is not None and numeric(snapshot.get('session_time')) is not None
+                    and 0 <= snapshot['session_time'] - self.race_at <= 2):
+                # iRacing scoring can still show the pre-stop leader as P1 until
+                # the next line. Fuel needs the car currently leading on track.
+                observed = [car for car in race.get('cars', []) if positive(car.get('position'))
+                            and not car.get('is_pace_car') and car.get('track_surface') not in (-1, 0)
+                            and progress(car) is not None]
+                front = max(observed, key=progress, default=leader)
+                if progress(front) - progress(leader) > .002:
+                    leader = front
             leader_pace = pace(leader)
             # The overall leader crosses after time expires. Include the player's
             # next crossing and a reserve; never treat seconds/own pace as exact laps.
@@ -663,36 +672,13 @@ class RaceEngineer:
                 'estimate_notice': '간격은 랩 진행 거리와 페이스로 환산한 추정입니다. 복귀 순위는 상대 피트·추월·교통 변화를 포함하지 않습니다.'}
 
     def _pit_fuel_litres(self, view, snapshot):
-        base = positive(view.get('fuel_next_stop_l'))
-        longer = positive(view.get('fuel_next_stop_longer_l'))
-        amount = longer or base
+        # The configured reserve is already included. A possible extra lap is
+        # shown separately; it must not silently add another full lap of fuel.
+        amount = positive(view.get('fuel_next_stop_l'))
         full = view.get('fuel_next_stop_full')
         target = math.ceil((positive(view.get('tank_capacity_l')) if full else None) or amount) if amount else None
-        lap, pct = numeric(snapshot.get('lap_number')), numeric(snapshot.get('distance_pct'))
-        if (full or not base or snapshot.get('on_pit_road') or lap is None or pct is None or not 0 <= pct <= 1
-                or not 0 < (view.get('fuel_laps') or 0) <= 2.5 or (view.get('fuel_finish_shortfall_l') or 0) <= .1):
-            self.extended_fill = None
+        if full or target is None:
             return target
-
-        progress = lap + pct
-        scope = (snapshot.get('run_id'), view.get('own_stops'), view.get('finish_total_laps'),
-                 view.get('reserve_laps'), view.get('tank_capacity_l'))
-        plan = self.extended_fill
-        if plan and (plan['scope'] != scope or progress < plan['progress'] or abs(base-plan['base']) >= 1):
-            plan = self.extended_fill = None
-        if longer:
-            # Keep a one-litre rounding dip from reversing the last extension forecast.
-            if plan and target == plan['target'] - 1:
-                target = plan['target']
-            self.extended_fill = dict(scope=scope, base=base, target=target, progress=progress, lower_since=None)
-        elif plan:
-            if plan['lower_since'] is None:
-                plan['lower_since'] = progress
-            plan['progress'] = progress
-            if progress - plan['lower_since'] < 1:
-                target = max(target, plan['target'])
-            else:
-                self.extended_fill = None
         capacity, fuel = positive(view.get('tank_capacity_l')), numeric(snapshot.get('fuel_l'))
         if capacity is not None and fuel is not None:
             target = min(target, math.ceil(max(0, capacity-fuel)))
@@ -775,11 +761,8 @@ class RaceEngineer:
                     # A stop any sooner would not reach the finish on one tank: that is the thing to know.
                     add('pit_two', 'strategy', priority=2, cooldown=900, phrase=('pit_two', {}),
                         also=[('pit_run_dry', {})] if view.get('fuel_run_dry') else [('pit_rejoin', {'pos': rejoin})] if rejoin else ())
-                # How much goes in at this stop, to the litre, and what a lap more would need.
-                amount = view.get('fuel_next_stop_l')
                 # Full-tank litres are the maximum setting; partial stops use the measured addition.
-                # One number only (the driver's decision): when the race may still run a lap longer,
-                # that lap is simply included. "It might be a lap more" is not something to act on.
+                # Speak one number, including the driver's configured reserve.
                 if available <= 2.5 and fuel_part:
                     add('pit_fuel_plan', 'strategy', priority=2, cooldown=900, token=str(litres), phrase=(fuel_phrase, {'liters': litres}))
                     reports[-1]['prepared_only'] = True
@@ -791,7 +774,7 @@ class RaceEngineer:
                 if plan and available <= 2.5:
                     add('tyre_plan', 'strategy', priority=2, cooldown=900, token=str(view.get('tyre_decision')), phrase=plan[0], also=plan[1:])
                 planned, flags = numeric(snapshot.get('pit_sv_fuel')), numeric(snapshot.get('pit_sv_flags'))
-                needed = litres if self.extended_fill is not None else view.get('fuel_next_stop_l')
+                needed = view.get('fuel_next_stop_l')
                 if available <= 2.5 and planned is not None and flags is not None and needed is not None:
                     planned = planned if int(flags) & 0x10 else 0.
                     if needed - planned > 1:

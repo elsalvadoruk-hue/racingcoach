@@ -14,6 +14,7 @@ import { Mic, MicOff, Radio, Route, Square, Volume2, VolumeX } from 'lucide-reac
 import { HelpHint } from './HelpGuide';
 import { encodeWav, VoiceRecorder, RESUMABLE, MAX_RESUMES, DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX, informationFits } from '../voiceAudio';
 import useAudioOutput from '../useAudioOutput';
+import { useButtonRadio } from '../useButtonRadio';
 import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import PitWall, { ENGINEERS, PIT_WALL_KEY, readPitPreferences } from './PitWall';
 import { voiceEventAllowed } from '../lib/voiceAlerts';
@@ -128,6 +129,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const audioOutput = useAudioOutput();
   const standbyRef = useRef(false); standbyRef.current = Boolean(audioOutput.standby);
   const recordDelivery = useRadioDiagnostics(apiBase);
+  useButtonRadio(apiBase, Boolean(status?.radio_buttons_enabled), audioOutput, status, phase, setError, recordDelivery);
   const [classApproaches] = useState(createClassApproaches);
   useTireVoice(apiBase, activeGame, audioOutput, { busy: phase !== 'idle', recordDelivery,
     postPit: appliedWall.alerts?.race_tire_push !== false });

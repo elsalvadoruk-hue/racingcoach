@@ -141,8 +141,8 @@ class TrafficTests(unittest.TestCase):
         # Heard: while the same car stays there it is not called again.
         self.assertEqual(waiting(80.), [])
         self.assertEqual(waiting(150.), [])
-        # Another car is.
-        nearby.append({**nearby[0], 'idx': 8})
+        # A separate following pack is still called immediately.
+        nearby.append({**nearby[0], 'idx': 8, 'gap_estimate_s': 8.})
         other = waiting(151.)
         self.assertEqual(len(other), 1)
         radio.ack(other[0]['id'], 151.)
@@ -178,7 +178,7 @@ class TrafficTests(unittest.TestCase):
         radio.ingest({**sample, 'session_time': 2.1, 'session_flags': 8}, 'run', 2.1)
         self.assertFalse(any(e['key'].startswith('traffic_') for e in radio.view(2.1)['events']))
 
-    def test_another_fast_car_can_warn_immediately_after_the_first_one_finishes(self):
+    def test_an_independent_fast_car_can_warn_immediately_after_the_first_one_finishes(self):
         radio = RaceRadio()
         s = dict(session_state=4, session_flags=0, on_track=True, is_replay=False, on_pit_road=False)
         radio.ingest(dict(s, session_time=1), 'r', 1)
@@ -188,7 +188,7 @@ class TrafficTests(unittest.TestCase):
         radio.ingest(dict(s, session_time=1.2), 'r', 1.2)
         first = next(e for e in radio.view(1.2)['events'] if e['key'] == car['call_key'])
         radio.delivery(first['id'], 'completed', session_time=1.2)
-        nearby.append({**car, 'idx':8})
+        nearby.append({**car, 'idx':8, 'gap_estimate_s':8.})
         radio.ingest(dict(s, session_time=1.4), 'r', 1.4)
         self.assertEqual([e['car'][0] for e in radio.view(1.4)['events'] if e['key']==car['call_key']], [8])
 

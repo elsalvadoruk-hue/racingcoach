@@ -152,6 +152,39 @@ test('a stalled data source switches to a fresh Blob on the next attempt and rel
   unmount(); URL.createObjectURL = create; URL.revokeObjectURL = revoke;
 });
 
+test('pit entry loads selected audio before an event and keeps the output route when playing it', async () => {
+  const { result, unmount } = renderHook(useAudioOutput);
+  act(() => result.current.changeOutput('headset'));
+  const mockAudio = global.Audio.getMockImplementation();
+  global.Audio.mockImplementation(src => {
+    const part = mockAudio(src);
+    part.load = jest.fn();
+    part.removeAttribute = jest.fn();
+    part.readyState = 3;
+    return part;
+  });
+  act(() => result.current.preparePitEntry(['selected-audio']));
+  const warm = players[0];
+  expect(warm.load).toHaveBeenCalledTimes(1);
+  expect(warm.play).not.toHaveBeenCalled();
+  expect(warm.setSinkId).not.toHaveBeenCalled();
+  const report = jest.fn();
+  const options = { priority: 2, pitEntry: true, diagnostics: createRadioAttempt('iracing'), onStatus: report };
+  expect(await act(async () => result.current.play('selected-audio', 'audio/mpeg', { ...options, valid: () => false }))).toBe(false);
+  expect(players).toHaveLength(1);
+  await act(async () => result.current.play('selected-audio', 'audio/mpeg', options));
+  expect(players).toHaveLength(1);
+  expect(warm.load).toHaveBeenCalledTimes(1);
+  expect(warm.setSinkId).toHaveBeenCalledWith('headset');
+  expect(report).toHaveBeenCalledWith('started', '', expect.objectContaining({ metadata_received: true, can_play: true }));
+  act(() => warm.onended());
+  expect(warm.removeAttribute).toHaveBeenCalledWith('src');
+  expect(players[1].load).toHaveBeenCalledTimes(1);
+  expect(players[1].play).not.toHaveBeenCalled();
+  unmount();
+  expect(players[1].removeAttribute).toHaveBeenCalledWith('src');
+});
+
 test('repeated native start failures recover once, keep warning until success and preserve output preference', async () => {
   jest.useFakeTimers();
   localStorage.setItem(storageKey, 'headset');
@@ -234,6 +267,20 @@ test('multipart completion keeps one attempt and the actual final part media clo
     part_index: 1, started: true, started_at: started.started_at, media_time_s: 1.25, duration_s: 1.5 });
   expect(completed.ended_at).toBeGreaterThanOrEqual(started.started_at);
   unmount();
+});
+
+test('a session change between sentences drops the rest of the button reply', async () => {
+  const { result } = renderHook(useAudioOutput);
+  const delivery = jest.fn();
+  let sameRun = true;
+  await act(async () => result.current.play(['a', 'b', 'c'], 'audio/mpeg', {
+    onStatus: delivery, whilePlaying: () => sameRun,
+  }));
+  await act(async () => players[0].onended());
+  sameRun = false;
+  await act(async () => players[1].onended());
+  expect(players).toHaveLength(2);
+  expect(delivery).toHaveBeenCalledWith('interrupted', 'condition_changed');
 });
 
 test('stalled priority audio releases the radio and records a failed terminal status', async () => {

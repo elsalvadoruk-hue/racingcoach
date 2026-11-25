@@ -92,6 +92,13 @@ def copy_backend(root: Path, out: Path) -> None:
         destination = out / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root / name, destination)
+    if (backend / 'live_damage.py').is_file():
+        from live_damage import DAMAGE_AUDIO_FALLBACKS
+        target = out / 'iRacing_Backend' / 'radio_fallbacks'
+        target.mkdir(exist_ok=True)
+        for key in DAMAGE_AUDIO_FALLBACKS:
+            name = f'{key}.ogg'
+            shutil.copy2(backend / 'radio_fallbacks' / name, target / name)
 
 
 def tire_reader_files(root: Path) -> list[str]:

@@ -81,6 +81,7 @@ test.each(['disconnect frame', 'socket closed'])('connection notice lets an alre
   await act(async () => {
     if (mode === 'disconnect frame') send(sockets[0], frame(false));
     else sockets[0].onclose();
+    jest.advanceTimersByTime(3200);
   });
   expect(delivery.mock.calls.some(([e, s]) => e.key === 'race_result' && s === 'interrupted')).toBe(false);
   expect(players).toHaveLength(1);
@@ -149,6 +150,10 @@ test('disconnect notice plays when audio is idle and is never deferred into a ne
   const utils = await setup();
   await act(async () => players[0].onended());
   await act(async () => send(sockets[0], frame(false)));
+  expect(players).toHaveLength(1);
+  for (let i = 0; i < 32; i += 1) {
+    await act(async () => { jest.advanceTimersByTime(100); send(sockets[0], frame(false)); });
+  }
   expect(players).toHaveLength(2);
   expect(delivery.mock.calls.some(([e, s]) => e.key === 'unavailable' && s === 'started')).toBe(true);
   await act(async () => { send(sockets[0], frame(true)); jest.advanceTimersByTime(300); });
@@ -161,6 +166,9 @@ test('disabling radio also stops an idle connection notice that already started'
   const utils = await setup();
   await act(async () => players[0].onended());
   await act(async () => send(sockets[0], frame(false)));
+  for (let i = 0; i < 32; i += 1) {
+    await act(async () => { jest.advanceTimersByTime(100); send(sockets[0], frame(false)); });
+  }
   expect(players).toHaveLength(2);
   await act(async () => utils.result.current.spotter.toggle());
   expect(players[1].pause).toHaveBeenCalled();

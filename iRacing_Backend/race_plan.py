@@ -6,6 +6,9 @@ from statistics import median
 from race_call_audio import BY_WORDING, CALLS, FUEL_TARGETS
 from race_corner_cost import CornerCosts, coast_combinations, num
 from race_encounters import RaceEncounters
+from pit_cycle import PitCycles
+from fuel_defence import FuelDefence
+from race_strategy_clips import pit_cycle_words
 from radio_policy import quiet_window, speech_seconds
 from live_pit import stall_estimate
 
@@ -105,6 +108,8 @@ class RacePlan:
     def __init__(self):
         self.corners = CornerCosts()
         self.traffic = RaceEncounters()
+        self.pit_cycles = PitCycles()
+        self.fuel_defence = FuelDefence()
         self.view = {}
         self.choices = {}
         self.announced = {}
@@ -125,12 +130,17 @@ class RacePlan:
         self.previous_brake = None
         self.last_voice_at = -1e9
         self.joint_laps = deque(maxlen=5)
+        self.audio_seconds = None
 
     def delivered(self, key, token, now):
         self.announced[key] = self.notice_token(key, token)
         self.last_voice_at = now
         if key=='fuel_secured':
             self.was_saving = False
+        if key.startswith('pit_cycle_'):
+            self.pit_cycles.delivered(token)
+        if key.startswith('fuel_defence'):
+            self.fuel_defence.delivered(key, token)
 
     @staticmethod
     def notice_token(key, token):
@@ -144,10 +154,13 @@ class RacePlan:
         distance = target - lap + entry - pct
         return distance if distance > 0 and (remaining is None or distance <= remaining + .05) else None
 
-    def reset_motion(self):
+    def reset_motion(self, *, preserve_pit_cycles=False):
         self.choices.clear()
         self.view = {}
         self.traffic.reset_motion()
+        if not preserve_pit_cycles:
+            self.pit_cycles = PitCycles()
+        self.fuel_defence.reset()
         for costs in (self.corners,self.historical):
             costs.active = costs.previous = None
             costs.pending.clear()
@@ -177,13 +190,23 @@ class RacePlan:
         return self.auto_zones
 
     def ingest(self,live,s,race,now):
+        self.audio_seconds = getattr(live.radio,'prepared_seconds',None)
         t,p,lap = (num(s.get(k)) for k in ('session_time','distance_pct','lap_number'))
         meta = live.radio.metadata
-        green = (str(meta.get('session_type','')).lower()=='race' and s.get('session_state')==4
-                 and s.get('session_flags') is not None and not int(s['session_flags'])&0xC119 and s.get('on_track') is True
-                 and s.get('is_replay') is False and not s.get('lmu_scoring_held'))
-        if None in (t,p,lap) or not green:
+        competing = (str(meta.get('session_type','')).lower()=='race' and s.get('session_state')==4
+                     and s.get('session_flags') is not None and s.get('on_track') is True
+                     and s.get('is_replay') is False and not s.get('lmu_scoring_held'))
+        if None in (t,p,lap) or not competing or int(s['session_flags']) & 0xC011:
             self.reset_motion()
+            return
+        if (num(s.get('tow_time_s')) or 0) > 0:
+            self.pit_cycles = PitCycles()
+        elif race is not None:
+            self.pit_cycles.update(race, t)
+        # A local yellow elsewhere need not destroy a continuously observed pit stop.
+        # All plan audio, including the ordering call, still waits for green.
+        if int(s['session_flags']) & 0xC119:
+            self.reset_motion(preserve_pit_cycles=True)
             return
         if self.previous_pit is False and s.get('on_pit_road') is True:
             self.pit_entries.append(p)
@@ -202,6 +225,7 @@ class RacePlan:
         length = num(meta.get('track_length_m'))
         definitions = self.definitions(s,getattr(live.corners,'definitions',[]))
         if race is not None:
+            self.fuel_defence.observe(race, s, length)
             self.corners.layout(definitions, length)
             mapped = definitions is not self.auto_zones and len(self.corners.zones) == len(definitions)
             self.traffic.update(race, t, self.corners.zones if mapped else [])
@@ -251,7 +275,10 @@ class RacePlan:
         distance = self.distance_to_planned_stop(target, lap, p, remaining)
         target_active = distance is not None
         urgent_fuel = reach is not None and (pit.get('fuel_finish_shortfall_l') or 0)>.1 and reach-(1-p)<1+live.pit_wall.BOX_MARGIN_LAPS
-        saving_to_flag = live.pit_wall.finish_save_percent(pit, s, live.fuel_feedback) is not None
+        saving_percent = live.pit_wall.finish_save_percent(pit, s, live.fuel_feedback)
+        saving_to_flag = saving_percent is not None
+        if urgent_fuel and saving_to_flag and (ready := getattr(live, 'finish_save_audio_ready', None)):
+            saving_to_flag = ready(saving_percent)
         if saving_to_flag:
             urgent_fuel = False
         urgent_energy = live.game=='lmu' and ve is not None and ve<1
@@ -315,6 +342,13 @@ class RacePlan:
                     choices.insert(0,(key,(zone,key),f"{row['label']} · 최근 이득 {row['gain']:.2f}초" if 'gain' in row else row['label']))
         if has_traffic and live.radio.traffic_enabled:
             choices=[(key,token,'') for key,token in self.traffic.calls]+choices
+        plan_known = configured.get('run') == live.run_id
+        defence = self.fuel_defence.choice(s, pit, live.fuel_feedback, floor,
+                                           plan_known and not (target_active or urgent_fuel or urgent_energy), now)
+        if defence:
+            choices.append(defence)
+        if self.pit_cycles.choice:
+            choices.insert(0, self.pit_cycles.choice)
         result['superseded'] = self.superseded_reports(live, choices, plan, result, override)
         self.view=result
         self.choices={}
@@ -322,7 +356,7 @@ class RacePlan:
             self.choices.setdefault(key,(token,now,detail))
         pending = next((e for e in live.radio.pending if e['group']=='race_plan' and live.radio.valid(e,now)),None)
         for key,token,detail in choices:
-            category,role,wording,_=CALLS[key]
+            category,role,wording,short=self.call(key,token)
             encounter = category == 'race_catch_zone'
             if self.announced.get(key)==self.notice_token(key,token) or not self.valid(key,token,now,s):
                 continue
@@ -333,15 +367,31 @@ class RacePlan:
             if encounter:
                 standard, _ = BY_WORDING[role, token[2]]
                 wording = CALLS[standard][2] if standard else token[2]
-            ev=live.radio.emit(key,now,(token[2] if encounter else wording)+(' '+detail if detail else ''),role=role,ttl=2,
+            display = (token[2] if encounter else wording)
+            if detail and not key.startswith(('pit_cycle_', 'fuel_defence')):
+                display += ' '+detail
+            ev=live.radio.emit(key,now,display,role=role,ttl=2,
                 speech_text=wording,prepared_only=True,group='race_plan',condition=('race_plan',(key,token)),
                 alert_category='pitwall.'+category,cooldown=12)
             if ev:
                 if encounter:
                     ev['race_short_text'] = token[2]
+                elif key.startswith(('pit_cycle_', 'fuel_defence')):
+                    ev['race_short_text'] = short
+                    seconds=num(self.audio_seconds(role,wording,short)) if self.audio_seconds else None
+                    if seconds is not None:
+                        ev['speech_required_s']=round(seconds+.5,3)
                 cars = token[3] if encounter and len(token) > 3 else (token[0],) if encounter else ()
                 live.radio.track_delivery(ev, plan_token=token, class_notice=(cars, 'behind') if encounter else None)
                 break
+
+    def call(self, key, token):
+        if key.startswith('pit_cycle_'):
+            rank = token[2] if 1 <= token[2] <= 128 else None
+            return ('pit_cycle', 'strategy', *pit_cycle_words(key.removeprefix('pit_cycle_'), rank))
+        if key.startswith('fuel_defence'):
+            return ('fuel_defence', 'strategy', *self.fuel_defence.words(key, token))
+        return CALLS[key]
 
     def superseded_reports(self, live, choices, plan, result, override):
         """Suppress the previous advice only after the replacement was heard."""
@@ -362,7 +412,12 @@ class RacePlan:
                 or int(s['session_flags']) & 0xBC119 or (num(s.get('speed_mps')) or 0)<8
                 or s.get('car_left_right') not in (0,1) or not quiet_window(s)):
             return False
-        if CALLS[key][0] in ('race_pack','race_catch_zone') and (key,token) not in self.traffic.calls:
+        if key.startswith('pit_cycle_') and not self.pit_cycles.valid(key, token, s):
+            return False
+        if key.startswith('fuel_defence') and not self.fuel_defence.valid(key, token, s):
+            return False
+        category, role, normal, short = self.call(key, token)
+        if category in ('race_pack','race_catch_zone') and (key,token) not in self.traffic.calls:
             return False
         if key.startswith('catch_'):
             position = num(s.get('distance_pct'))
@@ -373,7 +428,11 @@ class RacePlan:
             if travelled >= window[1]:
                 return False
         ahead=num(s.get('workload_in_s'))
-        duration = speech_seconds(CALLS[key][2])
+        duration = speech_seconds(normal)
+        if key.startswith(('pit_cycle_', 'fuel_defence')) and self.audio_seconds:
+            seconds=num(self.audio_seconds(role,normal,short))
+            if seconds is not None:
+                duration=seconds+.5
         if key.startswith('catch_'):
             duration = max(duration, speech_seconds(token[2]))
         return ahead is not None and ahead > duration

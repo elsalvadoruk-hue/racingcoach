@@ -54,6 +54,21 @@
           ]
         },
         {
+          "id": "reentry_approach",
+          "label": "코스 이탈 뒤 차량 접근",
+          "description": "코스 밖에서 느려졌을 때 내 위치로 다가오는 차량",
+          "example": "차량이 옵니다. 약 5초 뒤입니다.",
+          "keys": ["reentry_approach"]
+        },
+        {
+          "id": "class_pass_rival",
+          "label": "빠른 클래스 통과 뒤 경쟁차",
+          "description": "빠른 차를 보낸 직후 바로 뒤에 남은 같은 클래스 경쟁차",
+          "example": "바로 뒤는 우리 클래스 10위.",
+          "games": ["iracing"],
+          "keys": ["class_pass_rival"]
+        },
+        {
           "id": "lapping",
           "label": "랩핑 차량 접근",
           "description": "한 랩 이상 앞서거나 뒤처진 차량과 만날 때",
@@ -329,6 +344,8 @@
         {"id":"race_coast","label":"코스팅과 급유 시간","description":"완주까지 절약량과 시간 이득을 비교하고 리프트 지점을 안내","example":"다음 코너, 액셀 반 초 일찍 놓기.","keys":["coast_*","save_stop","save_fill","fuel_secured","normal_pace"]},
         {"id":"race_limits","label":"반복 이탈과 트랙 리밋","description":"짧은 라인의 기록, 이탈 및 페널티 이력을 다음 진입 전에 안내","example":"다음 코너는 자주 벗어나니까 살짝 여유 두고.","keys":["cut_*"]},
         {"id":"race_rejoin","label":"복귀 교통과 피트 랩","description":"이번 랩과 다음 랩의 피트 출구부터 첫 제동까지 예상 간격 비교","example":"이번 랩 피트. 다음 랩엔 나올 때 붐빌 듯.","keys":["stay_for_gap","pit_now_gap"]},
+        {"id":"pit_cycle","label":"피트 전후 경쟁차 순서","description":"나와 경쟁차가 모두 정차하고 복귀한 뒤 바뀐 앞뒤 순서를 안내","example":"피트 전 뒤차가 지금은 앞. 클래스 16위.","keys":["pit_cycle_*"]},
+        {"id":"fuel_defence","label":"연료 절약과 순위 방어","description":"완주 연료 목표를 먼저 읽고 뒤차에 따라잡힐 페이스를 별도로 안내","example":"연료 목표 달성. 간격은 유지됨.","keys":["fuel_defence_target","fuel_defence","fuel_defence_feedback"]},
         {"id":"race_pit_target","label":"예정 피트까지 연료","description":"남은 연료와 실측 절약량으로 예정 진입 랩을 재평가","example":"예정 랩까지 연료 부족. 피트 앞당기기.","keys":["plan_fuel_*"]},
         {"id":"race_energy_plan","label":"예정 피트까지 가상 에너지","description":"계획한 정차까지 남은 연료와 가상 에너지를 함께 평가","example":"가상 에너지 아끼면 예정대로 피트.","keys":["energy_early","energy_save_plan","plan_both_*"],"games":["lmu"]},
         {"id":"race_tire_push","label":"교체 후 타이어 준비","description":"타이어 음성을 켜면 빠르게 돌았던 코너의 온도·압력과 현재 제동·탈출을 확인한 뒤 푸시 안내","example":"타이어 데워짐. 이제 푸시.","keys":["tire_push","tire_rear_wait","tire_press_ready"],"games":["iracing"]},

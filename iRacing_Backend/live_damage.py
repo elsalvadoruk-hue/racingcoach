@@ -10,6 +10,12 @@ import math
 import statistics
 from collections import deque
 
+DAMAGE_AUDIO_FALLBACKS = {
+    'damage_slower': '충돌 뒤 랩타임이 느려졌습니다.',
+    'damage_vmax': '직선 최고속이 떨어졌습니다.',
+    'damage_steer': '직선에서 핸들이 틀어졌습니다.',
+}
+
 
 def finite(value):
     return value if type(value) in (int, float) and math.isfinite(value) else None

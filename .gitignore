@@ -36,6 +36,7 @@
 !/iRacing_Backend/*.py
 !/iRacing_Backend/test_lmu_replay_ui.js
 !/iRacing_Backend/test_lmu_setup_ui.js
+!/iRacing_Backend/radio_fallbacks/
 !/iRacing_Backend/lmu_native_bridge.cpp
 !/iRacing_Backend/lmu_lock.c
 !/iRacing_Backend/lmu_lock/
@@ -152,6 +153,9 @@
 *.mp3
 *.wav
 *.ogg
+!/iRacing_Backend/radio_fallbacks/damage_slower.ogg
+!/iRacing_Backend/radio_fallbacks/damage_vmax.ogg
+!/iRacing_Backend/radio_fallbacks/damage_steer.ogg
 *.m4a
 *.flac
 *.ibt

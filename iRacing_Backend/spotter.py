@@ -276,6 +276,16 @@ class SpotterAudio:
         self.directory = Path(os.getenv('IRACING_SPOTTER_AUDIO_DIR', str(Path(__file__).resolve().parent / 'spotter_audio')))
         self.lock = threading.Lock()
 
+    def path(self, text):
+        digest = hashlib.sha256(json.dumps([self.voice(), spoken_form(text)], ensure_ascii=False).encode()).hexdigest()
+        return self.directory / f'{digest}.mp3'
+
+    def read_prepared(self, text):
+        data = self.path(text).read_bytes()
+        if len(data) < 100:
+            raise ValueError('준비된 스포터 음성이 없습니다.')
+        return base64.b64encode(data).decode('ascii')
+
     def prepare(self):
         with self.lock:
             self.directory.mkdir(parents=True, exist_ok=True)
@@ -283,8 +293,7 @@ class SpotterAudio:
             for key, texts in VARIANTS.items():
                 choices = []
                 for text in texts:
-                    digest = hashlib.sha256(json.dumps([self.voice(), spoken_form(text)], ensure_ascii=False).encode()).hexdigest()
-                    path = self.directory / f'{digest}.mp3'
+                    path = self.path(text)
                     data = path.read_bytes() if path.exists() else b''
                     if len(data) < 100:
                         data = base64.b64decode(self.speech.synthesize(text, role='spotter'), validate=True)

@@ -140,6 +140,8 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
         self.state = 'STOPPED'
         self.message = '실시간 수집을 시작하지 않았습니다.'
         self.hotkey_down = False
+        self.button_owns_f8 = lambda game, key_state: False
+        self.wait_f8_release = False
         self.hotkey_serial = 0
         self.hotkey_events = deque(maxlen=32)
         self.last_clock = None
@@ -524,7 +526,13 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
     def _poll_hotkey(self):
         if os.name != 'nt':
             return
-        pressed = bool(ctypes.windll.user32.GetAsyncKeyState(0x77) & 0x8000)
+        key_state = ctypes.windll.user32.GetAsyncKeyState
+        pressed = bool(key_state(0x77) & 0x8000)
+        if not pressed:
+            self.wait_f8_release = False
+        elif not self.hotkey_down and self.button_owns_f8(self.game, key_state):
+            self.wait_f8_release = True
+        pressed = pressed and not self.wait_f8_release
         with self.lock:
             if pressed != self.hotkey_down:
                 self.hotkey_down = pressed

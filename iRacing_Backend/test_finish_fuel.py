@@ -36,6 +36,19 @@ class TimedFinishTests(unittest.TestCase):
         s = self.at(*args, **kwargs)
         return self.wall.view(s, USE, 3), s
 
+    def test_pit_stop_with_stale_scored_leader_does_not_add_a_fuel_lap(self):
+        self.race['game'] = 'iracing'
+        sample = self.at(559.7667, .59219259, .08073, fuel=2.338697, lap=12)
+        self.wall.race['cars'][0].update(lap_completed=13, class_id=2, position=1)
+        self.wall.race['cars'][2].update(lap_completed=13, distance_pct=.33118, class_id=2, position=2)
+        self.wall.paces = {0: deque([111.319, 113.393, 112.419]), 1: deque([119.8093, 119.5394, 119.9489]),
+                           2: deque([111.123, 113.698, 112.4])}
+        self.wall.race_at = sample['session_time']
+        view = self.wall.view(sample, 3.992, 5, reserve_laps=.3, fuel_save_mode='reserve')
+        self.assertEqual(view['finish_crossing_lap'], 18)
+        self.assertEqual(self.wall._pit_fuel_litres(view, sample), 21)
+        self.assertLess(view['fuel_next_stop_l'], 21)
+
     def test_laps_to_the_flag_follow_the_leader_and_the_margins_are_measured(self):
         # 950 s left. The leader is at 0.20 of his lap: 9.7 laps at the buzzer, so he finishes 30 s after it.
         # The player is at 0.50: when the leader finishes he is at 10.3, so he drives to the end of his eleventh lap from here.
@@ -142,8 +155,8 @@ class TimedFinishTests(unittest.TestCase):
         reports, view = self.reports(946., .20, .50, fuel=5.5)       # two laps and a bit in the tank, 9.8 to go, half a lap in reserve
         plan = reports['pit_fuel_plan']
         self.assertEqual(view['fuel_to_add_l'], 20.25)
-        # One number: the race may still run a lap longer, so that lap is in it (20.25 + 2.5, rounded up).
-        self.assertEqual((plan['speech_text'], 'speech_parts' in plan), ('급유는 23리터입니다.', False))
+        # One number: include the configured reserve, then round litres up.
+        self.assertEqual((plan['speech_text'], 'speech_parts' in plan), ('급유는 21리터입니다.', False))
         self.assertEqual((plan['engineer'], plan['priority']), ('strategy', 2))
         sure, _ = self.reports(950., .50, .20, fuel=5.5)
         self.assertEqual(sure['pit_fuel_plan']['speech_text'], '급유는 22리터입니다.')

@@ -99,6 +99,13 @@ const clipPlayer = (clip, mime, useBlob) => {
   return part;
 };
 
+const loadPitEntry = clip => {
+  const part = clipPlayer(clip, 'audio/mpeg', true);
+  part.preload = 'auto';
+  part.load?.();
+  return part;
+};
+
 export default function useAudioOutput() {
   const host = useAudioHost();
   const hostRef = useRef(host); hostRef.current = host;
@@ -120,16 +127,35 @@ export default function useAudioOutput() {
   const [effect, setEffect, appliedEffect] = useGameSettings(radioEffect.savedSettings, storeEffect);
   const effectSettings = useRef(appliedEffect); effectSettings.current = appliedEffect;
   const selected = useRef(appliedOutput), knownDevices = useRef([]), player = useRef(null);
+  const preparedPitEntry = useRef(new Map());
   selected.current = appliedOutput;
   const unavailableOutput = useRef(''), removalTimer = useRef(null);
   const priorityGate = useRef(false);
   const mounted = useRef(true), refreshSerial = useRef(0);
   const permissionFlight = useRef(null), refreshQueued = useRef(false);
+  const preparePitEntry = useCallback((clips = []) => {
+    const prepared = preparedPitEntry.current;
+    const wanted = new Set(hostRef.current ? clips.filter(Boolean).slice(0, 8) : []);
+    for (const [clip, part] of prepared) {
+      if (wanted.has(clip)) continue;
+      if (part) disposePlayer(part);
+      prepared.delete(clip);
+    }
+    for (const clip of wanted) {
+      if (!prepared.has(clip)) prepared.set(clip, loadPitEntry(clip));
+    }
+  }, []);
   const stop = useCallback((reason = 'stopped') => {
     if (typeof reason !== 'string') reason = 'driver_or_radio_pause';
     const current = player.current;
     player.current = null;
-    if (current) { current.pause(); current._stop?.(reason); disposePlayer(current); }
+    if (current) {
+      current.pause(); current._stop?.(reason); disposePlayer(current);
+      const clip = current._pitEntryClip;
+      if (mounted.current && hostRef.current && preparedPitEntry.current.get(clip) === null) {
+        preparedPitEntry.current.set(clip, loadPitEntry(clip));
+      }
+    }
     if (mounted.current && !player.current) setIsPlaying(false);
   }, []);
   // The driver's own stop (a new question, the stop button) ends routine speech and his answer,
@@ -277,9 +303,10 @@ export default function useAudioOutput() {
       media?.removeEventListener?.('devicechange', refresh);
       window.removeEventListener('focus', refresh);
       document.removeEventListener('visibilitychange', visible);
+      preparePitEntry();
       stop('page_closed');
     };
-  }, [refresh, stop]);
+  }, [refresh, stop, preparePitEntry]);
   useEffect(() => {
     if (storedOutput(selectedGame) === COMMUNICATIONS) storeOutput(selectedGame, '');
   }, [selectedGame]);
@@ -291,7 +318,7 @@ export default function useAudioOutput() {
     saveOutput(id); setMessage(''); lastOutputTest.current = null; setTestMessage('');
     if (selectedGame === activeGame) { stop('output_changed'); radioEffect.warm(effectSettings.current, id); }
   }, [stop, saveOutput, selectedGame, activeGame]);
-  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, diagnostics, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall', startDeadline, signal, pitBoxDistance, routineReport = false, outputTest = false, confirmAudible = false } = {}) => {
+  const play = useCallback(async (encoded, mime = 'audio/mpeg', { priority = 0, valid = () => true, interrupt = true, onStatus, diagnostics, windowSeconds, workloadValid, whilePlaying, rate, channel = 'pitwall', startDeadline, signal, pitBoxDistance, pitEntry = false, routineReport = false, outputTest = false, confirmAudible = false } = {}) => {
     // Multipart calls use their own absolute rate, never a multiplier of the role's rate.
     // Capture it once so every sentence keeps the same speed until this call ends.
     const multipart = Array.isArray(encoded) && encoded.length > 1;
@@ -311,7 +338,16 @@ export default function useAudioOutput() {
     const useBlob = Date.now() < health.current.blobUntil;
     // A list is one call of several whole sentences: they play back to back and nothing slips in between.
     const rest = Array.isArray(encoded) ? encoded.slice(1) : [];
-    const current = clipPlayer(Array.isArray(encoded) ? encoded[0] : encoded, mime, useBlob);
+    const first = Array.isArray(encoded) ? encoded[0] : encoded;
+    const prepared = pitEntry && mime === 'audio/mpeg' && preparedPitEntry.current.get(first);
+    const current = prepared || clipPlayer(first, mime, useBlob);
+    if (prepared) {
+      preparedPitEntry.current.set(first, null);
+      current._pitEntryClip = first;
+      current._metadataReceived = current.readyState >= 1;
+      current._dataReceived = current.readyState >= 2;
+      current._canPlay = current.readyState >= 3;
+    }
     current._silenced = playbackSettings.current.muted || playbackSettings.current.volume === 0;
     current._priority = priority;
     current._pitBoxDistance = pitBoxDistance;
@@ -426,6 +462,10 @@ export default function useAudioOutput() {
       if (!began && (signal?.aborted || !valid() || (priority < 3 && priorityGate.current))) {
         cancelPending(); return false;
       }
+      if (!began && stage === 'play' && windowSeconds
+          && !(current.duration / current.playbackRate + .5 <= windowSeconds())) {
+        cancelPending('speech_window_too_short'); return false;
+      }
       return true;
     };
     const progress = part => {
@@ -458,7 +498,7 @@ export default function useAudioOutput() {
         lastPosition = position; lastProgress = Date.now();
       }
       if (partStarted && part.ended) { follow(part); return; }
-      if (whilePlaying && part === current && !whilePlaying()) { stop('condition_changed'); return; }
+      if (whilePlaying && !whilePlaying()) { stop('condition_changed'); return; }
       if (Date.now() - lastProgress < (partStarted ? AUDIO_STALL_TIMEOUT_MS : AUDIO_START_TIMEOUT_MS)) return;
       const reason = partStarted ? 'playback_stalled' : 'playback_start_timeout';
       console.warn('[RacingCoach audio]', { reason, stage, priority, channel,
@@ -511,6 +551,7 @@ export default function useAudioOutput() {
           else finish('completed');
           stop(); return;
         }
+        if (whilePlaying && !whilePlaying()) { stop('condition_changed'); return; }
         part.pause(); disposePlayer(part);
         const next = clipPlayer(rest.shift(), mime, useBlob);
         next._priority = priority; next._finish = finish; next._stop = current._stop;
@@ -525,6 +566,7 @@ export default function useAudioOutput() {
             if (!await route(next)) return;
             setStage('effect'); if (!plain) await wait(radioEffect.warm(effectSettings.current, sinkId));
             if (!active(next)) return;
+            if (whilePlaying && !whilePlaying()) { stop('condition_changed'); return; }
             next._effect = plain ? null : radioEffect.attach(next, effectSettings.current, { sinkId, ...playbackSettings.current });
             next.volume = Math.min(1, playbackSettings.current.volume); next.muted = playbackSettings.current.muted;
             next._effect?.start(false);
@@ -594,6 +636,9 @@ export default function useAudioOutput() {
       setStage('effect'); if (!plain) await wait(radioEffect.warm(effectSettings.current, sinkId));
       if (!mounted.current || player.current !== current || terminal) return false;
       if (!valid() || (priority < 3 && priorityGate.current) || (workloadValid && !workloadValid())) { stop(); return false; }
+      if (windowSeconds && !(current.duration / current.playbackRate + .5 <= windowSeconds())) {
+        current._finish('cancelled', 'speech_window_too_short'); stop(); return false;
+      }
       current._effect = plain ? null : radioEffect.attach(current, effectSettings.current, { sinkId, ...playbackSettings.current });
       current.volume = Math.min(1, playbackSettings.current.volume); current.muted = playbackSettings.current.muted;
       if (playbackSettings.current.volume > 1 && !current._effect?.boosted) setMessage('이 브라우저 또는 출력장치에서는 증폭을 사용할 수 없어 100%로 재생합니다. 최신 Chrome 또는 Edge와 출력장치 설정을 확인하세요.');
@@ -601,7 +646,7 @@ export default function useAudioOutput() {
       if (Number.isFinite(startDeadline) && Date.now() >= startDeadline) { finish('cancelled', 'start_deadline'); stop(); return false; }
       // Explicitly reload a fresh Blob after a native loading failure. This
       // remains HTML audio, preserving the selected output and voice pitch.
-      if (useBlob) { current.preload = 'auto'; current.load?.(); }
+      if (useBlob && !prepared) { current.preload = 'auto'; current.load?.(); }
       current.playbackRate = speed; current.preservesPitch = true;
       setStage('play'); await wait(current.play());
       if (!mayStart()) return false;
@@ -623,7 +668,7 @@ export default function useAudioOutput() {
     }
   }, [supported, stop]);
   return { applied: { ...appliedPlayback, outputId: appliedOutput }, outputId, devices, supported, standby: !host,
-    message: host ? testMessage || failureMessage || message : STANDBY_MESSAGE, testMessage: host ? testMessage : '', refresh, refreshing, changeOutput, play, stop, stopNormal,
+    message: host ? testMessage || failureMessage || message : STANDBY_MESSAGE, testMessage: host ? testMessage : '', refresh, refreshing, changeOutput, play, preparePitEntry, stop, stopNormal,
     setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, canStartLap, isPlaying, recoveryGeneration,
     volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, rate: playback.rate, changeRate,
     spotterRate: playback.spotterRate, changeSpotterRate, pitwallRate: playback.pitwallRate, changePitwallRate, effect, changeEffect };

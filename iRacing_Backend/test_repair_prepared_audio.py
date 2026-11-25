@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import test_radio_optional_parts as fixtures
 from voice_coach import VoiceCoach, ReportRequest, RadioPlaybackDiagnostics, RadioDeliveryEvent
 from voice_notes import VoiceNoteStore
+from live_damage import DAMAGE_AUDIO_FALLBACKS
 import session_log
 from pydantic import ValidationError
 
@@ -62,6 +63,21 @@ class RepairPreparedAudioTests(unittest.TestCase):
             self.assertTrue(result['missing_prepared_audio'])
             f.coach.fixed_audio.phrase.assert_not_called()
             f.synthesize.assert_not_called()
+
+    def test_out_of_range_damage_keeps_exact_screen_text_and_uses_bundled_recordings(self):
+        parts = ['충돌 뒤 랩타임이 8.8초 느려졌습니다.', '직선 최고속이 32킬로미터 떨어졌습니다.', '직선에서 핸들이 3.3도 틀어졌습니다.']
+        f = self.fixture(parts, 'damage_check')
+        f.event['damage_part_keys'] = list(DAMAGE_AUDIO_FALLBACKS)
+        f.stored = {parts[2]}
+        result = asyncio.run(f.render('run:1'))
+        self.assertEqual(result['event']['text'], ' '.join(parts))
+        self.assertEqual(result['spoken_text'], ' '.join([*list(DAMAGE_AUDIO_FALLBACKS.values())[:2], parts[2]]))
+        self.assertEqual(result['dropped_parts'], 2)
+        for audio in result['audio_parts'][:2]:
+            self.assertTrue(audio.startswith('data:audio/ogg;codecs=opus;base64,T2dnUw'))
+        self.assertEqual(result['audio_parts'][2], 'cached:' + parts[2])
+        f.synthesize.assert_not_called()
+        f.coach.fixed_audio.phrase.assert_not_called()
 
     def test_cache_deleted_after_check_does_not_synthesize(self):
         f = self.fixture(['필수 수리는 2062초입니다.'])

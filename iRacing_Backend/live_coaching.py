@@ -196,9 +196,12 @@ class LiveCoaching:
             # The first clean lap after a contact: say what it shows against the laps before.
             found = self.damage.lap_done(newest['time'])
             if found:
-                parts = [self.radio.wording(key, **values) for key, values in damage_parts(found)]
-                self.radio.emit('damage_check', self.clock(), ' '.join(parts), role='race', ttl=60, cooldown=0,
-                                group='damage_check', speech_text=' '.join(parts), speech_parts=parts)
+                measures = damage_parts(found)
+                parts = [self.radio.wording(key, **values) for key, values in measures]
+                event = self.radio.emit('damage_check', self.clock(), ' '.join(parts), role='race', ttl=60, cooldown=0,
+                                        group='damage_check', speech_text=' '.join(parts), speech_parts=parts)
+                if event:
+                    event['damage_part_keys'] = [key for key, _ in measures]
         pit = sample.get('on_pit_road')
         if pit is True and self._stint.get('pit') is False:
             times = self._stint.get('times') or []

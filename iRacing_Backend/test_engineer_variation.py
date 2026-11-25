@@ -476,6 +476,26 @@ class RadioCallTests(unittest.TestCase):
         self.lap(95.)
         self.assertIn('rain_box', self.events())
 
+    def test_wet_tire_advice_waits_for_active_driving_and_remembers_delivery(self):
+        self.meta.update(tire_types_known=True, wet_compounds=[1])
+        self.tick(track_wetness=3, declared_wet=True, tire_compound=0, on_pit_road=True)
+        self.assertNotIn('rain_prepare', self.events())
+        self.tick(on_pit_road=False)
+        queued = self.events()['rain_prepare']
+        self.tick(advance=.75)
+        self.assertEqual(self.events()['rain_prepare']['id'], queued['id'])
+        self.radio.delivery(queued['id'], 'completed')
+        self.tick(advance=100.)
+        self.assertNotIn('rain_prepare', self.events())
+
+        self.tick(track_wetness=1)
+        self.tick(track_wetness=3)
+        queued = self.events()['rain_prepare']
+        self.tick(on_pit_road=True)
+        self.assertIsNone(self.radio.get(queued['id'], self.now))
+        self.tick(on_pit_road=False, session_state=5, session_flags=1)
+        self.assertNotIn('rain_prepare', self.events())
+
     def test_result_is_given_after_taking_the_chequered_flag(self):
         self.tick()
         self.tick(session_flags=0x1)

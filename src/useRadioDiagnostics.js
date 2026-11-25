@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef } from 'react';
 import packageInfo from '../package.json';
 
 const needsImmediateReceipt = ({ key, status, dropped_parts: dropped }) =>
-  (status === 'started' && (key?.startsWith('control_') || key?.startsWith('setup_')))
+  (key === 'reentry_approach' && !dropped && (status === 'started' || status === 'completed'))
+  || (status === 'started' && (key?.startsWith('control_') || key?.startsWith('setup_')))
   || (status === 'completed' && !dropped && (key === 'traffic_faster_behind' || key === 'traffic_slower_ahead' || key?.startsWith('catch_')));
 
 // Batched independently from the audio path; no recordings or credentials.

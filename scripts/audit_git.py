@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -32,6 +33,13 @@ PATTERNS = {
 TEXT_SUFFIXES = {'.py', '.js', '.jsx', '.ts', '.tsx', '.json', '.md', '.txt', '.html', '.css',
                  '.svg', '.yml', '.yaml', '.bat', '.ps1', '.toml', '.ini', '.cfg', '.gs'}
 
+# These three fixed programme clips contain edited stock speech, with no user recording.
+BUNDLED_RADIO = {
+    'iRacing_Backend/radio_fallbacks/damage_slower.ogg': 'e2e7b5a675797407eb447730c0d13f09b19c0cbf8857621d0c9e08dff3d18288',
+    'iRacing_Backend/radio_fallbacks/damage_vmax.ogg': 'ebdc7f31775b56ec4d55e79f711de73e9428426262953f45a3fe6462632ad0e6',
+    'iRacing_Backend/radio_fallbacks/damage_steer.ogg': '47f2fcd33afbb0499060fa44bede671ff7bf913df08e3d1ff2e6366e6d8518d5',
+}
+
 
 PUBLIC_REPOSITORY = b'elsalvadoruk-hue/racingcoach'
 PUBLIC_MANUAL_URL = b'https://' + PUBLIC_REPOSITORY.split(b'/')[0] + b'.github.io/' + PUBLIC_REPOSITORY.split(b'/')[1] + b'/'
@@ -48,7 +56,9 @@ def forbidden_path(name: str) -> bool:
 
 
 def findings(name: str, content: bytes, markers: list[bytes] = ()) -> list[str]:
-    problems = ['forbidden path'] if forbidden_path(name) else []
+    approved = BUNDLED_RADIO.get(name)
+    bundled_clip = approved is not None and hashlib.sha256(content).hexdigest() == approved
+    problems = ['forbidden path'] if not bundled_clip and forbidden_path(name) else []
     # Compare exact local identifiers in every format, including uncompressed binary metadata.
     # Known public project addresses are not private even when the owner contains a Windows user name.
     lower = content.lower().replace(PUBLIC_REPOSITORY, b'').replace(PUBLIC_MANUAL_URL, b'')

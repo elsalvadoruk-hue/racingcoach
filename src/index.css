@@ -382,3 +382,29 @@
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+.radio-button-dialog {
+  width: min(1120px, 96vw);
+  max-width: min(1120px, 96vw);
+  max-height: 91dvh;
+  overflow-y: auto;
+}
+.radio-button-settings { display: grid; gap: .8rem; min-width: 0; }
+.radio-listen-dialog { max-height: 90dvh; overflow-y: auto; }
+.radio-button-columns { display: grid; grid-template-columns: minmax(190px, .84fr) minmax(250px, 1.1fr) minmax(255px, 1.18fr); border-block: 1px solid hsl(var(--border)); }
+.radio-button-columns section { min-width: 0; display: flex; flex-direction: column; align-items: stretch; gap: .5rem; padding: .9rem; }
+.radio-button-columns section + section { border-inline-start: 1px solid hsl(var(--border)); }
+.radio-button-columns h3 { font-size: .875rem; font-weight: 650; }
+.radio-button-columns p, .radio-button-row span { color: hsl(var(--muted-foreground)); font-size: .8rem; }
+.radio-button-columns .radio-button-row { height: auto; min-height: 2.75rem; display: grid; justify-content: start; gap: .1rem; white-space: normal; text-align: start; }
+.radio-button-rows, .radio-button-edit, .radio-button-options { max-height: min(44dvh, 400px); overflow: auto; }
+.radio-button-rows { display: grid; align-content: start; gap: .2rem; }
+.radio-library-path { display: flex; flex-wrap: wrap; align-items: center; gap: .15rem; font-size: .8rem; }
+.radio-library-path svg { width: 1em; height: 1em; }
+.radio-library-path button { padding-inline: .25rem; }
+.radio-button-options { display: flex; flex-direction: column; gap: .15rem; }
+.radio-button-options button { justify-content: start; text-align: start; height: auto; min-height: 2rem; white-space: normal; }
+@media (max-width: 790px) {
+  .radio-button-columns { grid-template-columns: 1fr; }
+  .radio-button-columns section + section { border-inline-start: 0; border-top: 1px solid hsl(var(--border)); }
+  .radio-button-rows, .radio-button-options { max-height: 180px; }
+}

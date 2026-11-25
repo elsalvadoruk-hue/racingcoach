@@ -423,10 +423,9 @@ def build(key, seed=0, **values):
     return {'engineer': role, 'text': text}
 
 
-def catalog():
-    """Every (role, sentence) the calls above can speak within the prepared ranges."""
-    found = {}
-    for key in PHRASES:
+def catalog_entries(keys):
+    """Yield each event, role and wording in the prepared ranges."""
+    for key in keys:
         role, variants = wordings(key)
         ranges = PREPARED.get(key, RANGES)
         if ranges is None:
@@ -436,7 +435,11 @@ def catalog():
             for combination in itertools.product(*(ranges.get(name, RANGES.get(name, ())) for name in names)):
                 values = dict(zip(names, combination))
                 text = PLACEHOLDER.sub(lambda match: FORMATS[match[1]](values[match[1]]), template)
-                found[(role, text)] = None
+                yield key, role, text
                 for additional_role in ADDITIONAL_CATALOG_ROLES.get(key, ()):
-                    found[(additional_role, text)] = None
-    return list(found)
+                    yield key, additional_role, text
+
+
+def catalog():
+    """Every (role, sentence) the calls above can speak within the prepared ranges."""
+    return list(dict.fromkeys((role, text) for _, role, text in catalog_entries(PHRASES)))

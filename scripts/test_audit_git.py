@@ -10,6 +10,16 @@ from unittest.mock import patch
 import audit_git
 
 
+class BundledRadioTests(unittest.TestCase):
+    def test_only_known_bytes_at_the_bundled_clip_paths_are_allowed(self):
+        for path in audit_git.BUNDLED_RADIO:
+            with self.subTest(path=path):
+                clip = (audit_git.ROOT / path).read_bytes()
+                self.assertEqual(audit_git.findings(path, clip), [])
+                self.assertIn('forbidden path', audit_git.findings(path, clip + b'replaced'))
+                self.assertIn('forbidden path', audit_git.findings('data/driver.ogg', clip))
+
+
 class GitAuditTests(unittest.TestCase):
     def test_private_files_and_audio_are_rejected(self):
         for name in ['data/settings.json', 'a/gcp-key.json', 'a/garage61_api_token.txt',

@@ -42,6 +42,27 @@ class RaceRadioTests(unittest.TestCase):
     def keys(self):
         return [e['key'] for e in self.events()]
 
+    def test_pit_service_is_announced_once_per_visit_through_gaps_and_status_changes(self):
+        def issued(key):
+            return self.radio.variant_counts.get(key, 0)
+
+        self.tick(on_pit_road=True, pit_service_status=1)
+        self.tick(advance=.75)
+        self.tick(pit_service_status=0)
+        self.tick(pit_service_status=1)
+        self.tick(pit_service_status=2)
+        self.assertIn('service_done', self.keys())
+        self.wait(5.2)
+        self.tick(pit_service_status=0)
+        self.tick(pit_service_status=2)
+        self.tick(advance=.75, pit_service_status=1)
+        self.assertEqual((issued('service_start'), issued('service_done')), (1, 1))
+
+        self.tick(on_pit_road=False, pit_service_status=0)
+        self.tick(on_pit_road=True, pit_service_status=1)
+        self.tick(pit_service_status=2)
+        self.assertEqual((issued('service_start'), issued('service_done')), (2, 2))
+
     def test_black_survives_short_gap_and_rearms_on_observed_clear(self):
         self.tick(session_flags=0x10000)
         first = next(e for e in self.events() if e['key'] == 'black')

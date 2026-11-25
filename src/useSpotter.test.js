@@ -194,6 +194,22 @@ test.each(['basic','short','custom','prepared-default'])('finish uses the prepar
   expect(fetch.mock.calls.filter(([url])=>url.endsWith('/ack'))).toHaveLength(1);
 });
 
+test('spotter warms the selected pit-entry variants and plays the current event take', async () => {
+  const first = { audio_base64: 'pit-first', text: '피트 진입.' };
+  const second = { audio_base64: 'pit-second', text: '피트로드입니다.' };
+  manifest.clips.pit_enter = { variants: [first, second] };
+  audio.preparePitEntry = jest.fn();
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  expect(audio.preparePitEntry).toHaveBeenCalledWith(['pit-first', 'pit-second']);
+  const event = { id: 'run:pit', key: 'pit_enter', cached: true, variant: 1, engineer: 'spotter', priority: 2,
+    serial: 1, run_id: 'run', expires_in_ms: 5000, text: second.text };
+  await act(async () => send(sockets[0], frame(1, null, { radio: { connected: true, run_id: 'run', quiet: true, events: [event] } })));
+  expect(audio.play).toHaveBeenCalledWith('pit-second', 'audio/mpeg', expect.objectContaining({ pitEntry: true, priority: 2 }));
+  await enable(result);
+  expect(audio.preparePitEntry).toHaveBeenLastCalledWith();
+});
+
 test.each(['overlap','finish'])('missing prepared %s audio can recover on the next explicit start without rendering',async missing=>{
   const recordDelivery=jest.fn();
   delete manifest.clips.right;
@@ -240,14 +256,14 @@ test('mute suppresses audio but preserves visual spotting and normal audio prior
   expect(audio.setPriorityGate).toHaveBeenCalledWith(true);
 });
 
-test('loss announces once, never clears, and reconnect starts with the current direction', async () => {
+test('a short socket loss stays silent and reconnect starts with the current direction', async () => {
   jest.useFakeTimers();
   const { result } = renderHook(() => useSpotter('http://test', audio));
   await enable(result);
   send(sockets[0], frame(2, 'left'));
   act(() => sockets[0].onclose());
   expect(result.current.view.active).toBe(false);
-  expect(audio.play.mock.calls.map((call) => call[0])).toEqual(['left', 'unavailable']);
+  expect(audio.play.mock.calls.map((call) => call[0])).toEqual(['left']);
   act(() => jest.advanceTimersByTime(1000));
   expect(sockets).toHaveLength(2);
   send(sockets[1], frame(3, null, { type: 'ready', current_key: 'right', serial: 10 }));
@@ -258,7 +274,7 @@ test('loss announces once, never clears, and reconnect starts with the current d
   expect(audio.cancelPriority).toHaveBeenCalledTimes(cancellations);
 });
 
-test('watchdog cancels a frozen stream and rejects expired clips while sink routing is pending', async () => {
+test('a brief frame gap cancels stale directions and recovers on the same socket', async () => {
   jest.useFakeTimers();
   const { result } = renderHook(() => useSpotter('http://test', audio));
   await enable(result);
@@ -267,7 +283,122 @@ test('watchdog cancels a frozen stream and rejects expired clips while sink rout
   act(() => jest.advanceTimersByTime(700));
   expect(valid()).toBe(false);
   expect(result.current.view.active).toBe(false);
-  expect(sockets[0].close).toHaveBeenCalled();
+  expect(sockets[0].close).not.toHaveBeenCalled();
+  expect(audio.play.mock.calls.map(call => call[0])).toEqual(['left']);
+  send(sockets[0], frame(3, 'right', { serial: 2,
+    events: [{ serial: 2, key: 'right', state: 3, run_id: 'run', expires_in_ms: 500 }] }));
+  expect(result.current.view.active).toBe(true);
+  expect(valid()).toBe(false);
+  expect(audio.play.mock.calls.map(call => call[0])).toEqual(['left', 'right']);
+  expect(sockets).toHaveLength(1);
+});
+
+test('repeated short frame gaps do not announce a stopped spotter', async () => {
+  jest.useFakeTimers();
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  for (let i = 0; i < 8; i += 1) {
+    send(sockets[0], radioFrame([]));
+    act(() => jest.advanceTimersByTime(900));
+    expect(result.current.view.active).toBe(false);
+  }
+  send(sockets[0], radioFrame([]));
+  expect(sockets[0].close).not.toHaveBeenCalled();
+  expect(result.current.view.active).toBe(true);
+  expect(audio.play).not.toHaveBeenCalled();
+});
+
+test('a sustained loss announces once with the original session and closes the frozen socket once', async () => {
+  jest.useFakeTimers();
+  const recordDelivery = jest.fn();
+  const { result } = renderHook(() => useSpotter('http://test', audio, { recordDelivery }));
+  await enable(result);
+  send(sockets[0], radioFrame([]));
+  act(() => jest.advanceTimersByTime(3600));
+  expect(audio.play).not.toHaveBeenCalled();
+  act(() => jest.advanceTimersByTime(200));
+  expect(audio.play.mock.calls.map(call => call[0])).toEqual(['unavailable']);
+  expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({ run_id: 'run', key: 'unavailable' }), 'started', '');
+  act(() => jest.advanceTimersByTime(5000));
+  expect(sockets[0].close).toHaveBeenCalledTimes(1);
+  expect(audio.play).toHaveBeenCalledTimes(1);
+});
+
+test('a loss notice rearms only after sustained fresh data and stops when the radio recovers', async () => {
+  jest.useFakeTimers();
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  send(sockets[0], radioFrame([]));
+  const remainDisconnected = () => {
+    for (let i = 0; i < 38; i += 1) {
+      send(sockets[0], frame(null, null, { active: false, radio: { connected: false, events: [] } }));
+      act(() => jest.advanceTimersByTime(100));
+    }
+  };
+  remainDisconnected();
+  expect(audio.play).toHaveBeenCalledTimes(1);
+  const noticeValid = audio.play.mock.calls[0][2].valid;
+  send(sockets[0], frame(null, null, { active: false, radio: { connected: true, run_id: 'run', events: [] } }));
+  expect(noticeValid()).toBe(false);
+  remainDisconnected();
+  expect(audio.play).toHaveBeenCalledTimes(1);
+  for (let i = 0; i < 32; i += 1) {
+    send(sockets[0], radioFrame([]));
+    act(() => jest.advanceTimersByTime(100));
+  }
+  remainDisconnected();
+  expect(audio.play).toHaveBeenCalledTimes(2);
+});
+
+test('inactive telemetry gets a grace period but a connected pit-lane radio needs no loss notice', async () => {
+  jest.useFakeTimers();
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  send(sockets[0], radioFrame([]));
+  for (let i = 0; i < 10; i += 1) {
+    send(sockets[0], frame(null, null, { active: false, radio: { connected: false, events: [] } }));
+    act(() => jest.advanceTimersByTime(100));
+  }
+  expect(audio.play).not.toHaveBeenCalled();
+  for (let i = 0; i < 40; i += 1) {
+    send(sockets[0], frame(null, null, { active: false, radio: { connected: true, run_id: 'run', events: [] } }));
+    act(() => jest.advanceTimersByTime(100));
+  }
+  expect(audio.play).not.toHaveBeenCalled();
+  for (let i = 0; i < 32; i += 1) {
+    send(sockets[0], frame(null, null, { active: false, radio: { connected: false, events: [] } }));
+    act(() => jest.advanceTimersByTime(100));
+  }
+  expect(audio.play.mock.calls.map(call => call[0])).toEqual(['unavailable']);
+  expect(sockets[0].close).not.toHaveBeenCalled();
+});
+
+test('a delayed packet invalidates old warnings without forcing a reconnect', async () => {
+  jest.useFakeTimers();
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  send(sockets[0], frame(2, 'left', { sent_at: Date.now() / 1000 }));
+  const valid = audio.play.mock.calls[0][2].valid;
+  act(() => jest.advanceTimersByTime(100));
+  send(sockets[0], frame(2, 'left', { sent_at: Date.now() / 1000 - .55 }));
+  expect(valid()).toBe(false);
+  expect(result.current.view.active).toBe(false);
+  act(() => jest.advanceTimersByTime(700));
+  send(sockets[0], radioFrame([]));
+  expect(sockets[0].close).not.toHaveBeenCalled();
+  expect(audio.play.mock.calls.map(call => call[0])).toEqual(['left']);
+});
+
+test('disabling cancels a pending loss notice', async () => {
+  jest.useFakeTimers();
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  send(sockets[0], radioFrame([]));
+  act(() => sockets[0].onclose());
+  await enable(result);
+  act(() => jest.advanceTimersByTime(5000));
+  expect(audio.play).not.toHaveBeenCalled();
+  expect(sockets).toHaveLength(1);
 });
 
 test('disabling invalidates callbacks and later enable reuses the loaded manifest', async () => {
@@ -308,6 +439,24 @@ const radioEvent = (key, extra = {}) => ({ id: `run:${key}`, serial: 1, key, tex
   engineer: 'spotter', priority: 1, run_id: 'run', cached: false, expires_in_ms: 15000, ...extra });
 const radioFrame = (events, quiet = true, extra = {}) => frame(1, null, { serial: 0,
   radio: { connected: true, run_id: 'run', events, quiet }, ...extra });
+
+test('off-course calls use the passage budget and never repeat a car already heard at the five-second transition', async () => {
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ event: {}, audio_base64: 'warning' }) }));
+  const timed = radioEvent('reentry_approach', { expires_in_ms: 5700, priority: 2,
+    reentry_take: 'first_5', reentry_contacts: ['1/11'] });
+  await act(async () => send(sockets[0], radioFrame([timed], false)));
+  await waitFor(() => expect(audio.play).toHaveBeenCalledTimes(1));
+  const options = audio.play.mock.calls[0][2];
+  expect(options.windowSeconds()).toBeGreaterThan(5);
+  expect(options.priority).toBeLessThan(2);
+  expect(options.confirmAudible).toBe(true);
+  const quick = { ...timed, id: 'run:changed', expires_in_ms: 3900, reentry_take: 'first' };
+  await act(async () => send(sockets[0], radioFrame([quick], false)));
+  expect(options.valid()).toBe(false);
+  expect(audio.play).toHaveBeenCalledTimes(1);
+});
 
 test('a routine rank waits for enough road and rechecks at audio start', async () => {
   const { result } = renderHook(() => useSpotter('http://test', audio));
@@ -360,6 +509,49 @@ test('pit wall alone plays the selected race plan and leaves spotter and drill s
   expect(global.fetch.mock.calls.some(([url]) => url.includes('green'))).toBe(false);
   expect(playBeep).not.toHaveBeenCalled();
   unmount();
+});
+
+test.each([
+  ['pit_cycle_ahead', 'pit_cycle'], ['fuel_defence', 'fuel_defence'], ['fuel_defence_target', 'fuel_defence'],
+])('pit wall alone renders %s as a routine report for the selected category', async (key, category) => {
+  const wallAlerts = { [category]: true };
+  const { result } = renderHook(() => useSpotter('http://test', audio, {
+    specialists: true, racePlanEnabled: true, wallAlerts,
+  }));
+  expect(result.current.enabled).toBe(false);
+  global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ event: {}, audio_base64: 'strategy-audio' }) }));
+  const event = radioEvent(key, { engineer: 'strategy', group: 'race_plan', expires_in_ms: 2000 });
+  await act(async () => send(sockets[0], radioFrame([radioEvent('green'), event])));
+  expect(audio.play).toHaveBeenCalledWith('strategy-audio', 'audio/mpeg', expect.objectContaining({
+    channel: 'pitwall', confirmAudible: true, priority: 0, routineReport: true, interrupt: false,
+  }));
+  expect(global.fetch.mock.calls.some(([url]) => url.includes('/green/render'))).toBe(false);
+});
+
+test.each(['pit_cycle_behind', 'fuel_defence_feedback'])('%s yields to a new two-second lap call', async (key) => {
+  let playing;
+  audio.audioBusy = () => Boolean(playing);
+  audio.canStartLap = () => playing?.routineReport === true;
+  audio.play.mockImplementation(async (_clip, _mime, options) => {
+    if (playing && (!options.interrupt || playing.priority >= options.priority)) return false;
+    playing = options;
+    options.onStatus?.('started');
+    return true;
+  });
+  const wallAlerts = { pit_cycle: true, fuel_defence: true };
+  const { result } = renderHook(() => useSpotter('http://test', audio, {
+    specialists: true, racePlanEnabled: true, wallAlerts,
+  }));
+  await enable(result);
+  global.fetch = jest.fn(async url => ({ ok: true, json: async () => ({ event: {}, audio_base64: url.includes('lap_time') ? 'lap' : 'strategy' }) }));
+  const strategy = radioEvent(key, { engineer: 'strategy', group: 'race_plan', expires_in_ms: 2000 });
+  await act(async () => send(sockets.at(-1), radioFrame([strategy])));
+  expect(playing?.routineReport).toBe(true);
+  const lap = radioEvent('lap_time', { serial: 2, immediate: true, expires_in_ms: 2000 });
+  const received = Date.now();
+  await act(async () => send(sockets.at(-1), radioFrame([strategy, lap])));
+  expect(playing).toMatchObject({ interrupt: true, channel: 'spotter', priority: 1 });
+  expect(playing.startDeadline).toBeLessThanOrEqual(received + 2050);
 });
 
 test.each([
@@ -1031,4 +1223,48 @@ test('missing essential audio still fails preparation without playing or acknowl
   expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({ event_id: event.id }), 'failed', 'audio_preparation');
   expect(audio.play).not.toHaveBeenCalled();
   expect(global.fetch.mock.calls.some(([url]) => url.endsWith('/ack'))).toBe(false);
+});
+
+test.each([
+  ['pit wall only', false, true, true, false],
+  ['spotter only', true, false, true, true],
+  ['both with rival disabled', true, true, false, false],
+  ['both with rival enabled', true, true, true, true],
+])('post-pass rival follows the spotter selection (%s)', async (_, enableSpotter, wall, selected, hearRival) => {
+  localStorage.setItem('iracing.spotter.settings', JSON.stringify({ alerts: { class_pass_rival: selected } }));
+  const { result } = renderHook(() => useSpotter('http://test', audio, { specialists: wall, racePlanEnabled: wall }));
+  if (enableSpotter) await enable(result);
+  const socket = sockets.at(-1);
+  const rival = radioEvent('class_pass_rival', { alert_categories: ['spotter.class_pass_rival'], expires_in_ms: 4000 });
+  const plan = radioEvent('pack_fight', { id: 'run:plan', group: 'race_plan', serial: 2, engineer: 'race' });
+  global.fetch = jest.fn(async url => ({ ok: true, json: async () => ({
+    event: {}, audio_base64: url.includes('class_pass_rival') ? 'rival' : 'plan',
+  }) }));
+  await act(async () => send(socket, radioFrame([rival, plan])));
+  const spoken = hearRival ? 'rival' : 'plan';
+  await waitFor(() => expect(audio.play).toHaveBeenCalledWith(spoken, 'audio/mpeg', expect.objectContaining({
+    channel: hearRival ? 'spotter' : 'pitwall',
+  })));
+  expect(fetch.mock.calls.some(([url]) => url.includes('class_pass_rival'))).toBe(hearRival);
+  const playback = audio.play.mock.calls[0][2];
+  expect(playback.valid()).toBe(true);
+  await act(async () => send(socket, radioFrame([])));
+  expect(playback.valid()).toBe(false);
+});
+
+test('post-pass rival rechecks available media time and raw overlap just before sound', async () => {
+  const { result } = renderHook(() => useSpotter('http://test', audio));
+  await enable(result);
+  global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({ event: {}, audio_base64: 'rival' }) }));
+  const rival = radioEvent('class_pass_rival');
+  await act(async () => send(sockets[0], radioFrame([rival])));
+  const playback = audio.play.mock.calls[0][2];
+  expect(playback.confirmAudible).toBe(true);
+  const closing = radioFrame([{ ...rival, class_pass_contact_at: 105 }]);
+  closing.radio.session_time = 103;
+  await act(async () => send(sockets[0], closing));
+  expect(playback.windowSeconds()).toBeGreaterThan(1.5);
+  expect(playback.windowSeconds()).toBeLessThanOrEqual(2);
+  await act(async () => send(sockets[0], { ...closing, raw_state: 3 }));
+  expect(playback.valid()).toBe(false);
 });

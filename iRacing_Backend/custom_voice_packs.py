@@ -190,10 +190,10 @@ class CustomVoicePacks:
             if voice and self.reviewed.has(role,voice,text):return True
             key,row=self._row(role,text)
             return bool(row and (self._folder(key)/row['audio']).is_file())
-    def audio(self,role,text):
+    def audio(self,role,text,*,exact=False):
         with self.lock:
             voice=self._reviewed_voice(role)
-            if voice and self.reviewed.has(role,voice,text):return self.reviewed.audio(role,voice,text)
+            if not exact and voice and self.reviewed.has(role,voice,text):return self.reviewed.audio(role,voice,text)
             key,row=self._row(role,text)
             if not row:raise MissingCustomAudio('커스텀팩에 없는 문장입니다. 이 안내는 생략합니다.')
             data=(self._folder(key)/row['audio']).read_bytes();check_audio(row,data)
