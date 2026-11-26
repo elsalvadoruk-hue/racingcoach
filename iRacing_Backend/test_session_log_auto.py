@@ -60,7 +60,7 @@ class AutoSendTests(unittest.TestCase):
         self.assertEqual(self.sent[0][1], 'log-drive-a.zip')
 
     def test_the_new_notice_with_oval_practice_invalidates_previous_consent(self):
-        self.assertEqual(CONSENT_VERSION, 5)
+        self.assertEqual(CONSENT_VERSION, 6)
         with mock.patch.object(session_log_auto, 'CONSENT_VERSION', 4):
             session_log_auto.set_enabled(True, 4, now=1000.)
         self.assertFalse(session_log_auto.status()['enabled'])

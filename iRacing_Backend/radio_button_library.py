@@ -36,6 +36,7 @@ LIBRARY_KINDS = (
     ('타이어 상태', '온도·마모', 'tire_temperature* tire_trend* tire_input* tire_tires_ok'),
     ('무전 확인', '수신 확인', 'ack'),
     ('무전 확인', '음성 테스트', 'preview_* test'),
+    ('피트 명령 복창', '설정·취소·결과 확인', 'pit_command_readback'),
 )
 ALIASES = {
     'brief:stint_ahead': 'stint_* stops_*', 'brief:rejoin': 'rejoin_* pit_rejoin',
@@ -121,11 +122,13 @@ def strategy_recordings():
 
 @lru_cache(maxsize=1)
 def defaults():
+    from pit_command_audio import catalog as pit_catalog
     from number_splice import LAP_KEYS
     from spotter import OPTIONAL_CLIPS, VARIANTS
     # Lap times and SOFs are assembled during playback. They have no individual recording.
     composed = {*LAP_KEYS, 'form_sof', 'form_sof_class'}
     entries = dict(((role, text), key) for key, role, text in fixed_catalog_entries())
+    entries.update({(row['role'],row['text']):'pit_command_readback' for row in pit_catalog()})
     entries.update({(role, text): key for key, (role, variants) in PHRASES.items() for text in variants if '{' not in text})
     entries.update({(role, text): key for key, role, text in catalog_entries(k for k in PHRASES if k not in composed)})
     entries.update({binding: (standard or short).split('-')[0] for binding, (standard, short) in BY_WORDING.items()})
@@ -204,13 +207,14 @@ class VoiceLibrary:
 
     def _installed(self):
         from race_engineer import role_voice
+        from pit_command_audio import catalog as pit_catalog, path_for as pit_path
         self._update_packs()
         radio = self.audio.directory
         spot = self.spotter.directory if self.spotter else None
         fuel_dirs = {(topic,style): fuel_audio.directory(radio,topic,style)
                      for topic in fuel_audio.LIMITS for style in fuel_audio.STYLES}
         strategy_dir=radio/'pieces'/'race-strategy'
-        roots = [radio, radio / RACE_AUDIO_DIR, strategy_dir, *fuel_dirs.values(), *self.pack_dirs] + ([spot] if spot else [])
+        roots = [radio, radio / 'pit-readback', radio / RACE_AUDIO_DIR, strategy_dir, *fuel_dirs.values(), *self.pack_dirs] + ([spot] if spot else [])
         stamp = (tuple(directory_stamp(p) for p in roots), tuple(role_voice(r) for r in ROLES),
                  self.spotter.voice() if spot else None)
         if stamp == self.stamp:
@@ -247,9 +251,17 @@ class VoiceLibrary:
                 paths=strategy_audio.files(radio,item.role,item.source,self.packs)
                 if paths and paths[0].name in strategy_files:
                     rows.append((identifier,item,[item.source]))
+        pit_styles = {row['text']:row['style'] for row in pit_catalog()}
+        pit_files = audio_files(radio / 'pit-readback')
         for key, item in defaults().items():
             role, source = item.role, item.source
             if (role, source) in replaced:
+                continue
+            if item.group == '피트 명령 복창':
+                if pit_path(radio, source).name in pit_files:
+                    style = '짧은 무전' if pit_styles[source] == 'short' else '기본 무전'
+                    if source.endswith('공기압.'): style = '공통 대상'
+                    rows.append((key, item._replace(kind=f'{item.kind} · {style}'), [source]))
                 continue
             if (role, source) in BY_WORDING:
                 path = prepared_file(role, source, self.packs, radio)

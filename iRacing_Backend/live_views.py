@@ -145,6 +145,7 @@ class LiveViews:
             return {'connected': True, 'game': self.game if self.state == 'CONNECTED' else None,
                     'identity': dict(self.identity), 'snapshot': latest,
                     'recent': recent, 'captured_at': now,
+                    'pit_tire_compounds': [dict(t) for t in self.radio.metadata.get('tire_compounds', [])],
                     'fuel_l_per_lap': max(self.fuel_history) if self.fuel_history else None,
                     'fuel_avg_l_per_lap': sum(self.fuel_history) / len(self.fuel_history) if self.fuel_history else None,
                     'fuel_observed_laps': len(self.fuel_history),

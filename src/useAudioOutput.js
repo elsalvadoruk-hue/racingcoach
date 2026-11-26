@@ -1,3 +1,4 @@
+import { deviceIdentity } from './voiceDeviceIdentity';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import useAudioHost, { STANDBY_MESSAGE } from './audioHost';
 import { useGame, useGameSettings } from './lib/gameContext';
@@ -123,6 +124,7 @@ export default function useAudioOutput() {
   const recoveryGeneration = useCallback(() => recovery.current.generation, []);
   const [playback, setPlayback, appliedPlayback] = useGameSettings(savedPlayback, storePlayback);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackConfirmed, setPlaybackConfirmed] = useState(null);
   const playbackSettings = useRef(appliedPlayback); playbackSettings.current = appliedPlayback;
   const [effect, setEffect, appliedEffect] = useGameSettings(radioEffect.savedSettings, storeEffect);
   const effectSettings = useRef(appliedEffect); effectSettings.current = appliedEffect;
@@ -600,6 +602,9 @@ export default function useAudioOutput() {
       part.onplaying = () => {
         if (!active(part) || (part === current && !mayStart())) return;
         part._heard = true;
+        if (!part.muted && part.volume > 0) deviceIdentity('', selected.current).then(value => {
+          if (mounted.current && value?.speaker) setPlaybackConfirmed(value.speaker);
+        }).catch(() => {});
         confirmedProgress();
         setStage('playing');
         progress(part);
@@ -667,7 +672,7 @@ export default function useAudioOutput() {
       if (recover && !player.current) radioEffect.recover();
     }
   }, [supported, stop]);
-  return { applied: { ...appliedPlayback, outputId: appliedOutput }, outputId, devices, supported, standby: !host,
+  return { playbackConfirmed, applied: { ...appliedPlayback, outputId: appliedOutput }, outputId, devices, supported, standby: !host,
     message: host ? testMessage || failureMessage || message : STANDBY_MESSAGE, testMessage: host ? testMessage : '', refresh, refreshing, changeOutput, play, preparePitEntry, stop, stopNormal,
     setPriorityGate, cancelPriority, isPriorityBlocked, audioBusy, canStartLap, isPlaying, recoveryGeneration,
     volume: playback.volume, muted: playback.muted, changeVolume, toggleMute, rate: playback.rate, changeRate,

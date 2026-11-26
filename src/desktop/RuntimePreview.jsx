@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import VoiceVolumeSlider from '../components/VoiceVolumeSlider';
 import { ConsentDialog, useSessionLogAuto } from '../components/SessionLogAutoSend';
+import LocalSpeechDialog from '../components/LocalSpeechDialog';
 import { useGame, GameSettingsNotice } from '../lib/gameContext';
 export { DesktopRuntimeProvider, useLabControls } from './DesktopRuntime';
 
@@ -62,10 +63,17 @@ export function RuntimeControls({ runtime }) {
           disabled={unsupported || (key === 'overlay' ? runtime.overlayBusy || !runtime.overlay?.supported : key === 'spotter' ? runtime.host?.spotter?.preparing : false)}
           onClick={() => change(key, !on)}><Icon data-icon="inline-start" aria-hidden="true" />{label}</Button>;
       })}
+      {host.localRadio && <Button id="quick-local-speech" size="sm" variant={host.localRadio.enabled?'default':'outline'}
+        aria-pressed={host.localRadio.enabled} aria-label={host.localRadio.enabled?'로컬 음성 인식 끄기':'로컬 음성 인식 켜기'}
+        className={`runtime-toggle${host.localRadio.enabled?' runtime-toggle-on':''}`}
+        disabled={!host.localRadio.enabled && (host.localRadio.busy || host.localRadio.headerBusy)}
+        title={host.localRadio.error || (host.localRadio.enabled?'음성 인식 켜짐':'음성 인식 꺼짐 · 모델이 없으면 설치 안내를 엽니다.')}
+        onClick={host.localRadio.toggleFromHeader}><Mic data-icon="inline-start" aria-hidden="true"/>{host.localRadio.phase==='arming'?'인식 준비 중…':'음성 인식'}</Button>}
     </FieldGroup>
+    <LocalSpeechDialog apiBase={runtime.apiBase ?? host.apiBase ?? ''} radio={host.localRadio} hideTrigger/>
     {runtime.speech?.available && <>
     <Field orientation="horizontal" className="runtime-input"><FieldLabel htmlFor="input-device-trigger"><Mic aria-hidden="true" /><span>입력장치</span></FieldLabel><Button id="input-device-trigger" variant="outline" aria-label="입력장치 선택" aria-haspopup="dialog" aria-expanded={inputDialog} title={inputLabel} onClick={() => { setInputDialog(true); runtime.refreshDevices?.(); }}><span className="truncate">{inputLabel}</span><ChevronDown data-icon="inline-end" /></Button></Field>
-    <Dialog open={inputDialog} onOpenChange={setInputDialog}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>마이크 입력장치</DialogTitle><DialogDescription>F8 음성을 받을 마이크를 선택하세요. 앱의 선택은 Chrome 기본 마이크 설정과 별개이며 게임별로 저장됩니다.</DialogDescription></DialogHeader>
+    <Dialog open={inputDialog} onOpenChange={setInputDialog}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>마이크 입력장치</DialogTitle><DialogDescription>질문 단축키 음성을 받을 마이크를 선택하세요. 앱의 선택은 Chrome 기본 마이크 설정과 별개이며 게임별로 저장됩니다.</DialogDescription></DialogHeader>
       <GameSettingsNotice />
       <FieldGroup><Field><FieldLabel htmlFor="quick-input">마이크 입력장치</FieldLabel><NativeSelect id="quick-input" value={controls.microphone} disabled={microphoneBusy} onChange={event => change('microphone', event.target.value)}><DeviceOptions devices={inputDevices} kind="audioinput" selected={controls.microphone} /></NativeSelect></Field>
         <FieldDescription role="status">{host.armed ? `현재 연결: ${connectedInput?.label || '장치 이름 확인 필요'}${selectedGame !== activeGame ? ` (${activeGame === 'lmu' ? 'LMU' : 'iRacing'})` : ''}` : '마이크 대기 중 · 선택 후 마이크 준비를 누르세요.'}</FieldDescription>

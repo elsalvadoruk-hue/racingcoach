@@ -35,6 +35,8 @@ async def managed_lifespan(live, overlay, warm_references, tire_overlay=None):
             await asyncio.to_thread(tire_overlay.start)
         yield
     finally:
+        if getattr(live, 'local_speech_runtime', None) is not None:
+            await asyncio.to_thread(live.local_speech_runtime.close)
         if tire_overlay is not None:
             await asyncio.to_thread(tire_overlay.close)
         await asyncio.to_thread(overlay.close)

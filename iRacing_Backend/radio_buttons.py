@@ -312,6 +312,8 @@ class ButtonRadio:
             raise HTTPException(409, '다른 창에서 저장했습니다. 창을 다시 열어 최신 설정을 확인하세요.')
         if rows is None:
             rows, _ = self.settings_rows(validate(data.get('rows')))
+        if getattr(self, 'speech_inputs', None):
+            self.speech_inputs.check_radio(rows)
         value = {'revision': self.revision + 1, 'rows': rows}
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix('.tmp')
@@ -367,7 +369,11 @@ class ButtonRadio:
                         edges.extend(sorted(values - previous.get(group, set())))
                         previous[group] = values
                 captures = [q for q, capture in self.clients.items() if capture]
-                now_keys = native.shortcuts_down(self.shortcuts.get(game, []))
+                speech = getattr(self, 'speech_inputs', None)
+                assigned = self.shortcuts.get(game, []) + (speech.shortcuts() if speech and game else [])
+                now_keys = native.shortcuts_down(assigned)
+                if speech:
+                    speech.poll(now_keys.union(*previous.values()), game if game == self.coach.live.game else None, bool(captures))
                 if captures:
                     if edges:
                         for queue in captures:
@@ -389,6 +395,8 @@ class ButtonRadio:
                 if q.empty():
                     q.put_nowait({'error': f'Windows 입력을 열 수 없습니다. {exc}'})
         finally:
+            if getattr(self, 'speech_inputs', None):
+                self.speech_inputs.release()
             if native:
                 native.close()
 

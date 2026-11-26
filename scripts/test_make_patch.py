@@ -55,6 +55,19 @@ def copy(version, **changes):
 
 
 class PatchTests(unittest.TestCase):
+    def test_optional_recognizer_manifest_ships_without_personal_json(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root,out=Path(folder)/'source',Path(folder)/'share'
+            manifest='[{"file":"model.int8.onnx","size":123,"sha256":"public-model-digest"}]'
+            write(root,{'iRacing_Backend/local_speech_worker.py':'# worker',
+                        'iRacing_Backend/sensevoice_model.json':manifest,
+                        'iRacing_Backend/settings.json':'private',
+                        'iRacing_Backend/gcp-key.json':'private'})
+            with patch.object(make_share_copy,'bundled_bridge_files',return_value=[]):
+                make_share_copy.copy_backend(root,out)
+            self.assertEqual((out/'iRacing_Backend/sensevoice_model.json').read_text(),manifest)
+            self.assertEqual(len(list((out/'iRacing_Backend').iterdir())),2)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.temp.cleanup)

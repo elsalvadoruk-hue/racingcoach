@@ -5,6 +5,7 @@ import UtilityWorkspace from './UtilityWorkspace';
 let mockReferenceProps, mockVoiceReviewProps;
 jest.mock('../analysis/ReferencePanel', () => ({ ExternalReferencePanel: props => { mockReferenceProps = props; return <div>real-reference-workflow</div>; } }));
 jest.mock('../components/AppSettings', () => ({ __esModule: true, default: props => <div data-testid="settings-base">{props.apiBase}</div> }));
+jest.mock('../components/PerformanceSettings', () => ({ __esModule: true, default: () => <div>performance-settings</div> }));
 jest.mock('../components/OverlaySettings', () => ({ __esModule: true, default: props => <div data-testid="overlay-base">{props.apiBase}</div> }));
 jest.mock('../components/SessionLogExport', () => ({ __esModule: true, default: () => <div>real-session-log</div> }));
 jest.mock('../components/RadioAudioPrepare', () => ({ __esModule: true, default: () => <div>real-radio-prepare</div> }));

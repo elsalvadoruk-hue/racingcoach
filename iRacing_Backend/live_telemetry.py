@@ -101,6 +101,8 @@ CHANNELS = {
     'lat_accel_mps2': 'LatAccel', 'long_accel_mps2': 'LongAccel', 'vert_accel_mps2': 'VertAccel',
     'track_wetness': 'TrackWetness', 'declared_wet': 'WeatherDeclaredWet', 'tire_compound': 'PlayerTireCompound',
     'pit_sv_fuel': 'PitSvFuel', 'pit_sv_flags': 'PitSvFlags',
+    'pit_sv_tire_compound': 'PitSvTireCompound',
+    **{f'pit_sv_{wheel.lower()}p': f'PitSv{wheel}P' for wheel in ('LF','RF','LR','RR')},
     'finish_status': 'PlayerFinishStatus',
     'virtual_energy_sample_time': 'VirtualEnergySampleTime',
     'lmu_parts_detached': 'LmuPartsDetached', 'lmu_overheating': 'LmuOverheating',
@@ -524,7 +526,7 @@ class LiveTelemetry(LiveReporting, LiveViews, LiveCoaching):
                     'hotkey_events': [e for e in self.hotkey_events if e['serial'] > after]}
 
     def _poll_hotkey(self):
-        if os.name != 'nt':
+        if os.name != 'nt' or getattr(self, 'speech_shortcuts_managed', False):
             return
         key_state = ctypes.windll.user32.GetAsyncKeyState
         pressed = bool(key_state(0x77) & 0x8000)

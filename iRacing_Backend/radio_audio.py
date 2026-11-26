@@ -231,6 +231,9 @@ class RadioAudioCache:
 
     def cached(self, role, text):
         if self.custom_packs is not None and self.custom_packs.has(role,text):return True
+        from pit_command_audio import prepared_file as pit_file
+        path = pit_file(self.directory, role, text)
+        if path is not None: return path.is_file()
         from race_strategy_clips import files
         paths = files(self.directory, role, text, self.custom_packs)
         if paths:
@@ -254,6 +257,10 @@ class RadioAudioCache:
         """Read an existing whole-sentence clip; never repair or synthesize it."""
         if self.custom_packs is not None and self.custom_packs.has(role,text):
             return self.custom_packs.audio(role,text)
+        from pit_command_audio import prepared_file as pit_file
+        path = pit_file(self.directory, role, text)
+        if path is not None:
+            return 'data:audio/ogg;codecs=opus;base64,' + base64.b64encode(path.read_bytes()).decode('ascii')
         from race_strategy_clips import files, read_files
         paths = files(self.directory, role, text, self.custom_packs)
         if paths:
@@ -274,6 +281,9 @@ class RadioAudioCache:
 
     def phrase(self, role, text):
         """One whole call as a single clip, synthesized once per voice and wording."""
+        from pit_command_audio import prepared_file as pit_file
+        if pit_file(self.directory, role, text) is not None:
+            return self.read_prepared(role, text)
         from race_call_audio import BY_WORDING
         from race_strategy_clips import clauses
         if clauses(role,text):

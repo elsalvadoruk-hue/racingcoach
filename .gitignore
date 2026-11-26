@@ -50,6 +50,7 @@
 !/iRacing_Backend/lmu_bridges/bridge-*/manifest.json
 !/iRacing_Backend/lmu_bridges/bridge-*/lmu_native_bridge.dll
 !/iRacing_Backend/requirements*.txt
+!/iRacing_Backend/sensevoice_model.json
 !/iRacing_Backend/tire_reader/
 /iRacing_Backend/tire_reader/*
 !/iRacing_Backend/tire_reader/*.py

@@ -77,7 +77,7 @@ function ConsentContents({ auto }) {
       <DialogHeader>
         <DialogTitle>{renewal ? '로그 전송 동의 내용이 변경되었습니다' : '세션 로그를 자동으로 보낼까요?'}</DialogTitle>
         <DialogDescription>{renewal
-          ? '업데이트로 전송하는 기록과 동의 내용이 바뀌어 재동의가 필요합니다. 현재 자동 보내기는 중지되어 있습니다. 변경 내용을 확인하고 다시 동의해야 켜집니다. 동의하지 않아도 앱을 계속 쓸 수 있습니다.'
+          ? '업데이트로 전송하는 기록과 동의 내용이 바뀌어 재동의가 필요합니다. 현재 자동 보내기는 중지되어 있습니다. 변경 내용을 확인하고 다시 동의해야 켜집니다. 로컬 음성 인식은 재동의 후 사용할 수 있으며, 스포터·피트월 등 다른 기능은 계속 사용할 수 있습니다.'
           : '켜면 주행이 끝날 때마다 아래 기록이 앱을 만든 사람에게 자동으로 전달됩니다. iRacing과 LMU에 함께 적용됩니다. 읽어 보고 동의할 때만 켜집니다.'}</DialogDescription>
       </DialogHeader>
       {renewal && <section aria-label="변경된 내용" className="rounded-md border border-border bg-muted p-3 text-sm">
@@ -93,11 +93,12 @@ function ConsentContents({ auto }) {
         <div><dt className="font-semibold">파일이 클 때</dt><dd>보낼 수 있는 크기를 넘으면 주변 차 기록을 먼저 빼고, 그래도 크면 내 주행 측정값도 뺍니다. 포장 오벌은 내 주행 측정값 요약부터 빼고, 주변 차 기록은 최대 6구간·1,200행의 일부 기록으로 줄여 남깁니다. 빠진 구간을 표시하며 전체 주행 기록으로 취급하지 않습니다. 그래도 공간이 부족하면 추가 자료를 뺍니다. 오벌 분류와 안내 기록은 기본 로그에 남습니다.</dd></div>
         <div><dt className="font-semibold">타이어 측정 기록</dt><dd>타이어 표시 또는 음성을 켜고 수집한 해당 주행의 압력·온도·색 판정·기온/노면 온도·인식 실패 진단·판단 범위·랩/스틴트 요약을 포함합니다. 제공되는 냉간 설정값은 출처와 실제 장착 미확인을 구분합니다. 화면 이미지·인식 문자열은 보내지 않습니다. 크기 한도에 따라 실제 앞/뒤 구간으로 줄이거나 제외하고 누락량을 표시합니다.</dd></div>
         <div><dt className="font-semibold">남는 용량에 함께 보내는 것 · 코너 거동 측정값</dt><dd>주변 차 기록이 없는 파일에는 같은 코너의 여러 유효 랩(최소 4개, 최대 8개)에서 기록된 시각·랩 위치·속도·핸들·브레이크·스로틀·회전율·횡가속도·종가속도·ABS 개입을 일부 넣습니다. 표시가 없는 구간도 포함하며, 기록 간격과 결측을 보존합니다. 기본 기록과 측정값 요약을 유지하고 전체 압축 파일이 1.4MB 이하일 때만 추가합니다. 공간이 부족하면 코너 묶음을 생략합니다.</dd></div>
-        <div><dt className="font-semibold">보내지 않는 것</dt><dd>내 이름과 다른 드라이버 이름(“Driver 번호”로 바뀜), 레이팅, 세션 번호, 마이크로 한 질문과 답변, 음성, 주행 파일(IBT·DuckDB) 원본, 셋업 파일 이름, Google 키, Garage61 토큰, PC의 폴더 경로.</dd></div>
+        <div><dt className="font-semibold">로컬 음성 인식 개선 기록 · 사용 시 필수</dt><dd>인식률 개선을 위해 한동안 로컬 음성 인식 기록을 받습니다. 새 동의 후 로컬 음성 인식으로 말한 문장, 보정 내용과 근거, 연결한 질문과 답변, 모델·처리 시간·실패 이유·피트 명령 결과를 보냅니다. 인식 테스트와 차량 미연결 질문도 포함합니다. 최대 100건씩 별도 파일로, 기록 후 1분 이상 지난 항목을 앱 실행 중 보냅니다. 음성과 장치 이름·ID는 제외합니다. 자동 전송을 끄면 로컬 음성 인식도 중지합니다.</dd></div>
+        <div><dt className="font-semibold">보내지 않는 것</dt><dd>내 이름과 다른 드라이버 이름(“Driver 번호”로 바뀜), 레이팅, 세션 번호, Google 마이크 질문과 답변, 녹음 원음과 답변 음성, 장치 이름·ID, 주행 파일(IBT·DuckDB) 원본, 셋업 파일 이름, Google 키, Garage61 토큰, PC의 폴더 경로.</dd></div>
         <div><dt className="font-semibold">언제</dt><dd>이 설정을 켠 뒤 시작한 주행만, 마지막 기록 뒤 10분 이상 지나고 현재 세션이 아닐 때 주행 하나당 한 번 보냅니다. 앱을 바로 닫았다면 다음 실행 때 확인합니다. 내 주행 측정값은 계산에 시간이 걸려 차에서 내린 뒤에 만들어 보냅니다. 2분 미만이나 안내 10건 미만은 보내지 않지만, 실제 주행이 확인된 포장 오벌은 2분 이상이면 안내가 없어도 보냅니다.</dd></div>
         <div><dt className="font-semibold">어디로, 어떻게</dt><dd>암호화된 연결(HTTPS)로 Google Apps Script를 거쳐 앱 제작자의 Google Drive에 저장됩니다. Google의 국내외 데이터센터에 보관될 수 있고, Google이 저장할 때 암호화합니다.</dd></div>
         <div><dt className="font-semibold">얼마나 보관하나요</dt><dd>앱 개선에 쓰는 동안 보관하고, 받은 날로부터 1년이 지나면 지웁니다.</dd></div>
-        <div><dt className="font-semibold">동의하지 않거나 끄고 싶을 때</dt><dd>동의하지 않아도 앱의 모든 기능을 그대로 쓸 수 있습니다. 언제든 스위치를 끄면 바로 보내기를 멈춥니다. 이미 보낸 기록을 지우고 싶으면 앱을 받은 곳에서 제작자에게 요청해 주세요.</dd></div>
+        <div><dt className="font-semibold">동의하지 않거나 끄고 싶을 때</dt><dd>로컬 음성 인식은 개선용 기록 전송이 필수이며, 동의하지 않거나 끄면 사용할 수 없습니다. 스포터·피트월·Google 질문 등 다른 기능은 계속 사용할 수 있습니다. 언제든 스위치를 끄면 바로 보내기를 멈춥니다. 이미 보낸 기록을 지우고 싶으면 앱을 받은 곳에서 제작자에게 요청해 주세요.</dd></div>
       </dl>
       <label className="mt-2 flex items-start gap-2 text-sm font-semibold text-foreground">
         <input type="checkbox" className="mt-1" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} disabled={auto.busy} />
@@ -129,6 +130,8 @@ export default function SessionLogAutoSend({ apiBase, visible = true }) {
     {state.reconsent_required && <p role="status" className="mt-2 text-sm text-warning">동의 내용 변경 · 재동의 필요 · 자동 보내기 중지. <Button type="button" variant="outline" size="sm" onClick={() => auto.toggle(true)}>변경 내용 확인</Button></p>}
     {state.enabled && <p role="status" className="mt-2 text-sm text-foreground">
       켜짐 · {when(state.consented_at)}부터의 주행을 보냅니다 · 보낸 주행 {state.sent}개</p>}
+    {state.speech?.records > 0 && <p role="status">로컬 음성 인식 기록 {state.speech.records}건 전송 · {when(state.speech.sent_at)}</p>}
+    {state.speech?.error && <p role="alert">음성 인식 로그: {state.speech.error}{state.speech.failures>=3?' · 3회 실패했습니다. 연결을 확인한 뒤 로그 보내기를 껐다 켜면 다시 시도합니다.':' · 잠시 후 다시 시도합니다.'}</p>}
     {state.enabled && state.recent?.length > 0 && <ul className="mt-2 flex flex-col gap-1 text-xs text-muted-foreground">
       {state.recent.slice(0, 5).map(run => <li key={run.run_id}>
         {when(run.ended_at)} · {run.track || '트랙 미확인'} · {run.sent_at ? '보냄' : run.attempts >= 3 ? `보내지 못함 · ${run.error || ''} 직접 보내 주세요.` : `다시 시도 예정 · ${run.error || ''}`}

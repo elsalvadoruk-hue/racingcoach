@@ -123,6 +123,7 @@ def read_race(sdk, names, session_num):
     options = weekend.get('WeekendOptions') or metadata('WeekendOptions')
     data['incident_limit'] = limit_value(options.get('IncidentLimit')) if isinstance(options, dict) else None
     tires = [t for t in (info.get('DriverTires') or []) if isinstance(t, dict)]
+    data['tire_compounds'] = [{'index':t.get('TireIndex'), 'type':t.get('TireCompoundType')} for t in tires]
     data['tire_types_known'] = bool(tires)
     data['wet_compounds'] = [t.get('TireIndex') for t in tires
                              if any(word in str(t.get('TireCompoundType') or '').lower() for word in ('wet', 'rain'))]
@@ -671,7 +672,8 @@ class RaceEngineer:
                 'own_stint_laps': self.stint(own)[0] if own else None, 'own_stops': self.stint(own)[1] if own else None,
                 'estimate_notice': '간격은 랩 진행 거리와 페이스로 환산한 추정입니다. 복귀 순위는 상대 피트·추월·교통 변화를 포함하지 않습니다.'}
 
-    def _pit_fuel_litres(self, view, snapshot):
+    @staticmethod
+    def _pit_fuel_litres(view, snapshot):
         # The configured reserve is already included. A possible extra lap is
         # shown separately; it must not silently add another full lap of fuel.
         amount = positive(view.get('fuel_next_stop_l'))

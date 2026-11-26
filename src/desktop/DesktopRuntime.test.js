@@ -69,6 +69,16 @@ test('missing Google configuration cannot arm a microphone or masquerade as a ve
   expect(fetcher).toHaveBeenCalledWith(`${mockHost.apiBase}/api/live-coach/status`, expect.any(Object));
 });
 
+test('local enablement never bypasses Google configuration for its independent microphone', async () => {
+  mockHost.status.speech = {};
+  mockHost.localRadio = { enabled: true };
+  let runtime;
+  render(<DesktopRuntimeProvider apiBase={mockHost.apiBase}>{value => { runtime = value; return null; }}</DesktopRuntimeProvider>);
+  await act(async () => { await runtime.change('armed', true); });
+  expect(mockHost.prepare).not.toHaveBeenCalled();
+  expect(runtime.speech.available).toBe(false);
+});
+
 test('device permission is requested only by an explicit action and every temporary track is released', async () => {
   const stopOne = jest.fn(), stopTwo = jest.fn();
   const media = { enumerateDevices: jest.fn(async () => [{ kind: 'audioinput', deviceId: 'mic', label: 'USB' }]),

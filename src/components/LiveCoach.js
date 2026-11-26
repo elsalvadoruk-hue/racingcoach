@@ -1,3 +1,4 @@
+import useVoiceAutoResume from '../useVoiceAutoResume';
 import VoiceVolumeSlider from './VoiceVolumeSlider';
 import { createClassApproaches } from '../lib/classApproaches';
 import DrivingLearning from './DrivingLearning';
@@ -15,6 +16,12 @@ import { HelpHint } from './HelpGuide';
 import { encodeWav, VoiceRecorder, RESUMABLE, MAX_RESUMES, DEFAULT_RATE, MULTIPART_DEFAULT_RATE, RATE_MIN, RATE_MAX, informationFits } from '../voiceAudio';
 import useAudioOutput from '../useAudioOutput';
 import { useButtonRadio } from '../useButtonRadio';
+import useLocalRadio from '../useLocalRadio';
+import { localSpeechRequest } from '../useLocalSpeech';
+import useSpeechShortcut from '../useSpeechShortcut';
+import LocalSpeechDialog from './LocalSpeechDialog';
+import SpeechShortcutField from './SpeechShortcutField';
+import { QUESTION_RESULTS } from './LocalSpeechSettings';
 import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import PitWall, { ENGINEERS, PIT_WALL_KEY, readPitPreferences } from './PitWall';
 import { voiceEventAllowed } from '../lib/voiceAlerts';
@@ -47,6 +54,7 @@ export function NoteText({ note }) {
   return <><div className="coach-note-meta"><Badge variant="secondary">{engineer?.label || '엔지니어'}{note.source === 'AUTO_REPORT' ? note.context?.report_delivery === 'PREPARED' ? ' · 전달 대기' : ' · 자동 보고' : ''}</Badge><time className="text-xs text-muted-foreground">{new Date(note.created_at * 1000).toLocaleTimeString('ko-KR')}</time></div>
     <p className="mt-2 text-xs text-muted-foreground">{phaseText(note)}</p>
     {note.source !== 'AUTO_REPORT' && <p className="mt-3 text-sm font-medium">“{note.text}”</p>}
+    {note.context?.local_question && <p className="text-sm text-muted-foreground">로컬 인식 · {note.context.local_question.topic_name || '질문 미확인'} · {QUESTION_RESULTS[note.context.local_question.result]} · {(note.context.local_question.total_ms / 1000).toFixed(2)}초</p>}
     {!!note.feelings?.length && <div className="mt-2 flex flex-wrap gap-2">{note.feelings.map(feeling => <Badge key={feeling} variant="outline">{FEELINGS[feeling] || feeling}</Badge>)}</div>}
     {note.reply && <div className="coach-note-reply"><p className="mb-1 text-xs text-muted-foreground">{note.reply_source === 'VERTEX_AI' ? 'AI 조언' : note.reply_source === 'MEASURED' ? '측정값 답변' : '안내'}</p><p>{note.reply}</p></div>}
     {note.source === 'AUTO_REPORT' && note.context?.spoken_text && <p className="mt-3 text-xs text-muted-foreground">자동 음성 문구: {note.context.spoken_text} · 정확한 수치는 위 기록 참조</p>}</>;
@@ -127,11 +135,16 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const [wallPreferences, setWallPreferences, appliedWall] = useGameSettings(readWall, storeWall);
   const [wallView, setWallView] = useState(null);
   const audioOutput = useAudioOutput();
+  const localResult = useRef();
+  const localRadio = useLocalRadio({ apiBase, game: activeGame, standby: audioOutput.standby,
+    inputDevice: appliedInput, status, cloudBusy: phase !== 'idle',
+    stopAudio: audioOutput.stopNormal || audioOutput.stop, onResult: (...args) => localResult.current?.(...args) });
+  const localRadioRef = useRef(localRadio); localRadioRef.current = localRadio;
   const standbyRef = useRef(false); standbyRef.current = Boolean(audioOutput.standby);
   const recordDelivery = useRadioDiagnostics(apiBase);
-  useButtonRadio(apiBase, Boolean(status?.radio_buttons_enabled), audioOutput, status, phase, setError, recordDelivery);
+  useButtonRadio(apiBase, Boolean(status?.radio_buttons_enabled), audioOutput, status, localRadio.busy ? 'recording' : phase, setError, recordDelivery);
   const [classApproaches] = useState(createClassApproaches);
-  useTireVoice(apiBase, activeGame, audioOutput, { busy: phase !== 'idle', recordDelivery,
+  useTireVoice(apiBase, activeGame, audioOutput, { busy: phase !== 'idle' || localRadio.busy, recordDelivery,
     postPit: appliedWall.alerts?.race_tire_push !== false });
   const deliveryEvent = useCallback((note, spokenText) => ({ event_id: String(note.id), run_id: note.context?.snapshot?.run_id || '',
     backend_version: note.context?.backend_version || null,
@@ -146,10 +159,11 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   const recoveryGeneration = useRef(null); recoveryGeneration.current = audioOutput.recoveryGeneration;
   blocked.current = audioOutput.isPriorityBlocked; busyAudio.current = audioOutput.audioBusy;
   const recorder = useRef(null), microphoneEpoch = useRef(0), state = useRef({ phase: 'idle', armed: false });
-  const spotter = useSpotter(apiBase, audioOutput, { busy: phase !== 'idle', specialists: wallEnabled && appliedWall.level !== 'off',
+  const spotter = useSpotter(apiBase, audioOutput, { busy: phase !== 'idle' || localRadio.busy, specialists: wallEnabled && appliedWall.level !== 'off',
     racePlanEnabled: wallEnabled && speak && !appliedAudio.muted && appliedAudio.volume > 0,
     level: appliedWall.level, wallAlerts: appliedWall.alerts, recordDelivery, classApproaches });
   useEffect(() => { if (spotter.enabled) setWallEnabled(true); }, [spotter.enabled]);
+  const autoResumeMessage = useVoiceAutoResume({game:activeGame,input:appliedInput,audio:audioOutput,spotter,localRadio,wallEnabled,setWallEnabled});
   const turn = useRef(null), stopRequested = useRef(false), timeout = useRef(null);
   const mounted = useRef(true), options = useRef({ mode, speak }), saved = useRef(onSaved);
   options.current = { mode, speak }; saved.current = onSaved;
@@ -168,6 +182,25 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   driving.current = spotter.enabled && spotter.view?.radio?.connected ? spotter.view.radio : status?.snapshot;
   const drivingConnected = useRef(true);
   drivingConnected.current = !!(spotter.enabled && spotter.view?.radio?.connected) || status?.connected !== false;
+  localResult.current = async (response, stillEnabled) => {
+    if (!mounted.current) return;
+    setNotes(current => [response.note, ...current.filter(n => n.id !== response.note.id)].slice(0, 200));
+    saved.current?.(response.note);
+    const valid = () => stillEnabled() && !standbyRef.current && drivingConnected.current && driving.current?.run_id === response.note.context?.snapshot?.run_id;
+    const parts = response.audio_parts;
+    if (parts?.length && (response.command_result || response.note.context?.local_question?.topic === 'race_focus')) {
+      try {
+        const check = await localSpeechRequest(apiBase, '/readback-check', {
+          owner: localRadio.engine.owner, capture_id: response.note.id,
+        });
+        if (!check.valid) return;
+      } catch { return; }
+    }
+    if (parts?.length && valid()) await play(parts.length === 1 ? parts[0] : parts, 'audio/mpeg', {
+      priority: 4, channel: 'pitwall', valid, whilePlaying: valid, startDeadline: Date.now() + 5000,
+      onStatus: (state, reason, playback) => recordDelivery({ ...deliveryEvent(response.note, response.spoken_text), ...(playback ? { playback } : {}) }, state, reason),
+    });
+  };
   const request = useCallback(async (path, body) => {
     const response = await fetch(`${apiBase}/api/live-coach${path}`, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await response.json();
@@ -223,30 +256,40 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     if (state.current.phase === 'starting') { stopRequested.current = true; return; }
     if (state.current.phase !== 'recording') return;
     clearTimeout(timeout.current);
+    const capture = recorder.current, position = turn.current, ticket = microphoneEpoch.current;
+    const current = () => mounted.current && ticket === microphoneEpoch.current && state.current.armed && recorder.current === capture;
+    changePhase('sending');
     try {
-      const encoded = recorder.current.finish();
-      await submit({ capture_id: turn.current?.capture_id, audio_base64: encoded });
-    } catch (failure) { setError(errorMessage(failure)); changePhase('idle'); }
+      const encoded = await capture.finish();
+      if (!current()) return;
+      await submit({ capture_id: position?.capture_id, audio_base64: encoded });
+    } catch (failure) { if (current()) setError(errorMessage(failure)); }
+    finally { if (mounted.current && (recorder.current === capture || turn.current === position)) changePhase('idle'); }
   }, [submit]);
   const start = useCallback(async (serial) => {
-    if (!state.current.armed || state.current.phase !== 'idle') return;
+    if (!state.current.armed || state.current.phase !== 'idle' || localRadioRef.current.busy) return;
     reportEpoch.current += 1;
     stopSpeaking(); setError(''); stopRequested.current = false; changePhase('starting');
+    const microphone = recorder.current, ticket = microphoneEpoch.current;
     try {
-      // Freeze the backend's position at the F8 edge, independent of network/STT delay.
+      // Freeze position at the configured shortcut edge, independently of STT delay.
       const [capture] = await Promise.all([
         request(`/captures${serial ? `?hotkey_serial=${serial}` : ''}`, {}),
-        recorder.current.start(),
+        microphone.start(),
       ]);
+      if (!mounted.current || !state.current.armed || ticket !== microphoneEpoch.current || recorder.current !== microphone) { microphone.close(); return; }
       turn.current = capture;
-      if (!mounted.current || !state.current.armed) { recorder.current?.finish(); changePhase('idle'); return; }
       changePhase('recording');
       timeout.current = setTimeout(finish, 44000);
       if (stopRequested.current) await finish();
-    } catch (failure) { recorder.current && (recorder.current.recording = false); setError(errorMessage(failure)); changePhase('idle'); }
+    } catch (failure) {
+      if (ticket === microphoneEpoch.current && mounted.current) { microphone.recording = false; setError(errorMessage(failure)); changePhase('idle'); }
+    }
   }, [request, finish, stopSpeaking]);
   const startRef = useRef(start), finishRef = useRef(finish);
   startRef.current = start; finishRef.current = finish;
+  const cloudShortcut = useSpeechShortcut(apiBase, 'cloud', armed && !audioOutput.standby,
+    () => startRef.current(), () => finishRef.current(), setError);
 
   useEffect(() => {
     mounted.current = true;
@@ -273,7 +316,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     if (!visible && !wallEnabled) return undefined;
     let stopped = false, running = false, lastPoll = 0;
     const poll = async () => {
-      if (running || Date.now() - lastPoll < 1800 || state.current.phase !== 'idle' || playing.current || isPriorityBlocked?.()) return;
+      if (running || Date.now() - lastPoll < 1800 || state.current.phase !== 'idle' || localRadioRef.current.busy || playing.current || isPriorityBlocked?.()) return;
       if (standbyRef.current) return;   // the speaking tab takes the reports
       running = true;
       lastPoll = Date.now();
@@ -286,7 +329,7 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
           deferred_report_ids: deferred.map(item => String(item.id)) });
         if (stopped || !mounted.current || epoch !== reportEpoch.current) return;
         setWallView(response.pit_wall);
-        if (!response.report || state.current.phase !== 'idle' || playing.current || isPriorityBlocked?.()) return;
+        if (!response.report || state.current.phase !== 'idle' || localRadioRef.current.busy || playing.current || isPriorityBlocked?.()) return;
         const { note, warning } = response.report;
         const attemptKey = `${activeGame}:${note.context?.snapshot?.run_id || ''}:${note.id}`;
         const previousFailure = reportFailures.current.get(attemptKey);
@@ -387,17 +430,12 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
         const event = JSON.parse(data);
         if (event.type === 'ready') { setSocketReady(true); return; }
         if (event.type === 'heartbeat') { reportPoll.current?.(); return; }
-        if (event.type === 'ptt') {
-          if (event.down) startRef.current(event.serial); else finishRef.current();
-        }
       };
       socket.onclose = () => { setSocketReady(false); if (!stopped) retry = setTimeout(connect, 2000); };
       socket.onerror = () => socket.close();
     };
     connect();
-    const preventF8 = (event) => { if (event.code === 'F8') event.preventDefault(); };
-    window.addEventListener('keydown', preventF8);
-    return () => { stopped = true; clearTimeout(retry); socket?.close(); window.removeEventListener('keydown', preventF8); };
+    return () => { stopped = true; clearTimeout(retry); socket?.close(); };
   }, [armed, wallEnabled, apiBase]);
 
   const prepare = async () => {
@@ -452,8 +490,9 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   };
   const snapshot = status?.snapshot || {}, speech = status?.speech || {};
   const active = phase === 'recording' || phase === 'starting';
-  // The desktop surface reuses this host so audio priorities, expiry and F8 have one owner.
+  // The desktop surface reuses this host so audio priorities and expiry have one owner.
   if (typeof children === 'function') return children({ apiBase, status, notes, armed, phase, mode, speak, error, socketReady,
+    localRadio, cloudShortcut, autoResumeMessage,
     inputDevice, activeMicrophone: armed ? openedMicrophone : null, changeInputDevice, audioOutput, spotter, wallEnabled, wallPreferences, wallView,
     prepare, start: () => start(), finish, setMode, setSpeak: (value) => { setSpeak(value); if (!value) stopSpeaking(); },
     toggleWall, changeWallPreferences, testVoice, testOutput, stopSpeaking,
@@ -466,6 +505,8 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
     <CornerCoach coach={status?.corner_coach} controls={status?.controls} connected={!!status?.connected} />
     <DrivingLearning learning={status?.driving_learning} connected={!!status?.connected} />
     <RadioDiagnostics apiBase={apiBase} />
+    <LocalSpeechDialog apiBase={apiBase} radio={localRadio} notes={notes} />
+    <SpeechShortcutField apiBase={apiBase} shortcut={cloudShortcut} disabled={armed || phase !== 'idle'} label="Google 질문 단축키" />
     <Card asChild><section aria-label="주행 중 대화와 코너 메모" className="coach-panel">
       <LiveHeader title="주행 중 대화와 코너 메모" topic="voiceCoach" icon={Radio} description="질문과 코너 느낌을 말한 순간의 주행 위치와 함께 기록합니다." />
       <CardContent className="p-0">
@@ -477,9 +518,9 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
       <div className="mt-5 flex flex-wrap items-center gap-3">
         <Button variant="default" type="button" onClick={prepare} disabled={phase === 'sending' || phase === 'arming'} className="coach-primary-action flex items-center gap-2 px-4 py-3">{armed ? <MicOff size={17} /> : <Mic size={17} />}{armed ? '마이크 끄기' : phase === 'arming' ? '마이크 연결 중' : '마이크 준비'}</Button>
         <Button type="button" data-help="voicePtt" disabled={!armed || phase === 'sending'} onClick={() => active ? finish() : start()} variant={active ? 'destructive' : 'outline'}>{active ? <Square size={16} /> : <Mic size={16} />}{active ? '녹음 완료 · 전송' : '녹음 시작'}</Button>
-        <p role="status" className="text-sm text-foreground">{phase === 'sending' ? '인식·저장·답변 중…' : active ? '듣고 있습니다 · 최대 45초' : armed ? socketReady ? 'F8을 누른 채 말하고 놓으세요.' : 'F8 연결 중 · 화면 녹음 버튼 사용 가능' : '먼저 마이크를 준비하세요.'}</p>
+        <p role="status" className="text-sm text-foreground">{phase === 'sending' ? '인식·저장·답변 중…' : active ? '듣고 있습니다 · 최대 45초' : armed ? socketReady ? '설정한 단축키를 누른 채 말하고 놓으세요.' : '화면 녹음 버튼 사용 가능' : '먼저 마이크를 준비하세요.'}</p>
       </div>
-      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">게임에 포커스가 있어도 F8을 사용할 수 있습니다. 휠 버튼을 F8로 매핑해 사용할 수 있습니다. 앱 페이지는 열어두세요. 음성 인식과 합성은 요청할 때 Google Cloud 사용료가 발생합니다.</p>
+      <p className="mt-3 text-xs leading-relaxed text-muted-foreground">Google 질문 단축키에 키보드 조합이나 휠 버튼을 연결할 수 있습니다. 앱 페이지는 열어두세요. 음성 인식과 합성은 요청할 때 Google Cloud 사용료가 발생합니다.</p>
       <p className="mt-2 text-xs leading-relaxed text-primary">기본은 측정값 답변입니다. 원리나 가능한 이유를 더 알고 싶을 때 AI 원인 분석을 선택하세요. AI 분석 모드에서만 생성형 AI 토큰을 사용하며, 측정값으로 답할 수 있는 질문은 계산으로 처리합니다.</p>
       <div className="mt-4 flex flex-wrap items-center gap-4">
         <ToggleGroup type="multiple" variant="outline" value={[mode]} onValueChange={values => setMode(values.find(key => key !== mode) || mode)} disabled={phase !== 'idle'} aria-label="질문 답변 방식" className="flex flex-wrap justify-start gap-2">{[['measured', '측정값 답변'], ['ai', 'AI 원인 분석'], ['memo', '메모만 기록']].map(([key, label]) => <ToggleGroupItem key={key} value={key} className="min-h-11 px-3">{label}</ToggleGroupItem>)}</ToggleGroup>

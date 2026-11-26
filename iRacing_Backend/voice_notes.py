@@ -232,7 +232,7 @@ class VoiceNoteStore:
         self.revision += 1
         return self.get(note_id)
 
-    def update(self, note_id, *, text=None, reply=None, reply_source=None, service_error=None, report_delivery=None):
+    def update(self, note_id, *, text=None, reply=None, reply_source=None, service_error=None, report_delivery=None, local_command=None):
         values = {'updated_at': time.time()}
         if text is not None:
             values.update(text=text, feeling_json=json.dumps(feelings(text)))
@@ -244,6 +244,10 @@ class VoiceNoteStore:
             if note and note.get('source') == 'AUTO_REPORT':
                 context = {**note['context'], 'report_delivery': report_delivery}
                 values['context_json'] = json.dumps(context, ensure_ascii=False, allow_nan=False)
+        if local_command is not None:
+            note = self.get(note_id, with_recent=False)
+            if note and note.get('source') == 'LOCAL_VOICE' and (note['context'].get('local_question') or {}).get('command'):
+                values['context_json'] = json.dumps({**note['context'], 'local_question': local_command}, ensure_ascii=False, allow_nan=False)
         with self.connect() as db:
             db.execute('UPDATE voice_notes SET ' + ','.join(f'{key}=?' for key in values) + ' WHERE id=?', (*values.values(), note_id))
         self.revision += 1

@@ -1058,6 +1058,10 @@ def register_voice_routes(app, coach, resolve_file, repository, analyzer_type, a
     from radio_buttons import register as register_radio_buttons
     spotter_audio = SpotterAudio(coach.speech, lambda: role_voice('spotter'))
     buttons = register_radio_buttons(router, coach, spotter_audio)
+    from local_speech import register as register_local_speech
+    register_local_speech(router, coach, buttons)
+    from speech_shortcuts import register as register_speech_shortcuts
+    register_speech_shortcuts(router, coach, buttons)
     coach.live.button_owns_f8 = buttons.owns_f8
 
     @router.get('/race-radio/index.html')

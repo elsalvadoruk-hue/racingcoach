@@ -1,3 +1,4 @@
+import LocalSpeechHistory from '../components/LocalSpeechHistory';
 import React, { useState } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -33,7 +34,7 @@ function VoiceNotes({ runtime }) {
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const refresh = async () => { setBusy(true); try { await runtime.host.refreshNotes(); setError(''); } catch { setError('음성 기록을 불러오지 못했습니다.'); } finally { setBusy(false); } };
   return <><div className="mb-3 flex justify-end"><Button variant="outline" size="sm" disabled={busy} onClick={refresh}>대화 기록 새로고침</Button></div>
-    {error && <p role="alert">{error}</p>}{runtime.host.notes.length ? runtime.host.notes.map(note => <article key={note.id} className="coach-live-note"><NoteText note={note} /></article>)
+    {error && <p role="alert">{error}</p>}{runtime.host.notes.length ? runtime.host.notes.filter(note=>!note.context?.local_question).slice(0,20).map(note => <article key={note.id} className="coach-live-note"><NoteText note={note} /></article>)
       : <Empty><EmptyHeader><EmptyTitle>아직 대화가 없습니다</EmptyTitle><EmptyDescription>마이크 질문과 코너 메모, 자동 보고를 이곳에서 확인할 수 있습니다.</EmptyDescription></EmptyHeader></Empty>}</>;
 }
 
@@ -63,6 +64,7 @@ export default function UtilityWorkspace({ workspace, runtime, onNavigate, analy
       {analysis && <ExistingPanel id="voice-review-panel" title="대화로 남긴 코너" collapsible description="분석한 랩·코너에 메모를 연결하고 인식된 문장을 수정할 수 있습니다."><VoiceReview review={analysis.voice_review} filename={analysis.file?.name || w.selectedFile} laps={analysis.laps || []}
         corners={analysis.performance?.corners?.length ? analysis.performance.corners : analysis.coaching?.clean_segment_corners || []} apiBase={apiBase}
         onRefresh={() => w.runAnalysis?.({ includeAI: false })} onNavigate={navigate} onOpenCorner={onOpenCorner} /></ExistingPanel>}
+      <ExistingPanel title="로컬 음성 인식 기록" collapsible><Button variant="outline" onClick={runtime.host.refreshNotes}>기록 새로고침</Button><LocalSpeechHistory notes={runtime.host.notes}/></ExistingPanel>
       <ExistingPanel title="음성 답변·코너 메모" collapsible><VoiceNotes runtime={runtime} /></ExistingPanel>
       <ExistingPanel title="실시간 코너 비교"><CornerCoach coach={runtime.host.status?.corner_coach} controls={runtime.host.status?.controls} connected={!!runtime.host.status?.connected} /></ExistingPanel>
       <ExistingPanel title="음성 전달 진단"><RadioDiagnostics apiBase={apiBase} /></ExistingPanel>

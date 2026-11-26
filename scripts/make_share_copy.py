@@ -86,7 +86,7 @@ def copy_backend(root: Path, out: Path) -> None:
     (out / "iRacing_Backend").mkdir(parents=True, exist_ok=True)
     for path in sorted(backend.iterdir()):
         if path.is_file() and path.name not in BACKEND_SKIP and (
-                path.suffix == ".py" or path.name.startswith("requirements") or path.name == "lmu_native_bridge.cpp"):
+                path.suffix == ".py" or path.name.startswith("requirements") or path.name in ("lmu_native_bridge.cpp", "sensevoice_model.json")):
             shutil.copy2(path, out / "iRacing_Backend" / path.name)
     for name in bridges + tire_reader_files(root):
         destination = out / name

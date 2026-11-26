@@ -122,7 +122,7 @@ test('turning it on opens the notice and only agreeing turns it on, with the not
   render(<SessionLogAutoSend apiBase="" />);
   fireEvent.click(await screen.findByRole('switch', { name: '세션 로그 자동 보내기' }));
   expect(screen.getByRole('dialog', { name: '세션 로그를 자동으로 보낼까요?' })).toBeInTheDocument();
-  expect(screen.getByText(/마이크로 한 질문과 답변/)).toBeInTheDocument();
+  expect(screen.getByText(/Google 마이크 질문과 답변/)).toBeInTheDocument();
   expect(screen.getByText(/국내외 데이터센터/)).toBeInTheDocument();
   expect(screen.getByText(/주행 파일을 분석해 계산한 측정값 요약/)).toBeInTheDocument();
   expect(screen.getByText(/최소 4개, 최대 8개/)).toHaveTextContent('기록 간격과 결측을 보존');

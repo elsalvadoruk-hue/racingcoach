@@ -319,7 +319,7 @@ function Editor({ apiBase, audio }) {
             {draft.keys.map(k => <Button size="sm" variant="ghost" key={k.code} aria-label={k.label + ' 연결 해제'} onClick={() => update({ keys: draft.keys.filter(v => v !== k) })}>{k.label}<X data-icon="inline-end" /></Button>)}
             {draft.keys.length > 0 && <Button size="sm" variant="ghost" onClick={() => setCapture('add')}>다른 키도 연결</Button>}
           </div>
-          {draft.items.length > 0 && draft.keys.some(k => k.code.startsWith('key:119:')) && <p>이 버튼을 켜면 연결한 F8 조합으로 무전을 요청합니다. 연결을 해제하면 마이크 질문에 다시 쓸 수 있습니다.</p>}
+          {draft.items.length > 0 && draft.keys.length > 0 && <p>무전 버튼에 연결한 키는 로컬·Google 질문 단축키와 중복할 수 없습니다. 마이크 질문에 쓰려면 여기서 연결을 해제하세요.</p>}
           <h3>질문 순서</h3>
           {!draft.items.length && <p>버튼을 눌렀을 때 물어볼 질문을 선택하세요.</p>}
           {draft.items.map((key, index) => <div key={index} className="flex items-center gap-1"><span className="mr-auto">{index + 1}. {nameOf(key)}</span>

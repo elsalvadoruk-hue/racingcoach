@@ -4,7 +4,7 @@ One switch covers iRacing and LMU. Completed drives use the same file as the
 "보내기" button. Confirmed asphalt-oval drives can also qualify without radio
 calls, using independent health observations of non-replay driving, with:
 
-- no microphone questions or answers (always left out here),
+- no Google microphone questions or answers in drive exports; separately consented local ASR diagnostics,
 - names, session numbers, ratings and paths already removed (session_log.scrub),
 - only drives that ended after consent was given (nothing from before),
 - a visible status: what was sent, what failed and why. A failed drive is tried at most
@@ -30,9 +30,12 @@ logger = logging.getLogger(__name__)
 # 4 (2026-10-28): confirmed asphalt-oval practice, silent oval drives and pacing
 # signals; bounded traffic windows when the complete oval log does not fit.
 # 5 (2026-11-05): linked tire readings/diagnostics and unverified cold settings.
-CONSENT_VERSION = 5
+CONSENT_VERSION = 6
 # Update with CONSENT_VERSION when the notice's scope changes, independently of app releases.
 CONSENT_CHANGES = (
+    '로컬 음성 인식의 원문·보정·연결 질문·답변·처리 시간·실패 및 피트 명령 결과를 개선용으로 보냅니다. 인식 테스트와 차량 미연결 질문도 포함합니다.',
+    '로컬 음성 인식은 로그 보내기에 동의한 동안만 사용할 수 있습니다. Google 질문·녹음 원음·장치 이름과 ID는 보내지 않습니다.',
+    '음성 인식 기록은 새 동의 후 생성된 것만 최대 100건씩 별도로 보냅니다. 스포터·피트월은 로그 보내기 없이도 사용할 수 있습니다.',
     '해당 주행의 타이어 압력·온도·색 판정·기온/노면 온도와 인식 실패 진단을 추가합니다.',
     '제공되는 냉간 설정값의 출처·장착 미확인과 판단 범위·랩/스틴트 요약을 포함합니다. 화면과 인식 문자열은 보내지 않습니다.',
     '타이어 자료가 크면 실제 앞/뒤 구간으로 줄이거나 제외하며 누락량을 표시합니다.',
@@ -66,7 +69,7 @@ def load():
     if renewal:
         consent = None   # the notice changed since: ask again
     runs = saved.get('runs') if isinstance(saved.get('runs'), dict) else {}
-    return {'consent': consent, 'runs': runs, 'reconsent_required': renewal,
+    return {'consent': consent, 'runs': runs, 'speech':saved.get('speech',{}), 'reconsent_required': renewal,
             'previous_consent_version': previous if type(previous) is int else None}
 
 
@@ -75,7 +78,7 @@ def save(state):
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix('.tmp')
     # Renewal metadata is derived from the recorded consent; never persist stale UI flags.
-    temporary.write_text(json.dumps({key:state[key] for key in ('consent','runs')}, ensure_ascii=False, indent=2), encoding='utf-8')
+    temporary.write_text(json.dumps({key:state.get(key,{}) for key in ('consent','runs','speech')}, ensure_ascii=False, indent=2), encoding='utf-8')
     temporary.replace(target)
 
 
@@ -86,6 +89,7 @@ def set_enabled(enabled, consent_version=None, now=None):
         if consent_version != CONSENT_VERSION:
             raise ValueError('안내문을 다시 확인한 뒤 켜 주세요.')
         state['consent'] = {'version': CONSENT_VERSION, 'given_at': now or time.time()}
+        state['speech'] = {**state.get('speech',{}),'failures':0,'error':None,'tried_at':0}
     else:
         state['consent'] = None
     save(state)
@@ -101,6 +105,7 @@ def status():
             'consent_changes':list(CONSENT_CHANGES) if state['reconsent_required'] else [],
             'consented_at': (state['consent'] or {}).get('given_at'),
             'available': bool(app_settings.log_upload_url()),
+            'speech':state['speech'],
             'sent': sum(1 for entry in runs if entry.get('sent_at')),
             'recent': runs[:10]}
 
@@ -141,6 +146,28 @@ class AutoUploader:
             sent_today = sum(1 for entry in state['runs'].values()
                              if entry.get('sent_at') and time.strftime('%Y-%m-%d', time.localtime(entry['sent_at'])) == today)
             current, count = self.current_run(), 0
+            # Recognition tests and short sessions must not depend on ten radio calls.
+            speech = state.get('speech') or {}
+            day_count = speech.get('daily_sent',0) if speech.get('day')==today else 0
+            retry_delay = RETRY_AFTER_S if speech.get('error') else CHECK_EVERY_S
+            if day_count < DAILY_LIMIT and speech.get('failures',0)<MAX_ATTEMPTS and now-speech.get('tried_at',0)>=retry_delay:
+                from speech_diagnostics import batch
+                prepared = batch(self.store,state['consent'],speech,now,self.app_version)
+                if prepared:
+                    latest=load()
+                    if latest['consent'] != state['consent']: return 0
+                    speech={**speech,'tried_at':now,'day':today,'daily_sent':day_count}
+                    try:
+                        if prepared.get('data'):
+                            self.send_file(url,prepared['name'],prepared['data'],'로컬 음성 인식 개선 기록',self.app_version)
+                            speech.update(sent_at=now,records=speech.get('records',0)+prepared['records'],daily_sent=day_count+1)
+                        speech.update(through=prepared['through'],through_id=prepared['through_id'],error=None,failures=0)
+                    except ValueError as exc:
+                        speech['error']=str(exc)
+                        speech['failures']=speech.get('failures',0)+1
+                    latest=load()
+                    if latest['consent'] != state['consent']: return 0
+                    latest['speech']=speech;save(latest);state=latest
             for run in reversed(session_log.sessions(self.store, 30)):     # oldest first
                 entry = state['runs'].get(run['run_id'], {})
                 if (run['run_id'] == current or run['started_at'] < given or now - run['ended_at'] < FINISHED_AFTER_S
@@ -165,12 +192,18 @@ class AutoUploader:
                         raise error
                     if not found:
                         continue
+                    if load()['consent'] != state['consent']:
+                        return count
                     self.send_file(url, found[0], found[1], '자동 보내기', self.app_version)
                     entry.update(sent_at=now, name=found[0], error=None)
                     count += 1
                     sent_today += 1
                 except ValueError as exc:
                     entry['error'] = str(exc)
+                latest = load()
+                if latest['consent'] != state['consent']:
+                    return count
+                state = latest
                 state['runs'][run['run_id']] = entry
                 save(state)
             return count
