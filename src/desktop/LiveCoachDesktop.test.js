@@ -137,6 +137,7 @@ test('a delayed capture context cannot keep a local microphone recording beyond 
     await act(async()=>host.localRadio.prepare());
     act(()=>{pending=host.localRadio.start();});
     await act(async()=>{await Promise.resolve();await Promise.resolve();});
+    expect(mockStart).toHaveBeenCalledTimes(1);
     await act(async()=>jest.advanceTimersByTime(9500));
     expect(host.localRadio.phase).toBe('idle');
     expect(host.localRadio.error).toContain('지연');
@@ -199,4 +200,66 @@ test('pit command preference is passed only to real local requests and is locked
  expect(JSON.parse(testRequest[1].body).allow_pit_commands).toBeUndefined();
  await act(async()=>host.localRadio.stop());
  expect(host.localRadio.commandResult).toBeNull();
+});
+
+test('local prompt starts its timeout only after playback completes and a PTT response claims its ID',async()=>{
+  jest.useFakeTimers();
+  let host,captureNumber=0;
+  const dialogue={id:'pending-one',capture_id:'capture-1',state:'awaiting_confirmation',prompt:'경기 남은 시간 말씀이신가요?',remaining_ms:8000};
+  const note={id:'capture-1',text:'얼마나 남았어',reply:dialogue.prompt,context:{snapshot:{run_id:'run-one'},local_question:{result:'clarification_needed'}}};
+  global.fetch=jest.fn(async(url,options)=>({ok:true,json:async()=>
+    url.endsWith('/status')?{connected:true,game:'iracing',snapshot:{run_id:'run-one'},speech:{}}:
+    url.endsWith('/captures')?{capture_id:`capture-${++captureNumber}`}:
+    url.endsWith('/local-speech/dialogue/ready')?{dialogue}:
+    url.endsWith('/local-speech/dialogue/begin')?{accepted:true}:
+    url.endsWith('/local-speech/utterances')?captureNumber===1?{note,audio_parts:['prompt'],spoken_text:dialogue.prompt,dialogue}:
+      {note:{...note,id:'capture-2',reply:'12분 남았습니다.'},audio_parts:[]}:{}}));
+  mockAudio.play.mockClear().mockResolvedValue(true);
+  const view=render(<LiveCoach apiBase="http://localhost:24158" monitor visible={false}>{value=>{host=value;return null;}}</LiveCoach>);
+  try{
+    await act(async()=>host.localRadio.prepare());await act(async()=>host.localRadio.start());await act(async()=>host.localRadio.finish());
+    const options=mockAudio.play.mock.calls.at(-1)[2];
+    expect(host.localRadio.dialogue).toBeNull();
+    expect(global.fetch.mock.calls.some(([url])=>url.endsWith('/dialogue/ready'))).toBe(false);
+    await act(async()=>options.onStatus('started'));
+    await act(async()=>jest.advanceTimersByTime(3000));
+    await act(async()=>options.onStatus('completed'));
+    expect(host.localRadio.dialogue.id).toBe(dialogue.id);
+    const delivery=global.fetch.mock.calls.filter(([url])=>url.endsWith('/local-speech/delivery')).map(([,value])=>JSON.parse(value.body));
+    expect(delivery.find(row=>row.event==='completed')).toMatchObject({capture_id:'capture-1',playback_ms:3000});
+    expect(delivery.find(row=>row.event==='started').capture_end_to_start_ms).toBeGreaterThanOrEqual(0);
+    await act(async()=>host.localRadio.start());
+    expect(host.localRadio.dialogue).toBeNull();
+    const begins=global.fetch.mock.calls.filter(([url])=>url.endsWith('/dialogue/begin'));
+    expect(JSON.parse(begins[0][1].body).capture_id).toBeUndefined();
+    const begin=begins.at(-1);
+    expect(JSON.parse(begin[1].body)).toMatchObject({capture_id:'capture-2',dialogue_id:'pending-one'});
+    await act(async()=>host.localRadio.finish());
+    const questions=global.fetch.mock.calls.filter(([url])=>url.endsWith('/local-speech/utterances'));
+    expect(JSON.parse(questions[1][1].body)).toMatchObject({dialogue_id:'pending-one'});
+    expect(JSON.parse(questions[1][1].body).delivery.capture_ms).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(delivery)).not.toMatch(/audio_base64|deviceId|device_id/);
+  }finally{view.unmount();jest.useRealTimers();}
+});
+
+test('a text-only prompt expires without an automatic microphone request and a later question gets no pending ID',async()=>{
+  jest.useFakeTimers();let host,count=0;
+  const dialogue={id:'pending-silent',capture_id:'capture-1',state:'awaiting_confirmation',prompt:'앞차 간격 말씀이신가요?',remaining_ms:8000};
+  const note={id:'capture-1',reply:dialogue.prompt,context:{snapshot:{run_id:'run-one'},local_question:{result:'clarification_needed'}}};
+  global.fetch=jest.fn(async url=>({ok:true,json:async()=>url.endsWith('/status')?{connected:true,snapshot:{run_id:'run-one'},speech:{}}:
+    url.endsWith('/captures')?{capture_id:`capture-${++count}`}:
+    url.endsWith('/dialogue/ready')?{dialogue}:
+    url.endsWith('/local-speech/utterances')?{note:{...note,id:`capture-${count}`},audio_parts:[],dialogue:count===1?dialogue:null}:{}}));
+  const view=render(<LiveCoach apiBase="http://localhost:24158" monitor visible={false}>{value=>{host=value;return null;}}</LiveCoach>);
+  try{
+    await act(async()=>host.localRadio.prepare());await act(async()=>host.localRadio.start());await act(async()=>host.localRadio.finish());
+    const opened=mockOpen.mock.calls.length;
+    expect(host.localRadio.dialogue).not.toBeNull();
+    await act(async()=>jest.advanceTimersByTime(8000));
+    expect(host.localRadio.dialogue).toBeNull();expect(host.localRadio.dialogueNotice).toContain('응답이 없어');
+    expect(mockOpen).toHaveBeenCalledTimes(opened);
+    await act(async()=>host.localRadio.start());await act(async()=>host.localRadio.finish());
+    const questions=global.fetch.mock.calls.filter(([url])=>url.endsWith('/local-speech/utterances'));
+    expect(JSON.parse(questions[1][1].body).dialogue_id).toBeUndefined();
+  }finally{view.unmount();jest.useRealTimers();}
 });

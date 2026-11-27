@@ -73,6 +73,9 @@ def parse(text):
     if re.fullmatch(r'(?:타이어)?교체(?:체취|취)', t):
         return dict(id='invalid', name='타이어 동작 확인 필요', ambiguous_action=True,
                     error='교체인지 취소인지 확실하지 않습니다. “피트 타이어 교체” 또는 “피트 타이어 교체 취소”로 다시 말씀해 주세요.')
+    if re.fullmatch(r'(?:레인|웻|웨트|슬릭|일반|드라이)?타이어(?:로|으로)?', t):
+        return dict(id='invalid', name='타이어 동작 확인 필요', ambiguous_action=True,
+                    error='타이어 교체인지 취소인지 동작을 넣어 다시 말씀해 주세요. 예: “피트 레인 타이어 교체”.')
     # Repeated cancellation is an explicit action, unlike a clipped 취 syllable.
     t = re.sub(r'(?<=교체)재취소', '취소', t)
     windshield=r'(?:윈드실드|윈드스크린|앞유리|티어오프)'

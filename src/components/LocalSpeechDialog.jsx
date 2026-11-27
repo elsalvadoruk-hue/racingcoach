@@ -1,5 +1,5 @@
 import React,{useState} from 'react';
-import {Mic,Square} from 'lucide-react';
+import {BookOpen,ExternalLink,Mic,Square} from 'lucide-react';
 import {Button} from './ui/button';
 import {Dialog,DialogContent,DialogHeader,DialogTitle,DialogDescription,DialogTrigger} from './ui/dialog';
 import {Field,FieldLabel,FieldDescription,FieldGroup} from './ui/field';
@@ -9,6 +9,7 @@ import {ConsentDialog} from './SessionLogAutoSend';
 import LocalSpeechSettings from './LocalSpeechSettings';
 import SpeechShortcutField from './SpeechShortcutField';
 import LocalSpeechCorrection from './LocalSpeechCorrection';
+import LocalSpeechDialogue from './LocalSpeechDialogue';
 
 export function SpeechLogRequirement({radio}) {
   const auto=radio?.logAuto;
@@ -45,6 +46,10 @@ export default function LocalSpeechDialog({apiBase,radio,hideTrigger=false}) {
     {!hideTrigger && <DialogTrigger asChild><Button size="sm" variant="outline" aria-label="음성 인식"><Mic data-icon="inline-start"/>음성 인식{radio.enabled?' · 켜짐':''}</Button></DialogTrigger>}
     <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
       <DialogHeader><DialogTitle>음성 인식 · 내 PC에서 질문</DialogTitle><DialogDescription>SenseVoice로 한국어 질문과 피트 명령을 처리합니다. Google 질문은 별도입니다.</DialogDescription></DialogHeader>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button asChild variant="outline"><a href="https://elsalvadoruk-hue.github.io/racingcoach/#local-speech-development" target="_blank" rel="noopener noreferrer"><BookOpen data-icon="inline-start"/>사용법·질문 예시<ExternalLink data-icon="inline-end"/><span className="sr-only"> · 웹 매뉴얼, 새 탭</span></a></Button>
+        <p className="text-sm text-muted-foreground">처음 시작하는 순서부터 피트 명령까지</p>
+      </div>
       {open && <FieldGroup>
         {needsInstall && modelSettings}
         <Field><FieldLabel>음성 인식</FieldLabel><div className="flex flex-wrap gap-2">
@@ -54,6 +59,7 @@ export default function LocalSpeechDialog({apiBase,radio,hideTrigger=false}) {
         </div><p role="status">{radio.phase==='sending'?'음성을 인식하고 있습니다.':recording?'듣고 있습니다 · 최대 10초':radio.enabled?'대기 중 · '+(radio.shortcut?.binding?.label || '단축키 미지정'):needsInstall?'꺼짐 · 위에서 인식기 설치를 완료하세요.':'꺼짐 · 음성 인식 켜기로 시작하세요.'}</p>
         <FieldDescription>한 번 켜면 다음 앱 실행 때 같은 마이크에서 자동으로 준비합니다. 직접 끄면 자동 시작도 해제됩니다. 대기 중에는 마이크와 인식 연산을 멈추고 모델만 메모리에 유지합니다.</FieldDescription></Field>
         {radio.error && <Alert variant="destructive"><AlertDescription>{radio.error}</AlertDescription></Alert>}
+        <LocalSpeechDialogue radio={radio}/>
         {radio.commandResult && <Alert><AlertTitle>피트 명령 결과</AlertTitle><AlertDescription>{radio.commandResult.message}</AlertDescription></Alert>}
         <Field><FieldLabel>마이크 인식 테스트</FieldLabel><div className="flex flex-wrap gap-2">
           {recording && radio.testing ? <Button variant="destructive" onClick={radio.finish}>테스트 녹음 완료</Button> : <Button variant="outline" disabled={!radio.enabled || radio.busy} onClick={radio.startTest}>인식 테스트 시작</Button>}

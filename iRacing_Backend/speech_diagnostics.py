@@ -26,7 +26,10 @@ def batch(store, consent, previous, now, version):
                      'game':context.get('game'), 'recognition': {key:detail.get(key) for key in (
                          'model','engine','topic','topic_name','result','test','normalized_text','corrections',
                          'correction_status','classifier_version','asr_ms','cpu_ms','total_ms','sent','noise_retry',
-                         'readback_text','readback_result','readback_audio_missing','race_focus')},
+                         'readback_text','readback_result','readback_audio_missing','race_focus',
+                         'classify_ms','missing_data','missing_audio','semantic','dialogue','dialogue_outcome',
+                         'answer_detail','answer_facts','answer_explanation','spoken_text','delivery',
+                         'language','data_notes','additional_topics','additional_evidence')},
                      'command':{key:(detail.get('command') or {}).get(key) for key in ('id','name','calls')},
                      'snapshot':{key:(context.get('snapshot') or {}).get(key) for key in (
                          'lap_number','speed_mps','on_track','is_replay')},

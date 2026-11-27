@@ -6,6 +6,7 @@ driver's own fastest clean pass of that segment in this app run. Passes with
 a car alongside, a yellow, an incident or a sample gap are never a reference
 and never produce advice.
 """
+from collections import deque
 import math
 
 BRAKE_ON, THROTTLE_ON, THROTTLE_FULL = .08, .20, .95
@@ -81,6 +82,10 @@ class LiveCornerCoach:
         self.lap = {}
         self.brake_onset = None
         self.review = None
+        # A small per-lap history is read only by explicit speech questions.
+        # Keep all comparable deltas: omission from the top-three review does
+        # not mean a corner had no loss. No new per-frame work or disk writes.
+        self.question_history = deque(maxlen=5)
         self.last_pass = None
         self.last_measurement = None
         self.last_observation = None
@@ -233,6 +238,8 @@ class LiveCornerCoach:
         # Every pass is checked on its own, so a lap with a gap still compares its clean segments.
         passes = {key: p for key, p in passes.items() if self._eligible(p)}
         compared = [compare(p, best[p['id']], track_length_m) for p in passes.values() if p['id'] in best]
+        self.question_history.append({'lap': lap_number,
+                                      'corners': [{'id': c['id'], 'delta_s': c['delta_s']} for c in compared]})
         for corner_pass in passes.values():
             if corner_pass['id'] not in best or corner_pass['duration_s'] < best[corner_pass['id']]['duration_s']:
                 best[corner_pass['id']] = corner_pass

@@ -232,7 +232,7 @@ class VoiceNoteStore:
         self.revision += 1
         return self.get(note_id)
 
-    def update(self, note_id, *, text=None, reply=None, reply_source=None, service_error=None, report_delivery=None, local_command=None):
+    def update(self, note_id, *, text=None, reply=None, reply_source=None, service_error=None, report_delivery=None, local_command=None, local_question=None):
         values = {'updated_at': time.time()}
         if text is not None:
             values.update(text=text, feeling_json=json.dumps(feelings(text)))
@@ -249,6 +249,15 @@ class VoiceNoteStore:
             if note and note.get('source') == 'LOCAL_VOICE' and (note['context'].get('local_question') or {}).get('command'):
                 values['context_json'] = json.dumps({**note['context'], 'local_question': local_command}, ensure_ascii=False, allow_nan=False)
         with self.connect() as db:
+            if local_question is not None:
+                # Delivery and dialogue outcomes can arrive concurrently. Merge
+                # under the write transaction so neither erases the other.
+                db.execute('BEGIN IMMEDIATE')
+                row = db.execute('SELECT source,context_json FROM voice_notes WHERE id=?', (note_id,)).fetchone()
+                if row and row['source'] == 'LOCAL_VOICE':
+                    context = json.loads(row['context_json'] or '{}')
+                    detail = {**(context.get('local_question') or {}), **local_question}
+                    values['context_json'] = json.dumps({**context, 'local_question':detail}, ensure_ascii=False, allow_nan=False)
             db.execute('UPDATE voice_notes SET ' + ','.join(f'{key}=?' for key in values) + ' WHERE id=?', (*values.values(), note_id))
         self.revision += 1
         return self.get(note_id)

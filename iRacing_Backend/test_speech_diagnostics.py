@@ -53,6 +53,26 @@ class DiagnosticsTests(unittest.TestCase):
         with self.assertRaises(HTTPException):local_speech.require_logs()
         self.uploader.run_once();self.sender.assert_not_called()
 
+    def test_dialogue_and_delivery_are_exported_without_owner_or_raw_audio(self):
+        auto.set_enabled(True,auto.CONSENT_VERSION,now=100)
+        self.note()
+        note=self.store.list()[0]
+        self.store.update(note['id'],local_question={
+            'request_owner':'private-device-owner',
+            'dialogue':{'action':'confirmed','confirmed':True,'parent_capture_id':'question-one'},
+            'dialogue_outcome':{'status':'timeout','confirmed':None},
+            'answer_detail':'explain', 'spoken_text':'추가 급유 2리터를 추천합니다.',
+            'delivery':{'status':'completed','capture_end_to_start_ms':451},
+            'missing_audio':['질문 확인 안내']})
+        self.uploader.run_once()
+        with zipfile.ZipFile(io.BytesIO(self.sender.call_args.args[2])) as archive:
+            raw=archive.read('local-speech.jsonl').decode('utf8')
+        self.assertIn('capture_end_to_start_ms',raw)
+        self.assertIn('confirmed',raw)
+        self.assertIn('timeout',raw)
+        self.assertNotIn('private-device-owner',raw)
+        self.assertNotIn('never-upload',raw)
+
     def test_more_than_one_batch_at_same_timestamp_has_no_loss(self):
         auto.set_enabled(True,auto.CONSENT_VERSION,now=100)
         for i in range(105):self.note(text=str(i))

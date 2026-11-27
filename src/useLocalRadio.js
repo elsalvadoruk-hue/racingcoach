@@ -2,6 +2,7 @@ import { useSessionLogAuto } from './components/SessionLogAutoSend';
 import {useCallback,useEffect,useRef,useState} from 'react';
 import useLocalSpeech,{localSpeechRequest} from './useLocalSpeech';
 import useSpeechShortcut from './useSpeechShortcut';
+import useSpeechDialogue from './useSpeechDialogue';
 import {VoiceRecorder} from './voiceAudio';
 
 export default function useLocalRadio({apiBase,game,standby,inputDevice,status,cloudBusy,onResult,stopAudio}) {
@@ -19,9 +20,11 @@ export default function useLocalRadio({apiBase,game,standby,inputDevice,status,c
   const [logsRequired,setLogsRequired]=useState(false);
   const [settingsOpen,setSettingsOpen]=useState(false),[headerBusy,setHeaderBusy]=useState(false);
   const engine=useLocalSpeech(apiBase,game,standby,setError);
+  const dialogue=useSpeechDialogue(apiBase,engine.owner,
+    `${game}:${inputDevice}:${status?.connected===true}:${status?.snapshot?.run_id || ''}`,engine.active && !standby);
   const current=useRef({}),capture=useRef(null),epoch=useRef(0),timer=useRef(),mounted=useRef(true),waiting=useRef(false),state=useRef('idle');
   const testing=useRef(false);
-  current.current={engine,status,cloudBusy,onResult,stopAudio,speak,inputDevice,echoCancellation,pitCommands};
+  current.current={engine,status,cloudBusy,onResult,stopAudio,speak,inputDevice,echoCancellation,pitCommands,dialogue};
   const setPitCommands=value=>{
     if(state.current!=='idle')return;
     setPitCommandsValue(value===true);
@@ -36,6 +39,7 @@ export default function useLocalRadio({apiBase,game,standby,inputDevice,status,c
   const change=value=>{state.current=value;if(mounted.current)setPhase(value);};
   const closeCapture=()=>{clearTimeout(timer.current);capture.current?.recorder.close();capture.current=null;};
   const stop=useCallback(()=>{
+    current.current.dialogue.cancel('state_changed');
     epoch.current++;closeCapture();change('idle');current.current.stopAudio?.('local_microphone_off');
     if(mounted.current){setInputProcessing(null);setCommandResult(null);}
     return current.current.engine.stop();
@@ -84,16 +88,28 @@ export default function useLocalRadio({apiBase,game,standby,inputDevice,status,c
     clearTimeout(timer.current);change('sending');
     try{
       const audio=await turn.recorder.finish({tailMs:180,maxSeconds:10});turn.recorder.close();
+      const captureEnd=performance.now();
       if(!mounted.current || ticket!==epoch.current)return;
       capture.current=null;
       const body={owner:engine.owner,model:engine.model,audio_base64:audio};
       const result=await localSpeechRequest(apiBase,turn.test?'/test':'/utterances',
-        turn.test?{...body,game}:{...body,capture_id:turn.id,speak:current.current.speak,allow_pit_commands:game==='iracing'&&current.current.pitCommands});
+        turn.test?{...body,game}:{...body,capture_id:turn.id,speak:current.current.speak,allow_pit_commands:game==='iracing'&&current.current.pitCommands,
+          ...(turn.dialogueId?{dialogue_id:turn.dialogueId}:{}),delivery:{capture_ms:Math.max(0,Math.round(captureEnd-turn.startedAt))}});
+      const responseAt=performance.now();
       if(!mounted.current || ticket!==epoch.current)return;
-      if(turn.test)setTestResult(result);else await current.current.onResult?.(result,()=>ticket===epoch.current && current.current.engine.active);
+      if(!turn.test)current.current.dialogue.consume(turn.id);
+      if(turn.test)setTestResult(result);else {
+        const stillEnabled=()=>ticket===epoch.current && current.current.engine.active;
+        const onPromptReady=()=>{
+          if(mounted.current && stillEnabled())return current.current.dialogue.ready(result.dialogue);
+        };
+        const playback=await current.current.onResult?.(result,stillEnabled,{captureEnd,responseAt,onPromptReady});
+        if(!mounted.current || !stillEnabled())return;
+        if(result.dialogue && !result.audio_parts?.length && playback!==false) await onPromptReady();
+      }
       if(!turn.test)setCommandResult(result.command_result||null);
       setError(result.warning || '');
-    }catch(e){if(ticket===epoch.current && mounted.current)setError(e.message);}
+    }catch(e){if(ticket===epoch.current && mounted.current){if(turn.dialogueId)current.current.dialogue.cancel('recording_failed');setError(e.message);}}
     finally{turn.recorder.close();if(ticket===epoch.current){testing.current=false;change('idle');}}
   };
   const latestFinish=useRef(finish);latestFinish.current=finish;
@@ -101,32 +117,42 @@ export default function useLocalRadio({apiBase,game,standby,inputDevice,status,c
     if(!engine.active || state.current!=='idle')return;
     if(!logAuto.state?.enabled){setLogsRequired(true);await stop();return;}
     if(current.current.cloudBusy){setError('Google 질문이 끝난 뒤 사용하세요.');return;}
-    const ticket=epoch.current;
+    const ticket=++epoch.current;
     waiting.current=false;change('starting');setError('');current.current.stopAudio?.('local_question');
     const recorder=new VoiceRecorder();const turn={recorder,test};capture.current=turn;testing.current=test;
+    timer.current=setTimeout(()=>{
+      if(state.current==='starting') {
+        epoch.current += 1;closeCapture();current.current.dialogue.cancel('recording_failed');change('idle');
+        setError('질문 위치 준비가 지연되어 녹음을 취소했습니다. 다시 시도하세요.');
+      } else latestFinish.current();
+    },9500);
     try{
+      if(test)await current.current.dialogue.cancel('state_changed');
+      else turn.dialogueId=await current.current.dialogue.reserve();
+      if(ticket!==epoch.current){recorder.close();return;}
       const input=await recorder.open(inputDevice,current.current.echoCancellation?'standard':'echo_off');
       if(ticket!==epoch.current){recorder.close();return;}
       setInputProcessing(input?.processing||null);
-      await recorder.start();
-      timer.current=setTimeout(()=>{
-        if(state.current==='starting') {
-          epoch.current += 1;closeCapture();change('idle');setError('질문 위치 준비가 지연되어 녹음을 취소했습니다. 다시 시도하세요.');
-        } else latestFinish.current();
-      },9500);
+      // PTT already reserved the dialogue; capture sound while attaching the
+      // position snapshot so a slow metadata request cannot discard speech.
+      await recorder.start();turn.startedAt=performance.now();
+      if(ticket!==epoch.current){recorder.close();return;}
       if(!test){
         const response=await fetch(apiBase+'/api/live-coach/captures',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
         const value=await response.json();if(!response.ok)throw Error(value.detail);
         turn.id=value.capture_id;
+        if(ticket!==epoch.current){recorder.close();return;}
+        turn.dialogueId=await current.current.dialogue.begin(turn.id);
       }
       if(ticket!==epoch.current){recorder.close();return;}
       change('recording');
       if(waiting.current)await latestFinish.current();
-    }catch(e){recorder.close();if(ticket===epoch.current){setError(e.message);change('idle');}}
+    }catch(e){recorder.close();if(ticket===epoch.current){if(turn.dialogueId)current.current.dialogue.cancel('recording_failed');setError(e.message);change('idle');}}
   };
   const shortcut=useSpeechShortcut(apiBase,'local',engine.active && !standby,()=>start(false),()=>finish(),setError);
   return {logAuto,logsRequired,dismissLogsRequired:()=>setLogsRequired(false),engine,enabled:engine.active,phase,busy:phase!=='idle',testing:testing.current,error,testResult,speak,setSpeak,prepare,stop,
     settingsOpen,setSettingsOpen,headerBusy,toggleFromHeader,
+    dialogue:dialogue.pending,dialogueNotice:dialogue.notice,cancelDialogue:()=>dialogue.cancel('cancelled'),
     echoCancellation,setEchoCancellation,inputProcessing,
     game,pitCommands,setPitCommands,commandResult,
     start:()=>start(false),startTest:()=>start(true),finish,shortcut,

@@ -2,43 +2,43 @@
 import re
 import unicodedata
 
-VERSION = 8
+VERSION = 10
 # Alternatives describe intent, not exact sentences. More than one matching
 # intent is deliberately withheld; raw recognition text remains in the log.
 EXAMPLES = {
-    'race_focus': ['지금 뭐에 집중해야 해', '지금 레이스 전략 알려줘', '지금 공격할까 방어할까'],
+    'race_focus': ['지금 뭐에 집중해야 해', '지금 레이스 전략 알려줘', '지금 공격할까 방어할까', '지금 뭘 신경 써야 돼', '이번 랩 뭐부터 챙겨야 해'],
     'sof': ['이번 경기 SOF', '소프 얼마야', '클래스 에스오에프 알려줘'],
     'fuel': ['연료 얼마나 남았어', '기름 몇 리터야', '현재 연료량 알려줘'],
     'fuel_range': ['지금 연료로 얼마나 더 갈 수 있음', '기름으로 몇 바퀴 더 타', '연료 몇 랩 남았어'],
     'fuel_average': ['한 랩에 연료 얼마나 먹어', '평균 연비 알려줘', '랩당 소비량'],
     'energy_remaining': ['가상 에너지 얼마나 남았어', '에너지 몇 퍼센트야', '현재 에너지 잔량'],
-    'last': ['방금 랩타임', '지난 랩 몇 초야', '방금 몇 초 찍었어'],
+    'last': ['방금 랩타임', '지난 랩 몇 초야', '방금 몇 초 찍었어', '나 방금 한 바퀴 몇 초 찍은 거야'],
     'best': ['내 베스트 얼마야', '세션 최고 랩타임', '오늘 제일 빠른 랩'],
     'theoretical': ['이론상 베스트는', '잘 탄 구간 합치면 몇 초야', '구간 최고 합친 기록'],
     'sector_delta': ['베스트보다 얼마나 빨라', '최근 구간선 델타', '지금 기록 차이'],
     'position': ['지금 몇 등이야', '내 클래스 순위', '나 몇 위야'],
-    'laps': ['레이스 몇 랩 남았어', '끝까지 몇 바퀴야', '남은 랩 알려줘'],
+    'laps': ['레이스 몇 랩 남았어', '끝까지 몇 바퀴야', '남은 랩 알려줘', '결승까지 몇 바퀴 더 돌아야 돼'],
     'ahead': ['앞차 간격', '앞차랑 몇 초 차이야', '앞차 얼마나 떨어져 있어'],
     'behind': ['뒤차 간격', '뒤차 얼마나 붙었어', '뒤차랑 몇 초야'],
     'catch_ahead': ['앞차 잡을 수 있어', '몇 랩 뒤에 앞차 따라잡아', '앞차 추격 가능해'],
-    'closing_behind': ['뒤차가 랩당 얼마나 좁혀', '뒤차가 얼마나 빨라', '뒤차 추격 속도'],
-    'ahead_lap': ['앞차 방금 몇 초 찍었어', '앞차 최근 랩타임', '앞차 지난 랩'],
+    'closing_behind': ['뒤차가 랩당 얼마나 좁혀', '뒤차가 얼마나 빨라', '뒤차 추격 속도', '뒤에서 따라오는 차 얼마나 빨라', '뒤차가 나보다 얼마나 빠른데'],
+    'ahead_lap': ['앞차 방금 몇 초 찍었어', '앞차 최근 랩타임', '앞차 지난 랩', '앞차 지난 몇 초 나왔어'],
     'leader_lap': ['클래스 선두 랩타임', '일등 몇 초야', '선두 최근 랩'],
     'corner_loss': ['지난 랩 어디서 날렸어', '어느 코너에서 가장 많이 잃었어', '지난 랩 가장 큰 손실'],
     'corner_gain': ['어디서 제일 많이 줄였어', '지난 랩 잘 탄 코너는', '가장 개선된 코너'],
-    'pit_rejoin': ['지금 피트하면 몇 등으로 나와', '피트 후 예상 복귀 순위', '지금 들어가면 몇 위야'],
+    'pit_rejoin': ['지금 피트하면 몇 등으로 나와', '피트 후 예상 복귀 순위', '지금 들어가면 몇 위야', '지금 피트 들어갔다 나오면 몇 등이겠어'],
     'stint_ahead': ['앞차 스틴트 몇 랩째야', '앞차 피트 후 몇 바퀴 탔어', '앞차 타이어 몇 랩 탔어'],
     'stint_behind': ['뒤차 스틴트 얼마나 탔어', '뒤차 피트 후 몇 바퀴야', '뒤차 타이어 몇 랩째야'],
     'stops_ahead': ['앞차 피트 몇 번 했어', '앞차 정차 횟수', '앞차 피트 들어간 횟수'],
     'stops_behind': ['뒤차 피트 몇 번 했어', '뒤차 정차 횟수', '뒤차 피트 들어간 횟수'],
     'pit_transit': ['피트 들어가면 몇 초 손해야', '피트 통과 손실', '피트 지나면 얼마나 잃어'],
-    'fuel_finish': ['끝까지 연료 충분해', '완주까지 연료 얼마나 부족해', '이 기름으로 완주할 수 있어'],
-    'fuel_add': ['이번 피트에서 연료 몇 리터 넣어', '추가 급유량 알려줘', '연료 얼마나 채워야 해'],
-    'race_time': ['경기 몇 분 남았어', '남은 시간 알려줘', '레이스 종료까지 얼마나 남았어'],
+    'fuel_finish': ['끝까지 연료 충분해', '완주까지 연료 얼마나 부족해', '이 기름으로 완주할 수 있어', '연료 괜찮아', '지금 남은 기름으로 완주 가능해', '기름 더 안 넣고 버틸 수 있어'],
+    'fuel_add': ['이번 피트에서 연료 몇 리터 넣어', '추가 급유량 알려줘', '연료 얼마나 채워야 해', '끝까지 가려면 몇 리터 더 필요해', '피트에서 기름 몇 리터 넣으면 돼'],
+    'race_time': ['경기 몇 분 남았어', '남은 시간 알려줘', '레이스 종료까지 얼마나 남았어', '체커까지 시간이 얼마나 남았어'],
     'incidents': ['인시던트 몇 점이야', '인시던트 한도까지 얼마나 남았어', '현재 인시던트 점수'],
     'incident_limit': ['인시던트 한도 몇 점이야', '인시던트 제한 알려줘', '인시던트 몇 점이면 실격이야'],
-    'pit_speed': ['피트 제한 속도 얼마야', '피트 속도 제한 알려줘', '피트레인 제한 속도'],
-    'defend_time': ['뒤차가 몇 랩 뒤에 따라잡아', '뒤차한테 언제 잡혀', '뒤차가 나를 잡기까지 몇 바퀴야'],
+    'pit_speed': ['피트 제한 속도 얼마야', '피트 속도 제한 알려줘', '피트레인 제한 속도', '피트레인에서 몇 킬로까지 달려도 돼'],
+    'defend_time': ['뒤차가 몇 랩 뒤에 따라잡아', '뒤차한테 언제 잡혀', '뒤차가 나를 잡기까지 몇 바퀴야', '뒤차한테 잡히겠어', '뒤차가 언제쯤 붙겠어'],
     'ahead_gain': ['앞차보다 어디서 빨라', '앞차보다 빠른 구간', '앞차보다 잘 타는 코너', '앞차보다 내가 어디서 빨라'],
     'ahead_loss': ['앞차보다 어디서 느려', '앞차보다 느린 구간', '앞차한테 어느 코너에서 잃어', '앞차보다 내가 어디서 느려'],
     'behind_gain': ['뒤차보다 어디서 빨라', '뒤차보다 빠른 구간', '뒤차보다 잘 타는 코너', '뒤차보다 내가 어디서 빨라'],
@@ -49,6 +49,8 @@ EXAMPLES = {
     'report_behind': ['뒤차 상황 보고', '뒤차 정보 요약해줘', '뒤차 종합 보고해줘'],
     'report_pace': ['내 랩 기록 보고', '내 페이스 요약해줘', '랩타임 종합 보고해줘'],
     'report_pit': ['피트 전략 보고', '피트 상황 요약해줘', '피트 종합 보고해줘'],
+    'fuel_save': ['연료 아끼면 끝까지 가능해', '완주하려면 랩당 얼마나 써야 해', '아껴서 피트 안 하고 갈 수는 없어'],
+    'corner_repeat': ['같은 코너에서 계속 잃어', '지난 랩 손실이 반복되고 있어', '손실이 이번 랩만 그런 거야'],
 }
 
 # Full-clause matching for the added commands. A word inside an unrelated
@@ -80,7 +82,7 @@ _EXPANDED = {
        for side, noun in [('ahead', '앞차'), ('behind', '뒤차')]
        for metric, terms in [('gain', r'(?:빨라|빠른구간|빠른코너|잘타는코너)'),
                              ('loss', r'(?:느려|느린구간|느린코너|잃어)')]},
-    **{f'report_{key}': f'{noun}(?:상황|상태|정보|종합|전략)?(?:보고|요약)(?:해줘)?'
+    **{f'report_{key}': f'{noun}(?:상황|상태|정보|종합|전략)?(?:보고|요약)(?:해줘|해주세요|해줄래)?'
        for key, noun in [('fuel', '연료'), ('race', '(?:현재)?(?:경기|레이스)'),
                          ('ahead', '앞차'), ('behind', '뒤차'), ('pace', '(?:내랩기록|내페이스|랩타임)'), ('pit', '피트')]},
 }
@@ -117,11 +119,13 @@ _TRAIN_LITERAL = re.compile(r'기차역|전기차|열차|철도|승차|시간표
 _TRAIN_UNSUPPORTED = re.compile(r'순위|몇등|몇위|랩타임|베스트|델타|코너')
 _BEHIND_TOPICS = frozenset(['behind', 'closing_behind', 'stops_behind', 'stint_behind'])
 
-# Confirmed transcript pairs: first two from locally recorded, user-labelled
-# questions; the others from the frozen synthetic model comparison. Full-clause
-# context deliberately prevents broad replacements such as 간결하게 -> 간격하게.
+# Sources include labelled recordings, the frozen synthetic comparison and
+# unlabelled speech logs. Log-derived rules are narrow contextual interpretations,
+# not independent ASR ground truth. Never replace substrings in unrelated requests.
 _OBSERVED_CORRECTIONS = tuple((re.compile(context), re.compile(source), target, topic)
     for context, source, target, topic in [
+        (r'(?:지금|현재)?남은열요(?:알려줘|알려주세요|얼마야)?', r'열\s*요', '연료', 'fuel'),
+        (r'(?:지금|현재)?등기상황보고(?:해줘|해주세요|해줄래)?', r'등기', '경기', 'report_race'),
         (r'(?:지금|현재)?(?:열려|연류)(?:가)?얼마나남았어(?:요)?', r'열려|연류', '연료', 'fuel'),
         (r'(?:내)?(?:방금|지난|직전|최근)레타임(?:알려줘|얼마야|몇초야)?', r'레\s*타임', '랩타임', 'last'),
         (r'(?:지금)?피트후(?:에)?예상복귀수(?:알려줘)?', r'복귀\s*수', '복귀 순위', 'pit_rejoin'),
@@ -129,6 +133,14 @@ _OBSERVED_CORRECTIONS = tuple((re.compile(context), re.compile(source), target, 
         (r'(?:지금)?앞착(?:이|랑|와)?간격(?:알려줘)?', r'앞착', '앞차', 'ahead'),
         (r'클래스선도(?:최근|지난|방금)?랩타임(?:알려줘)?', r'선도', '선두', 'leader_lap'),
     ])
+
+_RECENT_RIVAL_TIME = re.compile(
+    r'(앞차|뒤차|전방차량|후방차량)(?:의|가|는)?(?:지난|최근|직전|방금)'
+    r'(?:랩타임|랩|기록)?(?:은|는|이|가)?몇초'
+    r'(?:야|임|나왔어|나왔어요|나왔나요|찍었어|찍었어요|걸렸어)(?:요)?')
+_CURRENT_PRESSURE = re.compile(
+    r'(?:지금|현재)?(?:내)?타이어(?:의)?(?:공기압|압력|암력)(?:은|이)?'
+    r'(?:지금|현재)?(?:얼마야|몇이야|알려줘|알려주세요)?(?:요)?')
 
 
 def classify(text, game='iracing'):
@@ -155,7 +167,7 @@ def classify(text, game='iracing'):
             proposed = source.sub(target, canonical)
             if proposed != canonical and _classify(proposed, game)['topic'] == topic:
                 changes.append({'from': source.search(canonical).group(), 'to': target,
-                                'kind': 'context', 'reason': '확인된 오인식과 질문 전체 문맥 일치'})
+                                'kind': 'context', 'reason': '관측된 표현과 질문 전체 문맥 일치'})
                 canonical, status = proposed, 'corrected'
                 break  # Do not cascade guessed substitutions.
     result = _classify(canonical, game)
@@ -182,10 +194,15 @@ def classify(text, game='iracing'):
             result = {'topic': None, 'reason': 'ambiguous' if conflict or mixed else 'unsupported', 'candidates': []}
             note = '레이스 문맥이 부족하거나 대상이 겹쳐 단어 보정을 보류했습니다.'
     return {**result, 'normalized_text': canonical, 'corrections': changes,
-            'correction_status': status, 'correction_note': note}
+            'correction_status': status, 'correction_note': note or result.get('correction_note', '')}
 
 
 def _classify(text, game='iracing'):
+    from local_question_language import understand
+    return understand(text, game, _classify_legacy)
+
+
+def _classify_legacy(text, game='iracing'):
     t = normalize(text)
     if not t or len(t) > 200:
         return {'topic': None, 'reason': 'unrecognized', 'candidates': []}
@@ -202,6 +219,9 @@ def _classify(text, game='iracing'):
     # quantities must not silently turn into the player's own fuel/position.
     if has(r'말하지|알려주지|묻는게아니|아니고|하지마|취소|됐어|그만|말고'):
         return {'topic': None, 'reason': 'unsupported', 'candidates': []}
+    if _CURRENT_PRESSURE.fullmatch(t):
+        return {'topic': None, 'reason': 'unsupported', 'candidates': [],
+                'correction_note': '현재 타이어 실측 공기압 질문은 아직 지원하지 않습니다. 피트 교체 공기압 설정은 현재 실측값과 다릅니다.'}
     if re.fullmatch(r'(?:지금|현재)?(?:뭐에집중(?:해야해|할까|해)|(?:레이스)?전략(?:알려줘|알려주세요)|공격할까방어할까)(?:요)?', t):
         return {'topic':'race_focus', 'reason':'matched', 'candidates':['race_focus']}
     expanded = [key for key, pattern in _EXPANDED.items()
@@ -231,6 +251,15 @@ def _classify(text, game='iracing'):
         return {'topic': None, 'reason': 'unsupported', 'candidates': []}
     if has('앞차|전방차량') and has('뒤차|후방차량'):
         return {'topic': None, 'reason': 'ambiguous', 'candidates': ['ahead', 'behind']}
+    # A previous lap's time must not fall through to the current gap merely
+    # because ASR retained "몇 초". Do not invent the unsupported rear lap answer.
+    if has('앞차|뒤차|전방차량|후방차량') and has('지난|최근|직전|방금') and has('몇초'):
+        recent = _RECENT_RIVAL_TIME.fullmatch(t)
+        if recent and recent[1] in ('앞차', '전방차량'):
+            return {'topic': 'ahead_lap', 'reason': 'matched', 'candidates': ['ahead_lap']}
+        return {'topic': None, 'reason': 'unsupported', 'candidates': [],
+                'correction_note': ('뒤차의 최근 랩타임 질문은 아직 지원하지 않습니다.' if recent else
+                                    '최근 랩타임인지 현재 간격인지 한 가지로 다시 말씀해 주세요.')}
     found = set()
     exact = [k for k, samples in EXAMPLES.items() if t in {normalize(s) for s in samples}]
     if exact:

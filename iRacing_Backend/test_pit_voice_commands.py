@@ -222,6 +222,18 @@ class PitServiceTests(unittest.IsolatedAsyncioTestCase):
         self.context.update(game='iracing');self.live.game='iracing'
         self.context['snapshot'].update(on_track=True,is_replay=False,pit_sv_flags=0,pit_sv_fuel=0)
 
+    async def test_missing_tire_action_reads_existing_clarification_without_sending(self):
+        self.connected()
+        for index, text in enumerate(('피트 레인 타이어.', '히트 슬릭 타이어')):
+            with patch.object(pit, 'send_sdk') as send:
+                result = await self.service.ask(LocalQuestion(owner='test-owner', capture_id=f'incomplete-{index}',
+                    text=text, allow_pit_commands=True))
+            send.assert_not_called()
+            self.assertEqual(result['command_result']['result'], 'command_blocked')
+            self.assertEqual(result['spoken_text'], '교체인지 취소인지 다시 말씀해 주세요.')
+            self.assertEqual(result['note']['text'], text)
+            self.assertEqual(result['note']['context']['local_question']['sent'], [])
+
     async def test_readback_check_rejects_changed_settings_owner_session_or_consent(self):
         self.connected();self.context['snapshot'].update(pit_sv_flags=16,pit_sv_fuel=15)
         app,router=FastAPI(),APIRouter();service=register(router,self.coach,self.buttons);service._runtime=self.runtime

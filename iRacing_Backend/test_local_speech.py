@@ -263,6 +263,30 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
     def payload(self, **kw):
         return LocalQuestion(owner='test-owner', capture_id='capture-one', **kw)
 
+    async def test_recorded_word_links_preserve_original_and_route_measured_answers(self):
+        cases = [('남은 열요.', 'fuel'), ('등기 상황 보고 해 줘.', 'report_race'),
+                 ('앞차 지난 몇 초 나왔어.', 'ahead_lap')]
+        for index, (text, topic) in enumerate(cases):
+            self.runtime.recognize = lambda *args, raw=text: {'text':raw, 'reason':'recognized'}
+            result = await self.service.ask(LocalQuestion(owner='test-owner', capture_id=f'linked-{index}', audio_base64=wav()))
+            note = result['note']
+            self.assertEqual(note['text'], text)
+            self.assertEqual(note['context']['local_question']['topic'], topic)
+            self.assertEqual(note['context']['local_question']['classifier_version'], 10)
+            self.assertTrue(result['audio_parts'])
+            self.assertNotIn('간격', result['spoken_text'] if topic == 'ahead_lap' else '')
+            if topic != 'ahead_lap':
+                self.assertEqual(note['context']['local_question']['correction_status'], 'corrected')
+
+    async def test_pressure_help_is_returned_and_saved_without_reading_reserved_pressure(self):
+        self.context['snapshot']['pit_sv_lfp'] = 180
+        result = await self.service.ask(self.payload(text='현재 타이어 암력.'))
+        self.assertIn('실측', result['warning'])
+        self.assertIn('지원하지', result['note']['service_error'])
+        self.assertFalse(result['audio_parts'])
+        self.assertFalse(result['note']['reply'])
+        self.assertNotIn('180', result['warning'])
+
     async def test_recognition_routes_to_prepared_voice_and_persists_details(self):
         reply = await self.service.ask(self.payload(audio_base64=wav()))
         self.assertEqual(reply['note']['text'], '지금 연료로 얼마나 더 갈 수 있음')
@@ -342,7 +366,7 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         note=self.store.get('capture-one')
         self.assertEqual(note['text'],text)
         self.assertEqual(note['context']['local_question']['topic'],'ahead_gain')
-        self.assertEqual(note['context']['local_question']['classifier_version'],8)
+        self.assertEqual(note['context']['local_question']['classifier_version'],10)
 
     async def test_incident_limit_comes_from_current_session_metadata(self):
         self.live.radio = SimpleNamespace(metadata={'incident_limit':17})

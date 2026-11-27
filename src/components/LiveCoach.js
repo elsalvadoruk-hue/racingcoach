@@ -182,24 +182,56 @@ export default function LiveCoach({ apiBase, visible, onSaved, children, monitor
   driving.current = spotter.enabled && spotter.view?.radio?.connected ? spotter.view.radio : status?.snapshot;
   const drivingConnected = useRef(true);
   drivingConnected.current = !!(spotter.enabled && spotter.view?.radio?.connected) || status?.connected !== false;
-  localResult.current = async (response, stillEnabled) => {
+  localResult.current = async (response, stillEnabled, timing) => {
     if (!mounted.current) return;
     setNotes(current => [response.note, ...current.filter(n => n.id !== response.note.id)].slice(0, 200));
     saved.current?.(response.note);
     const valid = () => stillEnabled() && !standbyRef.current && drivingConnected.current && driving.current?.run_id === response.note.context?.snapshot?.run_id;
     const parts = response.audio_parts;
-    if (parts?.length && (response.command_result || response.note.context?.local_question?.topic === 'race_focus')) {
+    let startedAt=null,terminal=false,promptOffered=false;
+    const promptReady=()=>{
+      if(response.dialogue && !promptOffered && valid()){
+        promptOffered=true;timing?.onPromptReady?.();
+      }
+    };
+    const reportPlayback=(event,reason='')=>{
+      const now=performance.now();
+      if(event==='started' && startedAt===null)startedAt=now;
+      if(['completed','failed','cancelled','not_played'].includes(event)){
+        if(terminal)return;terminal=true;
+      }
+      const data={owner:localRadio.engine.owner,capture_id:response.note.id,event,reason,
+        ...(timing?{client_response_ms:Math.max(0,Math.round(timing.responseAt-timing.captureEnd))}:{}),
+        ...(startedAt!==null && timing?{capture_end_to_start_ms:Math.max(0,Math.round(startedAt-timing.captureEnd)),
+          response_to_start_ms:Math.max(0,Math.round(startedAt-timing.responseAt))}:{}),
+        ...(startedAt!==null && event!=='started'?{playback_ms:Math.max(0,Math.round(now-startedAt))}:{})};
+      localSpeechRequest(apiBase,'/delivery',data).catch(()=>{});
+    };
+    if (parts?.length && (response.command_result || response.note.context?.local_question?.topic === 'race_focus' || response.note.context?.local_question?.playback_check)) {
       try {
         const check = await localSpeechRequest(apiBase, '/readback-check', {
           owner: localRadio.engine.owner, capture_id: response.note.id,
         });
-        if (!check.valid) return;
-      } catch { return; }
+        if (!check.valid) {reportPlayback('cancelled','state_changed');return false;}
+      } catch {reportPlayback('not_played','validation_failed');return false;}
     }
-    if (parts?.length && valid()) await play(parts.length === 1 ? parts[0] : parts, 'audio/mpeg', {
+    if (!valid()) {reportPlayback('cancelled','state_changed');return false;}
+    if (!parts?.length) {reportPlayback('not_played',response.warning?'no_playable_answer':'text_only');return true;}
+    const played=await play(parts.length === 1 ? parts[0] : parts, 'audio/mpeg', {
       priority: 4, channel: 'pitwall', valid, whilePlaying: valid, startDeadline: Date.now() + 5000,
-      onStatus: (state, reason, playback) => recordDelivery({ ...deliveryEvent(response.note, response.spoken_text), ...(playback ? { playback } : {}) }, state, reason),
+      onStatus: (state, reason, playback) => {
+        recordDelivery({ ...deliveryEvent(response.note, response.spoken_text), ...(playback ? { playback } : {}) }, state, reason);
+        if(state==='started'||state==='completed'||state==='failed')reportPlayback(state,reason);
+        else if(state==='interrupted'||state==='expired'||state==='cancelled')reportPlayback('cancelled',reason || state);
+        else if(state==='muted'||state==='skipped')reportPlayback('not_played',reason || state);
+        if(['completed','failed','muted','skipped'].includes(state))promptReady();
+      },
     });
+    if(!played && !terminal){
+      reportPlayback('not_played','playback_not_started');
+      promptReady();
+    }
+    return valid();
   };
   const request = useCallback(async (path, body) => {
     const response = await fetch(`${apiBase}/api/live-coach${path}`, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

@@ -12,6 +12,7 @@ import { EFFECT_LEVELS, POP_MODES } from '../radioEffect';
 import VoiceVolumeSlider from '../components/VoiceVolumeSlider';
 import { ConsentDialog, useSessionLogAuto } from '../components/SessionLogAutoSend';
 import LocalSpeechDialog from '../components/LocalSpeechDialog';
+import LocalSpeechDialogue from '../components/LocalSpeechDialogue';
 import { useGame, GameSettingsNotice } from '../lib/gameContext';
 export { DesktopRuntimeProvider, useLabControls } from './DesktopRuntime';
 
@@ -71,6 +72,7 @@ export function RuntimeControls({ runtime }) {
         onClick={host.localRadio.toggleFromHeader}><Mic data-icon="inline-start" aria-hidden="true"/>{host.localRadio.phase==='arming'?'인식 준비 중…':'음성 인식'}</Button>}
     </FieldGroup>
     <LocalSpeechDialog apiBase={runtime.apiBase ?? host.apiBase ?? ''} radio={host.localRadio} hideTrigger/>
+    {!host.localRadio?.settingsOpen && <LocalSpeechDialogue radio={host.localRadio} compact/>}
     {runtime.speech?.available && <>
     <Field orientation="horizontal" className="runtime-input"><FieldLabel htmlFor="input-device-trigger"><Mic aria-hidden="true" /><span>입력장치</span></FieldLabel><Button id="input-device-trigger" variant="outline" aria-label="입력장치 선택" aria-haspopup="dialog" aria-expanded={inputDialog} title={inputLabel} onClick={() => { setInputDialog(true); runtime.refreshDevices?.(); }}><span className="truncate">{inputLabel}</span><ChevronDown data-icon="inline-end" /></Button></Field>
     <Dialog open={inputDialog} onOpenChange={setInputDialog}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>마이크 입력장치</DialogTitle><DialogDescription>질문 단축키 음성을 받을 마이크를 선택하세요. 앱의 선택은 Chrome 기본 마이크 설정과 별개이며 게임별로 저장됩니다.</DialogDescription></DialogHeader>

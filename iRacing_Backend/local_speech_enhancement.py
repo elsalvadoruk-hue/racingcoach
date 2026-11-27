@@ -47,7 +47,9 @@ def eligible(text, game):
     from local_question_intents import classify, normalize
     result = classify(text, game)
     t = normalize(text)
-    if not t or result['topic'] or result['reason'] != 'unsupported':
+    # A specific clarification/unsupported-quantity message means the words
+    # were understood. Retrying must not erase "지난" and answer a current gap.
+    if not t or result['topic'] or result['reason'] != 'unsupported' or result.get('correction_note'):
         return False
     # No incomplete commands, negation, multiple requests or numbers. Never
     # guess a damaged subject such as 아차/주차, even on a second transcript.

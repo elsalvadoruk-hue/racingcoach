@@ -15,6 +15,8 @@ from voice_notes import public_note
 import pit_voice_commands
 import local_speech_enhancement as enhancement
 import pit_command_audio
+import local_question_audio as question_audio
+from local_question_dialogue import Dialogue, identity
 
 
 def require_logs():
@@ -36,6 +38,7 @@ class LocalQuestion(LocalOwner):
     text: str = Field(default='', max_length=500)
     speak: bool = True
     allow_pit_commands: bool = False
+    dialogue_id: str = Field(default='', max_length=100)
 
 
 class LocalInstall(LocalOwner):
@@ -51,6 +54,22 @@ class SpeechTest(LocalOwner):
     game: Literal['iracing', 'lmu'] = 'iracing'
 
 
+class DialogueEvent(LocalOwner):
+    dialogue_id: str = Field(min_length=1, max_length=100)
+    capture_id: str = Field(default='', max_length=100)
+    reason: Literal['timeout', 'cancelled', 'state_changed', 'recording_failed', 'playback_failed', 'disabled'] = 'cancelled'
+
+
+class SpeechDelivery(LocalOwner):
+    capture_id: str = Field(min_length=1, max_length=100)
+    event: Literal['started', 'completed', 'cancelled', 'failed', 'not_played']
+    capture_end_to_start_ms: float | None = Field(default=None, ge=0, le=120000, allow_inf_nan=False)
+    client_response_ms: float | None = Field(default=None, ge=0, le=120000, allow_inf_nan=False)
+    response_to_start_ms: float | None = Field(default=None, ge=0, le=120000, allow_inf_nan=False)
+    playback_ms: float | None = Field(default=None, ge=0, le=120000, allow_inf_nan=False)
+    reason: str = Field(default='', max_length=100)
+
+
 REASONS = {
     'no_speech': '목소리가 감지되지 않았습니다.',
     'uncertain_audio': '말씀을 확실히 알아듣지 못했습니다.',
@@ -63,6 +82,11 @@ REASONS = {
     'audio_unavailable': '답변 음성이 없습니다. 설정에서 빠진 음성을 받아 주세요.',
     'stale': '주행이나 마이크 상태가 바뀌어 답변을 취소했습니다.',
     'recognition_failed': '음성인식을 완료하지 못했습니다. 마이크를 다시 준비하세요.',
+    'dialogue_expired': '이어 묻기 시간이 지났습니다. 질문을 다시 말씀해 주세요.',
+    'dialogue_missing': '이어 답할 질문이 없습니다. 원하는 정보를 질문해 주세요.',
+    'dialogue_cancelled': '이어 묻기를 취소했습니다.',
+    'clarification_rejected': '어떤 정보를 원하시는지 질문을 다시 말씀해 주세요.',
+    'dialogue_target_changed': '비교 대상이 바뀌었습니다. 대상과 질문을 다시 말씀해 주세요.',
 }
 
 
@@ -72,6 +96,67 @@ class LocalQuestions:
         self._runtime = runtime
         self._runtime_lock = threading.Lock()
         self.lock = asyncio.Lock()
+        self.dialogue = Dialogue()
+        self.dialogue_lock = threading.RLock()
+        self.delivery_lock = asyncio.Lock()
+
+    def scope(self, owner, context, consent):
+        return identity(owner, context, consent)
+
+    async def dialogue_event(self, event, payload):
+        consent = require_logs()
+        if self.runtime.owner != payload.owner:
+            raise HTTPException(409, '마이크 사용자가 바뀌었습니다.')
+        context = await asyncio.to_thread(self.coach.live.context, include_recent=False)
+        scope = self.scope(payload.owner, context, consent)
+        if not self.same_session(context):
+            with self.dialogue_lock:
+                self.dialogue.clear()
+            return {'accepted':False, 'dialogue':None, 'cancelled':True}
+        if event == 'begin' and payload.capture_id:
+            try:
+                capture = await asyncio.to_thread(self.coach.capture_context, payload.capture_id)
+            except ValueError:
+                return {'accepted':False}
+            if not self.same_session(capture):
+                return {'accepted':False}
+        with self.dialogue_lock:
+            if event == 'ready':
+                s = self.dialogue.valid(scope)
+                if not s or s['capture_id'] != payload.capture_id:
+                    return {'dialogue':None}
+                return {'dialogue':self.dialogue.ready(scope, payload.dialogue_id)}
+            if event == 'begin':
+                accepted = self.dialogue.begin(scope, payload.dialogue_id, payload.capture_id)
+                return {'accepted':bool(accepted)}
+            old = self.dialogue.cancel(scope, payload.dialogue_id, payload.reason)
+        if old:
+            await asyncio.to_thread(self.coach.store.update, old['capture_id'], local_question={
+                'dialogue_outcome':{'status':payload.reason, 'confirmed':None}})
+        return {'cancelled':bool(old)}
+
+    async def delivery(self, payload):
+        async with self.delivery_lock:
+            return await self._delivery(payload)
+
+    async def _delivery(self, payload):
+        consent = require_logs()
+        note = await asyncio.to_thread(self.coach.store.get, payload.capture_id)
+        context = (note or {}).get('context') or {}
+        detail = context.get('local_question') or {}
+        if (self.runtime.owner != payload.owner or detail.get('log_consent_at') != consent
+                or detail.get('request_owner') != payload.owner or (note or {}).get('source') != 'LOCAL_VOICE'):
+            raise HTTPException(409, '음성 질문의 재생 기록을 확인하지 못했습니다.')
+        delivery = dict(detail.get('delivery') or {})
+        if payload.event == 'started' and delivery.get('status') in ('completed','cancelled','failed','not_played'):
+            return {'ok':True}
+        delivery.update(status=payload.event, reason=payload.reason)
+        for key in ('capture_end_to_start_ms','client_response_ms','response_to_start_ms','playback_ms'):
+            value = getattr(payload, key)
+            if value is not None:
+                delivery.setdefault(key, round(value))
+        await asyncio.to_thread(self.coach.store.update, payload.capture_id, local_question={'delivery':delivery})
+        return {'ok':True}
 
     @property
     def runtime(self):
@@ -113,10 +198,12 @@ class LocalQuestions:
         return result
 
     async def command(self, payload, text, command, context, asr, start):
+        with self.dialogue_lock:
+            self.dialogue.clear()
         detail = {'topic': None, 'topic_name':command['name'], 'command':command,
                   'result':'command_pending', 'model':self.runtime.model, 'engine':'sherpa-onnx' if self.runtime.model=='sensevoice' else 'faster-whisper',
                   'asr_ms':asr.get('asr_ms'), 'audio_saved':False, 'total_ms':0, 'sent':[],
-                  'log_consent_at':context.get('speech_consent_at')}
+                  'log_consent_at':context.get('speech_consent_at'), 'request_owner':payload.owner}
         # Persist a receipt BEFORE sending. Retrying a capture after a timeout or
         # crash can read the receipt but must never send the command a second time.
         saved_context={k:v for k,v in context.items() if k!='recent'}
@@ -198,13 +285,39 @@ class LocalQuestions:
                 return await self.command(payload,text,command,context,asr,start)
             classify_start = time.perf_counter()
             result = await self.classify_audio(payload, text, context.get('game'), asr)
+            if asr.get('reason') in ('no_speech','uncertain_audio'):
+                result = {**result, 'topic':None, 'reason':asr['reason'], 'candidates':[]}
+            scope = self.scope(payload.owner, context, consent_at)
+            dialogue_meta = {'action':'unrecognized','confirmed':None}
+            if not error and text and asr.get('reason') not in ('no_speech','uncertain_audio'):
+                dialogue_context = await asyncio.to_thread(self.coach.live.context, include_recent=False)
+                with self.dialogue_lock:
+                    result, dialogue_meta = self.dialogue.interpret(text, result, scope,
+                        dialogue_id=payload.dialogue_id, capture_id=payload.capture_id, context=dialogue_context)
             classify_ms = round((time.perf_counter()-classify_start)*1000, 3)
             topic = result['topic']
+            additional_topics = result.get('additional_topics', [])[:1]
+            if topic and dialogue_meta['action'] != 'standalone':
+                dialogue_meta.setdefault('resolved_text', EXAMPLES[topic][0])
             reason = 'recognition_failed' if error else asr.get('reason') if not text else result['reason']
             reason = reason or 'unrecognized'
             parts, spoken, audible = [], [], []
             missing_data, missing_audio = [], []
             focus = None
+            rendered = {}
+            answer_detail = result.get('answer_detail', 'default')
+            prompt = result.get('prompt', '') or (REASONS['clarification_rejected'] if reason=='clarification_rejected' else '')
+            if prompt:
+                _, prompt = question_audio.select('strategy', prompt, getattr(self.coach, 'custom_packs', None),
+                                                   detail=answer_detail)
+                result['prompt'] = prompt
+            if prompt and self.same_session(context) and self.runtime.owner == payload.owner:
+                spoken = [prompt]
+                try:
+                    parts = [await asyncio.to_thread(self.buttons.read_clip, 'question_dialogue', 'strategy', prompt)]
+                    audible = [prompt]
+                except (OSError, ValueError, KeyError):
+                    missing_audio = ['질문 확인 안내']
             if not error and topic:
                 if not context.get('connected'):
                     reason = 'not_connected'
@@ -220,8 +333,16 @@ class LocalQuestions:
                         await asyncio.to_thread(enrich, topic, current, self.coach.live)
                         if topic == 'race_focus':
                             focus = current.get('question_focus')
-                        if topic in EXTRA_TOPICS:
-                            rendered = await asyncio.to_thread(render_question, topic, current, self.buttons)
+                        if topic in EXTRA_TOPICS or topic in ('catch_ahead','corner_loss') or answer_detail != 'default' or additional_topics:
+                            rendered = await asyncio.to_thread(render_question, topic, current, self.buttons, detail=answer_detail)
+                            for additional in additional_topics:
+                                if additional == topic:
+                                    continue
+                                await asyncio.to_thread(enrich, additional, current, self.coach.live)
+                                more = await asyncio.to_thread(render_question, additional, current, self.buttons)
+                                for key in ('parts','display','spoken','missing_data','missing_audio'):
+                                    rendered[key].extend(more[key])
+                                rendered.setdefault('additional_evidence', {})[additional] = more.get('answer_evidence', {})
                             parts, spoken = rendered['parts'], rendered['display']
                             audible = rendered['spoken']
                             missing_data, missing_audio = rendered['missing_data'], rendered['missing_audio']
@@ -251,7 +372,7 @@ class LocalQuestions:
                 audible = []
                 if reason in ('prepared', 'prepared_partial'):
                     reason = 'text_partial' if missing_data or missing_audio else 'text_only'
-            warning = error or REASONS.get(reason, '')
+            warning = error or (result.get('correction_note') if reason in ('unsupported', 'ambiguous') else '') or REASONS.get(reason, '')
             if reason not in ('stale', 'recognition_failed') and (missing_data or missing_audio):
                 warning = ' · '.join((['주행 데이터 부족: ' + ', '.join(missing_data)] if missing_data else [])
                                      + (['음원 없음: ' + ', '.join(missing_audio)] if missing_audio else []))
@@ -261,19 +382,45 @@ class LocalQuestions:
                       'classifier_version': VERSION, 'asr_ms': asr.get('asr_ms'), 'cpu_ms': asr.get('cpu_ms'),
                       'classify_ms': classify_ms, 'total_ms': elapsed,
                       'missing_data': missing_data, 'missing_audio': missing_audio,
-                      'topic_name': TOPICS[topic][1] if topic else '', 'audio_saved': False, 'log_consent_at':consent_at}
+                      'topic_name': TOPICS[topic][1] if topic else '', 'audio_saved': False, 'log_consent_at':consent_at,
+                      'request_owner':payload.owner, 'dialogue':dialogue_meta, 'answer_detail':answer_detail,
+                      'spoken_text':' '.join(audible), 'answer_facts':rendered.get('answer_evidence',{}),
+                      'answer_explanation':rendered.get('explanation','')}
+            if rendered.get('data_notes'):
+                detail['data_notes'] = rendered['data_notes']
+            if rendered.get('additional_evidence'):
+                detail['additional_evidence'] = rendered['additional_evidence']
             if focus:
                 detail['race_focus'] = {key:value for key,value in focus.items() if key not in ('normal','short')}
                 detail['focus_signature'] = focus_signature
+            if topic and audible and (dialogue_meta['action'] != 'standalone' or topic in ('fuel_save','corner_repeat')):
+                from local_question_dialogue import rival
+                topics = list(dict.fromkeys([topic, *additional_topics]))
+                detail['playback_check'] = {'spoken':audible, 'topics':topics,
+                                            'rivals':{item:rival(current,item) for item in topics}}
             context = {k: v for k, v in context.items() if k != 'recent'}
             context = {**context, 'local_question': detail, 'engineer': 'coach',
                        'backend_version': getattr(self.coach, 'app_version', None)}
             note = await asyncio.to_thread(self.coach.store.save, text, context, 'LOCAL_VOICE', payload.capture_id)
             note = await asyncio.to_thread(self.coach.store.update, note['id'], reply=' '.join(spoken),
                                           reply_source='MEASURED' if spoken else 'LOCAL', service_error=warning)
+            parent_id = dialogue_meta.get('parent_capture_id')
+            if parent_id:
+                await asyncio.to_thread(self.coach.store.update, parent_id, local_question={
+                    'dialogue_outcome':{'status':dialogue_meta['action'], 'confirmed':dialogue_meta.get('confirmed'),
+                                        'reply_capture_id':payload.capture_id}})
+            dialogue = None
+            with self.dialogue_lock:
+                if reason == 'clarification_needed' and self.same_session(context) and self.runtime.owner == payload.owner:
+                    dialogue = self.dialogue.offer(scope, payload.capture_id, result['proposed_topic'],
+                        prompt=prompt, choices=result['choices'], context=context)
+                elif topic and spoken and not additional_topics and reason in ('prepared','prepared_partial','text_only','text_partial','audio_unavailable'):
+                    dialogue = self.dialogue.offer(scope, payload.capture_id, topic, context=current, detail=answer_detail)
+                else:
+                    self.dialogue.clear()
             return {'note': public_note(note), 'audio_parts': parts, 'audio_base64': parts[0] if parts else None,
                     'spoken_text': ' '.join(audible),
-                    'warning': warning, 'audio_stored': False, 'remaining_ms': 5000}
+                    'warning': warning, 'audio_stored': False, 'remaining_ms': 5000, 'dialogue':dialogue}
 
 
 def register(router, coach, buttons):
@@ -326,7 +473,26 @@ def register(router, coach, buttons):
     @router.post('/local-speech/deactivate')
     def deactivate(payload: LocalOwner):
         service.runtime.deactivate(payload.owner)
+        with service.dialogue_lock:
+            if service.dialogue.state and service.dialogue.state['scope'][0] == payload.owner:
+                service.dialogue.clear()
         return {'ok': True}
+
+    @router.post('/local-speech/dialogue/ready')
+    async def dialogue_ready(payload: DialogueEvent):
+        return await service.dialogue_event('ready', payload)
+
+    @router.post('/local-speech/dialogue/begin')
+    async def dialogue_begin(payload: DialogueEvent):
+        return await service.dialogue_event('begin', payload)
+
+    @router.post('/local-speech/dialogue/cancel')
+    async def dialogue_cancel(payload: DialogueEvent):
+        return await service.dialogue_event('cancel', payload)
+
+    @router.post('/local-speech/delivery')
+    async def delivery(payload: SpeechDelivery):
+        return await service.delivery(payload)
 
     @router.post('/local-speech/utterances')
     async def utterance(payload: LocalQuestion):
@@ -340,7 +506,7 @@ def register(router, coach, buttons):
         detail = context.get('local_question') or {}
         valid = bool(service.runtime.owner == payload.owner and service.same_session(context)
                      and detail.get('log_consent_at') == consent
-                     and (detail.get('readback_text') or detail.get('focus_signature')))
+                     and (detail.get('readback_text') or detail.get('focus_signature') or detail.get('playback_check')))
         if valid and detail.get('focus_signature'):
             import race_focus
             valid = detail.get('result') in ('prepared','prepared_partial') and await asyncio.to_thread(
@@ -349,6 +515,18 @@ def register(router, coach, buttons):
             with coach.live.lock:
                 _, sample = coach.live._current_snapshot()
                 valid = bool(sample and pit_voice_commands.applied(detail['command'], sample))
+        if valid and detail.get('playback_check'):
+            from local_question_dialogue import rival
+            current = await asyncio.to_thread(coach.live.context, include_recent=False)
+            expected = detail['playback_check']
+            spoken = []
+            for index, topic in enumerate(expected['topics']):
+                await asyncio.to_thread(enrich, topic, current, coach.live)
+                fresh = await asyncio.to_thread(render_question, topic, current, buttons,
+                    detail=detail.get('answer_detail','default') if index==0 else 'default')
+                spoken.extend(fresh['spoken'])
+            valid = (service.same_session(current) and all(rival(current,t)==expected['rivals'][t] for t in expected['topics'])
+                     and spoken == expected['spoken'] and service.runtime.owner == payload.owner and require_logs()==consent)
         return {'valid': valid}
 
     @router.post('/local-speech/test')

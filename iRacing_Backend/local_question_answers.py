@@ -4,6 +4,8 @@ import math
 from instant_answers import instant_answer, number
 from radio_buttons import TOPICS as BUTTON_TOPICS, wordings as button_wordings
 from radio_phrases import build
+import local_question_details as details
+import local_question_audio as question_audio
 
 
 EXTRA_TOPICS = {
@@ -11,6 +13,8 @@ EXTRA_TOPICS = {
     'sof': ('랩·세션', '현재 클래스 SOF'),
     'fuel_finish': ('연료', '완주 연료 확인'),
     'fuel_add': ('연료', '이번 피트 추가 급유량'),
+    'fuel_save': ('연료', '절약해서 완주할 연료 목표'),
+    'corner_repeat': ('코너 코칭', '최근 코너 손실 반복 여부'),
     'race_time': ('랩·세션', '경기 남은 시간'),
     'incidents': ('랩·세션', '인시던트와 한도까지 여유'),
     'incident_limit': ('랩·세션', '인시던트 한도'),
@@ -54,6 +58,11 @@ def enrich(topic, context, live):
             context['theoretical'] = live.lap_sectors.theoretical()
         if 'sector_delta' in items:
             context['sector_delta'] = live.lap_sectors.delta()
+        if 'corner_repeat' in items:
+            corners = getattr(live, 'corners', None)
+            context['question_corner_history'] = [
+                {'lap': row['lap'], 'corners': [dict(c) for c in row['corners']]}
+                for row in getattr(corners, 'question_history', ())]
         if topic in ('incidents', 'incident_limit'):
             context['question_incident_limit'] = getattr(getattr(live, 'radio', None), 'metadata', {}).get('incident_limit')
         if topic == 'sof' and context.get('game')=='iracing':
@@ -89,6 +98,20 @@ def wordings(topic, context, style='default'):
     if topic == 'race_focus':
         from race_focus import words
         return words(context, style)
+    if topic == 'fuel_save':
+        facts = details.fuel_saving(context)
+        if not facts:
+            return []
+        from race_strategy_clips import defence_words
+        target = round(facts['target_l_per_lap'] * 100)
+        target_words = defence_words(target, None)[1 if style == 'short' else 0]
+        return [('strategy', target_words), *button_wordings('fuel_average', context, style)]
+    if topic == 'corner_repeat':
+        facts = details.corner_repetition(context)
+        if not facts:
+            return []
+        # Name the same corner as the immediately preceding lap's review.
+        return [*button_wordings('corner_loss', context, style), question_audio.wording(facts['line'], style)]
     if topic in BUTTON_TOPICS:
         return button_wordings(topic, context, style)
     snapshot, view = context.get('snapshot') or {}, context.get('pit_wall') or {}
@@ -159,24 +182,112 @@ def wordings(topic, context, style='default'):
     return []
 
 
-def render(topic, context, buttons):
+def _groups(topic, context, style, detail):
+    """Independent facts may survive missing optional audio, labelled pairs may not."""
+    words = wordings(topic, context, style)
+    if not words:
+        return []
+    groups = [(topic, words)]
+    if topic == 'fuel_finish' and (number((context.get('pit_wall') or {}).get('fuel_finish_shortfall_l')) or 0) > 0:
+        extra = wordings('fuel_add', context, style)
+        if extra:
+            groups.append(('fuel_add', extra))
+    elif topic in ('catch_ahead', 'defend_time'):
+        extra = button_wordings('laps', context, style)
+        if extra:
+            groups.append(('laps', extra))
+    if topic == 'fuel_save':
+        facts = details.fuel_saving(context)
+        caveats = []
+        if (facts.get('mandatory_stops_remaining') or 0) > 0:
+            caveats.append(('strategy', details.LINES['fuel_stop_required']))
+        if (facts.get('energy_shortfall_pct') or 0) > .1:
+            caveats.append(('strategy', details.LINES['fuel_energy_short']))
+        # A no-stop fuel question must not lose a known non-fuel reason for a
+        # stop just because that caveat's recording is missing. Keep it atomic.
+        groups[0] = (topic, words + caveats)
+    if detail in ('short', 'short_explain'):
+        if topic == 'catch_ahead':
+            # Preserve both a prediction and its remaining race distance.
+            facts = details.catching(context, 'ahead')
+            if facts and 1 <= facts['spoken_catch_laps'] <= 30:
+                groups[0] = (topic, [phrase('catch_in', laps=facts['spoken_catch_laps'])])
+        if detail == 'short':
+            return groups
+    if detail in ('explain', 'short_explain'):
+        if topic in ('catch_ahead', 'defend_time'):
+            facts = details.catching(context, 'ahead' if topic == 'catch_ahead' else 'behind')
+            if topic == 'defend_time':
+                basis = button_wordings('behind', context, style) + button_wordings('closing_behind', context, style)
+                if basis:
+                    groups.append(('defend_time', basis))
+            if facts.get('before_finish') is not None:
+                key = ('catch' if topic == 'catch_ahead' else 'defend') + ('_within' if facts['before_finish'] else '_after')
+                groups.append((topic, [('race', details.LINES[key])]))
+        elif topic in ('fuel_finish', 'fuel_add'):
+            groups.append((topic, [('strategy', details.LINES['fuel_basis'])]))
+            if (number((context.get('pit_wall') or {}).get('fuel_reserve_l')) or 0) > 0:
+                groups.append((topic, [('strategy', details.LINES['fuel_reserve'])]))
+            extra = button_wordings('fuel_average', context, style) + button_wordings('laps', context, style)
+            if extra:
+                groups.append((topic, extra))
+        elif topic in ('corner_loss', 'corner_gain', 'corner_repeat'):
+            groups.append((topic, [('coach', details.LINES['corner_basis'])]))
+        elif topic == 'race_focus':
+            # Compare the two observed prospects, without inventing a counterfactual
+            # lap time for saving fuel or assuming that catching means overtaking.
+            focus = context.get('question_focus') or {}
+            key = focus.get('key')
+            if key in ('pit_now_gap', 'stay_for_gap'):
+                items = ('pit_rejoin', 'pit_transit')
+            elif key in ('energy_early', 'energy_save_plan'):
+                items = ('energy_remaining',)
+            elif key in ('pit_resources', 'plan_both_early', 'plan_fuel_early', 'plan_both_save',
+                         'plan_fuel_save', 'fuel_defence_target', 'fuel_defence', 'save_stop', 'save_fill'):
+                items = ('fuel_finish', 'fuel_average')
+                if key in ('plan_both_early', 'plan_both_save'):
+                    items += ('energy_remaining',)
+            elif key in ('defend_section', 'chase_section'):
+                items = ('catch_ahead', 'defend_time')
+            else:
+                items = ()
+            for item in items:
+                extra = wordings(item, context, style)
+                if extra:
+                    groups.append((item, extra))
+            extra = button_wordings('laps', context, style)
+            if extra:
+                groups.append(('laps', extra))
+    if topic == 'fuel_save':
+        if detail in ('explain', 'short_explain'):
+            groups.append((topic, [('strategy', details.LINES['fuel_target_only'])]))
+    return groups
+
+
+def render(topic, context, buttons, *, detail='default'):
     """Keep each labelled answer atomic; report missing fields explicitly."""
     import button_fuel_audio
-    style = button_fuel_audio.style_for(getattr(buttons.coach, 'custom_packs', None))
+    packs = getattr(buttons.coach, 'custom_packs', None)
+    style = ('short' if detail in ('short', 'short_explain') else button_fuel_audio.style_for(packs))
     parts, spoken, display, missing_data, missing_audio = [], [], [], [], []
     seen = set()
+    groups = []
     for item in REPORTS.get(topic, (topic,)):
-        candidates = wordings(item, context, style)
-        if not candidates:
+        prepared = _groups(item, context, style, detail)
+        if not prepared:
             missing_data.append(TOPICS[item][1])
             continue
+        groups.extend(prepared)
+    for item, candidates in groups:
+        candidates = [question_audio.select(role, text, packs, detail=detail) for role, text in candidates]
         clips = []
         try:
             for role, text in candidates:
                 fuel_take = button_fuel_audio.by_wording().get(text) if role == 'strategy' else None
                 clips.append(buttons.read_clip(fuel_take[0] if fuel_take else item, role, text))
         except (OSError, ValueError, KeyError):
-            missing_audio.append(TOPICS[item][1])
+            if TOPICS[item][1] not in missing_audio:
+                missing_audio.append(TOPICS[item][1])
             display.extend(text for _, text in candidates)
             continue
         for (_, text), clip in zip(candidates, clips):
@@ -188,5 +299,23 @@ def render(topic, context, buttons):
     if topic == 'race_focus' and display:
         focus = context['question_focus']
         display = [f"지금 우선할 일: {focus['label']}.", focus['reason'], *display]
+    evidence = details.evidence(topic, context)
+    explanation = []
+    data_notes = []
+    def explanation_line(key):
+        return question_audio.select(*question_audio.wording(key), packs, detail=detail)[1]
+    if topic == 'corner_repeat' and not evidence:
+        data_notes.append('반복 여부를 판단하려면 최근 다섯 랩 안에 같은 구간의 비교 가능한 기록이 세 랩 필요합니다.')
+    if topic == 'fuel_save' and not evidence:
+        data_notes.append('완주 거리와 연료 소비 기록이 확보되어야 절약 목표를 계산할 수 있습니다.')
+    if topic in ('corner_loss', 'corner_gain') and display:
+        explanation.append(explanation_line('corner_basis'))
+    if topic == 'fuel_save' and display:
+        explanation.append(explanation_line('fuel_target_only'))
+    if topic in ('catch_ahead', 'defend_time') and evidence.get('before_finish') is not None:
+        key = ('catch' if topic == 'catch_ahead' else 'defend') + ('_within' if evidence['before_finish'] else '_after')
+        explanation.append(explanation_line(key))
+    display.extend(line for line in explanation + data_notes if line not in display)
     return {'parts': parts, 'spoken': spoken, 'display': display,
-            'missing_data': missing_data, 'missing_audio': missing_audio}
+            'missing_data': missing_data, 'missing_audio': missing_audio,
+            'answer_evidence': evidence, 'explanation': explanation, 'data_notes': data_notes, 'detail': detail}
